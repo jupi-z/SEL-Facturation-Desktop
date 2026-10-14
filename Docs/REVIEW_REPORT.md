@@ -4,7 +4,7 @@ Date : 14 octobre 2026
 Branche : `monarque/audit-livraison-sel`
 Issue : [#3](https://github.com/jupi-z/SEL-Facturation-Desktop/issues/3)
 PR : [#4](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/4)
-Correctifs principaux : `298b667`, `f5bd24b`, `0269b6c`, `4926c77` et `22f71ac`
+Correctifs principaux : `298b667`, `f5bd24b`, `0269b6c`, `4926c77`, `22f71ac`, `db09134` et `cf6e133` ; correctifs de préparation intensive en cours sur cette branche.
 
 ## Périmètre et méthode
 
@@ -40,12 +40,19 @@ Le PDF était lisible mais sa hiérarchie financière était trop discrète pour
 
 ## Vérifications réalisées
 
-- Suite complète : `27 passed` avec Python intégré 3.12 et les dépendances du dépôt.
+### Préparation à l'exploitation intensive
+
+- Les agrégations du tableau de bord et de l'historique recomposent désormais les montants en `Decimal` au lieu de `CAST(... AS REAL)` ; le format portable v1 et les snapshots persistés sont inchangés.
+- Les paiements historiques sont protégés par des triggers SQLite contre modification et suppression directes. L'édition d'un client applique aussi les limites de longueur déjà présentes à la création.
+- Le workflow Windows sépare build et publication, réduit les permissions par défaut à `contents: read`, exige une publication manuelle et refuse d'écraser une release existante.
+
+- Suite complète : `30 passed` avec Python intégré 3.12 et `30 passed` dans l'environnement de build isolé.
 - `git diff --check` : aucune erreur de whitespace.
-- Compilation PyInstaller locale : `Build complete!`, `dist/SEL-Facturation.exe` créé ; l'analyse a émis des avertissements de collecte facultative WebView2/pycparser à confirmer dans la CI Windows.
+- Compilation PyInstaller locale : `Build complete!`, `dist/SEL-Facturation.exe` créé (23,8 Mo au dernier build) ; l'analyse a émis des avertissements de collecte facultative WebView2/pycparser à confirmer dans la CI Windows.
 - CI Windows GitHub Actions : runs `38621057633`, `38624033809`, `38625269038` et `38627086407` réussis ; tests, dépendances desktop, EXE et installateur Inno Setup validés. La publication de release a été ignorée car les runs provenaient d'une PR.
 - Tests de régression dédiés : sauvegarde rafraîchie, repli impression, message JavaScript et version `/health`.
 - Restauration contrôlée : sauvegarde SQLite, remplacement de la base, réouverture et `PRAGMA integrity_check` validés localement.
+- Test de restauration sur copie : snapshot copié vers une base de test, facture/snapshot retrouvés et `PRAGMA integrity_check` à `ok`, sans modifier la base live.
 - Vérification statique : loopback `127.0.0.1`, CSRF, cookies HttpOnly/SameSite, CSP, requêtes paramétrées, exports sans clé de session/mot de passe, snapshots protégés par trigger SQLite, calculs métier en `Decimal`.
 - Un premier smoke test avec inspecteur UI avait déclenché des erreurs WebView2 ; après le correctif `_window`, le test natif a été repris sans inspecteur et le parcours complet a été exécuté proprement sur un dossier de données temporaire.
 - Les PDF temporaires de prévisualisation sont maintenant purgés au-delà de 7 jours, sans toucher aux PDF récents ni aux factures SQLite.
@@ -62,6 +69,7 @@ Le PDF était lisible mais sa hiérarchie financière était trop discrète pour
 - Aucune validation physique n'a été possible avec l'imprimante SEL, l'antivirus ou l'installateur Inno Setup. Le statut reste **pilote non validé sur poste cible**.
 - L'inspection UI automatisée précédente avait elle-même déclenché la récursion WebView2 ; le correctif est maintenant testé sans inspecteur, avec démarrage et fermeture propre de l'EXE.
 - La release n'a pas été publiée par la PR ; aucun nouveau binaire ni lien de release n'est annoncé ici.
+- La CI du commit final de cette phase doit encore être relue après poussée de la branche ; le dernier état observé avant ces changements était encore `in_progress`.
 - Les tarifs, taxes, bases et identifiants d'entreprise restent à confirmer par SEL ; aucun statut DGI, QR ou identifiant fiscal fictif n'est ajouté.
 
 ## Avis de livraison

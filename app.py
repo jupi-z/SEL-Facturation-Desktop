@@ -26,6 +26,11 @@ from invoice_pdf import render_invoice
 APP_VERSION = '0.2.0'
 
 
+def sum_money(values):
+    """Additionne des montants persistés sans passer par un flottant binaire."""
+    return sum((Decimal(str(value)) for value in values), Decimal('0'))
+
+
 def resource(name):
     base = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
     return str(base / name)
@@ -143,13 +148,15 @@ def create_app():
     @app.get('/')
     @protected
     def dashboard():
-        stats=g.db.execute('''SELECT COUNT(*) AS n,
-          COALESCE(SUM(CASE WHEN status='ISSUED' AND currency=(SELECT value FROM settings WHERE key='currency') THEN CAST(json_extract(calc_snapshot,'$.total') AS REAL) ELSE 0 END),0) AS billed
-          FROM invoices''').fetchone()
+        invoice_rows=g.db.execute('SELECT status,currency,calc_snapshot FROM invoices').fetchall()
+        currency=db.settings(g.db).get('currency')
+        billed=sum_money(json.loads(row['calc_snapshot'])['total'] for row in invoice_rows
+                         if row['status']=='ISSUED' and row['currency']==currency)
+        stats={'n':len(invoice_rows),'billed':billed}
         clients=g.db.execute('SELECT COUNT(*) AS n FROM clients').fetchone()['n']
         recent=g.db.execute('''SELECT i.*, c.name as client_name FROM invoices i
           JOIN clients c ON c.id=i.client_id ORDER BY i.id DESC LIMIT 8''').fetchall()
-        paid=g.db.execute("SELECT COALESCE(SUM(CAST(amount AS REAL)),0) AS n FROM payments").fetchone()['n']
+        paid=sum_money(row['amount'] for row in g.db.execute('SELECT amount FROM payments'))
         return render_template('dashboard.html',title='Tableau de bord',stats=stats,clients=clients,paid=paid,recent=recent)
 
     @app.route('/clients',methods=['GET','POST'])
@@ -187,6 +194,8 @@ def create_app():
             try:
                 if not values['name'] or not values['address'] or not values['meter_number']: raise BillingError('Nom, adresse et compteur obligatoires.')
                 decimal(values['coefficient'] or '1','Coefficient',allow_zero=False)
+                if len(values['name'])>180 or len(values['meter_number'])>80:
+                    raise BillingError('Nom ou numéro de compteur trop long.')
                 g.db.execute('''UPDATE clients SET name=?,address=?,category=?,client_type=?,contract_number=?,meter_number=?,center=?,service_point=?,nif=?,phone=?,coefficient=? WHERE id=?''',(*[values[k] for k in values],cid))
                 g.db.commit();flash('Fiche mise à jour. Les anciennes factures conservent leurs données.','success');return redirect(url_for('clients'))
             except BillingError as e: flash(str(e),'error')
@@ -229,9 +238,12 @@ def create_app():
         if status in ('ISSUED','VOID'):
             clause.append('i.status=?');args.append(status)
         where='WHERE '+' AND '.join(clause) if clause else ''
-        rows=g.db.execute(f'''SELECT i.*,c.name client_name,
-            COALESCE((SELECT SUM(CAST(p.amount AS REAL)) FROM payments p WHERE p.invoice_id=i.id),0) AS paid
-            FROM invoices i JOIN clients c ON c.id=i.client_id {where} ORDER BY i.id DESC LIMIT 300''',args).fetchall()
+        rows=[]
+        for row in g.db.execute(f'''SELECT i.*,c.name client_name
+            FROM invoices i JOIN clients c ON c.id=i.client_id {where} ORDER BY i.id DESC LIMIT 300''',args):
+            item=dict(row)
+            item['paid']=sum_money(p['amount'] for p in g.db.execute('SELECT amount FROM payments WHERE invoice_id=?',(row['id'],)))
+            rows.append(item)
         return render_template('invoices.html',title='Historique des factures',invoices=rows,query=term,status=status)
 
     @app.route('/invoices/new',methods=['GET','POST'])

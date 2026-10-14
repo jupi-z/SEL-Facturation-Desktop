@@ -96,3 +96,31 @@ def test_database_handles_are_released_after_initialize_and_backup(monkeypatch,t
 
     db.db_path().unlink()
     destination.unlink()
+
+
+def test_payment_history_is_immutable(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    with db.connect() as c:
+        c.execute("INSERT INTO clients(code,name,address,meter_number) VALUES('SEL-C-00001','A','K','M')")
+        c.execute("INSERT INTO invoices(number,client_id,billing_period,issue_date,client_snapshot,company_snapshot,calc_snapshot) VALUES('SEL-2026-000001',1,'2026-10','2026-10-14','{}','{}','{\"total\":\"100.00\"}')")
+        c.execute("INSERT INTO payments(invoice_id,amount,method,paid_on) VALUES(1,'10.00','Espèces','2026-10-14')")
+        with pytest.raises(db.sqlite3.DatabaseError, match='Paiement enregistré immuable'):
+            c.execute("UPDATE payments SET amount='20.00' WHERE id=1")
+        with pytest.raises(db.sqlite3.DatabaseError, match='Paiement enregistré immuable'):
+            c.execute("DELETE FROM payments WHERE id=1")
+
+
+def test_backup_restore_copy_preserves_invoice_snapshot(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path/'live'))
+    db.initialize()
+    with db.connect() as c:
+        c.execute("INSERT INTO clients(code,name,address,meter_number) VALUES('SEL-C-00001','A','K','M')")
+        c.execute("INSERT INTO invoices(number,client_id,billing_period,issue_date,client_snapshot,company_snapshot,calc_snapshot) VALUES('SEL-2026-000001',1,'2026-10','2026-10-14','{\"name\":\"A\"}','{}','{\"total\":\"100.00\"}')")
+    snapshot=db.backup(tmp_path/'snapshot.sqlite3')
+    restored=tmp_path/'restored.sqlite3'
+    restored.write_bytes(snapshot.read_bytes())
+    with db.sqlite3.connect(restored) as c:
+        row=c.execute('SELECT number,calc_snapshot FROM invoices').fetchone()
+        assert row == ('SEL-2026-000001','{\"total\":\"100.00\"}')
+        assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'

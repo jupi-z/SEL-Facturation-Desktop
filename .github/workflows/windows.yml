@@ -1,6 +1,12 @@
 name: Build Windows Desktop
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publier une release après validation de la version et de la recette'
+        required: true
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
@@ -8,9 +14,9 @@ on:
     branches: [main]
     paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
 permissions:
-  contents: write
+  contents: read
 jobs:
-  test-build-release:
+  test-build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +40,28 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler unavailable: $iscc" }
           & $iscc packaging\SEL-Facturation.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
-      - name: Publish private GitHub prerelease
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: sel-windows-packages
+          path: |
+            dist/SEL-Facturation.exe
+            dist/installer/SEL-Facturation-Setup-0.2.0.exe
+          if-no-files-found: error
+
+  publish-release:
+    needs: test-build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@v4
+        with:
+          name: sel-windows-packages
+          path: dist
+      - name: Publish private GitHub prerelease without overwriting
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,7 +72,7 @@ jobs:
           if (-not (Test-Path $exe) -or -not (Test-Path $setup)) { throw "Missing Windows binary" }
           gh release view $tag --repo ${{ github.repository }} 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $exe $setup --clobber --repo ${{ github.repository }}
+            throw "Release $tag already exists; bump the application/installer version before publishing. Existing assets are never overwritten."
           } else {
             gh release create $tag $exe $setup --prerelease --title 'SEL Facturation Desktop V0.2 - fenêtre native' --notes 'Préversion native Windows : fenêtre dédiée WebView2, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
           }

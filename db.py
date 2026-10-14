@@ -91,6 +91,12 @@ def initialize():
             OR NEW.due_date != OLD.due_date OR NEW.client_id != OLD.client_id
             OR NEW.currency != OLD.currency
           BEGIN SELECT RAISE(ABORT, 'Facture émise immuable'); END;
+        CREATE TRIGGER IF NOT EXISTS immutable_payment_update
+          BEFORE UPDATE ON payments
+          BEGIN SELECT RAISE(ABORT, 'Paiement enregistré immuable'); END;
+        CREATE TRIGGER IF NOT EXISTS immutable_payment_delete
+          BEFORE DELETE ON payments
+          BEGIN SELECT RAISE(ABORT, 'Paiement enregistré immuable'); END;
         ''')
         defaults = {
             'company_name': 'SOCIÉTÉ D’ÉNERGIE DU LUALABA',

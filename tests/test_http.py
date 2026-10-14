@@ -47,6 +47,8 @@ def test_complete_flow(client):
         inv=c.execute('SELECT * FROM invoices').fetchone()
         assert inv['number'].startswith('SEL-')
         iid=inv['id']
+    dashboard=client.get('/')
+    assert '72 540,00' in dashboard.get_data(as_text=True)
     pdf=client.get(f'/invoices/{iid}/pdf')
     assert pdf.status_code==200 and pdf.data.startswith(b'%PDF-')
     r=client.post('/invoices/new',data=data,follow_redirects=True)
