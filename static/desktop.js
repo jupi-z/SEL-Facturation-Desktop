@@ -12,6 +12,11 @@
     toggle.setAttribute('aria-label', visible ? 'Afficher le mot de passe' : 'Masquer le mot de passe');
   });
 
+  document.addEventListener('submit', (event) => {
+    const form = event.target.closest('form[data-confirm]');
+    if (form && !window.confirm(form.dataset.confirm)) event.preventDefault();
+  });
+
   document.addEventListener('click', async (event) => {
     const anchor = event.target.closest('a[data-document-action]');
     if (!anchor || !window.pywebview || !window.pywebview.api) return;
@@ -21,6 +26,7 @@
     const actions = {open: 'open_pdf', save: 'save_pdf', print: 'print_pdf'};
     if (!(action in actions)) return;
     anchor.dataset.busy = '1';
+    anchor.setAttribute('aria-busy', 'true');
     const previousText = anchor.textContent;
     anchor.textContent = 'Préparation du document…';
     try {
@@ -49,6 +55,7 @@
     } finally {
       anchor.textContent = previousText;
       delete anchor.dataset.busy;
+      anchor.removeAttribute('aria-busy');
     }
   });
 })();

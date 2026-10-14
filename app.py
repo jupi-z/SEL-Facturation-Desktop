@@ -345,8 +345,10 @@ def create_app():
         inv,payments=record
         calc=json.loads(inv['calc_snapshot'])
         total=Decimal(calc['total']);paid=sum((Decimal(p['amount']) for p in payments),Decimal('0'))
+        balance=money(total-paid)
+        payment_status='ANNULÉ' if inv['status']=='VOID' else ('PAYÉ' if balance<=0 else ('PARTIELLEMENT PAYÉ' if paid>0 else 'IMPAYÉ'))
         return render_template('invoice_detail.html',title='Décompte '+inv['number'],invoice=inv,calc=calc,
-                               client=json.loads(inv['client_snapshot']),payments=payments,paid=paid,balance=money(total-paid))
+                               client=json.loads(inv['client_snapshot']),payments=payments,paid=paid,balance=balance,payment_status=payment_status)
 
     @app.post('/invoices/<int:iid>/payments')
     @protected
