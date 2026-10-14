@@ -4,7 +4,7 @@ Date : 14 octobre 2026
 Branche : `monarque/audit-livraison-sel`
 Issue : [#3](https://github.com/jupi-z/SEL-Facturation-Desktop/issues/3)
 PR : [#4](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/4)
-Correctifs principaux : `298b667`, `f5bd24b` et `0269b6c`
+Correctifs principaux : `298b667`, `f5bd24b`, `0269b6c`, `4926c77` et `22f71ac`
 
 ## Périmètre et méthode
 
@@ -34,6 +34,10 @@ Les blocs de contexte SQLite validaient les transactions mais ne fermaient pas e
 
 `DesktopDocuments` exposait la fenêtre native sous l'attribut public `window` dans l'objet passé à `js_api`. pywebview parcourait alors cet attribut et descendait récursivement dans l'objet WinForms `AccessibilityObject`, jusqu'à l'erreur `maximum recursion depth exceeded` et au blocage de la fenêtre. La référence est maintenant privée (`_window`) afin qu'elle ne soit pas exposée au pont JavaScript.
 
+### P1 — présentation PDF insuffisamment structurée
+
+Le PDF était lisible mais sa hiérarchie financière était trop discrète pour une remise professionnelle : en-têtes de tableaux peu contrastés, total et situation du compte séparés uniquement par du texte courant, et informations de règlement peu visibles. Le moteur ReportLab conserve désormais le même format de données, les mêmes calculs et les mêmes snapshots, tout en ajoutant une structure A4 plus nette : en-têtes bleus contrastés, lignes alternées, total mis en évidence, blocs « CONDITIONS DE RÈGLEMENT » et « SITUATION DU COMPTE », échéance, montant déjà réglé et « MONTANT À RÉGLER ». Aucun élément DGI fictif n'a été ajouté.
+
 ## Vérifications réalisées
 
 - Suite complète : `27 passed` avec Python intégré 3.12 et les dépendances du dépôt.
@@ -43,20 +47,23 @@ Les blocs de contexte SQLite validaient les transactions mais ne fermaient pas e
 - Tests de régression dédiés : sauvegarde rafraîchie, repli impression, message JavaScript et version `/health`.
 - Restauration contrôlée : sauvegarde SQLite, remplacement de la base, réouverture et `PRAGMA integrity_check` validés localement.
 - Vérification statique : loopback `127.0.0.1`, CSRF, cookies HttpOnly/SameSite, CSP, requêtes paramétrées, exports sans clé de session/mot de passe, snapshots protégés par trigger SQLite, calculs métier en `Decimal`.
-- Smoke test natif local : la fenêtre WebView2 s'est ouverte, la première configuration a créé un compte de test et la connexion au tableau de bord a réussi sur un dossier de données temporaire. La poursuite avec l'inspecteur UI a déclenché des erreurs WebView2 `E_NOINTERFACE`/accès hors thread UI et la fenêtre a fini par afficher « Ne répond pas » ; ce résultat ne constitue pas une validation propre du parcours natif ni une preuve de panne sur le poste SEL.
+- Un premier smoke test avec inspecteur UI avait déclenché des erreurs WebView2 ; après le correctif `_window`, le test natif a été repris sans inspecteur et le parcours complet a été exécuté proprement sur un dossier de données temporaire.
 - Les PDF temporaires de prévisualisation sont maintenant purgés au-delà de 7 jours, sans toucher aux PDF récents ni aux factures SQLite.
 - Smoke test EXE après reconstruction : processus Windows répondant après 12 secondes et base créée dans un dossier de données isolé.
 - Smoke test de fermeture : parent et processus GUI se ferment proprement via `CloseMainWindow()`, sans processus SEL-Facturation résiduel.
+- Inspection visuelle du PDF A4 rendu en PNG : en-tête SEL, informations client/compteur, relevé, tableaux tarifaires, total, règlement, mentions et pied de page alignés sans chevauchement sur le cas représentatif 200 kWh avec paiement partiel.
+- Test natif E2E sur EXE reconstruit : configuration, connexion, client, facture 450 → 650, total 72 540 CDF, sauvegarde PDF, paiement complet et fermeture propre ; journal applicatif sans `ERROR`, `Traceback` ou récursion.
+- Artefacts E2E vérifiés : PDF commençant par `%PDF-`, export JSON `sel-facturation-portable` schema 1 et sauvegarde SQLite créée.
 
 ## Limites et non-validations
 
 - Le lanceur `py -3.12` n'est pas installé dans l'environnement local. La suite a été exécutée avec le runtime Python 3.12 intégré à Codex ; le script `build-windows.ps1` n'a donc pas été exécuté tel quel.
 - Inno Setup n'est pas installé dans l'environnement local ; l'installateur n'a pas été compilé ici.
-- Aucune validation physique n'a été possible avec WebView2, un poste SEL, une imprimante, l'antivirus ou l'installateur Inno Setup. Le statut reste **pilote non validé sur poste cible**.
+- Aucune validation physique n'a été possible avec l'imprimante SEL, l'antivirus ou l'installateur Inno Setup. Le statut reste **pilote non validé sur poste cible**.
 - L'inspection UI automatisée précédente avait elle-même déclenché la récursion WebView2 ; le correctif est maintenant testé sans inspecteur, avec démarrage et fermeture propre de l'EXE.
 - La release n'a pas été publiée par la PR ; aucun nouveau binaire ni lien de release n'est annoncé ici.
 - Les tarifs, taxes, bases et identifiants d'entreprise restent à confirmer par SEL ; aucun statut DGI, QR ou identifiant fiscal fictif n'est ajouté.
 
 ## Avis de livraison
 
-**NO-GO pour remise commerciale immédiate.** Le socle corrigé est prêt pour revue et CI Windows, mais la livraison chez SEL ne peut passer en GO qu'après CI verte, compilation/installateur vérifiés et recette sur le poste Windows/imprimante cible, avec restauration d'une copie de sauvegarde testée.
+**NO-GO pour remise commerciale immédiate.** Le rendu PDF et le parcours EXE isolé sont techniquement vérifiés, mais la livraison chez SEL ne peut passer en GO qu'après CI verte sur le commit final, compilation/installateur vérifiés, restauration sur copie et recette sur le poste Windows/imprimante cible. Les tarifs, taxes et identifiants d'entreprise doivent également être confirmés par SEL.
