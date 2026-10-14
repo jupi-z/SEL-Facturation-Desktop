@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
+  pull_request:
+    branches: [main]
+    paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
 permissions:
   contents: write
 jobs:
@@ -32,6 +35,7 @@ jobs:
           & $iscc packaging\SEL-Facturation.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
       - name: Publish private GitHub prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,6 +48,6 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $exe $setup --clobber --repo ${{ github.repository }}
           } else {
-            gh release create $tag $exe $setup --prerelease --title 'SEL Facturation Desktop V1 - pilote' --notes 'Préversion native Windows : fenêtre dédiée WebView2, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
+            gh release create $tag $exe $setup --prerelease --title 'SEL Facturation Desktop V0.2 - fenêtre native' --notes 'Préversion native Windows : fenêtre dédiée WebView2, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
           }
           if ($LASTEXITCODE -ne 0) { throw "Publication GitHub Releases failed" }
