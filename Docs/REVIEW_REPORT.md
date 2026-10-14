@@ -1,7 +1,7 @@
 # Rapport d'audit — SEL Facturation Desktop
 
-Date : 14 octobre 2026
-Branche : `monarque/production-hardening`
+Date : 15 octobre 2026
+Branche : `monarque/ui-simplification`
 Issue : [#3](https://github.com/jupi-z/SEL-Facturation-Desktop/issues/3)
 PR : [#7](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/7)
 Correctifs principaux : `298b667`, `f5bd24b`, `0269b6c`, `4926c77`, `22f71ac`, `db09134` et `cf6e133` ; correctifs de préparation intensive en cours sur cette branche.
@@ -38,6 +38,10 @@ Les blocs de contexte SQLite validaient les transactions mais ne fermaient pas e
 
 Le PDF était lisible mais sa hiérarchie financière était trop discrète pour une remise professionnelle : en-têtes de tableaux peu contrastés, total et situation du compte séparés uniquement par du texte courant, et informations de règlement peu visibles. Le moteur ReportLab conserve désormais le même format de données, les mêmes calculs et les mêmes snapshots, tout en ajoutant une structure A4 plus nette : titre du document compact et aligné, en-têtes bleus contrastés, lignes alternées, total mis en évidence, blocs « CONDITIONS DE RÈGLEMENT » et « SITUATION DU COMPTE », échéance, montant déjà réglé et « MONTANT À RÉGLER ». Aucun élément DGI fictif n'a été ajouté.
 
+### P1 — parcours utilisateur trop technique
+
+Le shell d'authentification utilise maintenant une composition SEL dédiée sans barre latérale vide ni carte autour du formulaire. La navigation connectée expose un vocabulaire stable et un état actif accessible. Le tableau de bord distingue les montants émis, encaissés et restant à suivre, et signale la configuration du barème ainsi que la dernière sauvegarde détectée. Les formulaires abonnés/paramètres sont regroupés par tâche avec labels explicites. Enfin, l'émission d'un décompte passe par une prévisualisation serveur avant création immuable ; une nouvelle saisie invalide efface tout brouillon précédent.
+
 ## Vérifications réalisées
 
 ### Préparation à l'exploitation intensive
@@ -46,7 +50,9 @@ Le PDF était lisible mais sa hiérarchie financière était trop discrète pour
 - Les paiements historiques sont protégés par des triggers SQLite contre modification et suppression directes. L'édition d'un client applique aussi les limites de longueur déjà présentes à la création.
 - Le workflow Windows sépare build et publication, réduit les permissions par défaut à `contents: read`, exige une publication manuelle et refuse d'écraser une release existante.
 
-- Suite complète : `36 passed` avec Python intégré 3.12 et dans l'environnement de build isolé.
+- Suite complète : `59 passed` avec Python intégré 3.12 et dans l'environnement de build isolé.
+- Tests UI/parcours : shell auth, navigation active, tableau de bord, formulaires, prévisualisation/confirmation de décompte, états de paiement, actions PDF et pages d'erreur.
+- Compilation PyInstaller locale après les évolutions UI : `SEL-Facturation-ui.exe`, build terminé avec l'icône SEL embarquée.
 - `git diff --check` : aucune erreur de whitespace.
 - Compilation PyInstaller locale : `Build complete!`, `dist/SEL-Facturation.exe` créé (23,8 Mo au dernier build) ; l'analyse a émis des avertissements de collecte facultative WebView2/pycparser à confirmer dans la CI Windows.
 - CI Windows GitHub Actions : run final `38641344478` réussi ; tests, dépendances desktop, EXE, Inno Setup, MSI WiX et bootstrapper WebView2 validés sur `windows-latest`. La publication/upload de release est volontairement ignorée sur une PR brouillon.
