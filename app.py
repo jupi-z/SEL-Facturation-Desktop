@@ -89,6 +89,21 @@ def create_app():
            "font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
         return response
 
+    @app.errorhandler(400)
+    def bad_request(error):
+        return render_template('error.html', title='Requête impossible', status_code=400,
+                               message='La demande n’a pas pu être traitée. Rechargez la page puis réessayez.'), 400
+
+    @app.errorhandler(404)
+    def not_found(error):
+        return render_template('error.html', title='Page introuvable', status_code=404,
+                               message='Cette page n’existe pas ou n’est plus disponible.'), 404
+
+    @app.errorhandler(500)
+    def server_error(error):
+        return render_template('error.html', title='Erreur du logiciel', status_code=500,
+                               message='Une erreur inattendue est survenue. Vos données existantes n’ont pas été modifiées.'), 500
+
     @app.teardown_request
     def close_connection(exc):
         c=g.pop('db',None)
