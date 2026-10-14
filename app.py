@@ -159,15 +159,18 @@ def create_app():
     @protected
     def dashboard():
         invoice_rows=g.db.execute('SELECT status,currency,calc_snapshot FROM invoices').fetchall()
-        currency=db.settings(g.db).get('currency')
-        billed=sum_money(json.loads(row['calc_snapshot'])['total'] for row in invoice_rows
-                         if row['status']=='ISSUED' and row['currency']==currency)
-        stats={'n':len(invoice_rows),'billed':billed}
+        conf=db.settings(g.db)
+        currency=conf.get('currency')
+        issued_rows=[row for row in invoice_rows if row['status']=='ISSUED' and row['currency']==currency]
+        billed=sum_money(json.loads(row['calc_snapshot'])['total'] for row in issued_rows)
         clients=g.db.execute('SELECT COUNT(*) AS n FROM clients').fetchone()['n']
         recent=g.db.execute('''SELECT i.*, c.name as client_name FROM invoices i
           JOIN clients c ON c.id=i.client_id ORDER BY i.id DESC LIMIT 8''').fetchall()
         paid=sum_money(row['amount'] for row in g.db.execute('SELECT amount FROM payments'))
-        return render_template('dashboard.html',title='Tableau de bord',stats=stats,clients=clients,paid=paid,recent=recent)
+        backups=sorted((db.home()/'sauvegardes').glob('sel-*.sqlite3'), key=lambda path: path.stat().st_mtime, reverse=True)
+        stats={'n':len(issued_rows),'billed':billed,'paid':paid,'balance':money(billed-paid),
+               'configured':conf.get('configured')=='1','last_backup':backups[0].name if backups else None}
+        return render_template('dashboard.html',title='Tableau de bord',stats=stats,clients=clients,recent=recent)
 
     @app.route('/clients',methods=['GET','POST'])
     @protected
