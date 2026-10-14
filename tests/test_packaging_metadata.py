@@ -18,3 +18,13 @@ def test_bundle_uses_wix4_exe_arguments():
     assert exe.find("wix:UninstallCommand", NS) is None
     assert "DisplayInternalUI" not in msi.attrib
 
+
+def test_msi_keeps_program_files_separate_from_local_data():
+    root = ET.parse(ROOT / "packaging" / "wix" / "Product.wxs").getroot()
+    ns = {"wix": "http://wixtoolset.org/schemas/v4/wxs"}
+    install = root.find(".//wix:Directory[@Id='INSTALLFOLDER']", ns)
+    assert install is not None
+    assert install.attrib["Name"] == "SEL Facturation"
+    parent = next(parent for parent in root.iter() if install in list(parent))
+    assert parent.attrib == {"Id": "ProgramsFolder", "Name": "Programs"}
+

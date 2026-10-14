@@ -10,7 +10,9 @@
   </Package>
   <Fragment>
     <StandardDirectory Id="LocalAppDataFolder">
-      <Directory Id="INSTALLFOLDER" Name="SEL Facturation" />
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="SEL Facturation" />
+      </Directory>
     </StandardDirectory>
   </Fragment>
   <Fragment>
