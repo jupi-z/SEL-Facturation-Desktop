@@ -34,6 +34,7 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     assert 'NON FISCALIS' not in txt
     assert 'Service clientèle' in txt
     assert '72 540,00' in txt
+    assert 'DÉCOMPTE D’ÉLECTRICITÉ' in txt
     assert 'CONDITIONS DE RÈGLEMENT' in txt
     assert 'MONTANT À RÉGLER' in txt
     with pytest.raises(Exception):

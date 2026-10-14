@@ -48,6 +48,7 @@ def render_invoice(invoice, payments) -> bytes:
     small=ParagraphStyle('small',parent=normal,fontSize=7.5,leading=11)
     section=ParagraphStyle('section',fontName='Helvetica-Bold',fontSize=10.3,leading=14,textColor=BLUE,spaceBefore=9,spaceAfter=5)
     title=ParagraphStyle('title',fontName='Helvetica-Bold',fontSize=17,leading=22,textColor=BLUE,spaceAfter=4)
+    document_title=ParagraphStyle('document_title',parent=title,fontSize=11.5,leading=14,alignment=TA_RIGHT,spaceAfter=3)
     twhite=ParagraphStyle('twhite',fontName='Helvetica-Bold',fontSize=8.2,leading=11,textColor=colors.white)
     right=ParagraphStyle('right',parent=normal,alignment=TA_RIGHT)
     val=ParagraphStyle('val',parent=normal,alignment=TA_RIGHT,fontSize=9)
@@ -63,7 +64,7 @@ def render_invoice(invoice, payments) -> bytes:
          Paragraph(p(co.get('tagline','')),muted),
          Paragraph(p(co.get('address','')),small),
          Paragraph(' · '.join([p(v) for v in (co.get('phone'),co.get('email'),co.get('website')) if v]),small)],
-        [Paragraph('DÉCOMPTE<br/>D’ÉLECTRICITÉ',title),
+        [Paragraph('DÉCOMPTE D’ÉLECTRICITÉ',document_title),
          Paragraph('N° '+p(inv['number']),ParagraphStyle('ref',parent=normal,fontName='Helvetica-Bold',fontSize=9,alignment=TA_RIGHT,textColor=BLUE)),
          Paragraph('Émis le '+p(inv['issue_date']),right)]]
     table=Table([company_cells],colWidths=[32*mm,80*mm,66*mm])
