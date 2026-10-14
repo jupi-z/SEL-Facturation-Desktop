@@ -36,7 +36,9 @@ def connect() -> sqlite3.Connection:
 
 
 def initialize():
-    with connect() as c:
+    c = connect()
+    try:
+      with c:
         c.executescript('''
         CREATE TABLE IF NOT EXISTS settings (
           key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -103,6 +105,8 @@ def initialize():
         }
         for k, v in defaults.items():
             c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)', (k,v))
+    finally:
+        c.close()
 
 
 def settings(c) -> dict:
@@ -128,7 +132,11 @@ def backup(destination: Path):
     try:
         target=sqlite3.connect(temp_name)
         try:
-            with connect() as source: source.backup(target)
+            source = connect()
+            try:
+                source.backup(target)
+            finally:
+                source.close()
             check=target.execute('PRAGMA integrity_check').fetchone()[0]
             if check!='ok': raise sqlite3.DatabaseError(f'Backup SQLite invalide : {check}')
         finally:

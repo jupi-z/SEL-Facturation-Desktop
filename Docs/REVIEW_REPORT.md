@@ -4,7 +4,7 @@ Date : 14 octobre 2026
 Branche : `monarque/audit-livraison-sel`
 Issue : [#3](https://github.com/jupi-z/SEL-Facturation-Desktop/issues/3)
 PR : [#4](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/4)
-Correctif principal : `298b667`
+Correctifs principaux : `298b667`, `f5bd24b` et le durcissement SQLite en cours
 
 ## Périmètre et méthode
 
@@ -26,16 +26,22 @@ La régénération est écrite dans un fichier temporaire, vérifiée par `PRAGM
 
 `/health` annonçait `1.0.0` alors que la préversion et l'installateur sont `0.2.0`. La version applicative est maintenant centralisée dans `app.py` à `0.2.0` pour ce cycle.
 
+### P1 — handles SQLite conservés pendant initialisation/sauvegarde Windows
+
+Les blocs de contexte SQLite validaient les transactions mais ne fermaient pas explicitement les connexions. Sur Windows, cela pouvait maintenir un verrou sur `sel.sqlite3` et empêcher le remplacement/restauration d'un snapshot. `initialize()` et `backup()` ferment maintenant leurs connexions dans des blocs `finally`, avec un test de remplacement de la base après sauvegarde.
+
 ## Vérifications réalisées
 
-- Suite complète : `25 passed` avec Python intégré 3.12 et les dépendances du dépôt.
+- Suite complète : `27 passed` avec Python intégré 3.12 et les dépendances du dépôt.
 - `git diff --check` : aucune erreur de whitespace.
 - Compilation PyInstaller locale : `Build complete!`, `dist/SEL-Facturation.exe` créé ; l'analyse a émis des avertissements de collecte facultative WebView2/pycparser à confirmer dans la CI Windows.
 - CI Windows GitHub Actions : runs `38621057633` et `38624033809` réussis ; tests, dépendances desktop, EXE et installateur Inno Setup validés. La publication de release a été ignorée car les runs provenaient d'une PR.
 - Tests de régression dédiés : sauvegarde rafraîchie, repli impression, message JavaScript et version `/health`.
+- Restauration contrôlée : sauvegarde SQLite, remplacement de la base, réouverture et `PRAGMA integrity_check` validés localement.
 - Vérification statique : loopback `127.0.0.1`, CSRF, cookies HttpOnly/SameSite, CSP, requêtes paramétrées, exports sans clé de session/mot de passe, snapshots protégés par trigger SQLite, calculs métier en `Decimal`.
 - Smoke test natif local : la fenêtre WebView2 s'est ouverte, la première configuration a créé un compte de test et la connexion au tableau de bord a réussi sur un dossier de données temporaire. La poursuite avec l'inspecteur UI a déclenché des erreurs WebView2 `E_NOINTERFACE`/accès hors thread UI et la fenêtre a fini par afficher « Ne répond pas » ; ce résultat ne constitue pas une validation propre du parcours natif ni une preuve de panne sur le poste SEL.
 - Les PDF temporaires de prévisualisation sont maintenant purgés au-delà de 7 jours, sans toucher aux PDF récents ni aux factures SQLite.
+- Smoke test EXE après reconstruction : processus Windows répondant après 12 secondes et base créée dans un dossier de données isolé.
 
 ## Limites et non-validations
 

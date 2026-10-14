@@ -76,7 +76,20 @@ def test_backup_preserves_previous_snapshot_if_refresh_fails(monkeypatch,tmp_pat
         def __exit__(self,*exc):
             return False
 
+        def close(self):
+            pass
+
     monkeypatch.setattr(db,'connect',lambda: BrokenSource())
     with pytest.raises(RuntimeError,match='simulated backup interruption'):
         db.backup(destination)
     assert destination.read_bytes()==previous
+
+
+def test_database_handles_are_released_after_initialize_and_backup(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    destination=tmp_path/'released.sqlite3'
+    db.backup(destination)
+
+    db.db_path().unlink()
+    destination.unlink()
