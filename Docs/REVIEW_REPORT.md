@@ -35,6 +35,7 @@ La régénération est écrite dans un fichier temporaire, vérifiée par `PRAGM
 - Tests de régression dédiés : sauvegarde rafraîchie, repli impression, message JavaScript et version `/health`.
 - Vérification statique : loopback `127.0.0.1`, CSRF, cookies HttpOnly/SameSite, CSP, requêtes paramétrées, exports sans clé de session/mot de passe, snapshots protégés par trigger SQLite, calculs métier en `Decimal`.
 - Smoke test natif local : la fenêtre WebView2 s'est ouverte, la première configuration a créé un compte de test et la connexion au tableau de bord a réussi sur un dossier de données temporaire. La poursuite avec l'inspecteur UI a déclenché des erreurs WebView2 `E_NOINTERFACE`/accès hors thread UI et la fenêtre a fini par afficher « Ne répond pas » ; ce résultat ne constitue pas une validation propre du parcours natif ni une preuve de panne sur le poste SEL.
+- Les PDF temporaires de prévisualisation sont maintenant purgés au-delà de 7 jours, sans toucher aux PDF récents ni aux factures SQLite.
 
 ## Limites et non-validations
 

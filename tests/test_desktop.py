@@ -73,3 +73,21 @@ def test_desktop_script_reports_print_fallback_as_guidance():
     script = (Path(__file__).resolve().parents[1] / "static" / "desktop.js").read_text(encoding="utf-8")
     assert 'result.fallback === \'open\'' in script
     assert 'Ctrl+P' in script
+
+
+def test_temporary_pdf_cleanup_removes_only_expired_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    folder = tmp_path / "documents-temporaires"
+    folder.mkdir()
+    expired = folder / "expired.pdf"
+    recent = folder / "recent.pdf"
+    expired.write_bytes(b"%PDF-expired")
+    recent.write_bytes(b"%PDF-recent")
+    old_timestamp = expired.stat().st_mtime - (8 * 24 * 60 * 60)
+    os.utime(expired, (old_timestamp, old_timestamp))
+
+    api = DesktopDocuments()
+    api.open_pdf("SEL-2026-000001.pdf", pdf_payload())
+
+    assert not expired.exists()
+    assert recent.exists()

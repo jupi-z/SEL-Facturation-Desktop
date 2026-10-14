@@ -9,6 +9,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import re
 import threading
+import time
 from uuid import uuid4
 
 from werkzeug.serving import make_server
@@ -17,6 +18,7 @@ import db
 
 DOCUMENT_NAME = re.compile(r"SEL-\d{4}-\d{6}\.pdf\Z", re.IGNORECASE)
 MAX_PDF_BASE64 = 8 * 1024 * 1024
+TEMPORARY_PDF_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 
 class DesktopDocuments:
@@ -46,6 +48,13 @@ class DesktopDocuments:
     def _temporary_pdf(self, filename: str, content: bytes) -> Path:
         folder = db.home() / "documents-temporaires"
         folder.mkdir(parents=True, exist_ok=True)
+        cutoff = time.time() - TEMPORARY_PDF_RETENTION_SECONDS
+        for old_file in folder.glob("*.pdf"):
+            try:
+                if old_file.is_file() and old_file.stat().st_mtime < cutoff:
+                    old_file.unlink()
+            except OSError:
+                logging.warning("Impossible de purger le PDF temporaire %s", old_file)
         target = folder / (uuid4().hex + "-" + filename)
         target.write_bytes(content)
         return target
