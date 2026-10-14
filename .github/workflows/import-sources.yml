@@ -2,8 +2,7 @@ name: Import SEL source archive
 on:
   push:
     branches: [main]
-    paths: ['bundle/source.tar.xz']
-  workflow_dispatch:
+    paths: ['bundle/source-v2.tar.xz']
 permissions:
   contents: write
 jobs:
@@ -15,11 +14,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f bundle/source.tar.xz ]; then
-            echo "No archive to import"; exit 0
-          fi
-          echo "de7dc277018661701c8968fd4f9ff9a74565558cc659e759390247a1e45eeba5  bundle/source.tar.xz" | sha256sum --check
-          tar -xJf bundle/source.tar.xz
+          test -f bundle/source-v2.tar.xz
+          echo "de7dc277018661701c8968fd4f9ff9a74565558cc659e759390247a1e45eeba5  bundle/source-v2.tar.xz" | sha256sum --check
+          tar -xJf bundle/source-v2.tar.xz
+          # GitHub Actions' GITHUB_TOKEN cannot create workflow files.
+          rm -f .github/workflows/windows.yml
           rm -rf bundle
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
