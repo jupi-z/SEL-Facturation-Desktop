@@ -43,3 +43,40 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     db.backup(tmp_path/'check.sqlite3')
     assert (tmp_path/'check.sqlite3').exists()
     c.close()
+
+
+def test_automatic_backup_refreshes_after_same_day_changes(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    db.automatic_backup()
+    backup_path=tmp_path/'sauvegardes'/f"sel-{__import__('datetime').date.today().isoformat()}.sqlite3"
+    with db.connect() as c:
+        c.execute('INSERT INTO clients(code,name,address,meter_number,coefficient) VALUES(?,?,?,?,?)',
+                  ('SEL-C-00001','Abonné sauvegardé','Kolwezi','M123','1'))
+    db.automatic_backup()
+    with db.sqlite3.connect(backup_path) as saved:
+        assert saved.execute('SELECT name FROM clients').fetchone()[0]=='Abonné sauvegardé'
+
+
+def test_backup_preserves_previous_snapshot_if_refresh_fails(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    destination=tmp_path/'previous.sqlite3'
+    db.backup(destination)
+    previous=destination.read_bytes()
+    class BrokenSource:
+        def backup(self, source):
+            source.execute('CREATE TABLE corrupt_marker(value TEXT)')
+            source.commit()
+            raise RuntimeError('simulated backup interruption')
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self,*exc):
+            return False
+
+    monkeypatch.setattr(db,'connect',lambda: BrokenSource())
+    with pytest.raises(RuntimeError,match='simulated backup interruption'):
+        db.backup(destination)
+    assert destination.read_bytes()==previous

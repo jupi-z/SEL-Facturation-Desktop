@@ -61,3 +61,9 @@ def test_complete_flow(client):
     assert d['schema_version']==1 and len(d['data']['invoices'])==1 and len(d['data']['payments'])==1
     assert 'password' not in portable.get_data(as_text=True).lower()
     assert client.get('/backup').status_code==200
+
+
+def test_health_reports_current_application_version(client):
+    response=client.get('/health')
+    assert response.status_code==200
+    assert response.json['version']=='0.2.0'

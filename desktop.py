@@ -87,7 +87,19 @@ class DesktopDocuments:
         try:
             content = self._validate_pdf(filename, payload)
             target = self._temporary_pdf(filename, content)
-            os.startfile(str(target), "print")
+            try:
+                os.startfile(str(target), "print")
+            except OSError as print_error:
+                # The print verb is optional in Windows PDF associations. Keep
+                # the document available in the associated viewer so the user
+                # can print it with Ctrl+P instead of losing the action.
+                os.startfile(str(target))
+                return {
+                    "ok": False,
+                    "fallback": "open",
+                    "message": "Impression automatique indisponible. Le PDF est ouvert : utilisez Ctrl+P.",
+                    "detail": str(print_error),
+                }
             return {"ok": True}
         except Exception as exc:
             logging.exception("Impossible d'imprimer le document")

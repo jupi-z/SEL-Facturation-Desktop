@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import sqlite3
 import sys
+import tempfile
 
 APP_NAME = 'SEL Facturation'
 
@@ -120,12 +121,22 @@ def invoice_full(c, invoice_id):
 
 
 def backup(destination: Path):
+    destination=Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    target=sqlite3.connect(str(destination))
+    fd,temp_name=tempfile.mkstemp(prefix=f'.{destination.name}.',suffix='.tmp',dir=destination.parent)
+    os.close(fd)
     try:
-        with connect() as source: source.backup(target)
-    finally:
-        target.close()
+        target=sqlite3.connect(temp_name)
+        try:
+            with connect() as source: source.backup(target)
+            check=target.execute('PRAGMA integrity_check').fetchone()[0]
+            if check!='ok': raise sqlite3.DatabaseError(f'Backup SQLite invalide : {check}')
+        finally:
+            target.close()
+        os.replace(temp_name,destination)
+    except Exception:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
     return destination
 
 
@@ -133,7 +144,10 @@ def automatic_backup():
     d=home() / 'sauvegardes'
     d.mkdir(parents=True, exist_ok=True)
     filename=d / f'sel-{date.today().isoformat()}.sqlite3'
-    if not filename.exists() and db_path().exists():
+    # Refresh the daily snapshot on every application start.  A backup made
+    # before the first invoice of the day must not remain the only copy after
+    # later writes to the same database.
+    if db_path().exists():
         backup(filename)
     old=sorted(d.glob('sel-*.sqlite3'))
     for fp in old[:-14]:

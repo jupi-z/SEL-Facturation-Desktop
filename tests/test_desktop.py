@@ -49,3 +49,27 @@ def test_print_pdf_calls_windows_print_verb(tmp_path, monkeypatch):
     api = DesktopDocuments()
     assert api.print_pdf("SEL-2026-000001.pdf", pdf_payload()) == {"ok": True}
     assert opened and opened[0][1] == ("print",)
+
+
+def test_print_pdf_falls_back_to_open_viewer_when_print_association_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    opened = []
+
+    def startfile(path, *args):
+        opened.append((path, args))
+        if args == ("print",):
+            raise OSError("No print association")
+
+    monkeypatch.setattr(os, "startfile", startfile, raising=False)
+    api = DesktopDocuments()
+    response = api.print_pdf("SEL-2026-000001.pdf", pdf_payload())
+    assert response["ok"] is False
+    assert response["fallback"] == "open"
+    assert opened[0][1] == ("print",)
+    assert opened[1][1] == ()
+
+
+def test_desktop_script_reports_print_fallback_as_guidance():
+    script = (Path(__file__).resolve().parents[1] / "static" / "desktop.js").read_text(encoding="utf-8")
+    assert 'result.fallback === \'open\'' in script
+    assert 'Ctrl+P' in script

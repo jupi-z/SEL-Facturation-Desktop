@@ -28,6 +28,10 @@
       });
       const pdfName = anchor.dataset.documentName;
       const result = await window.pywebview.api[actions[action]](pdfName, encoded);
+      if (result.fallback === 'open') {
+        alert(result.message || 'Impression automatique indisponible. Le PDF est ouvert : utilisez Ctrl+P.');
+        return;
+      }
       if (!result.ok) throw new Error(result.message || 'Action impossible.');
     } catch (err) {
       alert('Erreur PDF : ' + (err.message || String(err)));

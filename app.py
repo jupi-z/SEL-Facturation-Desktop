@@ -23,6 +23,8 @@ import db
 from domain import BillingError, calculate_from_settings, decimal, fmt, money, parse_tiers
 from invoice_pdf import render_invoice
 
+APP_VERSION = '0.2.0'
+
 
 def resource(name):
     base = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
@@ -95,7 +97,7 @@ def create_app():
 
     @app.get('/health')
     def health():
-        return {'app':'SEL-Facturation-Local','status':'ok','version':'1.0.0'}
+        return {'app':'SEL-Facturation-Local','status':'ok','version':APP_VERSION}
 
     @app.route('/setup',methods=['GET','POST'])
     def setup():
