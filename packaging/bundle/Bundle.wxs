@@ -5,9 +5,7 @@
       <bal:WixStandardBootstrapperApplication LicenseUrl="" Theme="hyperlinkLicense" />
     </BootstrapperApplication>
     <Chain>
-      <ExePackage Id="WebView2EvergreenStandalone" SourceFile="$(var.WebView2Installer)" PerMachine="yes" Permanent="yes">
-        <InstallCommand Command="/silent /install" />
-        <UninstallCommand Command="/uninstall /silent" />
+        <ExePackage Id="WebView2EvergreenStandalone" SourceFile="$(var.WebView2Installer)" PerMachine="yes" Permanent="yes" InstallArguments="/silent /install" UninstallArguments="/uninstall /silent">
       </ExePackage>
       <MsiPackage SourceFile="$(var.MsiPath)" />
     </Chain>
