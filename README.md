@@ -1,19 +1,98 @@
-# SEL Facturation Desktop
+# SEL Facturation Desktop — V1 locale
 
-Application Windows locale de facturation de la Société d'Énergie du Lualaba (SEL), indépendante de Monarque Connect.
+Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
 
-## État du dépôt
+**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF sont intitulés « décomptes » et signalés **non authentifiés par la DGI**. Les règles tarifaires et fiscales sont à confirmer par SEL, et les procédures officielles de fiscalisation restent distinctes. Il ne faut pas annoncer une homologation fiscale ou délivrer un document comme facture normalisée tant que la DGI n'a pas authentifié son émission.
 
-Le dépôt a été initialisé. Le projet complet a été créé sous forme d'archive de sources dans la conversation ChatGPT et doit encore être publié ici. Le contenu de cette archive comprend : application Flask, persistance SQLite, moteur de facturation, PDF A4, interface, tests, exports CSV/JSON et scripts Windows.
+## Démarrage développeur
 
-Après avoir téléchargé et extrait `SEL_Facturation_Desktop_Source.zip`, exécuter dans le dossier du projet sur un PC avec Git et authentification GitHub :
+Python 3.11 ou 3.12 sur Windows :
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python desktop.py
+```
+
+L'interface s'ouvre dans le navigateur : `http://127.0.0.1:8765/`. Un mot de passe administrateur d'au moins 10 caractères est demandé à la première utilisation. Le serveur écoute **uniquement sur `127.0.0.1`**. Il ne doit jamais être exposé sur Internet ou un réseau public : ce n'est pas une application multi-postes.
+
+## Version Windows pour les agents (sans Python)
+
+Créer l'exécutable sur un PC **Windows 64 bits**, ou via le workflow GitHub Actions `Build Windows Desktop` :
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-build.txt
+.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --add-data "templates;templates" --add-data "static;static" desktop.py
+```
+
+`dist\SEL-Facturation.exe` lance l'application et ouvre le navigateur. Pour un **vrai installateur** avec raccourcis Bureau/Menu Démarrer, installer *Inno Setup* puis compiler `packaging\SEL-Facturation.iss` après avoir construit l'exécutable. Ne jamais distribuer une version sans recette et sauvegarde. La compilation Windows n'est pas possible depuis tous les environnements ; **un exécutable non encore compilé ne doit pas être annoncé comme disponible**.
+
+## Où sont les données ?
+
+Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `session.key` et le répertoire `sauvegardes`. Elles restent séparées du dossier d'installation et de l'exécutable, donc ne sont pas écrasées à la mise à jour.
+
+- Au démarrage, une sauvegarde SQLite datée est conservée (rétention : 14 fichiers journaliers).
+- Le menu **Sauvegarde SQLite** produit une copie cohérente téléchargeable.
+- Sauvegarder régulièrement la copie hors du PC (disque externe chiffré, stockage contrôlé).
+- Le programme **n'effectue pas de synchronisation entre ordinateurs** ; ne pas ouvrir la même base via un partage réseau.
+- Pour restaurer, fermer l'application puis confier le remplacement de la base par une personne compétente, avec sauvegarde préalable et vérification d'intégrité.
+
+## Parcours agent
+
+1. Créer le mot de passe au premier lancement.
+2. Dans **Paramètres**, renseigner les références SEL et **confirmer** tarifs, taux et assiette de TVA. Les chiffres initiaux sont seulement ceux de l'exemple et **ne sont pas validés**.
+3. Dans **Abonnés**, enregistrer nom, adresse, contrat, numéro de compteur, coefficient et NIF le cas échéant.
+4. Dans **Nouvelle facture**, choisir l'abonné, mois, deux index et date d'échéance.
+5. Le serveur calcule les tranches, les taxes configurées, le total et attribue un numéro unique.
+6. Ouvrir le PDF A4 (ou le télécharger) puis imprimer via le navigateur.
+7. Dans **Factures**, retrouver/re-imprimer, enregistrer un paiement ou annuler un document **non réglé** avec motif.
+8. Exporter périodiquement une sauvegarde et le JSON portable.
+
+### Fonctionnement et limites assumées
+
+- Un seul document **actif** par client et par période, contrôlé aussi par index unique SQLite.
+- Le compteur n'est pas historisé indépendamment : son numéro et le coefficient sont copiés dans chaque facture. Un changement de compteur est à traiter manuellement, avec validation avant émission.
+- Les anciens index sont saisis manuellement : aucun report implicite. Éviter les erreurs en vérifiant le relevé précédent.
+- Les taux de TVA et taxe locale et le barème sont configurables, mais leur légalité n'est **pas validée automatiquement**.
+- Le montant de TVA de la facture source fournie par SEL ne correspond pas aux assiettes visibles : ne pas tenter de reproduire cet écart.
+- Les paiements sont des **constats saisis**, pas des transactions bancaires/Mobile Money exécutées.
+- Il n'existe qu'un compte administrateur par installation dans cette première version ; pas de journal d'audit nominatif multi-agents.
+- Pas d'envoi SMS, pas de connexion DGI, pas de facturation de masse, pas de multi-postes, pas de comptabilité SYSCOHADA.
+- Les modifications de la fiche client ou du barème ne recalculent jamais les snapshots des documents émis.
+
+## Portabilité future vers Monarque Connect
+
+Télécharger **Export JSON complet** depuis l'application. Il s'agit du format `sel-facturation-portable`, `schema_version: 1` :
+
+| Fichier / objet | Clé métier stable | Destination possible dans Monarque Connect |
+|---|---|---|
+| `data.clients[]` | `code` (`SEL-C-00001`) | `BusinessParty` + référence contrat/compteur spécialisée |
+| `data.invoices[]` | `number` (`SEL-YYYY-NNNNNN`) | `Invoice` ou import historique métier énergie |
+| `data.payments[]` | `invoice_number` + `id` | `PaymentRecord` / historique de paiement |
+| `data.company_settings` | noms des clés | Configuration d'organisation et grille tarifaire énergie |
+
+Les `client_snapshot`, `company_snapshot`, `calc_snapshot` de chaque document sont conservés à l'identique. L'import doit être **versionné, idempotent, et validé avant rapprochement** ; les identifiants SQLite entiers sont des références locales, pas les futurs UUID Monarque. On conserve aussi des exports CSV par catégorie. Aucun mot de passe ni clé de session n'est inclus dans les exports.
+
+L'adaptateur Monarque Connect n'est **pas développé** dans ce dépôt. Sa conception dépendra de l'API et du modèle Energy futurs ; on évite ici toute fausse compatibilité directe avec `Invoice` existant, lequel exige aujourd'hui une commande confirmée.
+
+## Vérifications
+
+```powershell
+.venv\Scripts\python -m pip install pytest
+.venv\Scripts\python -m pytest -q
+```
+
+Pour livrer aux agents, exécuter le scénario de recette sur un **Windows cible** : premier démarrage, fermeture/redémarrage, création de deux clients, facture d'essai, sauvegarde, réimpression, tentative de doublon, paiement partiel, connexion/déconnexion, test d'impression A4 et restauration sur une copie. Vérifier les montants et la fiscalité avec SEL avant de traiter les vrais clients.
+
+## Publication dans le dépôt privé fourni
+
+Après extraction de l'archive source sur votre PC de développement Windows, double-cliquez sur PowerShell ou exécutez dans le répertoire du projet :
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\publish-to-github.ps1
 ```
 
-Le script pousse les sources vers ce dépôt. Le workflow `Build Windows Desktop` contenu dans les sources construira ensuite un exécutable portable et tentera de construire un installateur Windows.
+Le script clone `jupi-z/SEL-Facturation-Desktop`, copie les sources, crée un commit et pousse sur `main`. Il exige **Git** et une session GitHub autorisée. Aucun mot de passe ni jeton n'est stocké dans le script. Le workflow `Build Windows Desktop` peut alors produire les exécutables Windows dans les artefacts GitHub Actions après réussite des tests.
 
-**Important :** les documents PDF générés sont des décomptes non authentifiés par la DGI. Les tarifs et la fiscalité doivent être validés par SEL avant utilisation réelle. La connexion à la DGI n'est pas implémentée.
-
-Le système exporte des données portables (`sel-facturation-portable`, version 1) avec les identifiants clients et numéros de factures stables, en vue d'une migration future vers Monarque Connect.
+Si les sources sont déjà sur la machine Windows, `powershell -ExecutionPolicy Bypass -File .\build-windows.ps1` exécute la suite de tests puis tente de compiler l'EXE (et l'installateur si Inno Setup est installé).
