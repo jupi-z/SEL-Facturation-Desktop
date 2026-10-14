@@ -34,12 +34,14 @@ La régénération est écrite dans un fichier temporaire, vérifiée par `PRAGM
 - CI Windows GitHub Actions : run `38621057633` réussi ; tests, dépendances desktop, EXE et installateur Inno Setup validés. La publication de release a été ignorée car le run provenait d'une PR.
 - Tests de régression dédiés : sauvegarde rafraîchie, repli impression, message JavaScript et version `/health`.
 - Vérification statique : loopback `127.0.0.1`, CSRF, cookies HttpOnly/SameSite, CSP, requêtes paramétrées, exports sans clé de session/mot de passe, snapshots protégés par trigger SQLite, calculs métier en `Decimal`.
+- Smoke test natif local : la fenêtre WebView2 s'est ouverte, la première configuration a créé un compte de test et la connexion au tableau de bord a réussi sur un dossier de données temporaire. La poursuite avec l'inspecteur UI a déclenché des erreurs WebView2 `E_NOINTERFACE`/accès hors thread UI et la fenêtre a fini par afficher « Ne répond pas » ; ce résultat ne constitue pas une validation propre du parcours natif ni une preuve de panne sur le poste SEL.
 
 ## Limites et non-validations
 
 - Le lanceur `py -3.12` n'est pas installé dans l'environnement local. La suite a été exécutée avec le runtime Python 3.12 intégré à Codex ; le script `build-windows.ps1` n'a donc pas été exécuté tel quel.
 - Inno Setup n'est pas installé dans l'environnement local ; l'installateur n'a pas été compilé ici.
 - Aucune validation physique n'a été possible avec WebView2, un poste SEL, une imprimante, l'antivirus ou l'installateur Inno Setup. Le statut reste **pilote non validé sur poste cible**.
+- Le smoke test local ne remplace pas une exécution manuelle sans outil d'inspection : l'anomalie WebView2 observée doit être retestée directement sur le poste cible avant toute décision.
 - La release n'a pas été publiée par la PR ; aucun nouveau binaire ni lien de release n'est annoncé ici.
 - Les tarifs, taxes, bases et identifiants d'entreprise restent à confirmer par SEL ; aucun statut DGI, QR ou identifiant fiscal fictif n'est ajouté.
 
