@@ -5,12 +5,30 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 import json
 import re
+from datetime import date
 
 Q = Decimal("0.01")
 
 
 class BillingError(ValueError):
     pass
+
+
+def validate_due_date(issue_date: str, due_date: str) -> None:
+    if not due_date:
+        return
+    try:
+        issued = date.fromisoformat(issue_date)
+        due = date.fromisoformat(due_date)
+    except ValueError:
+        raise BillingError("Date d’échéance invalide.") from None
+    if due < issued:
+        raise BillingError("La date d’échéance ne peut pas précéder la date d’émission.")
+
+
+def validate_payment_reference(method: str, reference: str) -> None:
+    if method in ("Banque", "Mobile Money") and not reference.strip():
+        raise BillingError("Une référence est obligatoire pour ce mode de paiement.")
 
 
 def decimal(value: Any, field: str, *, allow_zero=True) -> Decimal:

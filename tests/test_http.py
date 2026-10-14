@@ -9,7 +9,8 @@ if not importlib.util.find_spec('flask'):
     pytest.skip('Flask is not installed in this offline test environment',allow_module_level=True)
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from app import create_app
+from app import create_app, page_number
+from version import APP_VERSION
 from db import connect
 
 @pytest.fixture
@@ -68,4 +69,10 @@ def test_complete_flow(client):
 def test_health_reports_current_application_version(client):
     response=client.get('/health')
     assert response.status_code==200
-    assert response.json['version']=='0.2.0'
+    assert response.json['version']==APP_VERSION
+
+
+def test_page_number_is_safe_for_list_views():
+    assert page_number('2') == 2
+    assert page_number('0') == 1
+    assert page_number('not-a-number') == 1

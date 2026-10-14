@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from domain import BillingError,calculate,parse_tiers
+from domain import BillingError,calculate,parse_tiers,validate_due_date,validate_payment_reference
 
 TIERS=parse_tiers('1-100:300\n101-200:320\n201-:350')
 
@@ -45,3 +45,16 @@ def test_invalid_tiers(source):
 @pytest.mark.parametrize('prev,cur', [('500','499'),('NaN','2'),('-1','2'),('2','Infinity')])
 def test_invalid_readings(prev,cur):
     with pytest.raises(BillingError):amount(prev,cur)
+
+
+def test_due_date_cannot_precede_issue_date():
+    with pytest.raises(BillingError, match='échéance'):
+        validate_due_date('2026-10-14', '2026-10-13')
+
+
+def test_payment_reference_required_for_traceable_methods():
+    with pytest.raises(BillingError, match='référence'):
+        validate_payment_reference('Banque', '')
+    with pytest.raises(BillingError, match='référence'):
+        validate_payment_reference('Mobile Money', '   ')
+    validate_payment_reference('Espèces', '')

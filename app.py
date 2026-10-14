@@ -20,10 +20,19 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    send_file, session, url_for)
 
 import db
-from domain import BillingError, calculate_from_settings, decimal, fmt, money, parse_tiers
+from domain import (BillingError, calculate_from_settings, decimal, fmt, money,
+                    parse_tiers, validate_due_date, validate_payment_reference)
 from invoice_pdf import render_invoice
+from version import APP_VERSION
 
-APP_VERSION = '0.2.0'
+PAGE_SIZE = 50
+
+
+def page_number(value):
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
 
 
 def sum_money(values):
@@ -178,11 +187,18 @@ def create_app():
             except (BillingError,sqlite3.IntegrityError) as e:
                 g.db.rollback();flash(str(e),'error')
         term=request.args.get('q','').strip()[:120]
+        page=page_number(request.args.get('page','1'))
+        offset=(page-1)*PAGE_SIZE
+        search_args=[]
         if term:
-            result=g.db.execute("SELECT * FROM clients WHERE name LIKE ? OR code LIKE ? OR meter_number LIKE ? OR contract_number LIKE ? ORDER BY id DESC LIMIT 200",tuple(['%'+term+'%']*4)).fetchall()
+            where='WHERE name LIKE ? OR code LIKE ? OR meter_number LIKE ? OR contract_number LIKE ?'
+            search_args=['%'+term+'%']*4
         else:
-            result=g.db.execute('SELECT * FROM clients ORDER BY id DESC LIMIT 200').fetchall()
-        return render_template('clients.html',title='Clients et compteurs',clients=result,query=term)
+            where=''
+        total=g.db.execute(f'SELECT COUNT(*) FROM clients {where}',search_args).fetchone()[0]
+        result=g.db.execute(f'SELECT * FROM clients {where} ORDER BY id DESC LIMIT ? OFFSET ?',search_args+[PAGE_SIZE,offset]).fetchall()
+        pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
+        return render_template('clients.html',title='Clients et compteurs',clients=result,query=term,page=page,pages=pages,total=total)
 
     @app.route('/clients/<int:cid>/edit',methods=['GET','POST'])
     @protected
@@ -231,6 +247,8 @@ def create_app():
     def invoices():
         term=request.args.get('q','').strip()[:100]
         status=request.args.get('status','')
+        page=page_number(request.args.get('page','1'))
+        offset=(page-1)*PAGE_SIZE
         clause=[];args=[]
         if term:
             clause.append('(i.number LIKE ? OR c.name LIKE ? OR i.billing_period LIKE ?)')
@@ -238,13 +256,23 @@ def create_app():
         if status in ('ISSUED','VOID'):
             clause.append('i.status=?');args.append(status)
         where='WHERE '+' AND '.join(clause) if clause else ''
+        total=g.db.execute(f'''SELECT COUNT(*) FROM invoices i JOIN clients c ON c.id=i.client_id {where}''',args).fetchone()[0]
         rows=[]
         for row in g.db.execute(f'''SELECT i.*,c.name client_name
-            FROM invoices i JOIN clients c ON c.id=i.client_id {where} ORDER BY i.id DESC LIMIT 300''',args):
+            FROM invoices i JOIN clients c ON c.id=i.client_id {where} ORDER BY i.id DESC LIMIT ? OFFSET ?''',args+[PAGE_SIZE,offset]):
             item=dict(row)
-            item['paid']=sum_money(p['amount'] for p in g.db.execute('SELECT amount FROM payments WHERE invoice_id=?',(row['id'],)))
             rows.append(item)
-        return render_template('invoices.html',title='Historique des factures',invoices=rows,query=term,status=status)
+        if rows:
+            ids=[row['id'] for row in rows]
+            marks=','.join('?' for _ in ids)
+            paid_by_invoice={invoice_id: [] for invoice_id in ids}
+            for payment in g.db.execute(
+                f'SELECT invoice_id,amount FROM payments WHERE invoice_id IN ({marks})', ids):
+                paid_by_invoice[payment['invoice_id']].append(payment['amount'])
+            for item in rows:
+                item['paid']=sum_money(paid_by_invoice[item['id']])
+        pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
+        return render_template('invoices.html',title='Historique des factures',invoices=rows,query=term,status=status,page=page,pages=pages,total=total)
 
     @app.route('/invoices/new',methods=['GET','POST'])
     @protected
@@ -259,7 +287,7 @@ def create_app():
                 if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',period): raise BillingError('Période invalide (AAAA-MM).')
                 issue_date=date.today().isoformat()
                 due=request.form.get('due_date','').strip()
-                if due: date.fromisoformat(due)
+                validate_due_date(issue_date, due)
                 client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
                 if not client: raise BillingError('Client inexistant.')
                 calc=calculate_from_settings(request.form.get('previous',''),request.form.get('current',''),client['coefficient'],conf,request.form.get('fee','0') or '0')
@@ -303,6 +331,7 @@ def create_app():
             method=request.form.get('method','').strip()
             if method not in ('Espèces','Banque','Mobile Money','Autre'): raise BillingError('Mode de paiement invalide.')
             reference=request.form.get('reference','').strip()[:120]
+            validate_payment_reference(method, reference)
             paid_on=request.form.get('paid_on',date.today().isoformat())
             date.fromisoformat(paid_on)
             g.db.execute('BEGIN IMMEDIATE')

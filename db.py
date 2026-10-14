@@ -73,6 +73,8 @@ def initialize():
           void_reason TEXT NOT NULL DEFAULT ''
         );
         CREATE UNIQUE INDEX IF NOT EXISTS invoices_one_active_period ON invoices(client_id, billing_period) WHERE status='ISSUED';
+        CREATE INDEX IF NOT EXISTS clients_lookup ON clients(name, code, meter_number, contract_number);
+        CREATE INDEX IF NOT EXISTS invoices_history ON invoices(issue_date, billing_period, client_id);
         CREATE TABLE IF NOT EXISTS payments (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           invoice_id INTEGER NOT NULL REFERENCES invoices(id),

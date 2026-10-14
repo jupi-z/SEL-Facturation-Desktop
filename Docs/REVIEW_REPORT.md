@@ -24,7 +24,7 @@ La régénération est écrite dans un fichier temporaire, vérifiée par `PRAGM
 
 ### P1 — version de santé incohérente
 
-`/health` annonçait `1.0.0` alors que la préversion et l'installateur sont `0.2.0`. La version applicative est maintenant centralisée dans `app.py` à `0.2.0` pour ce cycle.
+`/health` annonçait une version différente de la préversion et de l’installateur. La version applicative est maintenant centralisée dans `version.py` (`0.3.0`) et vérifiée par test avec l’installateur Inno Setup et les artefacts WiX.
 
 ### P1 — handles SQLite conservés pendant initialisation/sauvegarde Windows
 
