@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .build-venv/
 build/
+build-local/
 dist/
 *.spec
 *.sqlite3
