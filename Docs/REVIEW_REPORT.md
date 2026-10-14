@@ -39,7 +39,7 @@ Les blocs de contexte SQLite validaient les transactions mais ne fermaient pas e
 - Suite complète : `27 passed` avec Python intégré 3.12 et les dépendances du dépôt.
 - `git diff --check` : aucune erreur de whitespace.
 - Compilation PyInstaller locale : `Build complete!`, `dist/SEL-Facturation.exe` créé ; l'analyse a émis des avertissements de collecte facultative WebView2/pycparser à confirmer dans la CI Windows.
-- CI Windows GitHub Actions : runs `38621057633`, `38624033809` et `38625269038` réussis ; tests, dépendances desktop, EXE et installateur Inno Setup validés. La publication de release a été ignorée car les runs provenaient d'une PR.
+- CI Windows GitHub Actions : runs `38621057633`, `38624033809`, `38625269038` et `38627086407` réussis ; tests, dépendances desktop, EXE et installateur Inno Setup validés. La publication de release a été ignorée car les runs provenaient d'une PR.
 - Tests de régression dédiés : sauvegarde rafraîchie, repli impression, message JavaScript et version `/health`.
 - Restauration contrôlée : sauvegarde SQLite, remplacement de la base, réouverture et `PRAGMA integrity_check` validés localement.
 - Vérification statique : loopback `127.0.0.1`, CSRF, cookies HttpOnly/SameSite, CSP, requêtes paramétrées, exports sans clé de session/mot de passe, snapshots protégés par trigger SQLite, calculs métier en `Decimal`.
