@@ -46,4 +46,3 @@ La régénération est écrite dans un fichier temporaire, vérifiée par `PRAGM
 ## Avis de livraison
 
 **NO-GO pour remise commerciale immédiate.** Le socle corrigé est prêt pour revue et CI Windows, mais la livraison chez SEL ne peut passer en GO qu'après CI verte, compilation/installateur vérifiés et recette sur le poste Windows/imprimante cible, avec restauration d'une copie de sauvegarde testée.
-
