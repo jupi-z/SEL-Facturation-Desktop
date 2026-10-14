@@ -199,7 +199,7 @@ def create_app():
         total=g.db.execute(f'SELECT COUNT(*) FROM clients {where}',search_args).fetchone()[0]
         result=g.db.execute(f'SELECT * FROM clients {where} ORDER BY id DESC LIMIT ? OFFSET ?',search_args+[PAGE_SIZE,offset]).fetchall()
         pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
-        return render_template('clients.html',title='Clients et compteurs',clients=result,query=term,page=page,pages=pages,total=total)
+        return render_template('clients.html',title='Abonnés et compteurs',clients=result,query=term,page=page,pages=pages,total=total)
 
     @app.route('/clients/<int:cid>/edit',methods=['GET','POST'])
     @protected
@@ -273,7 +273,7 @@ def create_app():
             for item in rows:
                 item['paid']=sum_money(paid_by_invoice[item['id']])
         pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
-        return render_template('invoices.html',title='Historique des factures',invoices=rows,query=term,status=status,page=page,pages=pages,total=total)
+        return render_template('invoices.html',title='Historique des décomptes',invoices=rows,query=term,status=status,page=page,pages=pages,total=total)
 
     @app.route('/invoices/new',methods=['GET','POST'])
     @protected
@@ -310,7 +310,7 @@ def create_app():
             except (BillingError,ValueError,sqlite3.IntegrityError) as e:
                 g.db.rollback();flash(f'Émission interrompue : {e}','error')
         period=date.today().strftime('%Y-%m')
-        return render_template('new_invoice.html',title='Nouvelle facture',clients=options,period=period,configured=conf.get('configured')=='1')
+        return render_template('new_invoice.html',title='Nouveau décompte',clients=options,period=period,configured=conf.get('configured')=='1')
 
     @app.get('/invoices/<int:iid>')
     @protected
