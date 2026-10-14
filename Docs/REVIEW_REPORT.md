@@ -1,9 +1,9 @@
 # Rapport d'audit — SEL Facturation Desktop
 
 Date : 14 octobre 2026
-Branche : `monarque/audit-livraison-sel`
+Branche : `monarque/production-hardening`
 Issue : [#3](https://github.com/jupi-z/SEL-Facturation-Desktop/issues/3)
-PR : [#4](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/4)
+PR : [#7](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/7)
 Correctifs principaux : `298b667`, `f5bd24b`, `0269b6c`, `4926c77`, `22f71ac`, `db09134` et `cf6e133` ; correctifs de préparation intensive en cours sur cette branche.
 
 ## Périmètre et méthode
@@ -46,10 +46,10 @@ Le PDF était lisible mais sa hiérarchie financière était trop discrète pour
 - Les paiements historiques sont protégés par des triggers SQLite contre modification et suppression directes. L'édition d'un client applique aussi les limites de longueur déjà présentes à la création.
 - Le workflow Windows sépare build et publication, réduit les permissions par défaut à `contents: read`, exige une publication manuelle et refuse d'écraser une release existante.
 
-- Suite complète : `30 passed` avec Python intégré 3.12 et `30 passed` dans l'environnement de build isolé.
+- Suite complète : `36 passed` avec Python intégré 3.12 et dans l'environnement de build isolé.
 - `git diff --check` : aucune erreur de whitespace.
 - Compilation PyInstaller locale : `Build complete!`, `dist/SEL-Facturation.exe` créé (23,8 Mo au dernier build) ; l'analyse a émis des avertissements de collecte facultative WebView2/pycparser à confirmer dans la CI Windows.
-- CI Windows GitHub Actions : runs `38621057633`, `38624033809`, `38625269038` et `38627086407` réussis ; tests, dépendances desktop, EXE et installateur Inno Setup validés. La publication de release a été ignorée car les runs provenaient d'une PR.
+- CI Windows GitHub Actions : run final `38641344478` réussi ; tests, dépendances desktop, EXE, Inno Setup, MSI WiX et bootstrapper WebView2 validés sur `windows-latest`. La publication/upload de release est volontairement ignorée sur une PR brouillon.
 - Tests de régression dédiés : sauvegarde rafraîchie, repli impression, message JavaScript et version `/health`.
 - Restauration contrôlée : sauvegarde SQLite, remplacement de la base, réouverture et `PRAGMA integrity_check` validés localement.
 - Test de restauration sur copie : snapshot copié vers une base de test, facture/snapshot retrouvés et `PRAGMA integrity_check` à `ok`, sans modifier la base live.
@@ -69,10 +69,10 @@ Le PDF était lisible mais sa hiérarchie financière était trop discrète pour
 - Aucune validation physique n'a été possible avec l'imprimante SEL, l'antivirus ou l'installateur Inno Setup. Le statut reste **pilote non validé sur poste cible**.
 - L'inspection UI automatisée précédente avait elle-même déclenché la récursion WebView2 ; le correctif est maintenant testé sans inspecteur, avec démarrage et fermeture propre de l'EXE.
 - La release n'a pas été publiée par la PR ; aucun nouveau binaire ni lien de release n'est annoncé ici.
-- La CI Windows du commit final `2caeddb` est verte : run `38635388084`, tests, dépendances desktop, PyInstaller et Inno Setup réussis ; publication et upload d'artefacts volontairement ignorés sur une validation standard.
+- La CI Windows du commit final `91e499e` est verte : run `38641344478`, tests, dépendances desktop, PyInstaller, Inno Setup, MSI et bootstrapper réussis ; publication et upload d'artefacts volontairement ignorés sur une validation standard.
 - La run `38634986894` a validé tests, dépendances desktop, EXE et Inno Setup, puis a échoué seulement sur l'upload d'artefact GitHub (`Artifact storage quota has been hit`). Le workflow limite désormais cet upload à une publication manuelle explicite ; la validation CI standard ne dépend plus du quota d'artefacts.
 - Les tarifs, taxes, bases et identifiants d'entreprise restent à confirmer par SEL ; aucun statut DGI, QR ou identifiant fiscal fictif n'est ajouté.
 
 ## Avis de livraison
 
-**NO-GO pour remise commerciale immédiate.** Le rendu PDF et le parcours EXE isolé sont techniquement vérifiés, mais la livraison chez SEL ne peut passer en GO qu'après CI verte sur le commit final, compilation/installateur vérifiés, restauration sur copie et recette sur le poste Windows/imprimante cible. Les tarifs, taxes et identifiants d'entreprise doivent également être confirmés par SEL.
+**NO-GO pour remise commerciale immédiate.** La CI et le packaging sont maintenant verts, mais le statut reste **pilote non validé sur poste cible** : il manque l'installation/exécution du bootstrapper sur le PC Windows 10/11 SEL, la recette avec imprimante/PDF par défaut, la restauration sur copie et la validation SEL des tarifs, taxes et identifiants d'entreprise. Aucun GO commercial ne doit être annoncé avant ces preuves.
