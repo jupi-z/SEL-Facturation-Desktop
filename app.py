@@ -284,6 +284,7 @@ def create_app():
         conf=db.settings(g.db)
         options=g.db.execute('SELECT * FROM clients ORDER BY name').fetchall()
         if request.method=='POST':
+            session.pop('invoice_draft',None)
             try:
                 if conf.get('configured')!='1': raise BillingError('Validez d’abord le barème et les taxes dans Paramètres.')
                 cid=int(request.form.get('client_id','0'))
@@ -296,24 +297,45 @@ def create_app():
                 if not client: raise BillingError('Client inexistant.')
                 calc=calculate_from_settings(request.form.get('previous',''),request.form.get('current',''),client['coefficient'],conf,request.form.get('fee','0') or '0')
                 if db.active_invoice(g.db,cid,period): raise BillingError('Une facture active existe déjà pour ce client et cette période.')
-                g.db.execute('BEGIN IMMEDIATE')
-                if db.active_invoice(g.db,cid,period): raise BillingError('Cette période est déjà facturée pour ce client.')
-                year=date.today().year
-                r=g.db.execute('SELECT last_number FROM sequences WHERE year=?',(year,)).fetchone()
-                next_n=(r['last_number']+1) if r else 1
-                g.db.execute('INSERT INTO sequences(year,last_number) VALUES(?,?) ON CONFLICT(year) DO UPDATE SET last_number=excluded.last_number',(year,next_n))
-                number=f'SEL-{year}-{next_n:06d}'
-                s_client={k:client[k] for k in client.keys() if k!='created_at'}
-                s_company={k:v for k,v in conf.items() if k not in ('configured',)}
-                cur=g.db.execute('''INSERT INTO invoices(number,client_id,billing_period,issue_date,due_date,client_snapshot,company_snapshot,calc_snapshot,currency,note)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)''',(number,cid,period,issue_date,due,json.dumps(s_client,ensure_ascii=False),json.dumps(s_company,ensure_ascii=False),json.dumps(calc,ensure_ascii=False),conf['currency'],request.form.get('note','').strip()[:500]))
-                inv_id=cur.lastrowid
-                g.db.commit();flash('Décompte enregistré. Vérifiez le PDF avant impression.','success')
-                return redirect(url_for('invoice_detail',iid=inv_id))
+                session['invoice_draft']={'client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'fee':request.form.get('fee','0').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500]}
+                return render_template('invoice_preview.html',title='Vérifier le décompte',draft=session['invoice_draft'],client=client,calc=calc,configured=True)
             except (BillingError,ValueError,sqlite3.IntegrityError) as e:
                 g.db.rollback();flash(f'Émission interrompue : {e}','error')
         period=date.today().strftime('%Y-%m')
         return render_template('new_invoice.html',title='Nouveau décompte',clients=options,period=period,configured=conf.get('configured')=='1')
+
+    @app.post('/invoices/new/confirm')
+    @protected
+    def confirm_invoice():
+        draft=session.pop('invoice_draft',None)
+        if not draft:
+            flash('Aucun décompte en attente de confirmation.','error')
+            return redirect(url_for('new_invoice'))
+        conf=db.settings(g.db)
+        try:
+            if conf.get('configured')!='1': raise BillingError('Validez d’abord le barème et les taxes dans Paramètres.')
+            cid=int(draft['client_id']); period=draft['billing_period']; issue_date=date.today().isoformat()
+            validate_due_date(issue_date,draft['due_date'])
+            client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
+            if not client: raise BillingError('Client inexistant.')
+            calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft['fee'])
+            g.db.execute('BEGIN IMMEDIATE')
+            if db.active_invoice(g.db,cid,period): raise BillingError('Cette période est déjà facturée pour ce client.')
+            year=date.today().year
+            row=g.db.execute('SELECT last_number FROM sequences WHERE year=?',(year,)).fetchone()
+            next_n=(row['last_number']+1) if row else 1
+            g.db.execute('INSERT INTO sequences(year,last_number) VALUES(?,?) ON CONFLICT(year) DO UPDATE SET last_number=excluded.last_number',(year,next_n))
+            number=f'SEL-{year}-{next_n:06d}'
+            s_client={k:client[k] for k in client.keys() if k!='created_at'}
+            s_company={k:v for k,v in conf.items() if k not in ('configured',)}
+            cur=g.db.execute('''INSERT INTO invoices(number,client_id,billing_period,issue_date,due_date,client_snapshot,company_snapshot,calc_snapshot,currency,note)
+                VALUES(?,?,?,?,?,?,?,?,?,?)''',(number,cid,period,issue_date,draft['due_date'],json.dumps(s_client,ensure_ascii=False),json.dumps(s_company,ensure_ascii=False),json.dumps(calc,ensure_ascii=False),conf['currency'],draft['note']))
+            inv_id=cur.lastrowid
+            g.db.commit();flash('Décompte enregistré. Vérifiez le PDF avant impression.','success')
+            return redirect(url_for('invoice_detail',iid=inv_id))
+        except (BillingError,ValueError,sqlite3.IntegrityError) as e:
+            g.db.rollback();flash(f'Émission interrompue : {e}','error')
+            return redirect(url_for('new_invoice'))
 
     @app.get('/invoices/<int:iid>')
     @protected
