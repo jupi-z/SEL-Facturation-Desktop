@@ -69,7 +69,7 @@ Le PDF était lisible mais sa hiérarchie financière était trop discrète pour
 - Aucune validation physique n'a été possible avec l'imprimante SEL, l'antivirus ou l'installateur Inno Setup. Le statut reste **pilote non validé sur poste cible**.
 - L'inspection UI automatisée précédente avait elle-même déclenché la récursion WebView2 ; le correctif est maintenant testé sans inspecteur, avec démarrage et fermeture propre de l'EXE.
 - La release n'a pas été publiée par la PR ; aucun nouveau binaire ni lien de release n'est annoncé ici.
-- La CI du commit final de cette phase doit encore être relue après poussée de la branche ; le dernier état observé avant ces changements était encore `in_progress`.
+- La CI Windows du commit final `2caeddb` est verte : run `38635388084`, tests, dépendances desktop, PyInstaller et Inno Setup réussis ; publication et upload d'artefacts volontairement ignorés sur une validation standard.
 - La run `38634986894` a validé tests, dépendances desktop, EXE et Inno Setup, puis a échoué seulement sur l'upload d'artefact GitHub (`Artifact storage quota has been hit`). Le workflow limite désormais cet upload à une publication manuelle explicite ; la validation CI standard ne dépend plus du quota d'artefacts.
 - Les tarifs, taxes, bases et identifiants d'entreprise restent à confirmer par SEL ; aucun statut DGI, QR ou identifiant fiscal fictif n'est ajouté.
 
