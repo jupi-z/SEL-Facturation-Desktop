@@ -13,7 +13,7 @@ def test_bundle_uses_wix4_exe_arguments():
     exe = chain.find("wix:ExePackage", NS)
     msi = chain.find("wix:MsiPackage", NS)
     assert exe.attrib["InstallArguments"] == "/silent /install"
-    assert exe.attrib["UninstallArguments"] == "/uninstall /silent"
+    assert "UninstallArguments" not in exe.attrib
     assert exe.find("wix:InstallCommand", NS) is None
     assert exe.find("wix:UninstallCommand", NS) is None
     assert "DisplayInternalUI" not in msi.attrib
