@@ -181,7 +181,7 @@ def create_app():
         clients=g.db.execute('SELECT COUNT(*) AS n FROM clients').fetchone()['n']
         recent=g.db.execute('''SELECT i.*, c.name as client_name FROM invoices i
           JOIN clients c ON c.id=i.client_id ORDER BY i.id DESC LIMIT 8''').fetchall()
-        paid=sum_money(row['amount'] for row in g.db.execute('SELECT amount FROM payments'))
+        paid=sum_money(row['amount'] for row in g.db.execute("SELECT p.amount FROM payments p JOIN invoices i ON i.id=p.invoice_id WHERE i.status='ISSUED' AND i.currency=?", (currency,)))
         backups=sorted((db.home()/'sauvegardes').glob('sel-*.sqlite3'), key=lambda path: path.stat().st_mtime, reverse=True)
         stats={'n':len(issued_rows),'billed':billed,'paid':paid,'balance':money(billed-paid),
                'configured':conf.get('configured')=='1','last_backup':backups[0].name if backups else None}

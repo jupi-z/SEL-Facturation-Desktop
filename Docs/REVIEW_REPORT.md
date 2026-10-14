@@ -50,7 +50,7 @@ Le shell d'authentification utilise maintenant une composition SEL dédiée sans
 - Les paiements historiques sont protégés par des triggers SQLite contre modification et suppression directes. L'édition d'un client applique aussi les limites de longueur déjà présentes à la création.
 - Le workflow Windows sépare build et publication, réduit les permissions par défaut à `contents: read`, exige une publication manuelle et refuse d'écraser une release existante.
 
-- Suite complète : `59 passed` avec Python intégré 3.12 et dans l'environnement de build isolé.
+- Suite complète : `60 passed` avec Python intégré 3.12 et dans l'environnement de build isolé.
 - Tests UI/parcours : shell auth, navigation active, tableau de bord, formulaires, prévisualisation/confirmation de décompte, états de paiement, actions PDF et pages d'erreur.
 - Compilation PyInstaller locale après les évolutions UI : `SEL-Facturation-ui.exe`, build terminé avec l'icône SEL embarquée.
 - `git diff --check` : aucune erreur de whitespace.
