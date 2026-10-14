@@ -46,11 +46,14 @@ def render_invoice(invoice, payments) -> bytes:
     normal=ParagraphStyle('normal',fontName='Helvetica',fontSize=8.6,leading=13,textColor=INK,spaceAfter=0)
     muted=ParagraphStyle('muted',parent=normal,fontSize=8,textColor=GREY)
     small=ParagraphStyle('small',parent=normal,fontSize=7.5,leading=11)
-    section=ParagraphStyle('section',fontName='Helvetica-Bold',fontSize=10.3,leading=14,textColor=BLUE,spaceBefore=7,spaceAfter=5)
+    section=ParagraphStyle('section',fontName='Helvetica-Bold',fontSize=10.3,leading=14,textColor=BLUE,spaceBefore=9,spaceAfter=5)
     title=ParagraphStyle('title',fontName='Helvetica-Bold',fontSize=17,leading=22,textColor=BLUE,spaceAfter=4)
-    twhite=ParagraphStyle('twhite',fontName='Helvetica-Bold',fontSize=8.5,leading=12,textColor=colors.white)
+    document_title=ParagraphStyle('document_title',parent=title,fontSize=11.5,leading=14,alignment=TA_RIGHT,spaceAfter=3)
+    twhite=ParagraphStyle('twhite',fontName='Helvetica-Bold',fontSize=8.2,leading=11,textColor=colors.white)
     right=ParagraphStyle('right',parent=normal,alignment=TA_RIGHT)
     val=ParagraphStyle('val',parent=normal,alignment=TA_RIGHT,fontSize=9)
+    total_label=ParagraphStyle('total_label',parent=normal,fontName='Helvetica-Bold',fontSize=9.5,textColor=BLUE)
+    total_value=ParagraphStyle('total_value',parent=right,fontName='Helvetica-Bold',fontSize=11,textColor=BLUE)
     story=[]
 
     # identite SEL + titre de document
@@ -61,7 +64,7 @@ def render_invoice(invoice, payments) -> bytes:
          Paragraph(p(co.get('tagline','')),muted),
          Paragraph(p(co.get('address','')),small),
          Paragraph(' · '.join([p(v) for v in (co.get('phone'),co.get('email'),co.get('website')) if v]),small)],
-        [Paragraph('DÉCOMPTE<br/>D’ÉLECTRICITÉ',title),
+        [Paragraph('DÉCOMPTE D’ÉLECTRICITÉ',document_title),
          Paragraph('N° '+p(inv['number']),ParagraphStyle('ref',parent=normal,fontName='Helvetica-Bold',fontSize=9,alignment=TA_RIGHT,textColor=BLUE)),
          Paragraph('Émis le '+p(inv['issue_date']),right)]]
     table=Table([company_cells],colWidths=[32*mm,80*mm,66*mm])
@@ -81,25 +84,29 @@ def render_invoice(invoice, payments) -> bytes:
     details=Table([[Paragraph(info_left,normal),Paragraph(info_right,normal)]],colWidths=[89*mm,89*mm])
     details.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.6,BORDER),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),11),('BOTTOMPADDING',(0,0),(-1,-1),11),('LEFTPADDING',(0,0),(-1,-1),11)]))
     story.extend([details,Paragraph('RELEVÉ ET CONSOMMATION',section)])
-    usage=Table([[Paragraph('<b>Index précédent</b>',small),Paragraph('<b>Index actuel</b>',small),Paragraph('<b>Consommation</b>',small),Paragraph('<b>Période facturée</b>',small)],
+    usage=Table([[Paragraph('Index précédent',twhite),Paragraph('Index actuel',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite)],
                  [p(d['previous']),p(d['current']),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period']))]],colWidths=[43*mm,43*mm,43*mm,49*mm])
-    usage.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),PALE),('TEXTCOLOR',(0,0),(-1,0),BLUE),('LINEBELOW',(0,0),(-1,0),.8,BLUE),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('BOX',(0,0),(-1,-1),.65,BORDER),('ALIGN',(0,0),(-1,-1),'CENTER'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
+    usage.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('LINEBELOW',(0,0),(-1,0),.8,BLUE),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('BOX',(0,0),(-1,-1),.65,BORDER),('ALIGN',(0,0),(-1,-1),'CENTER'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
     story.extend([usage,Paragraph('DÉTAIL DE LA CONSOMMATION FACTURÉE',section)])
-    lines=[[Paragraph('<b>Tranche tarifaire</b>',small),Paragraph('<b>Quantité (kWh)</b>',small),Paragraph('<b>Prix unitaire</b>',small),Paragraph('<b>Montant</b>',small)]]
+    lines=[[Paragraph('Tranche tarifaire',twhite),Paragraph('Quantité (kWh)',twhite),Paragraph('Prix unitaire',twhite),Paragraph('Montant',twhite)]]
     for row in d['lines']:
         lines.append([p(row['range']),p(row['quantity']),fmt(row['unit_price']),fmt(row['amount'])])
     if not d['lines']:lines.append(['Aucune consommation','0','—','0,00'])
     table=Table(lines,colWidths=[49*mm,44*mm,43*mm,42*mm],repeatRows=1)
-    table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),PALE),('TEXTCOLOR',(0,0),(-1,0),BLUE),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('BOX',(0,0),(-1,-1),.6,BORDER),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'RIGHT'),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+    table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F7FAFC')]),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('BOX',(0,0),(-1,-1),.6,BORDER),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'RIGHT'),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
     story.append(table)
     recap=[('Sous-total énergie',fmt(d['energy'])),(f"Taxe locale ({p(d['local_rate'])} %)",fmt(d['local_tax'])),
            ('Frais supplémentaires',fmt(d['fee'])),(f"TVA ({p(d['vat_rate'])} %) — base {fmt(d['vat_basis'])}",fmt(d['vat'])),
            ('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total']))]
-    rec=Table([[Paragraph(a,normal),Paragraph(b,right)] for a,b in recap],colWidths=[130*mm,48*mm])
-    rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TEXTCOLOR',(0,-1),(-1,-1),BLUE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
+    rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
+    rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
     story.extend([Spacer(1,7),rec,Spacer(1,10)])
-    payment_summary=Paragraph(f"<b>Paiements enregistrés :</b> {fmt(paid)} {p(inv['currency'])} &nbsp;&nbsp; <b>Solde :</b> {fmt(balance)} {p(inv['currency'])}",normal)
-    story.append(payment_summary)
+    payment_box=Table([[Paragraph('CONDITIONS DE RÈGLEMENT',twhite),Paragraph('SITUATION DU COMPTE',twhite)],
+                       [Paragraph(f"Échéance : <b>{p(inv['due_date'])}</b><br/>Paiement accepté selon les modalités de SEL.",normal),
+                        Paragraph(f"Déjà réglé : <b>{fmt(paid)} {p(inv['currency'])}</b><br/>MONTANT À RÉGLER : <b>{fmt(balance)} {p(inv['currency'])}</b>",normal)]],
+                      colWidths=[89*mm,89*mm])
+    payment_box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('BACKGROUND',(0,1),(-1,1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.65,BORDER),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),9),('RIGHTPADDING',(0,0),(-1,-1),9)]))
+    story.append(payment_box)
     if inv['status']=='VOID':story.append(Paragraph('<font color="red"><b>DOCUMENT ANNULÉ - NE PAS UTILISER</b></font>',section))
     if inv['note']:story.extend([Spacer(1,6),Paragraph('<b>Note :</b> '+p(inv['note']),small)])
     story.extend([Spacer(1,10),Paragraph('<b>MENTIONS ENTREPRISE :</b> RCCM : '+p(co.get('rccm'))+' &nbsp;&nbsp; NIF : '+p(co.get('nif'))+' &nbsp;&nbsp; ID NAT : '+p(co.get('id_nat')),small),
@@ -109,7 +116,7 @@ def render_invoice(invoice, payments) -> bytes:
         w,h=A4
         canvas.setStrokeColor(BORDER);canvas.line(15*mm,14*mm,w-15*mm,14*mm)
         canvas.setFont('Helvetica',7);canvas.setFillColor(GREY)
-        canvas.drawString(15*mm,10*mm,'SEL · Service clientèle  |  '+str(inv['number']))
+        canvas.drawString(15*mm,10*mm,'SEL - Service clientèle  |  '+str(inv['number']))
         canvas.drawRightString(w-15*mm,10*mm,f'Page {document.page}')
         canvas.restoreState()
     doc.build(story,onFirstPage=footer,onLaterPages=footer)

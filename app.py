@@ -20,8 +20,24 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    send_file, session, url_for)
 
 import db
-from domain import BillingError, calculate_from_settings, decimal, fmt, money, parse_tiers
+from domain import (BillingError, calculate_from_settings, decimal, fmt, money,
+                    parse_tiers, validate_due_date, validate_payment_reference)
 from invoice_pdf import render_invoice
+from version import APP_VERSION
+
+PAGE_SIZE = 50
+
+
+def page_number(value):
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
+
+
+def sum_money(values):
+    """Additionne des montants persistés sans passer par un flottant binaire."""
+    return sum((Decimal(str(value)) for value in values), Decimal('0'))
 
 
 def resource(name):
@@ -73,6 +89,21 @@ def create_app():
            "font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
         return response
 
+    @app.errorhandler(400)
+    def bad_request(error):
+        return render_template('error.html', title='Requête impossible', status_code=400,
+                               message='La demande n’a pas pu être traitée. Rechargez la page puis réessayez.'), 400
+
+    @app.errorhandler(404)
+    def not_found(error):
+        return render_template('error.html', title='Page introuvable', status_code=404,
+                               message='Cette page n’existe pas ou n’est plus disponible.'), 404
+
+    @app.errorhandler(500)
+    def server_error(error):
+        return render_template('error.html', title='Erreur du logiciel', status_code=500,
+                               message='Une erreur inattendue est survenue. Vos données existantes n’ont pas été modifiées.'), 500
+
     @app.teardown_request
     def close_connection(exc):
         c=g.pop('db',None)
@@ -81,7 +112,8 @@ def create_app():
     @app.context_processor
     def global_template():
         return {'csrf':lambda: session.get('_csrf',''), 'company':db.settings(g.db),
-                'fmt':fmt, 'today':date.today(), 'is_logged':bool(session.get('authenticated'))}
+                'fmt':fmt, 'today':date.today(), 'app_version':APP_VERSION,
+                'is_logged':bool(session.get('authenticated'))}
 
     def protected(fn):
         @wraps(fn)
@@ -95,7 +127,7 @@ def create_app():
 
     @app.get('/health')
     def health():
-        return {'app':'SEL-Facturation-Local','status':'ok','version':'1.0.0'}
+        return {'app':'SEL-Facturation-Local','status':'ok','version':APP_VERSION}
 
     @app.route('/setup',methods=['GET','POST'])
     def setup():
@@ -141,14 +173,19 @@ def create_app():
     @app.get('/')
     @protected
     def dashboard():
-        stats=g.db.execute('''SELECT COUNT(*) AS n,
-          COALESCE(SUM(CASE WHEN status='ISSUED' AND currency=(SELECT value FROM settings WHERE key='currency') THEN CAST(json_extract(calc_snapshot,'$.total') AS REAL) ELSE 0 END),0) AS billed
-          FROM invoices''').fetchone()
+        invoice_rows=g.db.execute('SELECT status,currency,calc_snapshot FROM invoices').fetchall()
+        conf=db.settings(g.db)
+        currency=conf.get('currency')
+        issued_rows=[row for row in invoice_rows if row['status']=='ISSUED' and row['currency']==currency]
+        billed=sum_money(json.loads(row['calc_snapshot'])['total'] for row in issued_rows)
         clients=g.db.execute('SELECT COUNT(*) AS n FROM clients').fetchone()['n']
         recent=g.db.execute('''SELECT i.*, c.name as client_name FROM invoices i
           JOIN clients c ON c.id=i.client_id ORDER BY i.id DESC LIMIT 8''').fetchall()
-        paid=g.db.execute("SELECT COALESCE(SUM(CAST(amount AS REAL)),0) AS n FROM payments").fetchone()['n']
-        return render_template('dashboard.html',title='Tableau de bord',stats=stats,clients=clients,paid=paid,recent=recent)
+        paid=sum_money(row['amount'] for row in g.db.execute("SELECT p.amount FROM payments p JOIN invoices i ON i.id=p.invoice_id WHERE i.status='ISSUED' AND i.currency=?", (currency,)))
+        backups=sorted((db.home()/'sauvegardes').glob('sel-*.sqlite3'), key=lambda path: path.stat().st_mtime, reverse=True)
+        stats={'n':len(issued_rows),'billed':billed,'paid':paid,'balance':money(billed-paid),
+               'configured':conf.get('configured')=='1','last_backup':backups[0].name if backups else None}
+        return render_template('dashboard.html',title='Tableau de bord',stats=stats,clients=clients,recent=recent)
 
     @app.route('/clients',methods=['GET','POST'])
     @protected
@@ -169,11 +206,18 @@ def create_app():
             except (BillingError,sqlite3.IntegrityError) as e:
                 g.db.rollback();flash(str(e),'error')
         term=request.args.get('q','').strip()[:120]
+        page=page_number(request.args.get('page','1'))
+        offset=(page-1)*PAGE_SIZE
+        search_args=[]
         if term:
-            result=g.db.execute("SELECT * FROM clients WHERE name LIKE ? OR code LIKE ? OR meter_number LIKE ? OR contract_number LIKE ? ORDER BY id DESC LIMIT 200",tuple(['%'+term+'%']*4)).fetchall()
+            where='WHERE name LIKE ? OR code LIKE ? OR meter_number LIKE ? OR contract_number LIKE ?'
+            search_args=['%'+term+'%']*4
         else:
-            result=g.db.execute('SELECT * FROM clients ORDER BY id DESC LIMIT 200').fetchall()
-        return render_template('clients.html',title='Clients et compteurs',clients=result,query=term)
+            where=''
+        total=g.db.execute(f'SELECT COUNT(*) FROM clients {where}',search_args).fetchone()[0]
+        result=g.db.execute(f'SELECT * FROM clients {where} ORDER BY id DESC LIMIT ? OFFSET ?',search_args+[PAGE_SIZE,offset]).fetchall()
+        pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
+        return render_template('clients.html',title='Abonnés et compteurs',clients=result,query=term,page=page,pages=pages,total=total)
 
     @app.route('/clients/<int:cid>/edit',methods=['GET','POST'])
     @protected
@@ -185,6 +229,8 @@ def create_app():
             try:
                 if not values['name'] or not values['address'] or not values['meter_number']: raise BillingError('Nom, adresse et compteur obligatoires.')
                 decimal(values['coefficient'] or '1','Coefficient',allow_zero=False)
+                if len(values['name'])>180 or len(values['meter_number'])>80:
+                    raise BillingError('Nom ou numéro de compteur trop long.')
                 g.db.execute('''UPDATE clients SET name=?,address=?,category=?,client_type=?,contract_number=?,meter_number=?,center=?,service_point=?,nif=?,phone=?,coefficient=? WHERE id=?''',(*[values[k] for k in values],cid))
                 g.db.commit();flash('Fiche mise à jour. Les anciennes factures conservent leurs données.','success');return redirect(url_for('clients'))
             except BillingError as e: flash(str(e),'error')
@@ -220,6 +266,8 @@ def create_app():
     def invoices():
         term=request.args.get('q','').strip()[:100]
         status=request.args.get('status','')
+        page=page_number(request.args.get('page','1'))
+        offset=(page-1)*PAGE_SIZE
         clause=[];args=[]
         if term:
             clause.append('(i.number LIKE ? OR c.name LIKE ? OR i.billing_period LIKE ?)')
@@ -227,10 +275,23 @@ def create_app():
         if status in ('ISSUED','VOID'):
             clause.append('i.status=?');args.append(status)
         where='WHERE '+' AND '.join(clause) if clause else ''
-        rows=g.db.execute(f'''SELECT i.*,c.name client_name,
-            COALESCE((SELECT SUM(CAST(p.amount AS REAL)) FROM payments p WHERE p.invoice_id=i.id),0) AS paid
-            FROM invoices i JOIN clients c ON c.id=i.client_id {where} ORDER BY i.id DESC LIMIT 300''',args).fetchall()
-        return render_template('invoices.html',title='Historique des factures',invoices=rows,query=term,status=status)
+        total=g.db.execute(f'''SELECT COUNT(*) FROM invoices i JOIN clients c ON c.id=i.client_id {where}''',args).fetchone()[0]
+        rows=[]
+        for row in g.db.execute(f'''SELECT i.*,c.name client_name
+            FROM invoices i JOIN clients c ON c.id=i.client_id {where} ORDER BY i.id DESC LIMIT ? OFFSET ?''',args+[PAGE_SIZE,offset]):
+            item=dict(row)
+            rows.append(item)
+        if rows:
+            ids=[row['id'] for row in rows]
+            marks=','.join('?' for _ in ids)
+            paid_by_invoice={invoice_id: [] for invoice_id in ids}
+            for payment in g.db.execute(
+                f'SELECT invoice_id,amount FROM payments WHERE invoice_id IN ({marks})', ids):
+                paid_by_invoice[payment['invoice_id']].append(payment['amount'])
+            for item in rows:
+                item['paid']=sum_money(paid_by_invoice[item['id']])
+        pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
+        return render_template('invoices.html',title='Historique des décomptes',invoices=rows,query=term,status=status,page=page,pages=pages,total=total)
 
     @app.route('/invoices/new',methods=['GET','POST'])
     @protected
@@ -238,6 +299,7 @@ def create_app():
         conf=db.settings(g.db)
         options=g.db.execute('SELECT * FROM clients ORDER BY name').fetchall()
         if request.method=='POST':
+            session.pop('invoice_draft',None)
             try:
                 if conf.get('configured')!='1': raise BillingError('Validez d’abord le barème et les taxes dans Paramètres.')
                 cid=int(request.form.get('client_id','0'))
@@ -245,29 +307,50 @@ def create_app():
                 if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',period): raise BillingError('Période invalide (AAAA-MM).')
                 issue_date=date.today().isoformat()
                 due=request.form.get('due_date','').strip()
-                if due: date.fromisoformat(due)
+                validate_due_date(issue_date, due)
                 client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
                 if not client: raise BillingError('Client inexistant.')
                 calc=calculate_from_settings(request.form.get('previous',''),request.form.get('current',''),client['coefficient'],conf,request.form.get('fee','0') or '0')
                 if db.active_invoice(g.db,cid,period): raise BillingError('Une facture active existe déjà pour ce client et cette période.')
-                g.db.execute('BEGIN IMMEDIATE')
-                if db.active_invoice(g.db,cid,period): raise BillingError('Cette période est déjà facturée pour ce client.')
-                year=date.today().year
-                r=g.db.execute('SELECT last_number FROM sequences WHERE year=?',(year,)).fetchone()
-                next_n=(r['last_number']+1) if r else 1
-                g.db.execute('INSERT INTO sequences(year,last_number) VALUES(?,?) ON CONFLICT(year) DO UPDATE SET last_number=excluded.last_number',(year,next_n))
-                number=f'SEL-{year}-{next_n:06d}'
-                s_client={k:client[k] for k in client.keys() if k!='created_at'}
-                s_company={k:v for k,v in conf.items() if k not in ('configured',)}
-                cur=g.db.execute('''INSERT INTO invoices(number,client_id,billing_period,issue_date,due_date,client_snapshot,company_snapshot,calc_snapshot,currency,note)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)''',(number,cid,period,issue_date,due,json.dumps(s_client,ensure_ascii=False),json.dumps(s_company,ensure_ascii=False),json.dumps(calc,ensure_ascii=False),conf['currency'],request.form.get('note','').strip()[:500]))
-                inv_id=cur.lastrowid
-                g.db.commit();flash('Décompte enregistré. Vérifiez le PDF avant impression.','success')
-                return redirect(url_for('invoice_detail',iid=inv_id))
+                session['invoice_draft']={'client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'fee':request.form.get('fee','0').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500]}
+                return render_template('invoice_preview.html',title='Vérifier le décompte',draft=session['invoice_draft'],client=client,calc=calc,configured=True)
             except (BillingError,ValueError,sqlite3.IntegrityError) as e:
                 g.db.rollback();flash(f'Émission interrompue : {e}','error')
         period=date.today().strftime('%Y-%m')
-        return render_template('new_invoice.html',title='Nouvelle facture',clients=options,period=period,configured=conf.get('configured')=='1')
+        return render_template('new_invoice.html',title='Nouveau décompte',clients=options,period=period,configured=conf.get('configured')=='1')
+
+    @app.post('/invoices/new/confirm')
+    @protected
+    def confirm_invoice():
+        draft=session.pop('invoice_draft',None)
+        if not draft:
+            flash('Aucun décompte en attente de confirmation.','error')
+            return redirect(url_for('new_invoice'))
+        conf=db.settings(g.db)
+        try:
+            if conf.get('configured')!='1': raise BillingError('Validez d’abord le barème et les taxes dans Paramètres.')
+            cid=int(draft['client_id']); period=draft['billing_period']; issue_date=date.today().isoformat()
+            validate_due_date(issue_date,draft['due_date'])
+            client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
+            if not client: raise BillingError('Client inexistant.')
+            calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft['fee'])
+            g.db.execute('BEGIN IMMEDIATE')
+            if db.active_invoice(g.db,cid,period): raise BillingError('Cette période est déjà facturée pour ce client.')
+            year=date.today().year
+            row=g.db.execute('SELECT last_number FROM sequences WHERE year=?',(year,)).fetchone()
+            next_n=(row['last_number']+1) if row else 1
+            g.db.execute('INSERT INTO sequences(year,last_number) VALUES(?,?) ON CONFLICT(year) DO UPDATE SET last_number=excluded.last_number',(year,next_n))
+            number=f'SEL-{year}-{next_n:06d}'
+            s_client={k:client[k] for k in client.keys() if k!='created_at'}
+            s_company={k:v for k,v in conf.items() if k not in ('configured',)}
+            cur=g.db.execute('''INSERT INTO invoices(number,client_id,billing_period,issue_date,due_date,client_snapshot,company_snapshot,calc_snapshot,currency,note)
+                VALUES(?,?,?,?,?,?,?,?,?,?)''',(number,cid,period,issue_date,draft['due_date'],json.dumps(s_client,ensure_ascii=False),json.dumps(s_company,ensure_ascii=False),json.dumps(calc,ensure_ascii=False),conf['currency'],draft['note']))
+            inv_id=cur.lastrowid
+            g.db.commit();flash('Décompte enregistré. Vérifiez le PDF avant impression.','success')
+            return redirect(url_for('invoice_detail',iid=inv_id))
+        except (BillingError,ValueError,sqlite3.IntegrityError) as e:
+            g.db.rollback();flash(f'Émission interrompue : {e}','error')
+            return redirect(url_for('new_invoice'))
 
     @app.get('/invoices/<int:iid>')
     @protected
@@ -277,8 +360,10 @@ def create_app():
         inv,payments=record
         calc=json.loads(inv['calc_snapshot'])
         total=Decimal(calc['total']);paid=sum((Decimal(p['amount']) for p in payments),Decimal('0'))
+        balance=money(total-paid)
+        payment_status='ANNULÉ' if inv['status']=='VOID' else ('PAYÉ' if balance<=0 else ('PARTIELLEMENT PAYÉ' if paid>0 else 'IMPAYÉ'))
         return render_template('invoice_detail.html',title='Décompte '+inv['number'],invoice=inv,calc=calc,
-                               client=json.loads(inv['client_snapshot']),payments=payments,paid=paid,balance=money(total-paid))
+                               client=json.loads(inv['client_snapshot']),payments=payments,paid=paid,balance=balance,payment_status=payment_status)
 
     @app.post('/invoices/<int:iid>/payments')
     @protected
@@ -289,6 +374,7 @@ def create_app():
             method=request.form.get('method','').strip()
             if method not in ('Espèces','Banque','Mobile Money','Autre'): raise BillingError('Mode de paiement invalide.')
             reference=request.form.get('reference','').strip()[:120]
+            validate_payment_reference(method, reference)
             paid_on=request.form.get('paid_on',date.today().isoformat())
             date.fromisoformat(paid_on)
             g.db.execute('BEGIN IMMEDIATE')

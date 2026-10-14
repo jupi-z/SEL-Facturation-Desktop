@@ -9,6 +9,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import re
 import threading
+import time
 from uuid import uuid4
 
 from werkzeug.serving import make_server
@@ -17,6 +18,7 @@ import db
 
 DOCUMENT_NAME = re.compile(r"SEL-\d{4}-\d{6}\.pdf\Z", re.IGNORECASE)
 MAX_PDF_BASE64 = 8 * 1024 * 1024
+TEMPORARY_PDF_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 
 class DesktopDocuments:
@@ -28,7 +30,9 @@ class DesktopDocuments:
     """
 
     def __init__(self):
-        self.window = None
+        # Keep the native window private. pywebview exposes public attributes
+        # of the JS bridge and would recursively walk WinForms AccessibilityObject.
+        self._window = None
 
     def _validate_pdf(self, filename: str, payload: str) -> bytes:
         if not isinstance(filename, str) or DOCUMENT_NAME.fullmatch(filename) is None:
@@ -46,6 +50,13 @@ class DesktopDocuments:
     def _temporary_pdf(self, filename: str, content: bytes) -> Path:
         folder = db.home() / "documents-temporaires"
         folder.mkdir(parents=True, exist_ok=True)
+        cutoff = time.time() - TEMPORARY_PDF_RETENTION_SECONDS
+        for old_file in folder.glob("*.pdf"):
+            try:
+                if old_file.is_file() and old_file.stat().st_mtime < cutoff:
+                    old_file.unlink()
+            except OSError:
+                logging.warning("Impossible de purger le PDF temporaire %s", old_file)
         target = folder / (uuid4().hex + "-" + filename)
         target.write_bytes(content)
         return target
@@ -66,7 +77,7 @@ class DesktopDocuments:
         try:
             import webview
             content = self._validate_pdf(filename, payload)
-            selected = self.window.create_file_dialog(
+            selected = self._window.create_file_dialog(
                 webview.FileDialog.SAVE,
                 save_filename=filename,
                 file_types=("Documents PDF (*.pdf)",),
@@ -87,7 +98,19 @@ class DesktopDocuments:
         try:
             content = self._validate_pdf(filename, payload)
             target = self._temporary_pdf(filename, content)
-            os.startfile(str(target), "print")
+            try:
+                os.startfile(str(target), "print")
+            except OSError as print_error:
+                # The print verb is optional in Windows PDF associations. Keep
+                # the document available in the associated viewer so the user
+                # can print it with Ctrl+P instead of losing the action.
+                os.startfile(str(target))
+                return {
+                    "ok": False,
+                    "fallback": "open",
+                    "message": "Impression automatique indisponible. Le PDF est ouvert : utilisez Ctrl+P.",
+                    "detail": str(print_error),
+                }
             return {"ok": True}
         except Exception as exc:
             logging.exception("Impossible d'imprimer le document")
@@ -149,7 +172,7 @@ def main():
 
         webview.settings["ALLOW_DOWNLOADS"] = True
         bridge = DesktopDocuments()
-        bridge.window = webview.create_window(
+        bridge._window = webview.create_window(
             "SEL Facturation — Société d'Énergie du Lualaba",
             f"http://127.0.0.1:{server.server_port}/",
             js_api=bridge,

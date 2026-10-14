@@ -34,6 +34,9 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     assert 'NON FISCALIS' not in txt
     assert 'Service clientèle' in txt
     assert '72 540,00' in txt
+    assert 'DÉCOMPTE D’ÉLECTRICITÉ' in txt
+    assert 'CONDITIONS DE RÈGLEMENT' in txt
+    assert 'MONTANT À RÉGLER' in txt
     with pytest.raises(Exception):
         c.execute("UPDATE invoices SET calc_snapshot='{}' WHERE id=1")
     with pytest.raises(Exception):
@@ -43,3 +46,81 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     db.backup(tmp_path/'check.sqlite3')
     assert (tmp_path/'check.sqlite3').exists()
     c.close()
+
+
+def test_automatic_backup_refreshes_after_same_day_changes(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    db.automatic_backup()
+    backup_path=tmp_path/'sauvegardes'/f"sel-{__import__('datetime').date.today().isoformat()}.sqlite3"
+    with db.connect() as c:
+        c.execute('INSERT INTO clients(code,name,address,meter_number,coefficient) VALUES(?,?,?,?,?)',
+                  ('SEL-C-00001','Abonné sauvegardé','Kolwezi','M123','1'))
+    db.automatic_backup()
+    with db.sqlite3.connect(backup_path) as saved:
+        assert saved.execute('SELECT name FROM clients').fetchone()[0]=='Abonné sauvegardé'
+
+
+def test_backup_preserves_previous_snapshot_if_refresh_fails(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    destination=tmp_path/'previous.sqlite3'
+    db.backup(destination)
+    previous=destination.read_bytes()
+    class BrokenSource:
+        def backup(self, source):
+            source.execute('CREATE TABLE corrupt_marker(value TEXT)')
+            source.commit()
+            raise RuntimeError('simulated backup interruption')
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self,*exc):
+            return False
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(db,'connect',lambda: BrokenSource())
+    with pytest.raises(RuntimeError,match='simulated backup interruption'):
+        db.backup(destination)
+    assert destination.read_bytes()==previous
+
+
+def test_database_handles_are_released_after_initialize_and_backup(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    destination=tmp_path/'released.sqlite3'
+    db.backup(destination)
+
+    db.db_path().unlink()
+    destination.unlink()
+
+
+def test_payment_history_is_immutable(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    with db.connect() as c:
+        c.execute("INSERT INTO clients(code,name,address,meter_number) VALUES('SEL-C-00001','A','K','M')")
+        c.execute("INSERT INTO invoices(number,client_id,billing_period,issue_date,client_snapshot,company_snapshot,calc_snapshot) VALUES('SEL-2026-000001',1,'2026-10','2026-10-14','{}','{}','{\"total\":\"100.00\"}')")
+        c.execute("INSERT INTO payments(invoice_id,amount,method,paid_on) VALUES(1,'10.00','Espèces','2026-10-14')")
+        with pytest.raises(db.sqlite3.DatabaseError, match='Paiement enregistré immuable'):
+            c.execute("UPDATE payments SET amount='20.00' WHERE id=1")
+        with pytest.raises(db.sqlite3.DatabaseError, match='Paiement enregistré immuable'):
+            c.execute("DELETE FROM payments WHERE id=1")
+
+
+def test_backup_restore_copy_preserves_invoice_snapshot(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path/'live'))
+    db.initialize()
+    with db.connect() as c:
+        c.execute("INSERT INTO clients(code,name,address,meter_number) VALUES('SEL-C-00001','A','K','M')")
+        c.execute("INSERT INTO invoices(number,client_id,billing_period,issue_date,client_snapshot,company_snapshot,calc_snapshot) VALUES('SEL-2026-000001',1,'2026-10','2026-10-14','{\"name\":\"A\"}','{}','{\"total\":\"100.00\"}')")
+    snapshot=db.backup(tmp_path/'snapshot.sqlite3')
+    restored=tmp_path/'restored.sqlite3'
+    restored.write_bytes(snapshot.read_bytes())
+    with db.sqlite3.connect(restored) as c:
+        row=c.execute('SELECT number,calc_snapshot FROM invoices').fetchone()
+        assert row == ('SEL-2026-000001','{\"total\":\"100.00\"}')
+        assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'

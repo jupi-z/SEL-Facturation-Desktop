@@ -1,6 +1,12 @@
 name: Build Windows Desktop
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publier une release après validation de la version et de la recette'
+        required: true
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
@@ -10,7 +16,7 @@ on:
 permissions:
   contents: write
 jobs:
-  test-build-release:
+  test-build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +30,7 @@ jobs:
       - name: Verify Windows desktop dependencies
         run: python -c "import webview, clr; from webview import FileDialog; print('Desktop runtime import OK')"
       - name: Build Windows EXE
-        run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
+        run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon packaging\sel-facturation.ico --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
       - name: Compile Windows installer
@@ -34,20 +40,42 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler unavailable: $iscc" }
           & $iscc packaging\SEL-Facturation.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
-      - name: Publish private GitHub prerelease
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Install WiX Toolset 4
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+          wix extension add -g WixToolset.Bal.wixext/4.0.5
+      - name: Compile MSI and autonomous bootstrapper
+        shell: pwsh
+        run: |
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          New-Item -ItemType Directory -Force -Path build\webview2, dist\installer | Out-Null
+          $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webview
+          wix build packaging\wix\Product.wxs -d ProductVersion=$version -d ExePath="$((Resolve-Path dist\SEL-Facturation.exe).Path)" -o dist\installer\SEL-Facturation.msi
+          if ($LASTEXITCODE -ne 0) { throw 'WiX MSI build failed' }
+          wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -d ProductVersion=$version -d MsiPath="$((Resolve-Path dist\installer\SEL-Facturation.msi).Path)" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper build failed' }
+      - name: Publish private GitHub prerelease without overwriting
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v0.2.0-rc1'
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          $tag = 'v0.3.0-rc4'
           $exe = 'dist/SEL-Facturation.exe'
-          $setup = 'dist/installer/SEL-Facturation-Setup-0.2.0.exe'
-          if (-not (Test-Path $exe) -or -not (Test-Path $setup)) { throw "Missing Windows binary" }
+          $setup = "dist/installer/SEL-Facturation-Setup-$version.exe"
+          $msi = 'dist/installer/SEL-Facturation.msi'
+          if (-not (Test-Path $exe) -or -not (Test-Path $setup) -or -not (Test-Path $msi)) { throw "Missing Windows package" }
           gh release view $tag --repo ${{ github.repository }} 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $exe $setup --clobber --repo ${{ github.repository }}
+            throw "Release $tag already exists; bump the application/installer version before publishing. Existing assets are never overwritten."
           } else {
-            gh release create $tag $exe $setup --prerelease --title 'SEL Facturation Desktop V0.2 - fenêtre native' --notes 'Préversion native Windows : fenêtre dédiée WebView2, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
+            gh release create $tag $exe $setup $msi --prerelease --title 'SEL Facturation Desktop V0.3 - installateur Windows' --notes 'Préversion native Windows 10/11 : bootstrapper WebView2, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
           }
           if ($LASTEXITCODE -ne 0) { throw "Publication GitHub Releases failed" }

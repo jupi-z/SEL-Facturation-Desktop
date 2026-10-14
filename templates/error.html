@@ -1,0 +1,4 @@
+{% extends 'base.html' %}
+{% block body %}
+<section class="panel error-page"><div class="eyebrow">SEL FACTURATION</div><div class="error-code">{{ status_code }}</div><h2>{{ title }}</h2><p>{{ message }}</p><div class="actions"><a class="button primary" href="{{ url_for('dashboard') if is_logged else url_for('login') }}">Retourner à l’accueil</a></div></section>
+{% endblock %}

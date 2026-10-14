@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SEL Facturation" Manufacturer="Société d'Énergie du Lualaba" Version="$(var.ProductVersion)" UpgradeCode="7B258C72-AE0B-4D4E-84DE-725C08F20EA1" Scope="perUser">
+    <SummaryInformation Description="SEL Facturation Desktop" />
+    <MajorUpgrade DowngradeErrorMessage="Une version plus récente de SEL Facturation est déjà installée." />
+    <MediaTemplate EmbedCab="yes" />
+    <Feature Id="MainFeature" Title="SEL Facturation" Level="1">
+      <ComponentRef Id="ApplicationComponent" />
+    </Feature>
+  </Package>
+  <Fragment>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="SEL Facturation" />
+      </Directory>
+    </StandardDirectory>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ApplicationComponent" Guid="*">
+        <File Id="SelFacturationExe" Source="$(var.ExePath)" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="SEL Facturation" Description="Facturation électrique SEL" WorkingDirectory="INSTALLFOLDER" />
+          <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="SEL Facturation" Description="Facturation électrique SEL" WorkingDirectory="INSTALLFOLDER" />
+        </File>
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

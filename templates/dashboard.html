@@ -1,3 +1,19 @@
-{% extends 'base.html' %}{% block body %}<div class="actions"><a class="primary button" href="{{ url_for('new_invoice') }}">+ Créer un décompte</a><a class="button secondary" href="{{ url_for('clients') }}">Ajouter un abonné</a></div>
-<div class="kpis"><article class="panel metric"><div class="eyebrow">ABONNÉS</div><div class="figure">{{ clients }}</div><span class="sub">Enregistrés localement</span></article><article class="panel metric"><div class="eyebrow">DÉCOMPTES</div><div class="figure">{{ stats['n'] }}</div><span class="sub">Historique conservé</span></article><article class="panel metric"><div class="eyebrow">ÉMIS (ESTIMATION)</div><div class="figure">{{ fmt(stats['billed']) }}</div><span class="sub">À rapprocher des paiements, selon devises</span></article></div>
-<section class="panel"><div class="sectionhead"><h2>Documents récents</h2><a href="{{ url_for('invoices') }}">Tout l'historique →</a></div><div class="tablewrap"><table><thead><tr><th>Document</th><th>Client</th><th>Période</th><th>État</th><th>Action</th></tr></thead><tbody>{% for row in recent %}<tr><td><b>{{ row['number'] }}</b></td><td>{{ row['client_name'] }}</td><td>{{ row['billing_period'] }}</td><td><span class="pill">{{ 'Annulé' if row['status']=='VOID' else 'Enregistré' }}</span></td><td><a href="{{ url_for('invoice_detail',iid=row['id']) }}">Ouvrir →</a></td></tr>{% else %}<tr><td colspan="5">Aucun document pour le moment.</td></tr>{% endfor %}</tbody></table></div></section><p class="note">⚠ Les montants et les factures de ce logiciel ne sont pas authentifiés par la DGI. Vérifiez les tarifs et leur assiette avant toute utilisation réelle.</p>{% endblock %}
+{% extends 'base.html' %}
+{% block body %}
+<div class="actions"><a class="primary button" href="{{ url_for('new_invoice') }}">+ Créer un décompte</a><a class="button secondary" href="{{ url_for('clients') }}">Ajouter un abonné</a></div>
+<div class="kpis">
+  <article class="panel metric"><div class="eyebrow">ABONNÉS</div><div class="figure">{{ clients }}</div><span class="sub">Enregistrés localement</span></article>
+  <article class="panel metric"><div class="eyebrow">DÉCOMPTES ÉMIS</div><div class="figure">{{ stats['n'] }}</div><span class="sub">Documents actifs conservés</span></article>
+  <article class="panel metric"><div class="eyebrow">Montant émis</div><div class="figure">{{ fmt(stats['billed']) }}</div><span class="sub">Devise courante : {{ company['currency'] }}</span></article>
+  <article class="panel metric"><div class="eyebrow">Montant encaissé</div><div class="figure">{{ fmt(stats['paid']) }}</div><span class="sub">Paiements enregistrés</span></article>
+  <article class="panel metric"><div class="eyebrow">Solde à suivre</div><div class="figure">{{ fmt(stats['balance']) }}</div><span class="sub">Montant restant à recouvrer</span></article>
+</div>
+<section class="statusbar {{ 'status-ok' if stats['configured'] else 'status-warning' }}">
+  <div><strong>{{ 'Facturation prête' if stats['configured'] else 'Configuration à terminer' }}</strong><span>{{ 'Le barème validé peut être utilisé.' if stats['configured'] else 'Validez les coordonnées, le barème et les taxes dans les paramètres.' }}</span></div>
+  <div><strong>Sauvegarde locale</strong><span>{{ stats['last_backup'] or 'Aucune sauvegarde détectée' }}</span></div>
+  <div><strong>Documents</strong><span>{{ stats['n'] if stats['n'] else 'Aucune facture émise' }}</span></div>
+  {% if not stats['configured'] %}<a class="button secondary" href="{{ url_for('settings_view') }}">Ouvrir les paramètres</a>{% endif %}
+</section>
+<section class="panel"><div class="sectionhead"><h2>Documents récents</h2><a href="{{ url_for('invoices') }}">Tout l'historique →</a></div><div class="tablewrap"><table><thead><tr><th>Document</th><th>Client</th><th>Période</th><th>État</th><th>Action</th></tr></thead><tbody>{% for row in recent %}<tr><td><b>{{ row['number'] }}</b></td><td>{{ row['client_name'] }}</td><td>{{ row['billing_period'] }}</td><td><span class="pill">{{ 'Annulé' if row['status']=='VOID' else 'Enregistré' }}</span></td><td><a href="{{ url_for('invoice_detail',iid=row['id']) }}">Ouvrir →</a></td></tr>{% else %}<tr><td colspan="5">Aucun document pour le moment.</td></tr>{% endfor %}</tbody></table></div></section>
+<p class="note">⚠ Les montants et les factures de ce logiciel ne sont pas authentifiés par la DGI. Vérifiez les tarifs et leur assiette avant toute utilisation réelle.</p>
+{% endblock %}

@@ -19,6 +19,8 @@ def pdf_payload():
 
 def test_documents_validate_inputs_and_fiscal_neutrality():
     api = DesktopDocuments()
+    assert not hasattr(api, "window")
+    assert hasattr(api, "_window")
     assert api._validate_pdf("SEL-2026-000001.pdf", pdf_payload()).startswith(b"%PDF-")
     for name in ("../dossier.pdf", "other.pdf", "SEL-2026-000001.exe"):
         with pytest.raises(ValueError):
@@ -49,3 +51,45 @@ def test_print_pdf_calls_windows_print_verb(tmp_path, monkeypatch):
     api = DesktopDocuments()
     assert api.print_pdf("SEL-2026-000001.pdf", pdf_payload()) == {"ok": True}
     assert opened and opened[0][1] == ("print",)
+
+
+def test_print_pdf_falls_back_to_open_viewer_when_print_association_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    opened = []
+
+    def startfile(path, *args):
+        opened.append((path, args))
+        if args == ("print",):
+            raise OSError("No print association")
+
+    monkeypatch.setattr(os, "startfile", startfile, raising=False)
+    api = DesktopDocuments()
+    response = api.print_pdf("SEL-2026-000001.pdf", pdf_payload())
+    assert response["ok"] is False
+    assert response["fallback"] == "open"
+    assert opened[0][1] == ("print",)
+    assert opened[1][1] == ()
+
+
+def test_desktop_script_reports_print_fallback_as_guidance():
+    script = (Path(__file__).resolve().parents[1] / "static" / "desktop.js").read_text(encoding="utf-8")
+    assert 'result.fallback === \'open\'' in script
+    assert 'Ctrl+P' in script
+
+
+def test_temporary_pdf_cleanup_removes_only_expired_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    folder = tmp_path / "documents-temporaires"
+    folder.mkdir()
+    expired = folder / "expired.pdf"
+    recent = folder / "recent.pdf"
+    expired.write_bytes(b"%PDF-expired")
+    recent.write_bytes(b"%PDF-recent")
+    old_timestamp = expired.stat().st_mtime - (8 * 24 * 60 * 60)
+    os.utime(expired, (old_timestamp, old_timestamp))
+
+    api = DesktopDocuments()
+    api.open_pdf("SEL-2026-000001.pdf", pdf_payload())
+
+    assert not expired.exists()
+    assert recent.exists()

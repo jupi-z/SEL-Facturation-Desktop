@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import sqlite3
 import sys
+import tempfile
 
 APP_NAME = 'SEL Facturation'
 
@@ -35,7 +36,9 @@ def connect() -> sqlite3.Connection:
 
 
 def initialize():
-    with connect() as c:
+    c = connect()
+    try:
+      with c:
         c.executescript('''
         CREATE TABLE IF NOT EXISTS settings (
           key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -70,6 +73,8 @@ def initialize():
           void_reason TEXT NOT NULL DEFAULT ''
         );
         CREATE UNIQUE INDEX IF NOT EXISTS invoices_one_active_period ON invoices(client_id, billing_period) WHERE status='ISSUED';
+        CREATE INDEX IF NOT EXISTS clients_lookup ON clients(name, code, meter_number, contract_number);
+        CREATE INDEX IF NOT EXISTS invoices_history ON invoices(issue_date, billing_period, client_id);
         CREATE TABLE IF NOT EXISTS payments (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           invoice_id INTEGER NOT NULL REFERENCES invoices(id),
@@ -88,6 +93,12 @@ def initialize():
             OR NEW.due_date != OLD.due_date OR NEW.client_id != OLD.client_id
             OR NEW.currency != OLD.currency
           BEGIN SELECT RAISE(ABORT, 'Facture émise immuable'); END;
+        CREATE TRIGGER IF NOT EXISTS immutable_payment_update
+          BEFORE UPDATE ON payments
+          BEGIN SELECT RAISE(ABORT, 'Paiement enregistré immuable'); END;
+        CREATE TRIGGER IF NOT EXISTS immutable_payment_delete
+          BEFORE DELETE ON payments
+          BEGIN SELECT RAISE(ABORT, 'Paiement enregistré immuable'); END;
         ''')
         defaults = {
             'company_name': 'SOCIÉTÉ D’ÉNERGIE DU LUALABA',
@@ -102,6 +113,8 @@ def initialize():
         }
         for k, v in defaults.items():
             c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)', (k,v))
+    finally:
+        c.close()
 
 
 def settings(c) -> dict:
@@ -120,12 +133,26 @@ def invoice_full(c, invoice_id):
 
 
 def backup(destination: Path):
+    destination=Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    target=sqlite3.connect(str(destination))
+    fd,temp_name=tempfile.mkstemp(prefix=f'.{destination.name}.',suffix='.tmp',dir=destination.parent)
+    os.close(fd)
     try:
-        with connect() as source: source.backup(target)
-    finally:
-        target.close()
+        target=sqlite3.connect(temp_name)
+        try:
+            source = connect()
+            try:
+                source.backup(target)
+            finally:
+                source.close()
+            check=target.execute('PRAGMA integrity_check').fetchone()[0]
+            if check!='ok': raise sqlite3.DatabaseError(f'Backup SQLite invalide : {check}')
+        finally:
+            target.close()
+        os.replace(temp_name,destination)
+    except Exception:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
     return destination
 
 
@@ -133,7 +160,10 @@ def automatic_backup():
     d=home() / 'sauvegardes'
     d.mkdir(parents=True, exist_ok=True)
     filename=d / f'sel-{date.today().isoformat()}.sqlite3'
-    if not filename.exists() and db_path().exists():
+    # Refresh the daily snapshot on every application start.  A backup made
+    # before the first invoice of the day must not remain the only copy after
+    # later writes to the same database.
+    if db_path().exists():
         backup(filename)
     old=sorted(d.glob('sel-*.sqlite3'))
     for fp in old[:-14]:

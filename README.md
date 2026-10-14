@@ -1,4 +1,4 @@
-# SEL Facturation Desktop — V0.2 locale native Windows
+# SEL Facturation Desktop — V0.3 locale native Windows
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
 
@@ -23,10 +23,10 @@ Créer l'exécutable sur un PC **Windows 64 bits**, ou via le workflow GitHub Ac
 ```powershell
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-build.txt
-.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
+.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --icon "packaging\sel-facturation.ico" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
 ```
 
-`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. WebView2 Runtime est un prérequis sur les postes Windows. Pour un **vrai installateur** avec raccourcis Bureau/Menu Démarrer, installer *Inno Setup* puis compiler `packaging\SEL-Facturation.iss` après avoir construit l'exécutable. Ne jamais distribuer une version sans recette et sauvegarde. La compilation Windows n'est pas possible depuis tous les environnements ; **un exécutable non encore compilé ne doit pas être annoncé comme disponible**.
+`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée avec l'icône du logo SEL ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Pour la distribution, le workflow Windows compile un installateur MSI par utilisateur et un bootstrapper WiX qui installe silencieusement le WebView2 Evergreen Standalone puis le MSI. L'utilisateur peut donc utiliser SEL après une seule installation ; l'installation de WebView2 peut demander l'élévation Windows selon la politique du poste. Inno Setup reste disponible comme paquet de compatibilité développeur, mais le bootstrapper WiX est le paquet de livraison recommandé. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**
 
 ## Où sont les données ?
 
@@ -59,7 +59,7 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 - Les paiements sont des **constats saisis**, pas des transactions bancaires/Mobile Money exécutées.
 - Il n'existe qu'un compte administrateur par installation dans cette première version ; pas de journal d'audit nominatif multi-agents.
 - Pas d'envoi SMS, pas de connexion DGI, pas de facturation de masse, pas de multi-postes, pas de comptabilité SYSCOHADA.
-- Pour la **fenêtre native Windows**, Microsoft Edge WebView2 Runtime doit être présent. Le programme ne fonctionne pas comme application Windows si ce composant manque ; il peut être installé séparément par l'administrateur depuis Microsoft.
+- Pour la **fenêtre native Windows**, le bootstrapper de livraison installe Microsoft Edge WebView2 Runtime si nécessaire. Le programme ne fonctionne pas comme application Windows si ce composant manque ; si la stratégie informatique bloque l'installation silencieuse, un administrateur doit l'autoriser.
 - La visualisation du PDF et sa commande d'impression utilisent le lecteur PDF associé à Windows. La commande « Imprimer » doit être testée avec l'imprimante de SEL ; l'interface de ce lecteur est externe à l'application principale.
 - Sous Windows le programme empêche une seconde instance simultanée. Les PDF prévisualisés sont temporairement sauvegardés sous `%LOCALAPPDATA%\SEL Facturation\documents-temporaires`.
 
