@@ -59,7 +59,7 @@ jobs:
           wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -d ProductVersion=$version -d MsiPath="$((Resolve-Path dist\installer\SEL-Facturation.msi).Path)" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
           if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper build failed' }
       - name: Upload Windows packages
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: sel-windows-packages
