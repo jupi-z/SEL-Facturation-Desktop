@@ -19,6 +19,8 @@ def pdf_payload():
 
 def test_documents_validate_inputs_and_fiscal_neutrality():
     api = DesktopDocuments()
+    assert not hasattr(api, "window")
+    assert hasattr(api, "_window")
     assert api._validate_pdf("SEL-2026-000001.pdf", pdf_payload()).startswith(b"%PDF-")
     for name in ("../dossier.pdf", "other.pdf", "SEL-2026-000001.exe"):
         with pytest.raises(ValueError):

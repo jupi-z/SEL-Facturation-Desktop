@@ -30,6 +30,10 @@ La régénération est écrite dans un fichier temporaire, vérifiée par `PRAGM
 
 Les blocs de contexte SQLite validaient les transactions mais ne fermaient pas explicitement les connexions. Sur Windows, cela pouvait maintenir un verrou sur `sel.sqlite3` et empêcher le remplacement/restauration d'un snapshot. `initialize()` et `backup()` ferment maintenant leurs connexions dans des blocs `finally`, avec un test de remplacement de la base après sauvegarde.
 
+### P0 — fenêtre WebView2 « Ne répond pas » au démarrage
+
+`DesktopDocuments` exposait la fenêtre native sous l'attribut public `window` dans l'objet passé à `js_api`. pywebview parcourait alors cet attribut et descendait récursivement dans l'objet WinForms `AccessibilityObject`, jusqu'à l'erreur `maximum recursion depth exceeded` et au blocage de la fenêtre. La référence est maintenant privée (`_window`) afin qu'elle ne soit pas exposée au pont JavaScript.
+
 ## Vérifications réalisées
 
 - Suite complète : `27 passed` avec Python intégré 3.12 et les dépendances du dépôt.
@@ -42,13 +46,14 @@ Les blocs de contexte SQLite validaient les transactions mais ne fermaient pas e
 - Smoke test natif local : la fenêtre WebView2 s'est ouverte, la première configuration a créé un compte de test et la connexion au tableau de bord a réussi sur un dossier de données temporaire. La poursuite avec l'inspecteur UI a déclenché des erreurs WebView2 `E_NOINTERFACE`/accès hors thread UI et la fenêtre a fini par afficher « Ne répond pas » ; ce résultat ne constitue pas une validation propre du parcours natif ni une preuve de panne sur le poste SEL.
 - Les PDF temporaires de prévisualisation sont maintenant purgés au-delà de 7 jours, sans toucher aux PDF récents ni aux factures SQLite.
 - Smoke test EXE après reconstruction : processus Windows répondant après 12 secondes et base créée dans un dossier de données isolé.
+- Smoke test de fermeture : parent et processus GUI se ferment proprement via `CloseMainWindow()`, sans processus SEL-Facturation résiduel.
 
 ## Limites et non-validations
 
 - Le lanceur `py -3.12` n'est pas installé dans l'environnement local. La suite a été exécutée avec le runtime Python 3.12 intégré à Codex ; le script `build-windows.ps1` n'a donc pas été exécuté tel quel.
 - Inno Setup n'est pas installé dans l'environnement local ; l'installateur n'a pas été compilé ici.
 - Aucune validation physique n'a été possible avec WebView2, un poste SEL, une imprimante, l'antivirus ou l'installateur Inno Setup. Le statut reste **pilote non validé sur poste cible**.
-- Le smoke test local ne remplace pas une exécution manuelle sans outil d'inspection : l'anomalie WebView2 observée doit être retestée directement sur le poste cible avant toute décision.
+- L'inspection UI automatisée précédente avait elle-même déclenché la récursion WebView2 ; le correctif est maintenant testé sans inspecteur, avec démarrage et fermeture propre de l'EXE.
 - La release n'a pas été publiée par la PR ; aucun nouveau binaire ni lien de release n'est annoncé ici.
 - Les tarifs, taxes, bases et identifiants d'entreprise restent à confirmer par SEL ; aucun statut DGI, QR ou identifiant fiscal fictif n'est ajouté.
 

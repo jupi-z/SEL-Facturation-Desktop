@@ -30,7 +30,9 @@ class DesktopDocuments:
     """
 
     def __init__(self):
-        self.window = None
+        # Keep the native window private. pywebview exposes public attributes
+        # of the JS bridge and would recursively walk WinForms AccessibilityObject.
+        self._window = None
 
     def _validate_pdf(self, filename: str, payload: str) -> bytes:
         if not isinstance(filename, str) or DOCUMENT_NAME.fullmatch(filename) is None:
@@ -75,7 +77,7 @@ class DesktopDocuments:
         try:
             import webview
             content = self._validate_pdf(filename, payload)
-            selected = self.window.create_file_dialog(
+            selected = self._window.create_file_dialog(
                 webview.FileDialog.SAVE,
                 save_filename=filename,
                 file_types=("Documents PDF (*.pdf)",),
@@ -170,7 +172,7 @@ def main():
 
         webview.settings["ALLOW_DOWNLOADS"] = True
         bridge = DesktopDocuments()
-        bridge.window = webview.create_window(
+        bridge._window = webview.create_window(
             "SEL Facturation — Société d'Énergie du Lualaba",
             f"http://127.0.0.1:{server.server_port}/",
             js_api=bridge,
