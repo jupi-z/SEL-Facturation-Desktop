@@ -31,7 +31,7 @@ La régénération est écrite dans un fichier temporaire, vérifiée par `PRAGM
 - Suite complète : `25 passed` avec Python intégré 3.12 et les dépendances du dépôt.
 - `git diff --check` : aucune erreur de whitespace.
 - Compilation PyInstaller locale : `Build complete!`, `dist/SEL-Facturation.exe` créé ; l'analyse a émis des avertissements de collecte facultative WebView2/pycparser à confirmer dans la CI Windows.
-- CI Windows GitHub Actions : run `38621057633` réussi ; tests, dépendances desktop, EXE et installateur Inno Setup validés. La publication de release a été ignorée car le run provenait d'une PR.
+- CI Windows GitHub Actions : runs `38621057633` et `38624033809` réussis ; tests, dépendances desktop, EXE et installateur Inno Setup validés. La publication de release a été ignorée car les runs provenaient d'une PR.
 - Tests de régression dédiés : sauvegarde rafraîchie, repli impression, message JavaScript et version `/health`.
 - Vérification statique : loopback `127.0.0.1`, CSRF, cookies HttpOnly/SameSite, CSP, requêtes paramétrées, exports sans clé de session/mot de passe, snapshots protégés par trigger SQLite, calculs métier en `Decimal`.
 - Smoke test natif local : la fenêtre WebView2 s'est ouverte, la première configuration a créé un compte de test et la connexion au tableau de bord a réussi sur un dossier de données temporaire. La poursuite avec l'inspecteur UI a déclenché des erreurs WebView2 `E_NOINTERFACE`/accès hors thread UI et la fenêtre a fini par afficher « Ne répond pas » ; ce résultat ne constitue pas une validation propre du parcours natif ni une preuve de panne sur le poste SEL.
