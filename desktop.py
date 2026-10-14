@@ -67,7 +67,7 @@ class DesktopDocuments:
             import webview
             content = self._validate_pdf(filename, payload)
             selected = self.window.create_file_dialog(
-                getattr(webview, 'SAVE_DIALOG', webview.FileDialog.SAVE),
+                webview.FileDialog.SAVE,
                 save_filename=filename,
                 file_types=("Documents PDF (*.pdf)",),
             )
