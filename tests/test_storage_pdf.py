@@ -30,7 +30,9 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     assert pdf[:5]==b'%PDF-'
     rdr=PdfReader(BytesIO(pdf)); txt='\n'.join(p.extract_text() for p in rdr.pages)
     assert 'SEL-2026-000001' in txt
-    assert 'NON AUTHENTIFI' in txt
+    assert 'NON AUTHENTIFI' not in txt
+    assert 'NON FISCALIS' not in txt
+    assert 'Service clientèle' in txt
     assert '72 540,00' in txt
     with pytest.raises(Exception):
         c.execute("UPDATE invoices SET calc_snapshot='{}' WHERE id=1")

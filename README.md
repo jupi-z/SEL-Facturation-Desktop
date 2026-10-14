@@ -1,8 +1,8 @@
-# SEL Facturation Desktop — V1 locale
+# SEL Facturation Desktop — V0.2 locale native Windows
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
 
-**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF sont intitulés « décomptes » et signalés **non authentifiés par la DGI**. Les règles tarifaires et fiscales sont à confirmer par SEL, et les procédures officielles de fiscalisation restent distinctes. Il ne faut pas annoncer une homologation fiscale ou délivrer un document comme facture normalisée tant que la DGI n'a pas authentifié son émission.
+**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF clients sont intitulés « décomptes d'électricité », sans encadré de statut fiscal anxiogène et sans fausse référence, signature ou QR DGI. Les règles tarifaires et fiscales sont à confirmer par SEL ; la fiscalisation officielle reste une procédure distincte. Ne jamais présenter ces PDF comme des factures normalisées ou homologuées sans authentification par le dispositif autorisé.
 
 ## Démarrage développeur
 
@@ -14,7 +14,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\python desktop.py
 ```
 
-L'interface s'ouvre dans le navigateur : `http://127.0.0.1:8765/`. Un mot de passe administrateur d'au moins 10 caractères est demandé à la première utilisation. Le serveur écoute **uniquement sur `127.0.0.1`**. Il ne doit jamais être exposé sur Internet ou un réseau public : ce n'est pas une application multi-postes.
+L'interface s'ouvre dans sa propre **fenêtre Windows native** (pywebview + WebView2) : aucun navigateur externe n'est lancé pour utiliser SEL Facturation. Un mot de passe administrateur d'au moins 10 caractères est demandé à la première utilisation. Le serveur écoute **uniquement sur `127.0.0.1`**. Il ne doit jamais être exposé sur Internet ou un réseau public : ce n'est pas une application multi-postes.
 
 ## Version Windows pour les agents (sans Python)
 
@@ -23,10 +23,10 @@ Créer l'exécutable sur un PC **Windows 64 bits**, ou via le workflow GitHub Ac
 ```powershell
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-build.txt
-.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --add-data "templates;templates" --add-data "static;static" desktop.py
+.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
 ```
 
-`dist\SEL-Facturation.exe` lance l'application et ouvre le navigateur. Pour un **vrai installateur** avec raccourcis Bureau/Menu Démarrer, installer *Inno Setup* puis compiler `packaging\SEL-Facturation.iss` après avoir construit l'exécutable. Ne jamais distribuer une version sans recette et sauvegarde. La compilation Windows n'est pas possible depuis tous les environnements ; **un exécutable non encore compilé ne doit pas être annoncé comme disponible**.
+`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. WebView2 Runtime est un prérequis sur les postes Windows. Pour un **vrai installateur** avec raccourcis Bureau/Menu Démarrer, installer *Inno Setup* puis compiler `packaging\SEL-Facturation.iss` après avoir construit l'exécutable. Ne jamais distribuer une version sans recette et sauvegarde. La compilation Windows n'est pas possible depuis tous les environnements ; **un exécutable non encore compilé ne doit pas être annoncé comme disponible**.
 
 ## Où sont les données ?
 
@@ -45,7 +45,7 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 3. Dans **Abonnés**, enregistrer nom, adresse, contrat, numéro de compteur, coefficient et NIF le cas échéant.
 4. Dans **Nouvelle facture**, choisir l'abonné, mois, deux index et date d'échéance.
 5. Le serveur calcule les tranches, les taxes configurées, le total et attribue un numéro unique.
-6. Ouvrir le PDF A4 (ou le télécharger) puis imprimer via le navigateur.
+6. Utiliser les boutons **Voir le PDF**, **Enregistrer PDF** ou **Imprimer** : ouverture et impression avec le lecteur PDF associé à Windows, enregistrement par boîte de dialogue native ; le navigateur intégré reste réservé à l'interface du programme.
 7. Dans **Factures**, retrouver/re-imprimer, enregistrer un paiement ou annuler un document **non réglé** avec motif.
 8. Exporter périodiquement une sauvegarde et le JSON portable.
 
@@ -59,6 +59,10 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 - Les paiements sont des **constats saisis**, pas des transactions bancaires/Mobile Money exécutées.
 - Il n'existe qu'un compte administrateur par installation dans cette première version ; pas de journal d'audit nominatif multi-agents.
 - Pas d'envoi SMS, pas de connexion DGI, pas de facturation de masse, pas de multi-postes, pas de comptabilité SYSCOHADA.
+- Pour la **fenêtre native Windows**, Microsoft Edge WebView2 Runtime doit être présent. Le programme ne fonctionne pas comme application Windows si ce composant manque ; il peut être installé séparément par l'administrateur depuis Microsoft.
+- La visualisation du PDF et sa commande d'impression utilisent le lecteur PDF associé à Windows. La commande « Imprimer » doit être testée avec l'imprimante de SEL ; l'interface de ce lecteur est externe à l'application principale.
+- Sous Windows le programme empêche une seconde instance simultanée. Les PDF prévisualisés sont temporairement sauvegardés sous `%LOCALAPPDATA%\SEL Facturation\documents-temporaires`.
+
 - Les modifications de la fiche client ou du barème ne recalculent jamais les snapshots des documents émis.
 
 ## Portabilité future vers Monarque Connect

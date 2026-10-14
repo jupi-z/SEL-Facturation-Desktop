@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
+  pull_request:
+    branches: [main]
+    paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
 permissions:
   contents: write
 jobs:
@@ -18,8 +21,10 @@ jobs:
         run: python -m pip install -r requirements-build.txt pytest
       - name: Unit and HTTP tests
         run: python -m pytest -q
+      - name: Verify Windows desktop dependencies
+        run: python -c "import webview, clr; from webview import FileDialog; print('Desktop runtime import OK')"
       - name: Build Windows EXE
-        run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --add-data "templates;templates" --add-data "static;static" desktop.py
+        run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
       - name: Compile Windows installer
@@ -30,18 +35,19 @@ jobs:
           & $iscc packaging\SEL-Facturation.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
       - name: Publish private GitHub prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v0.1.0-rc1'
+          $tag = 'v0.2.0-rc1'
           $exe = 'dist/SEL-Facturation.exe'
-          $setup = 'dist/installer/SEL-Facturation-Setup-1.0.0.exe'
+          $setup = 'dist/installer/SEL-Facturation-Setup-0.2.0.exe'
           if (-not (Test-Path $exe) -or -not (Test-Path $setup)) { throw "Missing Windows binary" }
           gh release view $tag --repo ${{ github.repository }} 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $exe $setup --clobber --repo ${{ github.repository }}
           } else {
-            gh release create $tag $exe $setup --prerelease --title 'SEL Facturation Desktop V1 - pilote' --notes 'Version pilote locale : application Flask/SQLite, facturation et impression A4. Documents non authentifiés DGI ; tarifs à valider. Tester sur le PC de SEL avant tout usage réel.' --repo ${{ github.repository }}
+            gh release create $tag $exe $setup --prerelease --title 'SEL Facturation Desktop V0.2 - fenêtre native' --notes 'Préversion native Windows : fenêtre dédiée WebView2, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
           }
           if ($LASTEXITCODE -ne 0) { throw "Publication GitHub Releases failed" }

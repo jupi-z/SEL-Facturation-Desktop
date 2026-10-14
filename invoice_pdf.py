@@ -67,9 +67,8 @@ def render_invoice(invoice, payments) -> bytes:
     table=Table([company_cells],colWidths=[32*mm,80*mm,66*mm])
     table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),9),('LINEBELOW',(0,0),(-1,-1),2,BLUE)]))
     story.extend([table,Spacer(1,7)])
-    warning=Table([[Paragraph('<b>DOCUMENT NON AUTHENTIFIÉ PAR LA DGI</b> — les références et le QR fiscal officiels sont absents.',small)]],colWidths=[178*mm])
-    warning.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#FFF3DC')),('BOX',(0,0),(-1,-1),.6,colors.HexColor('#E5B660')),('LEFTPADDING',(0,0),(-1,-1),10),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
-    story.extend([warning,Spacer(1,10)])
+    # Les mentions de conformité internes n'appartiennent pas au document client.
+    # Aucun logo, QR code, numéro ou certification DGI fictif n'est généré.
 
     info_left='<b>INFORMATIONS CLIENT</b><br/>' + '<br/>'.join([
          f"<b>Nom :</b> {p(client.get('name'))}",f"<b>Code :</b> {p(client.get('code'))}",
@@ -104,13 +103,13 @@ def render_invoice(invoice, payments) -> bytes:
     if inv['status']=='VOID':story.append(Paragraph('<font color="red"><b>DOCUMENT ANNULÉ - NE PAS UTILISER</b></font>',section))
     if inv['note']:story.extend([Spacer(1,6),Paragraph('<b>Note :</b> '+p(inv['note']),small)])
     story.extend([Spacer(1,10),Paragraph('<b>MENTIONS ENTREPRISE :</b> RCCM : '+p(co.get('rccm'))+' &nbsp;&nbsp; NIF : '+p(co.get('nif'))+' &nbsp;&nbsp; ID NAT : '+p(co.get('id_nat')),small),
-                  Paragraph('Les taxes et tarifs repris sur ce document doivent avoir été validés par SEL. Aucun code ni QR DGI n’a été généré.',muted)])
+                  ])
     def footer(canvas, document):
         canvas.saveState()
         w,h=A4
         canvas.setStrokeColor(BORDER);canvas.line(15*mm,14*mm,w-15*mm,14*mm)
         canvas.setFont('Helvetica',7);canvas.setFillColor(GREY)
-        canvas.drawString(15*mm,10*mm,'SEL Facturation | Document local de gestion — non fiscalisé')
+        canvas.drawString(15*mm,10*mm,'SEL · Service clientèle  |  '+str(inv['number']))
         canvas.drawRightString(w-15*mm,10*mm,f'Page {document.page}')
         canvas.restoreState()
     doc.build(story,onFirstPage=footer,onLaterPages=footer)
