@@ -44,6 +44,7 @@ jobs:
         run: |
           dotnet tool install --global wix --version 4.0.5
           echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+          wix extension add -g WixToolset.Bal.wixext/4.0.5
       - name: Compile MSI and autonomous bootstrapper
         shell: pwsh
         run: |
