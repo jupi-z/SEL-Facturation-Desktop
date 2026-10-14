@@ -67,7 +67,7 @@ jobs:
           $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
           if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
           $version = $Matches[1]
-          $tag = 'v0.3.0-rc3'
+          $tag = 'v0.3.0-rc4'
           $exe = 'dist/SEL-Facturation.exe'
           $setup = "dist/installer/SEL-Facturation-Setup-$version.exe"
           $msi = 'dist/installer/SEL-Facturation.msi'
