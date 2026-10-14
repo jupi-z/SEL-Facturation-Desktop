@@ -1,6 +1,17 @@
 /* Actions de documents intégrées à la fenêtre SEL.
    Dans un navigateur de développement, les liens PDF restent ordinaires. */
 (() => {
+  document.addEventListener('click', (event) => {
+    const toggle = event.target.closest('[data-password-toggle]');
+    if (!toggle) return;
+    const input = document.getElementById(toggle.dataset.passwordToggle);
+    if (!input) return;
+    const visible = input.type === 'text';
+    input.type = visible ? 'password' : 'text';
+    toggle.textContent = visible ? 'Afficher' : 'Masquer';
+    toggle.setAttribute('aria-label', visible ? 'Afficher le mot de passe' : 'Masquer le mot de passe');
+  });
+
   document.addEventListener('click', async (event) => {
     const anchor = event.target.closest('a[data-document-action]');
     if (!anchor || !window.pywebview || !window.pywebview.api) return;

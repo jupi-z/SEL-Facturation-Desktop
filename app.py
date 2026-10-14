@@ -97,7 +97,8 @@ def create_app():
     @app.context_processor
     def global_template():
         return {'csrf':lambda: session.get('_csrf',''), 'company':db.settings(g.db),
-                'fmt':fmt, 'today':date.today(), 'is_logged':bool(session.get('authenticated'))}
+                'fmt':fmt, 'today':date.today(), 'app_version':APP_VERSION,
+                'is_logged':bool(session.get('authenticated'))}
 
     def protected(fn):
         @wraps(fn)
