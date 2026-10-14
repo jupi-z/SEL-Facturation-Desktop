@@ -23,10 +23,10 @@ Créer l'exécutable sur un PC **Windows 64 bits**, ou via le workflow GitHub Ac
 ```powershell
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-build.txt
-.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
+.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --icon "packaging\sel-facturation.ico" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
 ```
 
-`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Pour la distribution, le workflow Windows compile un installateur MSI par utilisateur et un bootstrapper WiX qui installe silencieusement le WebView2 Evergreen Standalone puis le MSI. L'utilisateur peut donc utiliser SEL après une seule installation ; l'installation de WebView2 peut demander l'élévation Windows selon la politique du poste. Inno Setup reste disponible comme paquet de compatibilité développeur, mais le bootstrapper WiX est le paquet de livraison recommandé. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**
+`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée avec l'icône du logo SEL ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Pour la distribution, le workflow Windows compile un installateur MSI par utilisateur et un bootstrapper WiX qui installe silencieusement le WebView2 Evergreen Standalone puis le MSI. L'utilisateur peut donc utiliser SEL après une seule installation ; l'installation de WebView2 peut demander l'élévation Windows selon la politique du poste. Inno Setup reste disponible comme paquet de compatibilité développeur, mais le bootstrapper WiX est le paquet de livraison recommandé. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**
 
 ## Où sont les données ?
 

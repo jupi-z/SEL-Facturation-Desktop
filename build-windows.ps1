@@ -8,7 +8,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Installation des outils Python impossible.' }
 if ($LASTEXITCODE -ne 0) { throw 'Dépendances Python non installées.' }
 & .\.venv\Scripts\python.exe -m pytest -q
 if ($LASTEXITCODE -ne 0) { throw 'Tests en échec : compilation annulée.' }
-& .\.venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --noconsole --name SEL-Facturation --add-data 'templates;templates' --add-data 'static;static' --hidden-import clr --collect-all webview desktop.py
+& .\.venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon 'packaging\sel-facturation.ico' --add-data 'templates;templates' --add-data 'static;static' --hidden-import clr --collect-all webview desktop.py
 if ($LASTEXITCODE -ne 0) { throw 'Compilation Windows échouée.' }
 Write-Host 'Application de bureau creee dans dist\SEL-Facturation.exe' -ForegroundColor Green
 $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"

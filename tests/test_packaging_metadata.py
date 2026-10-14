@@ -28,3 +28,11 @@ def test_msi_keeps_program_files_separate_from_local_data():
     parent = next(parent for parent in root.iter() if install in list(parent))
     assert parent.attrib == {"Id": "ProgramsFolder", "Name": "Programs"}
 
+
+def test_windows_builds_use_sel_logo_icon():
+    icon = ROOT / "packaging" / "sel-facturation.ico"
+    assert icon.is_file() and icon.stat().st_size > 1000
+    assert "--icon" in (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    assert "--icon packaging\\sel-facturation.ico" in workflow
+
