@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from domain import BillingError,calculate,parse_tiers,validate_due_date,validate_payment_reference
+from domain import BillingError,calculate,convert_amount,convert_calculation,parse_tiers,validate_currency,validate_due_date,validate_exchange_rate,validate_payment_reference
 
 TIERS=parse_tiers('1-100:300\n101-200:320\n201-:350')
 
@@ -58,3 +58,29 @@ def test_payment_reference_required_for_traceable_methods():
     with pytest.raises(BillingError, match='référence'):
         validate_payment_reference('Mobile Money', '   ')
     validate_payment_reference('Espèces', '')
+
+
+def test_currency_must_be_from_sel_supported_catalog():
+    assert validate_currency('CDF') == 'CDF'
+    assert validate_currency('USD') == 'USD'
+    with pytest.raises(BillingError):
+        validate_currency('ABC')
+
+
+def test_exchange_rate_is_positive_and_converts_money_deterministically():
+    rate = validate_exchange_rate('2850')
+    assert rate == Decimal('2850')
+    assert convert_amount(Decimal('2850'), rate, from_currency='CDF', to_currency='USD') == Decimal('1.00')
+    with pytest.raises(BillingError):
+        validate_exchange_rate('0')
+
+
+def test_conversion_preserves_base_snapshot_and_converts_all_displayed_amounts():
+    base = amount()
+    converted = convert_calculation(base, Decimal('2850'), from_currency='CDF', to_currency='USD')
+
+    assert converted['base_currency'] == 'CDF'
+    assert converted['currency'] == 'USD'
+    assert converted['exchange_rate'] == '2850'
+    assert converted['energy'] == '21.75'
+    assert converted['total'] == '25.45'

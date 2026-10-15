@@ -8,6 +8,8 @@ import sqlite3
 import sys
 import tempfile
 
+from domain import validate_currency, validate_exchange_rate
+
 APP_NAME = 'SEL Facturation'
 
 
@@ -43,6 +45,28 @@ def initialize():
         CREATE TABLE IF NOT EXISTS settings (
           key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS currency_catalog (
+          code TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          decimal_digits INTEGER NOT NULL DEFAULT 2 CHECK(decimal_digits BETWEEN 0 AND 6),
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          display_order INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS currency_rates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          base_currency TEXT NOT NULL REFERENCES currency_catalog(code),
+          quote_currency TEXT NOT NULL REFERENCES currency_catalog(code),
+          rate TEXT NOT NULL,
+          effective_on TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT '',
+          note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(base_currency, quote_currency, effective_on),
+          CHECK(base_currency != quote_currency)
+        );
+        CREATE INDEX IF NOT EXISTS currency_rates_lookup
+          ON currency_rates(base_currency, quote_currency, effective_on);
         CREATE TABLE IF NOT EXISTS admins (
           id INTEGER PRIMARY KEY CHECK (id=1), salt TEXT NOT NULL, hash TEXT NOT NULL
         );
@@ -108,17 +132,60 @@ def initialize():
             'rccm': '', 'nif': '', 'id_nat': '',
             'tiers': '1-100:300\n101-200:320',
             'local_rate': '1', 'vat_rate': '16', 'vat_base': 'ENERGY',
-            'currency': 'CDF', 'footnote': 'Document non authentifié par un dispositif fiscal DGI.',
+            'base_currency': 'CDF', 'currency': 'CDF',
+            'exchange_rate': '', 'exchange_rate_effective_on': '', 'exchange_rate_source': '',
+            'footnote': 'Document non authentifié par un dispositif fiscal DGI.',
             'configured': '0'
         }
         for k, v in defaults.items():
             c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)', (k,v))
+        currencies = (
+            ('CDF', 'Franc congolais', 'CDF', 2, 1, 10),
+            ('USD', 'Dollar américain', '$', 2, 1, 20),
+        )
+        for row in currencies:
+            c.execute('''INSERT OR IGNORE INTO currency_catalog
+                         (code,name,symbol,decimal_digits,active,display_order)
+                         VALUES(?,?,?,?,?,?)''', row)
     finally:
         c.close()
 
 
 def settings(c) -> dict:
     return {r['key']: r['value'] for r in c.execute('SELECT key,value FROM settings')}
+
+
+def currency_catalog(c):
+    return c.execute('''SELECT code,name,symbol,decimal_digits,active,display_order
+                        FROM currency_catalog WHERE active=1 ORDER BY display_order,code''').fetchall()
+
+
+def save_exchange_rate(c, base_currency, quote_currency, rate, effective_on, source='', note='', commit=True):
+    base = validate_currency(base_currency)
+    quote = validate_currency(quote_currency)
+    if base == quote:
+        raise ValueError('Une devise ne peut pas être son propre taux de change.')
+    value = validate_exchange_rate(rate)
+    # ISO date validation keeps effective rates deterministic and sortable.
+    date.fromisoformat(str(effective_on))
+    c.execute('''INSERT INTO currency_rates
+                 (base_currency,quote_currency,rate,effective_on,source,note)
+                 VALUES(?,?,?,?,?,?)
+                 ON CONFLICT(base_currency,quote_currency,effective_on)
+                 DO UPDATE SET rate=excluded.rate,source=excluded.source,note=excluded.note''',
+              (base, quote, str(value), str(effective_on), str(source).strip()[:120], str(note).strip()[:500]))
+    if commit:
+        c.commit()
+
+
+def exchange_rate_for(c, base_currency, quote_currency, effective_on):
+    base = validate_currency(base_currency)
+    quote = validate_currency(quote_currency)
+    date_value = date.fromisoformat(str(effective_on)).isoformat()
+    return c.execute('''SELECT * FROM currency_rates
+                        WHERE base_currency=? AND quote_currency=? AND effective_on<=?
+                        ORDER BY effective_on DESC,id DESC LIMIT 1''',
+                     (base, quote, date_value)).fetchone()
 
 
 def active_invoice(c, client_id, period):

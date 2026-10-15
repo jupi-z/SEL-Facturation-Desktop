@@ -49,6 +49,10 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 7. Dans **Factures**, retrouver/re-imprimer, enregistrer un paiement ou annuler un document **non réglé** avec motif.
 8. Exporter périodiquement une sauvegarde et le JSON portable.
 
+### Devises et taux de change
+
+La devise de référence SEL est le CDF. La devise d'affichage se choisit dans une liste contrôlée (CDF ou USD dans cette version) ; elle ne peut pas être saisie librement. Pour une devise différente du CDF, l'émission exige un taux positif, une date d'effet et une source validée par SEL. Le taux est exprimé en CDF pour une unité de la devise choisie et le taux applicable à la date d'émission est copié dans le snapshot de la facture. Les anciennes factures ne sont jamais recalculées si les paramètres ou les taux changent. Aucun taux n'est récupéré automatiquement sur Internet.
+
 ### Fonctionnement et limites assumées
 
 - Un seul document **actif** par client et par période, contrôlé aussi par index unique SQLite.
@@ -75,6 +79,7 @@ Télécharger **Export JSON complet** depuis l'application. Il s'agit du format 
 | `data.invoices[]` | `number` (`SEL-YYYY-NNNNNN`) | `Invoice` ou import historique métier énergie |
 | `data.payments[]` | `invoice_number` + `id` | `PaymentRecord` / historique de paiement |
 | `data.company_settings` | noms des clés | Configuration d'organisation et grille tarifaire énergie |
+| `data.currency_rates` | devise de base + devise cible + date d'effet | Historique des taux de change validés |
 
 Les `client_snapshot`, `company_snapshot`, `calc_snapshot` de chaque document sont conservés à l'identique. L'import doit être **versionné, idempotent, et validé avant rapprochement** ; les identifiants SQLite entiers sont des références locales, pas les futurs UUID Monarque. On conserve aussi des exports CSV par catégorie. Aucun mot de passe ni clé de session n'est inclus dans les exports.
 

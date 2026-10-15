@@ -44,3 +44,11 @@ def test_settings_form_separates_company_from_tariffs(authenticated_client):
     assert 'id="company_name"' in html
     assert 'for="tiers"' in html
     assert 'id="tiers"' in html
+
+
+def test_settings_currency_is_a_controlled_select_with_dated_rate_fields(authenticated_client):
+    html = authenticated_client.get('/settings').get_data(as_text=True)
+    assert '<select id="currency" name="currency"' in html
+    assert 'value="ABC"' not in html
+    assert 'id="exchange_rate_effective_on"' in html
+    assert 'id="exchange_rate_source"' in html

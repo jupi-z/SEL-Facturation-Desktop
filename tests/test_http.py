@@ -69,6 +69,75 @@ def test_complete_flow(client):
     assert client.get('/backup').status_code==200
 
 
+def test_settings_rejects_unknown_currency_code(client):
+    token=csrf(client,'/setup')
+    client.post('/setup',data={'_csrf':token,'password':'TestPassword2026!','confirm':'TestPassword2026!'})
+    token=csrf(client,'/login')
+    client.post('/login',data={'_csrf':token,'password':'TestPassword2026!'})
+    token=csrf(client,'/settings')
+    response=client.post('/settings',data={'_csrf':token,'section':'tariffs','company_name':'SEL','address':'Kolwezi',
+        'tiers':'1-100:300','local_rate':'1','vat_rate':'16','vat_base':'ENERGY','currency':'ABC','confirmed':'yes'}, follow_redirects=True)
+    assert 'Devise non prise en charge' in response.get_data(as_text=True)
+
+
+def test_settings_save_exchange_rate_in_catalog(client):
+    token=csrf(client,'/setup')
+    client.post('/setup',data={'_csrf':token,'password':'TestPassword2026!','confirm':'TestPassword2026!'})
+    token=csrf(client,'/login')
+    client.post('/login',data={'_csrf':token,'password':'TestPassword2026!'})
+    token=csrf(client,'/settings')
+    response=client.post('/settings',data={'_csrf':token,'section':'tariffs','company_name':'SEL','address':'Kolwezi',
+        'tiers':'1-100:300','local_rate':'1','vat_rate':'16','vat_base':'ENERGY','currency':'USD',
+        'exchange_rate':'2850','exchange_rate_effective_on':'2026-10-15','exchange_rate_source':'SEL','confirmed':'yes'})
+    assert response.status_code==302
+    with connect() as c:
+        assert c.execute('SELECT rate FROM currency_rates WHERE base_currency="CDF" AND quote_currency="USD"').fetchone()['rate']=='2850'
+
+
+def test_settings_rejects_invalid_exchange_rate_date_without_server_error(client):
+    token=csrf(client,'/setup')
+    client.post('/setup',data={'_csrf':token,'password':'TestPassword2026!','confirm':'TestPassword2026!'})
+    token=csrf(client,'/login')
+    client.post('/login',data={'_csrf':token,'password':'TestPassword2026!'})
+    token=csrf(client,'/settings')
+    response=client.post('/settings',data={'_csrf':token,'section':'tariffs','company_name':'SEL','address':'Kolwezi',
+        'tiers':'1-100:300','local_rate':'1','vat_rate':'16','vat_base':'ENERGY','currency':'USD',
+        'exchange_rate':'2850','exchange_rate_effective_on':'not-a-date','exchange_rate_source':'SEL','confirmed':'yes'}, follow_redirects=True)
+    assert response.status_code==200
+    assert 'Paramètres refusés' in response.get_data(as_text=True)
+
+
+def test_usd_invoice_snapshots_currency_and_rate(client):
+    token=csrf(client,'/setup')
+    client.post('/setup',data={'_csrf':token,'password':'TestPassword2026!','confirm':'TestPassword2026!'})
+    token=csrf(client,'/login')
+    client.post('/login',data={'_csrf':token,'password':'TestPassword2026!'})
+    token=csrf(client,'/settings')
+    client.post('/settings',data={'_csrf':token,'section':'tariffs','company_name':'SEL','address':'Kolwezi',
+        'tiers':'1-100:300','local_rate':'1','vat_rate':'16','vat_base':'ENERGY','currency':'USD',
+        'exchange_rate':'2850','exchange_rate_effective_on':'2026-10-15','exchange_rate_source':'SEL','confirmed':'yes'})
+    token=csrf(client,'/clients')
+    client.post('/clients',data={'_csrf':token,'name':'Abonné USD','address':'Kolwezi','meter_number':'USD-1','coefficient':'1'})
+    token=csrf(client,'/invoices/new')
+    preview=client.post('/invoices/new',data={'_csrf':token,'client_id':'1','billing_period':'2026-10',
+        'previous':'0','current':'100','fee':'0','due_date':'2026-10-31'})
+    assert preview.status_code==200
+    assert 'USD' in preview.get_data(as_text=True)
+    preview_token=re.search(r'name="_csrf" value="([^"]+)"',preview.get_data(as_text=True)).group(1)
+    client.post('/invoices/new/confirm',data={'_csrf':preview_token})
+    with connect() as c:
+        inv=c.execute('SELECT * FROM invoices').fetchone()
+        calc=json.loads(inv['calc_snapshot'])
+        assert inv['currency']=='USD'
+        assert calc['base_currency']=='CDF'
+        assert calc['currency']=='USD'
+        assert calc['exchange_rate']=='2850'
+        assert calc['total']=='12.32'
+    export=json.loads(client.get('/export/portable.json').data)
+    assert export['schema_version']==1
+    assert export['data']['currency_rates'][0]['rate']=='2850'
+
+
 def test_health_reports_current_application_version(client):
     response=client.get('/health')
     assert response.status_code==200

@@ -20,8 +20,10 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    send_file, session, url_for)
 
 import db
-from domain import (BillingError, calculate_from_settings, decimal, fmt, money,
-                    parse_tiers, validate_due_date, validate_payment_reference)
+from domain import (BillingError, calculate_from_settings, convert_calculation,
+                    decimal, fmt, money, parse_tiers, validate_currency,
+                    validate_due_date, validate_exchange_rate,
+                    validate_payment_reference)
 from invoice_pdf import render_invoice
 from version import APP_VERSION
 
@@ -38,6 +40,25 @@ def page_number(value):
 def sum_money(values):
     """Additionne des montants persistés sans passer par un flottant binaire."""
     return sum((Decimal(str(value)) for value in values), Decimal('0'))
+
+
+def currency_context(connection, settings, issue_date):
+    base = validate_currency(settings.get('base_currency', 'CDF'))
+    currency = validate_currency(settings.get('currency', base))
+    if currency == base:
+        return {'base_currency': base, 'currency': currency, 'rate': Decimal('1'), 'rate_row': None}
+    rate_row = db.exchange_rate_for(connection, base, currency, date.fromisoformat(issue_date))
+    if not rate_row:
+        raise BillingError('Aucun taux de change validé pour cette date et cette devise.')
+    return {'base_currency': base, 'currency': currency, 'rate': validate_exchange_rate(rate_row['rate']), 'rate_row': rate_row}
+
+
+def apply_currency_snapshot(calc, currency_info):
+    row = currency_info.get('rate_row')
+    if row:
+        calc['exchange_rate_effective_on'] = row['effective_on']
+        calc['exchange_rate_source'] = row['source']
+    return calc
 
 
 def resource(name):
@@ -233,17 +254,25 @@ def create_app():
                     raise BillingError('Nom ou numéro de compteur trop long.')
                 g.db.execute('''UPDATE clients SET name=?,address=?,category=?,client_type=?,contract_number=?,meter_number=?,center=?,service_point=?,nif=?,phone=?,coefficient=? WHERE id=?''',(*[values[k] for k in values],cid))
                 g.db.commit();flash('Fiche mise à jour. Les anciennes factures conservent leurs données.','success');return redirect(url_for('clients'))
-            except BillingError as e: flash(str(e),'error')
+            except (BillingError, ValueError) as e: flash(str(e),'error')
         return render_template('client_edit.html',title='Modifier le client',client=current)
 
     @app.route('/settings',methods=['GET','POST'])
     @protected
     def settings_view():
         conf=db.settings(g.db)
+        currency_options=db.currency_catalog(g.db)
         if request.method=='POST':
             section=request.form.get('section','tariffs')
             fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','tiers','local_rate','vat_rate','vat_base','currency']
             values={k:request.form.get(k,'').strip() for k in fields}
+            for key in fields:
+                if key not in request.form and key in conf:
+                    values[key]=conf[key]
+            values['base_currency']=request.form.get('base_currency', conf.get('base_currency','CDF')).strip() or 'CDF'
+            values['exchange_rate']=request.form.get('exchange_rate', conf.get('exchange_rate','')).strip()
+            values['exchange_rate_effective_on']=request.form.get('exchange_rate_effective_on', conf.get('exchange_rate_effective_on','')).strip()
+            values['exchange_rate_source']=request.form.get('exchange_rate_source', conf.get('exchange_rate_source','')).strip()
             try:
                 if not values['company_name'] or not values['address']: raise BillingError('Société et adresse obligatoires.')
                 if section == 'identity':
@@ -254,21 +283,34 @@ def create_app():
                     return redirect(url_for('settings_view'))
                 if section not in ('tariffs','all'):
                     raise BillingError('Section de paramètres invalide.')
-                if not re.fullmatch(r'[A-Z]{3}',values['currency']): raise BillingError('Devise attendue, ex. CDF ou USD.')
+                values['base_currency']=validate_currency(values['base_currency'])
+                values['currency']=validate_currency(values['currency'])
+                if values['base_currency'] != 'CDF': raise BillingError('La devise de référence SEL doit rester CDF.')
                 parse_tiers(values['tiers'])
                 for k in ('local_rate','vat_rate'):
                     if decimal(values[k],k)>100: raise BillingError('Taux fiscal supérieur à 100 %.')
                 if values['vat_base'] not in ('ENERGY','ENERGY_LOCAL','ENERGY_LOCAL_FEES'): raise BillingError('Assiette TVA invalide.')
+                rate=Decimal('1')
+                if values['currency'] != values['base_currency']:
+                    rate=validate_exchange_rate(values['exchange_rate'])
+                    if not values['exchange_rate_effective_on']:
+                        raise BillingError('La date d’effet du taux de change est obligatoire.')
+                    date.fromisoformat(values['exchange_rate_effective_on'])
+                    if not values['exchange_rate_source']:
+                        raise BillingError('La source du taux de change est obligatoire.')
                 if request.form.get('confirmed')!='yes':
                     raise BillingError('Confirmez que les tarifs et taxes ont été validés auprès de SEL avant d’activer la facturation.')
                 with g.db:
-                    for k,v in values.items(): g.db.execute('UPDATE settings SET value=? WHERE key=?',(v,k))
+                    for k,v in values.items(): g.db.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(k,v))
                     g.db.execute("UPDATE settings SET value='1' WHERE key='configured'")
+                    if values['currency'] != values['base_currency']:
+                        db.save_exchange_rate(g.db, values['base_currency'], values['currency'], rate,
+                                              values['exchange_rate_effective_on'], values['exchange_rate_source'], commit=False)
                 flash('Paramètres validés. Les anciennes factures restent inchangées.','success')
                 return redirect(url_for('settings_view'))
-            except BillingError as e: flash(str(e),'error')
+            except (BillingError, ValueError) as e: flash(f'Paramètres refusés : {e}','error')
             conf.update(values)
-        return render_template('settings.html',title='Paramètres SEL',settings=conf)
+        return render_template('settings.html',title='Paramètres SEL',settings=conf,currency_options=currency_options)
 
     @app.get('/invoices')
     @protected
@@ -319,7 +361,9 @@ def create_app():
                 validate_due_date(issue_date, due)
                 client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
                 if not client: raise BillingError('Client inexistant.')
-                calc=calculate_from_settings(request.form.get('previous',''),request.form.get('current',''),client['coefficient'],conf,request.form.get('fee','0') or '0')
+                base_calc=calculate_from_settings(request.form.get('previous',''),request.form.get('current',''),client['coefficient'],conf,request.form.get('fee','0') or '0')
+                currency_info=currency_context(g.db, conf, issue_date)
+                calc=apply_currency_snapshot(convert_calculation(base_calc, currency_info['rate'], from_currency=currency_info['base_currency'], to_currency=currency_info['currency']), currency_info)
                 if db.active_invoice(g.db,cid,period): raise BillingError('Une facture active existe déjà pour ce client et cette période.')
                 session['invoice_draft']={'client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'fee':request.form.get('fee','0').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500]}
                 return render_template('invoice_preview.html',title='Vérifier le décompte',draft=session['invoice_draft'],client=client,calc=calc,configured=True)
@@ -342,7 +386,9 @@ def create_app():
             validate_due_date(issue_date,draft['due_date'])
             client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
             if not client: raise BillingError('Client inexistant.')
-            calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft['fee'])
+            base_calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft['fee'])
+            currency_info=currency_context(g.db, conf, issue_date)
+            calc=apply_currency_snapshot(convert_calculation(base_calc, currency_info['rate'], from_currency=currency_info['base_currency'], to_currency=currency_info['currency']), currency_info)
             g.db.execute('BEGIN IMMEDIATE')
             if db.active_invoice(g.db,cid,period): raise BillingError('Cette période est déjà facturée pour ce client.')
             year=date.today().year
@@ -477,8 +523,10 @@ def create_app():
                              'invoice_business_key':'invoices[].number',
                              'payment_invoice_reference':'payments[].invoice_number',
                              'money':'decimal strings, same currency as document',
-                             'snapshots':'immutable documents: do not recalculate'},
+                             'snapshots':'immutable documents: do not recalculate',
+                             'currency_rates':'optional dated rates; invoice snapshots remain authoritative'},
                   'data':{'company_settings':{k:v for k,v in db.settings(g.db).items() if k!='configured'},
+                          'currency_rates':[dict(row) for row in g.db.execute('SELECT base_currency,quote_currency,rate,effective_on,source,note FROM currency_rates ORDER BY effective_on,id')],
                           'clients':clients,'invoices':documents,'payments':payments}}
         payload=json.dumps(manifest,ensure_ascii=False,indent=2).encode('utf-8')
         return send_file(io.BytesIO(payload),mimetype='application/json',as_attachment=True,

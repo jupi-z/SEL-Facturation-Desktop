@@ -48,6 +48,27 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     c.close()
 
 
+def test_pdf_discloses_currency_conversion_snapshot(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    c=db.connect()
+    c.execute("INSERT INTO clients(code,name,address,meter_number,coefficient) VALUES('SEL-C-00001','A','K','M','1')")
+    calc={'previous':'0','current':'100','kwh':'100','coefficient':'1','lines':[],
+          'energy':'10.53','local_rate':'1','local_tax':'0.11','vat_rate':'16','vat_basis':'10.53',
+          'vat':'1.68','fee':'0.00','total':'12.32','base_currency':'CDF','currency':'USD',
+          'exchange_rate':'2850','exchange_rate_effective_on':'2026-10-15'}
+    c.execute('''INSERT INTO invoices(number,client_id,billing_period,issue_date,due_date,client_snapshot,company_snapshot,calc_snapshot,currency)
+                 VALUES(?,?,?,?,?,?,?,?,?)''',('SEL-2026-000002',1,'2026-10','2026-10-15','2026-10-31',
+                 json.dumps(dict(c.execute('SELECT * FROM clients').fetchone())),json.dumps(db.settings(c)),json.dumps(calc),'USD'))
+    c.commit()
+    pdf=render_invoice(c.execute('SELECT * FROM invoices WHERE number=?',('SEL-2026-000002',)).fetchone(),[])
+    text='\n'.join(p.extract_text() for p in PdfReader(BytesIO(pdf)).pages)
+    assert 'MONTANT TOTAL (USD)' in text
+    assert '2850' in text
+    assert 'CDF' in text
+    c.close()
+
+
 def test_automatic_backup_refreshes_after_same_day_changes(monkeypatch,tmp_path):
     monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
     db.initialize()

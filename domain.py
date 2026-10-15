@@ -8,10 +8,67 @@ import re
 from datetime import date
 
 Q = Decimal("0.01")
+SUPPORTED_CURRENCIES = {
+    "CDF": {"name": "Franc congolais", "symbol": "CDF", "decimal_digits": 2},
+    "USD": {"name": "Dollar américain", "symbol": "$", "decimal_digits": 2},
+}
 
 
 class BillingError(ValueError):
     pass
+
+
+def validate_currency(value: Any) -> str:
+    code = str(value or "").strip().upper()
+    if code not in SUPPORTED_CURRENCIES:
+        raise BillingError("Devise non prise en charge. Sélectionnez une devise proposée par SEL.")
+    return code
+
+
+def validate_exchange_rate(value: Any) -> Decimal:
+    if value is None or str(value).strip() == "":
+        raise BillingError("Le taux de change est obligatoire.")
+    try:
+        rate = Decimal(str(value).strip().replace(",", "."))
+    except InvalidOperation:
+        raise BillingError("Le taux de change doit être un nombre valide.") from None
+    if not rate.is_finite() or rate <= 0:
+        raise BillingError("Le taux de change doit être strictement positif.")
+    if abs(rate.as_tuple().exponent) > 8:
+        raise BillingError("Le taux de change ne doit pas dépasser huit décimales.")
+    return rate
+
+
+def convert_amount(amount: Decimal, rate: Decimal, *, from_currency: str, to_currency: str) -> Decimal:
+    source = validate_currency(from_currency)
+    target = validate_currency(to_currency)
+    rate = validate_exchange_rate(rate)
+    amount = Decimal(amount)
+    if source == target:
+        return money(amount)
+    if source == "CDF" and target == "USD":
+        return money(amount / rate)
+    if source == "USD" and target == "CDF":
+        return money(amount * rate)
+    raise BillingError("Conversion de devise non prise en charge.")
+
+
+def convert_calculation(calc: dict, rate: Decimal, *, from_currency: str, to_currency: str) -> dict:
+    source = validate_currency(from_currency)
+    target = validate_currency(to_currency)
+    rate = validate_exchange_rate(rate)
+    result = dict(calc)
+    result.update({"base_currency": source, "currency": target, "exchange_rate": str(rate)})
+    for field in ("energy", "local_tax", "vat_basis", "vat", "fee", "total"):
+        result[f"base_{field}"] = str(calc[field])
+        result[field] = str(convert_amount(Decimal(calc[field]), rate, from_currency=source, to_currency=target))
+    result["lines"] = []
+    for row in calc.get("lines", []):
+        converted = dict(row)
+        converted["unit_price"] = str(convert_amount(Decimal(row["unit_price"]), rate, from_currency=source, to_currency=target))
+        converted["amount"] = str(convert_amount(Decimal(row["amount"]), rate, from_currency=source, to_currency=target))
+        result["lines"].append(converted)
+    return result
 
 
 def validate_due_date(issue_date: str, due_date: str) -> None:

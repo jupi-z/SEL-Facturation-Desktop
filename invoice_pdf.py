@@ -39,6 +39,8 @@ def render_invoice(invoice, payments) -> bytes:
     inv=dict(invoice)
     client=json.loads(inv['client_snapshot']);co=json.loads(inv['company_snapshot']);d=json.loads(inv['calc_snapshot'])
     paid=sum((Decimal(str(x['amount'])) for x in payments),Decimal('0'))
+    currency=d.get('currency',inv.get('currency','CDF'))
+    base_currency=d.get('base_currency',currency)
     balance=Decimal(d['total'])-paid
     out=BytesIO()
     doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=15*mm,leftMargin=15*mm,topMargin=16*mm,bottomMargin=17*mm,
@@ -97,13 +99,18 @@ def render_invoice(invoice, payments) -> bytes:
     story.append(table)
     recap=[('Sous-total énergie',fmt(d['energy'])),(f"Taxe locale ({p(d['local_rate'])} %)",fmt(d['local_tax'])),
            ('Frais supplémentaires',fmt(d['fee'])),(f"TVA ({p(d['vat_rate'])} %) — base {fmt(d['vat_basis'])}",fmt(d['vat'])),
-           ('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total']))]
+           ('MONTANT TOTAL ('+p(currency)+')',fmt(d['total']))]
     rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
     rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
-    story.extend([Spacer(1,7),rec,Spacer(1,10)])
+    story.extend([Spacer(1,7),rec])
+    if base_currency != currency:
+        rate=p(d.get('exchange_rate',''))
+        effective=p(d.get('exchange_rate_effective_on',''))
+        story.append(Paragraph(f"Conversion document : 1 {p(currency)} = {rate} {p(base_currency)} · taux SEL applicable au {effective}.",muted))
+    story.append(Spacer(1,10))
     payment_box=Table([[Paragraph('CONDITIONS DE RÈGLEMENT',twhite),Paragraph('SITUATION DU COMPTE',twhite)],
                        [Paragraph(f"Échéance : <b>{p(inv['due_date'])}</b><br/>Paiement accepté selon les modalités de SEL.",normal),
-                        Paragraph(f"Déjà réglé : <b>{fmt(paid)} {p(inv['currency'])}</b><br/>MONTANT À RÉGLER : <b>{fmt(balance)} {p(inv['currency'])}</b>",normal)]],
+                        Paragraph(f"Déjà réglé : <b>{fmt(paid)} {p(currency)}</b><br/>MONTANT À RÉGLER : <b>{fmt(balance)} {p(currency)}</b>",normal)]],
                       colWidths=[89*mm,89*mm])
     payment_box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('BACKGROUND',(0,1),(-1,1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.65,BORDER),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),9),('RIGHTPADDING',(0,0),(-1,-1),9)]))
     story.append(payment_box)
