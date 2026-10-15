@@ -16,7 +16,7 @@ import db
 
 
 MAX_UPDATE_SIZE = 250 * 1024 * 1024
-DEFAULT_MANIFEST_URL = "https://github.com/jupi-z/SEL-Facturation-Desktop/releases/latest/download/update.json"
+DEFAULT_MANIFEST_URL = "https://sel.shuleops.com/stable/update.json"
 
 
 def staging_dir() -> Path:

@@ -1,0 +1,14 @@
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sel.shuleops.com;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 404;
+    }
+}

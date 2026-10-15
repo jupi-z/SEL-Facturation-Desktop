@@ -4,7 +4,7 @@ Le paquet de livraison officiel est `SEL-Facturation-Setup-<version>.exe`, le bo
 
 Le manifeste `update.json` est publié comme asset de la même release. Il peut être généré et publié sans GitHub Actions avec `powershell -ExecutionPolicy Bypass -File scripts/publish-windows-release.ps1 -Tag v<version>` après compilation locale. La vérification automatique de l'application ne bloque jamais le fonctionnement hors connexion.
 
-Le dépôt source peut rester privé, mais l'URL configurée dans l'application doit être publiquement lisible sans jeton : une application installée ne doit jamais embarquer un identifiant GitHub. Pour un essai pilote, `SEL_UPDATE_MANIFEST_URL` peut pointer vers l'asset d'une préversion publiée sur un endpoint public ; pour la production, utiliser un endpoint public dédié aux releases signées. Une release d'un dépôt GitHub privé renvoie `404` à l'application et est donc traitée comme indisponible, même si elle est accessible avec `gh` authentifié.
+Le dépôt source peut rester privé, mais l'URL configurée dans l'application doit être publiquement lisible sans jeton : une application installée ne doit jamais embarquer un identifiant GitHub. L'endpoint de production est `https://sel.shuleops.com/stable/update.json`. Pour un essai pilote, `SEL_UPDATE_MANIFEST_URL` peut pointer vers l'endpoint `/pilot/update.json`. Une release d'un dépôt GitHub privé renvoie `404` à l'application et est donc traitée comme indisponible, même si elle est accessible avec `gh` authentifié.
 
 ## Garanties du parcours officiel
 

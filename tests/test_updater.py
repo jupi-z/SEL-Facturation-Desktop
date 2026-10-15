@@ -5,7 +5,11 @@ import sqlite3
 import pytest
 
 import db
-from updater import ManifestError, UpdateManifest, check_for_update, download_update, verify_sha256
+from updater import DEFAULT_MANIFEST_URL, ManifestError, UpdateManifest, check_for_update, download_update, verify_sha256
+
+
+def test_default_manifest_uses_public_sel_distribution_endpoint():
+    assert DEFAULT_MANIFEST_URL == "https://sel.shuleops.com/stable/update.json"
 
 
 def manifest_payload(**overrides):
