@@ -2,7 +2,9 @@
 
 Le paquet de livraison officiel est `SEL-Facturation-Setup-<version>.exe`, le bootstrapper WiX. Il embarque le MSI et l'installateur autonome WebView2 afin qu'une machine Windows 10/11 puisse être préparée en une seule installation.
 
-Le manifeste `update.json` est publié comme asset de la même GitHub Release. Il peut être généré et publié sans GitHub Actions avec `powershell -ExecutionPolicy Bypass -File scripts/publish-windows-release.ps1 -Tag v<version>` après compilation locale. La vérification automatique de l'application ne bloque jamais le fonctionnement hors connexion.
+Le manifeste `update.json` est publié comme asset de la même release. Il peut être généré et publié sans GitHub Actions avec `powershell -ExecutionPolicy Bypass -File scripts/publish-windows-release.ps1 -Tag v<version>` après compilation locale. La vérification automatique de l'application ne bloque jamais le fonctionnement hors connexion.
+
+Le dépôt source peut rester privé, mais l'URL configurée dans l'application doit être publiquement lisible sans jeton : une application installée ne doit jamais embarquer un identifiant GitHub. Pour un essai pilote, `SEL_UPDATE_MANIFEST_URL` peut pointer vers l'asset d'une préversion publiée sur un endpoint public ; pour la production, utiliser un endpoint public dédié aux releases signées. Une release d'un dépôt GitHub privé renvoie `404` à l'application et est donc traitée comme indisponible, même si elle est accessible avec `gh` authentifié.
 
 ## Garanties du parcours officiel
 
@@ -19,7 +21,7 @@ Le manifeste `update.json` est publié comme asset de la même GitHub Release. I
 1. Incrémenter `APP_VERSION` dans `version.py` (par exemple `0.3.0` vers `0.3.1`).
 2. Laisser le workflow compiler l'EXE, la MSI et le bootstrapper.
 3. Exécuter la recette Windows et la sauvegarde/restauration sur le poste cible SEL.
-4. Déclencher manuellement le workflow avec un tag dont la version numérique correspond à `APP_VERSION`, par exemple `v0.3.1-rc1`.
+4. Publier localement une préversion sur l'endpoint pilote public, puis vérifier la recette ; pour la production, utiliser un tag dont la version numérique correspond à `APP_VERSION`, par exemple `v0.3.1-rc1`.
 5. Installer la release sur une machine qui possède déjà la version précédente et vérifier l'ouverture, les données, les PDF et les raccourcis.
 
 ## Limite à déclarer
