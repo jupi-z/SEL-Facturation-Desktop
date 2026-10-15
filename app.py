@@ -242,18 +242,28 @@ def create_app():
         conf=db.settings(g.db)
         if request.method=='POST':
             section=request.form.get('section','tariffs')
-            fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','tiers','local_rate','vat_rate','vat_base','currency']
+            identity_fields=('company_name','tagline','address','phone','email','website','rccm','nif','id_nat')
+            tariff_fields=('tiers','local_rate','vat_rate','vat_base','currency')
+            if section == 'identity':
+                fields=identity_fields
+            elif section == 'tariffs':
+                fields=tariff_fields
+            elif section == 'all':
+                fields=identity_fields + tariff_fields
+            else:
+                fields=()
             values={k:request.form.get(k,'').strip() for k in fields}
             try:
-                if not values['company_name'] or not values['address']: raise BillingError('Société et adresse obligatoires.')
                 if section == 'identity':
-                    identity_fields=('company_name','tagline','address','phone','email','website','rccm','nif','id_nat')
+                    if not values['company_name'] or not values['address']: raise BillingError('Société et adresse obligatoires.')
                     with g.db:
                         for k in identity_fields: g.db.execute('UPDATE settings SET value=? WHERE key=?',(values[k],k))
                     flash('Identité SEL mise à jour. Les anciennes factures restent inchangées.','success')
                     return redirect(url_for('settings_view'))
                 if section not in ('tariffs','all'):
                     raise BillingError('Section de paramètres invalide.')
+                if section == 'all' and (not values['company_name'] or not values['address']):
+                    raise BillingError('Société et adresse obligatoires.')
                 if not re.fullmatch(r'[A-Z]{3}',values['currency']): raise BillingError('Devise attendue, ex. CDF ou USD.')
                 parse_tiers(values['tiers'])
                 for k in ('local_rate','vat_rate'):

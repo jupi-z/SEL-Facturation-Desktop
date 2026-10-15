@@ -74,6 +74,31 @@ def test_identity_settings_can_be_saved_without_reconfirming_tariffs(authenticat
     assert "SEL TEST" in authenticated_client.get("/settings").get_data(as_text=True)
 
 
+def test_tariff_settings_can_be_saved_without_erasing_identity(authenticated_client):
+    html = authenticated_client.get("/settings").get_data(as_text=True)
+    token = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
+
+    response = authenticated_client.post(
+        "/settings",
+        data={
+            "_csrf": token,
+            "section": "tariffs",
+            "tiers": "1-100:300\n101-200:320",
+            "local_rate": "2",
+            "vat_rate": "18",
+            "vat_base": "ENERGY_LOCAL",
+            "currency": "CDF",
+            "confirmed": "yes",
+        },
+    )
+
+    assert response.status_code == 302
+    settings = authenticated_client.get("/settings").get_data(as_text=True)
+    assert "SOCIÉTÉ D’ÉNERGIE DU LUALABA" in settings
+    assert "Avenue de la Province" in settings
+    assert "TVA 18 % · Taxe locale 2 %" in settings
+
+
 def test_modal_styles_and_keyboard_behavior_are_present():
     css = open("static/app.css", encoding="utf-8").read()
     js = open("static/desktop.js", encoding="utf-8").read()
