@@ -1,6 +1,52 @@
 /* Actions de documents intégrées à la fenêtre SEL.
    Dans un navigateur de développement, les liens PDF restent ordinaires. */
 (() => {
+  const openModal = (modal, trigger) => {
+    if (!modal) return;
+    modal._lastTrigger = trigger;
+    if (typeof modal.showModal === 'function') modal.showModal();
+    else modal.setAttribute('open', '');
+    const first = modal.querySelector('input, select, textarea, button');
+    if (first) window.setTimeout(() => first.focus(), 0);
+  };
+
+  const closeModal = (modal) => {
+    if (!modal) return;
+    if (typeof modal.close === 'function') modal.close();
+    else modal.removeAttribute('open');
+    if (modal._lastTrigger) modal._lastTrigger.focus();
+  };
+
+  document.addEventListener('click', (event) => {
+    const opener = event.target.closest('[data-modal-open]');
+    if (opener) {
+      const modal = document.getElementById(opener.dataset.modalOpen);
+      if (modal) {
+        event.preventDefault();
+        openModal(modal, opener);
+        return;
+      }
+    }
+    const closer = event.target.closest('[data-modal-close]');
+    if (closer) {
+      event.preventDefault();
+      closeModal(closer.closest('dialog'));
+      return;
+    }
+    const dialog = event.target.closest('dialog.modal');
+    if (dialog && event.target === dialog) closeModal(dialog);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      const openDialog = document.querySelector('dialog.modal[open]');
+      if (openDialog) {
+        event.preventDefault();
+        closeModal(openDialog);
+      }
+    }
+  });
+
   document.addEventListener('click', (event) => {
     const toggle = event.target.closest('[data-password-toggle]');
     if (!toggle) return;

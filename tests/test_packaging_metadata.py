@@ -12,6 +12,8 @@ def test_bundle_uses_wix4_exe_arguments():
     chain = bundle.find("wix:Chain", NS)
     exe = chain.find("wix:ExePackage", NS)
     msi = chain.find("wix:MsiPackage", NS)
+    assert exe.attrib["SourceFile"] == "$(var.WebView2Installer)"
+    assert exe.attrib["PerMachine"] == "yes"
     assert exe.attrib["InstallArguments"] == "/silent /install"
     assert "UninstallArguments" not in exe.attrib
     assert exe.find("wix:InstallCommand", NS) is None
@@ -35,4 +37,13 @@ def test_windows_builds_use_sel_logo_icon():
     assert "--icon" in (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
     assert "--icon packaging\\sel-facturation.ico" in workflow
+
+
+def test_windows_build_embeds_webview2_and_requires_signing_for_published_releases():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+
+    assert "MicrosoftEdgeWebView2RuntimeInstallerX64.exe" in workflow
+    assert "Invoke-WebRequest" in workflow
+    assert "SEL_CODESIGN_PFX_BASE64" in workflow
+    assert "Get-AuthenticodeSignature" in workflow
 
