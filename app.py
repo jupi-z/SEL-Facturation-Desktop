@@ -241,10 +241,19 @@ def create_app():
     def settings_view():
         conf=db.settings(g.db)
         if request.method=='POST':
+            section=request.form.get('section','tariffs')
             fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','tiers','local_rate','vat_rate','vat_base','currency']
             values={k:request.form.get(k,'').strip() for k in fields}
             try:
                 if not values['company_name'] or not values['address']: raise BillingError('Société et adresse obligatoires.')
+                if section == 'identity':
+                    identity_fields=('company_name','tagline','address','phone','email','website','rccm','nif','id_nat')
+                    with g.db:
+                        for k in identity_fields: g.db.execute('UPDATE settings SET value=? WHERE key=?',(values[k],k))
+                    flash('Identité SEL mise à jour. Les anciennes factures restent inchangées.','success')
+                    return redirect(url_for('settings_view'))
+                if section not in ('tariffs','all'):
+                    raise BillingError('Section de paramètres invalide.')
                 if not re.fullmatch(r'[A-Z]{3}',values['currency']): raise BillingError('Devise attendue, ex. CDF ou USD.')
                 parse_tiers(values['tiers'])
                 for k in ('local_rate','vat_rate'):

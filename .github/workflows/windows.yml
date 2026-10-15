@@ -7,6 +7,11 @@ on:
         required: true
         default: false
         type: boolean
+      sign_release:
+        description: 'Signer les artefacts avec le certificat Authenticode SEL configuré dans les secrets GitHub'
+        required: true
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
@@ -58,15 +63,47 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'WiX MSI build failed' }
           wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -d ProductVersion=$version -d MsiPath="$((Resolve-Path dist\installer\SEL-Facturation.msi).Path)" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
           if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper build failed' }
+      - name: Sign Windows artifacts
+        if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true
+        shell: pwsh
+        env:
+          SEL_CODESIGN_PFX_BASE64: ${{ secrets.SEL_CODESIGN_PFX_BASE64 }}
+          SEL_CODESIGN_PFX_PASSWORD: ${{ secrets.SEL_CODESIGN_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SEL_CODESIGN_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:SEL_CODESIGN_PFX_PASSWORD)) {
+            throw 'Secrets SEL_CODESIGN_PFX_BASE64 et SEL_CODESIGN_PFX_PASSWORD requis pour une release signée.'
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'sel-codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SEL_CODESIGN_PFX_BASE64))
+          $signtool = Get-ChildItem "$env:ProgramFiles\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'SignTool Windows SDK introuvable.' }
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          $artifacts = @('dist/SEL-Facturation.exe', 'dist/installer/SEL-Facturation.msi', "dist/installer/SEL-Facturation-Setup-$version.exe")
+          foreach ($artifact in $artifacts) {
+            if (-not (Test-Path $artifact)) { throw "Artefact introuvable avant signature: $artifact" }
+            & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SEL_CODESIGN_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $artifact
+            if ($LASTEXITCODE -ne 0) { throw "Signature échouée: $artifact" }
+            $signature = Get-AuthenticodeSignature $artifact
+            if ($signature.Status -ne 'Valid') { throw "Signature invalide après signature: $artifact ($($signature.Status))" }
+          }
+          Remove-Item -LiteralPath $pfx -Force
       - name: Publish private GitHub prerelease without overwriting
         if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISH_SIGNED: ${{ inputs.sign_release }}
         run: |
+          if ($env:PUBLISH_SIGNED -ne 'true') { throw 'Publication bloquée: activez sign_release pour publier uniquement des artefacts signés.' }
           $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
           if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
           $version = $Matches[1]
+          foreach ($artifact in @('dist/SEL-Facturation.exe', 'dist/installer/SEL-Facturation.msi', "dist/installer/SEL-Facturation-Setup-$version.exe")) {
+            $signature = Get-AuthenticodeSignature $artifact
+            if ($signature.Status -ne 'Valid') { throw "Artefact non signé: $artifact" }
+          }
           $tag = 'v0.3.0-rc5'
           $exe = 'dist/SEL-Facturation.exe'
           $setup = "dist/installer/SEL-Facturation-Setup-$version.exe"
