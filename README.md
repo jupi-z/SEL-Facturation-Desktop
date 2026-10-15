@@ -28,6 +28,8 @@ py -3.12 -m venv .venv
 
 `dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée avec l'icône du logo SEL ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Pour la distribution, le workflow Windows compile un installateur MSI par utilisateur et un bootstrapper WiX qui installe silencieusement le WebView2 Evergreen Standalone puis le MSI. L'utilisateur peut donc utiliser SEL après une seule installation ; l'installation de WebView2 peut demander l'élévation Windows selon la politique du poste. Inno Setup reste disponible comme paquet de compatibilité développeur, mais le bootstrapper WiX est le paquet de livraison recommandé. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**
 
+La mise à jour officielle remplace la version installée par une version supérieure au même emplacement, sans toucher aux données de `%LOCALAPPDATA%\SEL Facturation`. Le workflow vérifie ce scénario sur Windows et refuse une release dont le tag réutilise une version numérique déjà construite. Voir [la politique de mise à jour Windows](Docs/WINDOWS_UPDATE_POLICY.md).
+
 ## Où sont les données ?
 
 Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `session.key` et le répertoire `sauvegardes`. Elles restent séparées du dossier d'installation et de l'exécutable, donc ne sont pas écrasées à la mise à jour.

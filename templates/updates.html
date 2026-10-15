@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+{% block body %}
+<section class="panel">
+  <div class="sectionhead">
+    <div><div class="eyebrow">MAINTENANCE SÉCURISÉE</div><h2>Mises à jour</h2><p class="sub">La recherche ne bloque pas l’application et fonctionne aussi hors connexion.</p></div>
+    <span class="pill">Version {{ app_version }}</span>
+  </div>
+  <form method="post" action="{{ url_for('updates_check') }}" class="form">
+    <input type="hidden" name="_csrf" value="{{ csrf() }}">
+    <button class="primary" type="submit">Rechercher une mise à jour</button>
+  </form>
+  {% if update and update.ready %}
+    <div class="alert ok" role="status">La sauvegarde {{ update.ready.backup_name }} est prête. Fermez vos travaux puis lancez l’installation.</div>
+    <button class="primary" type="button" data-update-install data-update-file="{{ update.ready.filename }}" data-update-sha256="{{ update.ready.sha256 }}">Installer la mise à jour</button>
+  {% elif update and update.status == 'available' and update.manifest %}
+    <div class="notice-warning" role="status">
+      <strong>Version {{ update.manifest.version }} disponible.</strong>
+      {% if update.manifest.published_at %}<span> Publiée le {{ update.manifest.published_at }}.</span>{% endif %}
+      {% if update.manifest.release_notes %}<p>{{ update.manifest.release_notes }}</p>{% endif %}
+    </div>
+    <form method="post" action="{{ url_for('updates_download') }}" class="form">
+      <input type="hidden" name="_csrf" value="{{ csrf() }}">
+      <button class="secondary" type="submit">Télécharger et préparer l’installation</button>
+    </form>
+  {% elif update and update.status == 'current' %}
+    <div class="alert ok" role="status">Vous utilisez déjà la dernière version connue.</div>
+  {% elif update and update.status == 'unavailable' %}
+    <div class="alert" role="status">{{ update.message or 'Le service de mise à jour est temporairement indisponible. Réessayez plus tard.' }}</div>
+  {% elif update and update.status == 'not_published' %}
+    <div class="alert" role="status">{{ update.message or 'Le canal stable n’est pas encore publié. L’application reste utilisable normalement.' }}</div>
+  {% elif update and update.status == 'invalid' %}
+    <div class="alert err" role="alert">La mise à jour a été refusée : {{ update.message }}</div>
+  {% endif %}
+  <p class="note">Les données locales ne sont pas supprimées pendant une mise à jour. Une sauvegarde SQLite vérifiée est créée avant toute installation.</p>
+</section>
+{% endblock %}

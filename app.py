@@ -10,14 +10,15 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 from datetime import date, datetime
 from decimal import Decimal
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, abort, flash, g, redirect, render_template, request,
-                   send_file, session, url_for)
+from flask import (Flask, abort, flash, g, jsonify, redirect, render_template,
+                   request, send_file, session, url_for)
 
 import db
 from domain import (BillingError, calculate_from_settings, convert_calculation,
@@ -25,6 +26,8 @@ from domain import (BillingError, calculate_from_settings, convert_calculation,
                     validate_due_date, validate_exchange_rate,
                     validate_payment_reference)
 from invoice_pdf import render_invoice
+from updater import (DEFAULT_MANIFEST_URL, UpdateCheckResult, UpdateManifest,
+                     check_for_update, create_pre_update_backup, download_update, staging_dir)
 from version import APP_VERSION
 
 PAGE_SIZE = 50
@@ -66,6 +69,39 @@ def resource(name):
     return str(base / name)
 
 
+def update_result_payload(result):
+    payload={'status':result.status, 'message':result.message}
+    if result.manifest:
+        payload['manifest']={
+            'schema': result.manifest.schema,
+            'version': result.manifest.version,
+            'url': result.manifest.url,
+            'sha256': result.manifest.sha256,
+            'size': result.manifest.size,
+            'published_at': result.manifest.published_at,
+            'release_notes': result.manifest.release_notes,
+            'source_url': result.manifest.source_url,
+        }
+    return payload
+
+
+def start_background_update_check(application):
+    def worker():
+        result=check_for_update(application.config['UPDATE_MANIFEST_URL'], APP_VERSION)
+        application.extensions['update_result']=update_result_payload(result)
+
+    thread=threading.Thread(target=worker, name='sel-update-check', daemon=True)
+    thread.start()
+    return thread
+
+
+def current_update_result(application):
+    background = application.extensions.get('update_result') or {}
+    if background.get('status') and background.get('status') != 'not_checked':
+        return background
+    return session.get('update_result') or background
+
+
 def password_hash(password, salt):
     return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), bytes.fromhex(salt), 600000).hex()
 
@@ -89,7 +125,10 @@ def create_app():
     app.secret_key=read_secret()
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict',
                       PERMANENT_SESSION_LIFETIME=3600*8, TRUSTED_HOSTS=['127.0.0.1','localhost'],
-                      MAX_CONTENT_LENGTH=1024*1024)
+                      MAX_CONTENT_LENGTH=1024*1024,
+                      UPDATE_MANIFEST_URL=os.environ.get('SEL_UPDATE_MANIFEST_URL', DEFAULT_MANIFEST_URL))
+    app.extensions['update_result']={'status':'not_checked','message':''}
+    app.start_background_update_check=lambda: start_background_update_check(app)
 
     @app.before_request
     def open_connection_and_authorize():
@@ -149,6 +188,47 @@ def create_app():
     @app.get('/health')
     def health():
         return {'app':'SEL-Facturation-Local','status':'ok','version':APP_VERSION}
+
+    @app.get('/updates')
+    @protected
+    def updates_view():
+        return render_template('updates.html', title='Mises à jour',
+                               update=current_update_result(app))
+
+    @app.post('/updates/check')
+    @protected
+    def updates_check():
+        result=check_for_update(app.config['UPDATE_MANIFEST_URL'], APP_VERSION)
+        payload=update_result_payload(result)
+        session['update_result']=payload
+        app.extensions['update_result']=payload
+        return redirect(url_for('updates_view'))
+
+    @app.get('/updates/status')
+    @protected
+    def updates_status():
+        result=current_update_result(app)
+        return jsonify(status=result.get('status', 'not_checked'), message=result.get('message', ''))
+
+    @app.post('/updates/download')
+    @protected
+    def updates_download():
+        current=session.get('update_result') or {}
+        raw_manifest=current.get('manifest')
+        if current.get('status') != 'available' or not raw_manifest:
+            session['update_result']={'status':'invalid','message':'Aucune mise à jour confirmée à télécharger.'}
+            return redirect(url_for('updates_view'))
+        try:
+            manifest=UpdateManifest(**raw_manifest)
+            package=download_update(manifest, staging_dir())
+            backup=create_pre_update_backup()
+            current['ready']={'filename':package.name, 'sha256':manifest.sha256, 'backup_name':backup.name}
+            session['update_result']=current
+            app.extensions['update_result']=current
+        except Exception as exc:
+            session['update_result']={'status':'invalid','message':str(exc)}
+            app.extensions['update_result']=session['update_result']
+        return redirect(url_for('updates_view'))
 
     @app.route('/setup',methods=['GET','POST'])
     def setup():
@@ -264,7 +344,16 @@ def create_app():
         currency_options=db.currency_catalog(g.db)
         if request.method=='POST':
             section=request.form.get('section','tariffs')
-            fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','tiers','local_rate','vat_rate','vat_base','currency']
+            identity_fields=('company_name','tagline','address','phone','email','website','rccm','nif','id_nat')
+            tariff_fields=('tiers','local_rate','vat_rate','vat_base','currency')
+            if section == 'identity':
+                fields=identity_fields
+            elif section == 'tariffs':
+                fields=tariff_fields
+            elif section == 'all':
+                fields=identity_fields + tariff_fields
+            else:
+                fields=()
             values={k:request.form.get(k,'').strip() for k in fields}
             for key in fields:
                 if key not in request.form and key in conf:
@@ -274,9 +363,8 @@ def create_app():
             values['exchange_rate_effective_on']=request.form.get('exchange_rate_effective_on', conf.get('exchange_rate_effective_on','')).strip()
             values['exchange_rate_source']=request.form.get('exchange_rate_source', conf.get('exchange_rate_source','')).strip()
             try:
-                if not values['company_name'] or not values['address']: raise BillingError('Société et adresse obligatoires.')
                 if section == 'identity':
-                    identity_fields=('company_name','tagline','address','phone','email','website','rccm','nif','id_nat')
+                    if not values['company_name'] or not values['address']: raise BillingError('Société et adresse obligatoires.')
                     with g.db:
                         for k in identity_fields: g.db.execute('UPDATE settings SET value=? WHERE key=?',(values[k],k))
                     flash('Identité SEL mise à jour. Les anciennes factures restent inchangées.','success')
@@ -286,6 +374,8 @@ def create_app():
                 values['base_currency']=validate_currency(values['base_currency'])
                 values['currency']=validate_currency(values['currency'])
                 if values['base_currency'] != 'CDF': raise BillingError('La devise de référence SEL doit rester CDF.')
+                if section == 'all' and (not values['company_name'] or not values['address']):
+                    raise BillingError('Société et adresse obligatoires.')
                 parse_tiers(values['tiers'])
                 for k in ('local_rate','vat_rate'):
                     if decimal(values[k],k)>100: raise BillingError('Taux fiscal supérieur à 100 %.')

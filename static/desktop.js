@@ -63,7 +63,83 @@
     if (form && !window.confirm(form.dataset.confirm)) event.preventDefault();
   });
 
+  const updateStatus = document.querySelector('[data-update-status]');
+  if (updateStatus) {
+    const title = updateStatus.querySelector('[data-update-title]');
+    const message = updateStatus.querySelector('[data-update-message]');
+    const link = updateStatus.querySelector('[data-update-link]');
+    let attempts = 0;
+    const renderUpdateStatus = (payload) => {
+      const status = payload && payload.status;
+      updateStatus.classList.toggle('status-warning', status === 'available' || status === 'unavailable' || status === 'not_published' || status === 'invalid');
+      if (status === 'current') {
+        title.textContent = 'Application à jour';
+        message.textContent = 'Aucune mise à jour disponible.';
+        link.hidden = true;
+      } else if (status === 'available') {
+        title.textContent = 'Mise à jour disponible';
+        message.textContent = 'Une nouvelle version peut être téléchargée.';
+        link.hidden = false;
+      } else if (status === 'unavailable') {
+        title.textContent = 'Service de mise à jour indisponible';
+        message.textContent = payload.message || 'La vérification n’a pas pu joindre le serveur.';
+        link.hidden = false;
+      } else if (status === 'not_published') {
+        title.textContent = 'Canal de mise à jour non publié';
+        message.textContent = payload.message || 'Aucune version stable n’est encore publiée.';
+        link.hidden = false;
+      } else if (status === 'invalid') {
+        title.textContent = 'Mise à jour refusée';
+        message.textContent = payload.message || 'Le paquet n’a pas été accepté.';
+        link.hidden = false;
+      } else {
+        title.textContent = 'Vérification des mises à jour';
+        message.textContent = 'Vérification en cours…';
+        link.hidden = true;
+      }
+    };
+    const pollUpdateStatus = async () => {
+      try {
+        const response = await fetch(updateStatus.dataset.updatePoll, {credentials: 'same-origin', redirect: 'error'});
+        if (!response.ok) throw new Error('status unavailable');
+        const payload = await response.json();
+        renderUpdateStatus(payload);
+        if (payload.status === 'not_checked' && attempts < 20) {
+          attempts += 1;
+          window.setTimeout(pollUpdateStatus, 500);
+        }
+      } catch (_) {
+        title.textContent = 'Service de mise à jour indisponible';
+        message.textContent = 'La vérification n’a pas pu joindre le service. Réessayez plus tard.';
+        updateStatus.classList.add('status-warning');
+        link.hidden = false;
+      }
+    };
+    pollUpdateStatus();
+  }
+
   document.addEventListener('click', async (event) => {
+    const update = event.target.closest('[data-update-install]');
+    if (update) {
+      event.preventDefault();
+      if (!window.pywebview || !window.pywebview.api) {
+        alert('Cette action nécessite la fenêtre Windows native.');
+        return;
+      }
+      if (!window.confirm('Une sauvegarde vérifiée est prête. Lancer maintenant l’installation de la mise à jour ?')) return;
+      update.disabled = true;
+      update.setAttribute('aria-busy', 'true');
+      try {
+        const result = await window.pywebview.api.install_update(update.dataset.updateFile, update.dataset.updateSha256);
+        if (!result.ok) throw new Error(result.message || 'Impossible de lancer la mise à jour.');
+        update.textContent = 'Installation lancée…';
+      } catch (err) {
+        update.disabled = false;
+        update.removeAttribute('aria-busy');
+        alert('Mise à jour : ' + (err.message || String(err)));
+      }
+      return;
+    }
     const anchor = event.target.closest('a[data-document-action]');
     if (!anchor || !window.pywebview || !window.pywebview.api) return;
     event.preventDefault();
