@@ -96,7 +96,8 @@ def test_update_install_action_uses_the_native_bridge():
     assert "install_update" in script
 
 
-def test_background_update_check_stores_result_without_blocking_app(monkeypatch):
+def test_background_update_check_stores_result_without_blocking_app(monkeypatch, tmp_path):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
     app = create_app()
     monkeypatch.setattr("app.check_for_update", lambda *args, **kwargs: UpdateCheckResult("current"))
 
