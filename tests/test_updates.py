@@ -36,6 +36,28 @@ def test_updates_page_is_reachable_and_is_linked_from_navigation(authenticated_c
     html = response.get_data(as_text=True)
     assert "Mises à jour" in html
     assert 'action="/updates/check"' in html
+    assert 'data-update-status' in html
+    assert 'data-update-poll' in html
+
+
+def test_update_status_endpoint_exposes_background_result(authenticated_client):
+    app = authenticated_client.application
+    app.extensions["update_result"] = {"status": "available", "message": "Version prête"}
+
+    response = authenticated_client.get("/updates/status")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "available", "message": "Version prête"}
+
+
+def test_background_result_supersedes_stale_session_result(authenticated_client):
+    authenticated_client.application.extensions["update_result"] = {"status": "available", "message": "Nouvelle version"}
+    with authenticated_client.session_transaction() as session:
+        session["update_result"] = {"status": "current", "message": "Ancien résultat"}
+
+    response = authenticated_client.get("/updates/status")
+
+    assert response.get_json() == {"status": "available", "message": "Nouvelle version"}
 
 
 def test_update_check_is_non_blocking_when_release_service_is_unavailable(authenticated_client, monkeypatch):

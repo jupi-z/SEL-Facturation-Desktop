@@ -17,8 +17,8 @@ from decimal import Decimal
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, abort, flash, g, redirect, render_template, request,
-                   send_file, session, url_for)
+from flask import (Flask, abort, flash, g, jsonify, redirect, render_template,
+                   request, send_file, session, url_for)
 
 import db
 from domain import (BillingError, calculate_from_settings, decimal, fmt, money,
@@ -72,6 +72,13 @@ def start_background_update_check(application):
     thread=threading.Thread(target=worker, name='sel-update-check', daemon=True)
     thread.start()
     return thread
+
+
+def current_update_result(application):
+    background = application.extensions.get('update_result') or {}
+    if background.get('status') and background.get('status') != 'not_checked':
+        return background
+    return session.get('update_result') or background
 
 
 def password_hash(password, salt):
@@ -165,14 +172,22 @@ def create_app():
     @protected
     def updates_view():
         return render_template('updates.html', title='Mises à jour',
-                               update=session.get('update_result') or app.extensions.get('update_result'))
+                               update=current_update_result(app))
 
     @app.post('/updates/check')
     @protected
     def updates_check():
         result=check_for_update(app.config['UPDATE_MANIFEST_URL'], APP_VERSION)
-        session['update_result']=update_result_payload(result)
+        payload=update_result_payload(result)
+        session['update_result']=payload
+        app.extensions['update_result']=payload
         return redirect(url_for('updates_view'))
+
+    @app.get('/updates/status')
+    @protected
+    def updates_status():
+        result=current_update_result(app)
+        return jsonify(status=result.get('status', 'not_checked'), message=result.get('message', ''))
 
     @app.post('/updates/download')
     @protected
@@ -188,8 +203,10 @@ def create_app():
             backup=create_pre_update_backup()
             current['ready']={'filename':package.name, 'sha256':manifest.sha256, 'backup_name':backup.name}
             session['update_result']=current
+            app.extensions['update_result']=current
         except Exception as exc:
             session['update_result']={'status':'invalid','message':str(exc)}
+            app.extensions['update_result']=session['update_result']
         return redirect(url_for('updates_view'))
 
     @app.route('/setup',methods=['GET','POST'])

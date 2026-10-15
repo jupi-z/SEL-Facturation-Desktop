@@ -63,6 +63,57 @@
     if (form && !window.confirm(form.dataset.confirm)) event.preventDefault();
   });
 
+  const updateStatus = document.querySelector('[data-update-status]');
+  if (updateStatus) {
+    const title = updateStatus.querySelector('[data-update-title]');
+    const message = updateStatus.querySelector('[data-update-message]');
+    const link = updateStatus.querySelector('[data-update-link]');
+    let attempts = 0;
+    const renderUpdateStatus = (payload) => {
+      const status = payload && payload.status;
+      updateStatus.classList.toggle('status-warning', status === 'available' || status === 'unavailable' || status === 'invalid');
+      if (status === 'current') {
+        title.textContent = 'Application à jour';
+        message.textContent = 'Aucune mise à jour disponible.';
+        link.hidden = true;
+      } else if (status === 'available') {
+        title.textContent = 'Mise à jour disponible';
+        message.textContent = 'Une nouvelle version peut être téléchargée.';
+        link.hidden = false;
+      } else if (status === 'unavailable') {
+        title.textContent = 'Vérification indisponible';
+        message.textContent = 'L’application reste utilisable hors connexion.';
+        link.hidden = false;
+      } else if (status === 'invalid') {
+        title.textContent = 'Mise à jour refusée';
+        message.textContent = payload.message || 'Le paquet n’a pas été accepté.';
+        link.hidden = false;
+      } else {
+        title.textContent = 'Vérification des mises à jour';
+        message.textContent = 'Vérification en cours…';
+        link.hidden = true;
+      }
+    };
+    const pollUpdateStatus = async () => {
+      try {
+        const response = await fetch(updateStatus.dataset.updatePoll, {credentials: 'same-origin', redirect: 'error'});
+        if (!response.ok) throw new Error('status unavailable');
+        const payload = await response.json();
+        renderUpdateStatus(payload);
+        if (payload.status === 'not_checked' && attempts < 20) {
+          attempts += 1;
+          window.setTimeout(pollUpdateStatus, 500);
+        }
+      } catch (_) {
+        title.textContent = 'Vérification indisponible';
+        message.textContent = 'L’application reste utilisable hors connexion.';
+        updateStatus.classList.add('status-warning');
+        link.hidden = false;
+      }
+    };
+    pollUpdateStatus();
+  }
+
   document.addEventListener('click', async (event) => {
     const update = event.target.closest('[data-update-install]');
     if (update) {

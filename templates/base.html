@@ -42,6 +42,10 @@
       <header class="top"><div><div class="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</div><h1>{{ title }}</h1></div><span class="local"><span class="dot"></span>Local · Hors ligne</span></header>
       <main>
         {% with notices=get_flashed_messages(with_categories=true) %}{% if notices %}{% for category,msg in notices %}<div class="alert {{ 'err' if category=='error' else 'ok' }}" role="{{ 'alert' if category=='error' else 'status' }}" aria-live="polite">{{ msg }}</div>{% endfor %}{% endif %}{% endwith %}
+        <div class="statusbar" data-update-status data-update-poll="{{ url_for('updates_status') }}" aria-live="polite">
+          <div><strong data-update-title>État des mises à jour</strong><span data-update-message>Vérification en cours…</span></div>
+          <a class="button secondary" data-update-link href="{{ url_for('updates_view') }}" hidden>Voir les mises à jour</a>
+        </div>
 {% else %}
   <div class="auth-shell">
     <section class="auth-brand" aria-label="Identité SEL">
