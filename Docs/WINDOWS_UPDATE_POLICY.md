@@ -5,7 +5,7 @@ Le paquet de livraison officiel est `SEL-Facturation-Setup-<version>.exe`, le bo
 ## Garanties du parcours officiel
 
 - Le MSI conserve le même `UpgradeCode` et le bootstrapper conserve le même `UpgradeCode` à chaque version.
-- Le MSI installe le programme dans `%LOCALAPPDATA%\Programs\SEL Facturation`.
+- Le MSI installe le programme dans `%ProgramFiles%\SEL Facturation` avec élévation Windows ; le bootstrapper officiel et son prérequis WebView2 utilisent ainsi le même contexte machine.
 - Le MSI embarqué est masqué de la liste des applications lorsqu'il est piloté par le bootstrapper ; une seule entrée SEL Facturation reste visible dans Windows.
 - La base, les sauvegardes, les documents temporaires et la clé de session restent dans `%LOCALAPPDATA%\SEL Facturation`, en dehors du dossier remplacé par l'upgrade.
 - `MajorUpgrade` refuse les rétrogradations. Une mise à jour doit toujours augmenter `APP_VERSION` dans `version.py` ; une nouvelle MSI avec un autre identifiant produit mais la même version n'est pas considérée comme une mise à jour fiable.

@@ -65,9 +65,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path build\webview2, dist\installer | Out-Null
           $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
           Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webview
-          wix build packaging\wix\Product.wxs -d ProductVersion=$version -d ExePath="$((Resolve-Path dist\SEL-Facturation.exe).Path)" -o dist\installer\SEL-Facturation.msi
+          wix build -arch x64 packaging\wix\Product.wxs -d ProductVersion=$version -d ExePath="$((Resolve-Path dist\SEL-Facturation.exe).Path)" -o dist\installer\SEL-Facturation.msi
           if ($LASTEXITCODE -ne 0) { throw 'WiX MSI build failed' }
-          wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d ProductVersion=$version -d MsiPath="$((Resolve-Path dist\installer\SEL-Facturation.msi).Path)" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
+          wix build -arch x64 packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d ProductVersion=$version -d MsiPath="$((Resolve-Path dist\installer\SEL-Facturation.msi).Path)" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
           if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper build failed' }
       - name: Smoke-test in-place MSI upgrade and data preservation
         shell: pwsh
@@ -78,7 +78,7 @@ jobs:
           $oldMsi = Join-Path $env:RUNNER_TEMP 'SEL-Facturation-previous.msi'
           $setup = (Resolve-Path "dist\installer\SEL-Facturation-Setup-$version.exe").Path
           $oldExe = (Resolve-Path 'dist\SEL-Facturation.exe').Path
-          wix build packaging\wix\Product.wxs -d ProductVersion=0.3.0 -d ExePath="$oldExe" -o $oldMsi
+          wix build -arch x64 packaging\wix\Product.wxs -d ProductVersion=0.3.0 -d ExePath="$oldExe" -o $oldMsi
           if ($LASTEXITCODE -ne 0) { throw 'Previous-version MSI build failed' }
 
           $dataHome = Join-Path $env:LOCALAPPDATA 'SEL Facturation'
@@ -127,7 +127,7 @@ jobs:
             Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
             Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
             Get-ItemProperty 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-          ) | Where-Object { $_.DisplayName -eq 'SEL Facturation' }
+          ) | Where-Object { $_.DisplayName -eq 'SEL Facturation' -and $_.SystemComponent -ne 1 }
           if (@($entries).Count -ne 1) { throw "Expected exactly one SEL Facturation installation, found $(@($entries).Count)" }
       - name: Sign Windows artifacts
         if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true
@@ -192,6 +192,6 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw "Release $tag already exists; bump the application/installer version before publishing. Existing assets are never overwritten."
           } else {
-            gh release create $tag $exe $setup $msi --target $env:GITHUB_SHA --prerelease --title 'SEL Facturation Desktop V0.3 - installateur Windows' --notes 'Préversion native Windows 10/11 : bootstrapper WebView2, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
+            gh release create $tag $exe $setup $msi --target $env:GITHUB_SHA --prerelease --title 'SEL Facturation Desktop V0.3 - installateur Windows' --notes 'Préversion native Windows 10/11 : bootstrapper WebView2 hors ligne, MSI machine, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
           }
           if ($LASTEXITCODE -ne 0) { throw "Publication GitHub Releases failed" }

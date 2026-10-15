@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="SEL Facturation" Manufacturer="Société d'Énergie du Lualaba" Version="$(var.ProductVersion)" UpgradeCode="7B258C72-AE0B-4D4E-84DE-725C08F20EA1" Scope="perUser">
+  <Package Name="SEL Facturation" Manufacturer="Société d'Énergie du Lualaba" Version="$(var.ProductVersion)" UpgradeCode="7B258C72-AE0B-4D4E-84DE-725C08F20EA1" Scope="perMachine">
     <SummaryInformation Description="SEL Facturation Desktop" />
     <Property Id="ARPSYSTEMCOMPONENT" Value="1" />
     <MajorUpgrade AllowDowngrades="no" AllowSameVersionUpgrades="no" DowngradeErrorMessage="Une version plus récente de SEL Facturation est déjà installée." />
@@ -10,10 +10,8 @@
     </Feature>
   </Package>
   <Fragment>
-    <StandardDirectory Id="LocalAppDataFolder">
-      <Directory Id="ProgramsFolder" Name="Programs">
-        <Directory Id="INSTALLFOLDER" Name="SEL Facturation" />
-      </Directory>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="SEL Facturation" />
     </StandardDirectory>
   </Fragment>
   <Fragment>

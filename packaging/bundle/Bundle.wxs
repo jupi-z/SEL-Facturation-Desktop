@@ -6,7 +6,7 @@
     </BootstrapperApplication>
     <bal:Condition Condition="NOT LegacyInnoSetupInstalled" Message="Une ancienne installation Inno Setup de SEL Facturation est détectée. Désinstallez-la avant de lancer le paquet WiX officiel afin d'éviter deux installations concurrentes." />
     <Chain>
-        <ExePackage Id="WebView2EvergreenStandalone" SourceFile="$(var.WebView2Installer)" PerMachine="yes" Permanent="yes" InstallArguments="/silent /install">
+        <ExePackage Id="WebView2EvergreenStandalone" SourceFile="$(var.WebView2Installer)" PerMachine="yes" DetectCondition="WebView2RuntimeInstalled" Permanent="yes" InstallArguments="/silent /install">
       </ExePackage>
       <MsiPackage SourceFile="$(var.MsiPath)" Visible="no">
         <MsiProperty Name="ARPSYSTEMCOMPONENT" Value="1" />
@@ -14,6 +14,7 @@
     </Chain>
   </Bundle>
   <Fragment>
+    <util:RegistrySearch Id="WebView2RuntimeInstalled" Root="HKLM" Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Value="pv" Variable="WebView2RuntimeInstalled" Result="exists" />
     <util:RegistrySearch Id="LegacyInnoSetupInstalled" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{7B258C72-AE0B-4D4E-84DE-725C08F20EA1}_is1" Value="UninstallString" Variable="LegacyInnoSetupInstalled" Result="exists" />
   </Fragment>
 </Wix>

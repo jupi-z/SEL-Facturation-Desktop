@@ -35,7 +35,7 @@ def test_msi_keeps_program_files_separate_from_local_data():
     assert install is not None
     assert install.attrib["Name"] == "SEL Facturation"
     parent = next(parent for parent in root.iter() if install in list(parent))
-    assert parent.attrib == {"Id": "ProgramsFolder", "Name": "Programs"}
+    assert parent.attrib == {"Id": "ProgramFiles64Folder"}
 
 
 def test_msi_upgrade_contract_is_stable_and_never_downgrades():
@@ -45,7 +45,7 @@ def test_msi_upgrade_contract_is_stable_and_never_downgrades():
 
     assert package is not None
     assert package.attrib["UpgradeCode"] == MSI_UPGRADE_CODE
-    assert package.attrib["Scope"] == "perUser"
+    assert package.attrib["Scope"] == "perMachine"
     assert package.find("wix:Property[@Id='ARPSYSTEMCOMPONENT']", NS).attrib["Value"] == "1"
     assert major_upgrade is not None
     assert major_upgrade.attrib["AllowDowngrades"] == "no"
