@@ -19,10 +19,10 @@ on:
         type: boolean
   push:
     branches: [main]
-    paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
+    paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'scripts/**', 'Docs/**', 'tests/**', '.github/workflows/windows.yml']
   pull_request:
     branches: [main]
-    paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
+    paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'scripts/**', 'Docs/**', 'tests/**', '.github/workflows/windows.yml']
 permissions:
   contents: write
 jobs:
