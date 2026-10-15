@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -93,3 +94,28 @@ def test_temporary_pdf_cleanup_removes_only_expired_files(tmp_path, monkeypatch)
 
     assert not expired.exists()
     assert recent.exists()
+
+
+def test_install_update_accepts_only_verified_staged_executable(tmp_path, monkeypatch):
+    content = b"installer"
+    installer = tmp_path / "SEL-Facturation-Setup-0.3.2.exe"
+    installer.write_bytes(content)
+    launched = []
+    monkeypatch.setattr("desktop.staging_dir", lambda: tmp_path)
+    monkeypatch.setattr("desktop.subprocess.Popen", lambda args, **kwargs: launched.append((args, kwargs)))
+    api = DesktopDocuments()
+
+    response = api.install_update(installer.name, hashlib.sha256(content).hexdigest())
+
+    assert response == {"ok": True}
+    assert launched == [([str(installer), "/norestart"], {"close_fds": True})]
+
+
+def test_install_update_rejects_path_traversal_and_wrong_hash(tmp_path, monkeypatch):
+    installer = tmp_path / "SEL-Facturation-Setup-0.3.2.exe"
+    installer.write_bytes(b"installer")
+    monkeypatch.setattr("desktop.staging_dir", lambda: tmp_path)
+    api = DesktopDocuments()
+
+    assert api.install_update("..\\outside.exe", "a" * 64)["ok"] is False
+    assert api.install_update(installer.name, "a" * 64)["ok"] is False

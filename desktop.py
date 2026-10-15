@@ -5,6 +5,7 @@ import base64
 import ctypes
 import logging
 import os
+import subprocess
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import re
@@ -14,9 +15,11 @@ from uuid import uuid4
 
 from werkzeug.serving import make_server
 import db
+from updater import staging_dir, verify_sha256
 
 
 DOCUMENT_NAME = re.compile(r"SEL-\d{4}-\d{6}\.pdf\Z", re.IGNORECASE)
+UPDATE_NAME = re.compile(r"SEL-Facturation-Setup-\d+\.\d+\.\d+\.exe\Z", re.IGNORECASE)
 MAX_PDF_BASE64 = 8 * 1024 * 1024
 TEMPORARY_PDF_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
@@ -116,6 +119,24 @@ class DesktopDocuments:
             logging.exception("Impossible d'imprimer le document")
             return {"ok": False, "message": str(exc)}
 
+    def install_update(self, filename: str, expected_sha256: str) -> dict:
+        """Launch only a previously verified bootstrapper from the staging folder."""
+        try:
+            if not isinstance(filename, str) or UPDATE_NAME.fullmatch(filename) is None:
+                raise ValueError("Installateur non autorisé.")
+            root = staging_dir().resolve()
+            target = (root / filename).resolve()
+            if target.parent != root or not target.is_file():
+                raise ValueError("Installateur introuvable dans la zone temporaire.")
+            verify_sha256(target, expected_sha256)
+            subprocess.Popen([str(target), "/norestart"], close_fds=True)
+            if self._window is not None:
+                threading.Timer(0.5, self._window.destroy).start()
+            return {"ok": True}
+        except Exception as exc:
+            logging.exception("Impossible de lancer la mise à jour")
+            return {"ok": False, "message": str(exc)}
+
 
 def _acquire_single_instance():
     """Empêcher deux fenêtres concurrentes d'ouvrir la même base sur Windows."""
@@ -169,6 +190,7 @@ def main():
             daemon=True,
         )
         server_thread.start()
+        application.start_background_update_check()
 
         webview.settings["ALLOW_DOWNLOADS"] = True
         bridge = DesktopDocuments()

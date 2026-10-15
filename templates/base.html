@@ -22,6 +22,7 @@
         <a class="nav{{ ' active' if request.endpoint == 'new_invoice' else '' }}" href="{{ url_for('new_invoice') }}"{% if request.endpoint == 'new_invoice' %} aria-current="page"{% endif %}>Nouveau décompte</a>
         <a class="nav{{ ' active' if request.endpoint in ('invoices','invoice_detail') else '' }}" href="{{ url_for('invoices') }}"{% if request.endpoint in ('invoices','invoice_detail') %} aria-current="page"{% endif %}>Historique des décomptes</a>
         <a class="nav{{ ' active' if request.endpoint == 'settings_view' else '' }}" href="{{ url_for('settings_view') }}"{% if request.endpoint == 'settings_view' %} aria-current="page"{% endif %}>Paramètres de facturation</a>
+        <a class="nav{{ ' active' if request.endpoint in ('updates_view','updates_check') else '' }}" href="{{ url_for('updates_view') }}"{% if request.endpoint in ('updates_view','updates_check') %} aria-current="page"{% endif %}>Mises à jour</a>
       </nav>
       <div class="navfooter">
         <div class="eyebrow">SAUVEGARDER / MIGRER</div>

@@ -2,6 +2,8 @@
 
 Le paquet de livraison officiel est `SEL-Facturation-Setup-<version>.exe`, le bootstrapper WiX. Il embarque le MSI et l'installateur autonome WebView2 afin qu'une machine Windows 10/11 puisse être préparée en une seule installation.
 
+Le manifeste `update.json` est publié comme asset de la même GitHub Release. Il peut être généré et publié sans GitHub Actions avec `powershell -ExecutionPolicy Bypass -File scripts/publish-windows-release.ps1 -Tag v<version>` après compilation locale. La vérification automatique de l'application ne bloque jamais le fonctionnement hors connexion.
+
 ## Garanties du parcours officiel
 
 - Le MSI conserve le même `UpgradeCode` et le bootstrapper conserve le même `UpgradeCode` à chaque version.
@@ -23,3 +25,5 @@ Le paquet de livraison officiel est `SEL-Facturation-Setup-<version>.exe`, le bo
 ## Limite à déclarer
 
 Cette garantie concerne le parcours WiX officiel. Une archive portable ou un paquet tiers inconnu ne peut pas être désinstallé de manière fiable par le MSI ; il doit être identifié et retiré manuellement après sauvegarde avant déploiement. La validation sur le matériel et le profil Windows de SEL reste obligatoire.
+
+Tant qu'un certificat Authenticode n'est pas installé, le mécanisme de mise à jour et les paquets restent en statut pilote : le hash protège l'intégrité du téléchargement, mais ne remplace pas l'identité d'un éditeur vérifié par Windows.

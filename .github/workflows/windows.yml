@@ -69,6 +69,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'WiX MSI build failed' }
           wix build -arch x64 packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d ProductVersion=$version -d MsiPath="$((Resolve-Path dist\installer\SEL-Facturation.msi).Path)" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
           if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper build failed' }
+          $manifest = 'dist\installer\update.json'
+          $setupAsset = (Resolve-Path "dist\installer\SEL-Facturation-Setup-$version.exe").Path
+          $tag = '${{ inputs.release_tag }}'
+          $manifestData = [ordered]@{
+            schema = 1
+            version = $version
+            url = "https://github.com/${{ github.repository }}/releases/download/$tag/SEL-Facturation-Setup-$version.exe"
+            sha256 = (Get-FileHash $setupAsset -Algorithm SHA256).Hash.ToLowerInvariant()
+            size = (Get-Item $setupAsset).Length
+            published_at = (Get-Date).ToUniversalTime().ToString('o')
+            release_notes = 'Mise à jour SEL Facturation Desktop.'
+          }
+          [IO.File]::WriteAllText($manifest, ($manifestData | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
       - name: Smoke-test in-place MSI upgrade and data preservation
         shell: pwsh
         run: |
@@ -187,11 +200,12 @@ jobs:
           $exe = 'dist/SEL-Facturation.exe'
           $setup = "dist/installer/SEL-Facturation-Setup-$version.exe"
           $msi = 'dist/installer/SEL-Facturation.msi'
-          if (-not (Test-Path $exe) -or -not (Test-Path $setup) -or -not (Test-Path $msi)) { throw "Missing Windows package" }
+          $manifest = 'dist/installer/update.json'
+          if (-not (Test-Path $exe) -or -not (Test-Path $setup) -or -not (Test-Path $msi) -or -not (Test-Path $manifest)) { throw "Missing Windows package" }
           gh release view $tag --repo ${{ github.repository }} 2>$null
           if ($LASTEXITCODE -eq 0) {
             throw "Release $tag already exists; bump the application/installer version before publishing. Existing assets are never overwritten."
           } else {
-            gh release create $tag $exe $setup $msi --target $env:GITHUB_SHA --prerelease --title 'SEL Facturation Desktop V0.3 - installateur Windows' --notes 'Préversion native Windows 10/11 : bootstrapper WebView2 hors ligne, MSI machine, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
+            gh release create $tag $exe $setup $msi $manifest --target $env:GITHUB_SHA --prerelease --title 'SEL Facturation Desktop V0.3 - installateur Windows' --notes 'Préversion native Windows 10/11 : bootstrapper WebView2 hors ligne, MSI machine, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
           }
           if ($LASTEXITCODE -ne 0) { throw "Publication GitHub Releases failed" }

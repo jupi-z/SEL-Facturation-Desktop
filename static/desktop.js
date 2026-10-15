@@ -64,6 +64,27 @@
   });
 
   document.addEventListener('click', async (event) => {
+    const update = event.target.closest('[data-update-install]');
+    if (update) {
+      event.preventDefault();
+      if (!window.pywebview || !window.pywebview.api) {
+        alert('Cette action nécessite la fenêtre Windows native.');
+        return;
+      }
+      if (!window.confirm('Une sauvegarde vérifiée est prête. Lancer maintenant l’installation de la mise à jour ?')) return;
+      update.disabled = true;
+      update.setAttribute('aria-busy', 'true');
+      try {
+        const result = await window.pywebview.api.install_update(update.dataset.updateFile, update.dataset.updateSha256);
+        if (!result.ok) throw new Error(result.message || 'Impossible de lancer la mise à jour.');
+        update.textContent = 'Installation lancée…';
+      } catch (err) {
+        update.disabled = false;
+        update.removeAttribute('aria-busy');
+        alert('Mise à jour : ' + (err.message || String(err)));
+      }
+      return;
+    }
     const anchor = event.target.closest('a[data-document-action]');
     if (!anchor || !window.pywebview || !window.pywebview.api) return;
     event.preventDefault();

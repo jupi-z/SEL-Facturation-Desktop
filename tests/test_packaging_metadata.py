@@ -80,7 +80,8 @@ def test_release_workflow_publishes_only_the_recommended_wix_installer():
     workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
     publish_block = workflow.split("Publish private GitHub prerelease", 1)[1]
 
-    assert "gh release create $tag $exe $setup $msi" in publish_block
+    assert "gh release create $tag $exe $setup $msi $manifest" in publish_block
+    assert "update.json" in publish_block
     assert "inputs.release_tag" in publish_block
     assert "same numeric version as version.py" in publish_block
     assert "same numeric version already has a release" in publish_block
