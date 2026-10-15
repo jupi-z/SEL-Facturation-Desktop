@@ -71,7 +71,7 @@
     let attempts = 0;
     const renderUpdateStatus = (payload) => {
       const status = payload && payload.status;
-      updateStatus.classList.toggle('status-warning', status === 'available' || status === 'unavailable' || status === 'invalid');
+      updateStatus.classList.toggle('status-warning', status === 'available' || status === 'unavailable' || status === 'not_published' || status === 'invalid');
       if (status === 'current') {
         title.textContent = 'Application à jour';
         message.textContent = 'Aucune mise à jour disponible.';
@@ -81,8 +81,12 @@
         message.textContent = 'Une nouvelle version peut être téléchargée.';
         link.hidden = false;
       } else if (status === 'unavailable') {
-        title.textContent = 'Vérification indisponible';
-        message.textContent = 'L’application reste utilisable hors connexion.';
+        title.textContent = 'Service de mise à jour indisponible';
+        message.textContent = payload.message || 'La vérification n’a pas pu joindre le serveur.';
+        link.hidden = false;
+      } else if (status === 'not_published') {
+        title.textContent = 'Canal de mise à jour non publié';
+        message.textContent = payload.message || 'Aucune version stable n’est encore publiée.';
         link.hidden = false;
       } else if (status === 'invalid') {
         title.textContent = 'Mise à jour refusée';
@@ -105,8 +109,8 @@
           window.setTimeout(pollUpdateStatus, 500);
         }
       } catch (_) {
-        title.textContent = 'Vérification indisponible';
-        message.textContent = 'L’application reste utilisable hors connexion.';
+        title.textContent = 'Service de mise à jour indisponible';
+        message.textContent = 'La vérification n’a pas pu joindre le service. Réessayez plus tard.';
         updateStatus.classList.add('status-warning');
         link.hidden = false;
       }

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import sqlite3
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -75,6 +76,29 @@ def test_check_for_update_returns_none_for_current_or_older_release(monkeypatch)
 
     assert result.manifest is None
     assert result.status == "current"
+
+
+def test_check_for_update_distinguishes_unpublished_channel_from_offline(monkeypatch):
+    def fail(*args, **kwargs):
+        raise HTTPError("https://sel.shuleops.com/stable/update.json", 404, "Not Found", {}, None)
+
+    monkeypatch.setattr("updater.urlopen", fail)
+
+    result = check_for_update("https://sel.shuleops.com/stable/update.json", "0.3.3")
+
+    assert result.status == "not_published"
+    assert "canal" in result.message.lower()
+    assert "hors connexion" not in result.message.lower()
+
+
+def test_check_for_update_reports_network_failure_without_claiming_offline_mode(monkeypatch):
+    monkeypatch.setattr("updater.urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(URLError("timed out")))
+
+    result = check_for_update("https://sel.shuleops.com/stable/update.json", "0.3.3")
+
+    assert result.status == "unavailable"
+    assert "service" in result.message.lower() or "serveur" in result.message.lower()
+    assert "hors connexion" not in result.message.lower()
 
 
 def test_download_update_verifies_hash_and_renames_atomically(tmp_path, monkeypatch):

@@ -10,6 +10,7 @@ import os
 import tempfile
 from datetime import datetime
 from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import db
@@ -101,10 +102,33 @@ def check_for_update(manifest_url: str, current_version: str, timeout: float = 3
         if not manifest.is_newer_than(current_version):
             return UpdateCheckResult("current")
         return UpdateCheckResult("available", manifest)
-    except Exception as exc:
-        if isinstance(exc, ManifestError):
-            return UpdateCheckResult("invalid", message=str(exc))
-        return UpdateCheckResult("unavailable", message="Mise à jour indisponible hors connexion.")
+    except HTTPError as exc:
+        if exc.code == 404:
+            return UpdateCheckResult(
+                "not_published",
+                message="Le canal de mise à jour n’est pas encore publié.",
+            )
+        return UpdateCheckResult(
+            "unavailable",
+            message="Le serveur de mise à jour est temporairement indisponible.",
+        )
+    except URLError:
+        return UpdateCheckResult(
+            "unavailable",
+            message="Impossible de joindre le service de mise à jour. Vérifiez votre connexion ou réessayez.",
+        )
+    except TimeoutError:
+        return UpdateCheckResult(
+            "unavailable",
+            message="Le service de mise à jour n’a pas répondu à temps. Réessayez.",
+        )
+    except ManifestError as exc:
+        return UpdateCheckResult("invalid", message=str(exc))
+    except Exception:
+        return UpdateCheckResult(
+            "unavailable",
+            message="Le service de mise à jour est temporairement indisponible.",
+        )
 
 
 def verify_sha256(path: Path, expected: str) -> None:

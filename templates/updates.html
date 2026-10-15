@@ -25,7 +25,9 @@
   {% elif update and update.status == 'current' %}
     <div class="alert ok" role="status">Vous utilisez déjà la dernière version connue.</div>
   {% elif update and update.status == 'unavailable' %}
-    <div class="alert" role="status">{{ update.message or 'Service de mise à jour indisponible. L’application reste utilisable hors connexion.' }}</div>
+    <div class="alert" role="status">{{ update.message or 'Le service de mise à jour est temporairement indisponible. Réessayez plus tard.' }}</div>
+  {% elif update and update.status == 'not_published' %}
+    <div class="alert" role="status">{{ update.message or 'Le canal stable n’est pas encore publié. L’application reste utilisable normalement.' }}</div>
   {% elif update and update.status == 'invalid' %}
     <div class="alert err" role="alert">La mise à jour a été refusée : {{ update.message }}</div>
   {% endif %}

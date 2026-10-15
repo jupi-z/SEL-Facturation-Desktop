@@ -70,6 +70,18 @@ def test_update_check_is_non_blocking_when_release_service_is_unavailable(authen
     assert "hors ligne" in html
 
 
+def test_updates_page_explains_unpublished_channel_without_claiming_offline(authenticated_client):
+    authenticated_client.application.extensions["update_result"] = {
+        "status": "not_published",
+        "message": "Le canal de mise à jour n’est pas encore publié.",
+    }
+
+    html = authenticated_client.get("/updates").get_data(as_text=True)
+
+    assert "canal de mise à jour n’est pas encore publié" in html
+    assert "Mise à jour indisponible hors connexion." not in html
+
+
 def test_update_check_displays_available_release(authenticated_client, monkeypatch):
     monkeypatch.setattr(
         "app.check_for_update",
