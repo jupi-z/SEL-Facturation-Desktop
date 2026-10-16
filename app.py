@@ -397,8 +397,9 @@ def create_app():
             number=f'SEL-{year}-{next_n:06d}'
             s_client={k:client[k] for k in client.keys() if k!='created_at'}
             s_company={k:v for k,v in conf.items() if k not in ('configured',)}
+            invoice_currency=calc.get('currency', conf['currency'])
             cur=g.db.execute('''INSERT INTO invoices(number,client_id,billing_period,issue_date,due_date,client_snapshot,company_snapshot,calc_snapshot,currency,note)
-                VALUES(?,?,?,?,?,?,?,?,?,?)''',(number,cid,period,issue_date,draft['due_date'],json.dumps(s_client,ensure_ascii=False),json.dumps(s_company,ensure_ascii=False),json.dumps(calc,ensure_ascii=False),conf['currency'],draft['note']))
+                VALUES(?,?,?,?,?,?,?,?,?,?)''',(number,cid,period,issue_date,draft['due_date'],json.dumps(s_client,ensure_ascii=False),json.dumps(s_company,ensure_ascii=False),json.dumps(calc,ensure_ascii=False),invoice_currency,draft['note']))
             inv_id=cur.lastrowid
             g.db.commit();flash('Décompte enregistré. Vérifiez le PDF avant impression.','success')
             return redirect(url_for('invoice_detail',iid=inv_id))

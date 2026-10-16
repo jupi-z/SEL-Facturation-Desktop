@@ -16,6 +16,7 @@ def test_monthly_direct_consumption_invoice_without_meter(tmp_path, monkeypatch)
     client.post("/login", data={"_csrf": _token(client, "/login"), "password": "TestPassword2026!"})
     with db.connect() as connection:
         connection.execute("UPDATE settings SET value='1' WHERE key='configured'")
+        connection.execute("UPDATE settings SET value='CDF' WHERE key='currency'")
         connection.execute("UPDATE clients SET customer_type='RESIDENTIAL' WHERE 1=0")
         connection.commit()
     response = client.post("/clients", data={
@@ -34,6 +35,8 @@ def test_monthly_direct_consumption_invoice_without_meter(tmp_path, monkeypatch)
     created = client.post("/invoices/new/confirm", data={"_csrf": confirm_token})
     assert created.status_code == 302
     with db.connect() as connection:
-        invoice_id = connection.execute("SELECT id FROM invoices").fetchone()[0]
+        row = connection.execute("SELECT id,currency FROM invoices").fetchone()
+        invoice_id = row[0]
+        assert row[1] == "USD"
     variant = client.get(f"/invoices/{invoice_id}/pdf?currency=CDF&rate=2360")
     assert variant.status_code == 200 and variant.data.startswith(b"%PDF-")
