@@ -1,12 +1,14 @@
 /* Official S.E.L. SASU visual layer. Keep app.css as the compatibility base. */
 :root {
-  --sel-navy: #003b73;
-  --sel-navy-deep: #002b5c;
-  --sel-blue: #1683f4;
+  --sel-navy: #003078;
+  --sel-navy-deep: #002058;
+  --sel-blue: #1080f8;
   --sel-blue-soft: #eaf4ff;
-  --sel-yellow: #ffd400;
+  --sel-yellow: #f8d800;
   --sel-yellow-soft: #fff8d6;
-  --focus-ring: #1683f4;
+  --focus-ring: #1080f8;
+  --blue: var(--sel-navy);
+  --blue2: var(--sel-blue);
   --ink: #142b43;
   --muted: #5c7185;
   --border: #d7e2ec;
@@ -41,17 +43,27 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .pill { color: var(--sel-navy); background: var(--sel-blue-soft); }
 .sum .total { border-top-color: var(--sel-yellow); background: var(--sel-blue-soft); color: var(--sel-navy); }
 
-.auth-brand {
-  background: linear-gradient(145deg, var(--sel-navy-deep) 0%, var(--sel-navy) 68%, #0c6d9a 100%);
-}
-.auth-identity { width: fit-content; max-width: 100%; background: #fff; border-radius: 8px; padding: 10px 14px; box-shadow: 0 5px 16px rgba(0, 0, 0, .12); }
+.auth-brand { background: #fff; color: var(--sel-navy); }
+.auth-identity { width: fit-content; max-width: 100%; background: transparent; border-radius: 0; padding: 0; box-shadow: none; }
 .auth-identity .official-logo { display: block; width: min(280px, 100%); height: auto; max-height: none; object-fit: contain; object-position: left center; }
-.auth-brand .eyebrow { color: var(--sel-yellow); }
+.auth-brand .eyebrow { color: var(--sel-blue); }
+.auth-brand-copy h1 { color: var(--sel-navy); }
+.auth-brand-copy p { color: #36516c; }
+.auth-local { color: #36516c; }
 .auth-local .dot { background: var(--sel-yellow); }
 .auth-hint { border-left-color: var(--sel-yellow); }
+.auth-content { max-width: none; margin: 0; background: var(--sel-blue); color: #fff; }
+.auth-content h2 { color: #fff; }
+.auth-content .eyebrow { color: var(--sel-yellow); }
+.auth-content .auth-intro, .auth-content .auth-footer { color: #eaf4ff; }
+.auth-content label { color: #fff; }
+.auth-content input { border-color: #fff; box-shadow: 0 0 0 1px rgba(0, 48, 120, .12); }
+.auth-content input:focus-visible { outline-color: var(--sel-yellow); }
 .password-toggle { color: var(--sel-navy); }
-.auth-submit { background: var(--sel-navy) !important; }
-.auth-submit:hover { background: var(--sel-navy-deep) !important; }
+.auth-submit { background: #fff !important; color: var(--sel-navy) !important; }
+.auth-submit:hover { background: var(--sel-yellow) !important; color: var(--sel-navy) !important; }
+.auth-content .alert { background: #fff; color: var(--sel-navy); border-color: #fff; }
+.auth-content .alert.err { background: #fff0ef; color: #8d2d2a; border-color: #f1b8b5; }
 
 .statusbar { border-left-color: var(--sel-blue); }
 .status-warning { border-left-color: var(--sel-yellow); }

@@ -34,3 +34,21 @@ def test_official_logo_has_contrast_support_on_the_auth_panel():
 
     assert ".auth-identity .official-logo" in css
     assert "background: #fff" in css
+
+
+def test_sel_palette_uses_the_official_logo_color_anchors():
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert "--sel-navy: #003078" in css
+    assert "--sel-blue: #1080f8" in css
+    assert "--sel-yellow: #f8d800" in css
+
+
+def test_authentication_surface_is_inverted_with_a_blue_form_panel():
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert ".auth-brand" in css
+    assert ".auth-content" in css
+    assert "background: var(--sel-blue)" in css
+    assert ".auth-content h2" in css
+    assert ".auth-content label" in css
