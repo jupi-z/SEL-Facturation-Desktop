@@ -4,6 +4,16 @@ Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** :
 
 **Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF clients sont intitulés « décomptes d'électricité », sans encadré de statut fiscal anxiogène et sans fausse référence, signature ou QR DGI. Les règles tarifaires et fiscales sont à confirmer par SEL ; la fiscalisation officielle reste une procédure distincte. Ne jamais présenter ces PDF comme des factures normalisées ou homologuées sans authentification par le dispositif autorisé.
 
+### Règles de facturation actuellement implémentées
+
+- Facturation mensuelle selon la consommation en kWh, saisie directement tant que les compteurs ne sont pas disponibles.
+- Abonné résidentiel : 0,095 USD/kWh hors TVA.
+- Abonné commercial : 0,12 USD/kWh hors TVA.
+- TVA : 16 %. Aucune taxe locale n'est appliquée aux nouvelles factures.
+- Devise principale : USD. Une variante CDF peut être produite avec un taux configurable, initialement 1 USD = 2 360 CDF.
+- Les compteurs et relevés restent facultatifs et pourront être activés ultérieurement.
+- Les anciens barèmes progressifs et anciennes taxes restent lisibles dans les factures historiques mais ne contrôlent pas le nouveau parcours.
+
 ## Démarrage développeur
 
 Python 3.11 ou 3.12 sur Windows :

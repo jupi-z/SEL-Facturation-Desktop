@@ -82,3 +82,9 @@ Le shell d'authentification utilise maintenant une composition SEL dédiée sans
 ## Avis de livraison
 
 **NO-GO pour remise commerciale immédiate.** La CI et le packaging sont maintenant verts, mais le statut reste **pilote non validé sur poste cible** : il manque l'installation/exécution du bootstrapper sur le PC Windows 10/11 SEL, la recette avec imprimante/PDF par défaut, la restauration sur copie et la validation SEL des tarifs, taxes et identifiants d'entreprise. Aucun GO commercial ne doit être annoncé avant ces preuves.
+
+## Mise à jour métier du 16 octobre 2026
+
+La branche `monarque/consumption-tariffs` ajoute le modèle de facturation confirmé par SEL : Résidentiel 0,095 USD/kWh HT, Commercial 0,12 USD/kWh HT, TVA 16 %, aucune taxe locale pour les nouvelles factures, émission mensuelle en USD, conversion CDF optionnelle au taux configurable initial de 2 360. La consommation directe est disponible sans compteur ; les relevés restent un mode futur optionnel. Les anciennes données et snapshots restent compatibles.
+
+Validation locale de la branche : 82 tests exécutés par groupes, tous passants ; EXE PyInstaller produit et démarré dans un dossier de données isolé. L'installateur WiX/Inno Setup, l'imprimante SEL et le poste cible restent à valider séparément.
