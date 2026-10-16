@@ -1,5 +1,6 @@
 /* Official S.E.L. SASU visual layer. Keep app.css as the compatibility base. */
 :root {
+  --sel-primary: #003078;
   --sel-navy: #003078;
   --sel-navy-deep: #002058;
   --sel-blue: #1080f8;
@@ -32,10 +33,10 @@ a:hover { color: var(--sel-blue); }
 
 .top { border-bottom-color: var(--border); }
 h1, h2, h3, legend, .figure { color: var(--sel-navy); }
-.dot { background: var(--sel-blue); }
+.dot { background: var(--sel-primary); }
 .button:focus-visible, button:focus-visible, input:focus-visible,
 select:focus-visible, textarea:focus-visible { outline-color: var(--focus-ring); }
-button.primary, .button.primary { background: var(--sel-navy); }
+button.primary, .button.primary { background: var(--sel-primary); }
 button.primary:hover, .button.primary:hover { background: var(--sel-navy-deep); }
 button.secondary, .button.secondary { color: var(--sel-navy); border-color: #bfd0df; }
 button.secondary:hover, .button.secondary:hover { background: var(--sel-blue-soft); border-color: var(--sel-blue); }
@@ -52,7 +53,7 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .auth-local { color: #36516c; }
 .auth-local .dot { background: var(--sel-yellow); }
 .auth-hint { border-left-color: var(--sel-yellow); }
-.auth-content { max-width: none; margin: 0; background: var(--sel-blue); color: #fff; align-items: center; }
+.auth-content { max-width: none; margin: 0; background: var(--sel-primary); color: #fff; align-items: center; }
 .auth-content > .alert { width: min(100%, 520px); }
 .auth-content h2 { color: #fff; }
 .auth-content .eyebrow { color: var(--sel-yellow); }
@@ -67,11 +68,11 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .auth-content .alert { background: #fff; color: var(--sel-navy); border-color: #fff; }
 .auth-content .alert.err { background: #fff0ef; color: #8d2d2a; border-color: #f1b8b5; }
 
-.statusbar { border-left-color: var(--sel-blue); }
+.statusbar { border-left-color: var(--sel-primary); }
 .status-warning { border-left-color: var(--sel-yellow); }
 .settings-cards article { background: #fff; }
 .settings-cards strong { color: var(--sel-navy); }
-.modal { box-shadow: 0 24px 80px rgba(0, 59, 115, .22); }
+.modal { box-shadow: 0 24px 80px rgba(0, 48, 120, .22); }
 .modal-close:hover { color: var(--sel-navy); }
 
 @media (max-width: 980px) {

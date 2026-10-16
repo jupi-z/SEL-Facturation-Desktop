@@ -49,9 +49,18 @@ def test_authentication_surface_is_inverted_with_a_blue_form_panel():
 
     assert ".auth-brand" in css
     assert ".auth-content" in css
-    assert "background: var(--sel-blue)" in css
+    assert "background: var(--sel-primary)" in css
     assert ".auth-content h2" in css
     assert ".auth-content label" in css
+
+
+def test_sel_navy_is_the_dominant_surface_color_not_the_light_blue_accent():
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert "--sel-primary: #003078" in css
+    assert "background: var(--sel-primary);" in css
+    assert ".auth-content { max-width: none; margin: 0; background: var(--sel-primary);" in css
+    assert ".statusbar { border-left-color: var(--sel-primary);" in css
 
 
 def test_auth_logo_uses_a_deterministic_width_without_clipping():
