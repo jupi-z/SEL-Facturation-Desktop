@@ -249,7 +249,8 @@ def create_app():
             fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','tiers','local_rate','vat_rate','vat_base','currency','residential_rate','commercial_rate','exchange_rate_usd_cdf']
             values={k:request.form.get(k,'').strip() for k in fields}
             try:
-                if not values['company_name'] or not values['address']: raise BillingError('Société et adresse obligatoires.')
+                if section == 'identity' and (not values['company_name'] or not values['address']):
+                    raise BillingError('Société et adresse obligatoires.')
                 if section == 'identity':
                     identity_fields=('company_name','tagline','address','phone','email','website','rccm','nif','id_nat')
                     with g.db:
@@ -468,6 +469,19 @@ def create_app():
         record=db.invoice_full(g.db,iid)
         if not record: abort(404)
         inv,payments=record
+        if request.args.get('currency') == 'CDF':
+            if inv['currency'] != 'USD':
+                raise BillingError('La variante CDF est disponible pour les factures USD.')
+            rate_value=request.args.get('rate') or db.settings(g.db).get('exchange_rate_usd_cdf','2360')
+            rate=decimal(rate_value,'Taux USD/CDF',allow_zero=False)
+            inv=dict(inv); inv['currency']='CDF'
+            calc=json.loads(inv['calc_snapshot'])
+            for key in ('energy','local_tax','vat_basis','vat','fee','total'):
+                calc[key]=str(money(Decimal(calc[key])*rate))
+            calc['currency']='CDF'; calc['conversion_source_currency']='USD'; calc['conversion_rate']=str(rate)
+            calc['lines']=[dict(row,amount=str(money(Decimal(row['amount'])*rate))) for row in calc.get('lines',[])]
+            inv['calc_snapshot']=json.dumps(calc,ensure_ascii=False)
+            payments=[dict(item,amount=str(money(Decimal(item['amount'])*rate))) for item in payments]
         pdf=render_invoice(inv, payments)
         return send_file(io.BytesIO(pdf),mimetype='application/pdf',download_name=f'{inv["number"]}.pdf',as_attachment=request.args.get('download')=='1')
 

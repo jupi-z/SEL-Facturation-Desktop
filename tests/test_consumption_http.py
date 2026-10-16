@@ -30,3 +30,10 @@ def test_monthly_direct_consumption_invoice_without_meter(tmp_path, monkeypatch)
     })
     assert preview.status_code == 200
     assert "11,02" in preview.get_data(as_text=True)
+    confirm_token = re.search(r'name="_csrf" value="([^"]+)"', preview.get_data(as_text=True)).group(1)
+    created = client.post("/invoices/new/confirm", data={"_csrf": confirm_token})
+    assert created.status_code == 302
+    with db.connect() as connection:
+        invoice_id = connection.execute("SELECT id FROM invoices").fetchone()[0]
+    variant = client.get(f"/invoices/{invoice_id}/pdf?currency=CDF&rate=2360")
+    assert variant.status_code == 200 and variant.data.startswith(b"%PDF-")
