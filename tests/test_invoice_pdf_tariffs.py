@@ -19,3 +19,16 @@ def test_new_fixed_rate_pdf_shows_type_rate_vat_and_no_local_tax():
     assert "0,095" in text or "0.095" in text
     assert "TVA" in text and "16" in text
     assert "Taxe locale" not in text
+
+
+def test_cdf_variant_pdf_discloses_source_currency_and_rate():
+    invoice = {
+        "number": "SEL-2026-000102", "issue_date": "2026-10-16", "due_date": "2026-10-31",
+        "billing_period": "2026-10", "currency": "CDF", "status": "ISSUED", "note": "",
+        "client_snapshot": json.dumps({"name": "Client", "address": "Kolwezi", "category": "", "meter_number": "", "contract_number": "C1"}),
+        "company_snapshot": json.dumps({"company_name": "SEL", "address": "Kolwezi"}),
+        "calc_snapshot": json.dumps({"pricing_model": "FLAT_KWH", "customer_type": "RESIDENTIAL", "unit_price": "0.095", "kwh": "100", "lines": [{"range": "Consommation", "quantity": "100", "unit_price": "0.095", "amount": "22420.00"}], "energy": "22420.00", "local_rate": "0", "local_tax": "0.00", "vat_rate": "16", "vat_basis": "22420.00", "vat": "3587.20", "fee": "0.00", "total": "26007.20", "conversion_source_currency": "USD", "conversion_rate": "2360"}),
+    }
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_invoice(invoice, []))).pages)
+    assert "2360" in text
+    assert "USD" in text and "CDF" in text

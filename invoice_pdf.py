@@ -106,6 +106,8 @@ def render_invoice(invoice, payments) -> bytes:
         recap.append(('Frais supplémentaires',fmt(d['fee'])))
     if d.get('unit_price'):
         recap.append(('Tarif unitaire HT',f"{rate_fmt(d['unit_price'])} {p(inv['currency'])}/kWh"))
+    if d.get('conversion_rate'):
+        recap.append(('Conversion indicative',f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"))
     recap.extend([(f"TVA ({p(d['vat_rate'])} %) — base {fmt(d['vat_basis'])}",fmt(d['vat'])),
            ('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total']))])
     rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
