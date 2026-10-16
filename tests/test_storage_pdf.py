@@ -18,6 +18,8 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     c=db.connect()
     s=db.settings(c)
     assert s['configured']=='0'
+    s['local_rate']='1'
+    s['currency']='CDF'
     assert db.db_path().exists()
     c.execute('INSERT INTO clients(code,name,address,meter_number,coefficient) VALUES(?,?,?,?,?)',('SEL-C-00001','Abonné Test','Kolwezi','M123','1'))
     calc=calculate_from_settings('450','650','1',s)

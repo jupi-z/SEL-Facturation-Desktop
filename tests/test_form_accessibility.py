@@ -28,7 +28,7 @@ def test_subscriber_form_groups_data_and_has_explicit_labels(authenticated_clien
     html = authenticated_client.get("/clients").get_data(as_text=True)
 
     assert "Identité de l’abonné" in html
-    assert "Compteur et contrat" in html
+    assert "Contrat et compteur futur" in html
     assert 'for="name"' in html
     assert 'id="name"' in html
     assert 'for="meter_number"' in html
@@ -42,5 +42,5 @@ def test_settings_form_separates_company_from_tariffs(authenticated_client):
     assert "Barème et taxes" in html
     assert 'for="company_name"' in html
     assert 'id="company_name"' in html
-    assert 'for="tiers"' in html
-    assert 'id="tiers"' in html
+    assert 'for="residential_rate"' in html
+    assert 'id="residential_rate"' in html
