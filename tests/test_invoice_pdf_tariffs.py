@@ -1,3 +1,4 @@
+import base64
 import json
 from io import BytesIO
 
@@ -14,7 +15,9 @@ def test_pdf_uses_full_official_logo_and_direct_billing_layout():
     assert "'sel-logo.png'" not in code
     assert "#003078" in code
     assert (source / 'static' / 'sel-icon.png').exists()
-    assert (source / 'static' / 'sel-icon.png').read_bytes() == __import__('pathlib').Path(r'C:\Users\MonarQue\Downloads\Icône_SEL.png').read_bytes()
+    svg = (source / 'packaging' / 'sel-icon-source.svg').read_text(encoding='utf-8')
+    embedded_png = base64.b64decode(svg.split('data:image/png;base64,', 1)[1].split('"', 1)[0])
+    assert (source / 'static' / 'sel-icon.png').read_bytes() == embedded_png
 
 
 def test_new_fixed_rate_pdf_shows_type_rate_vat_and_no_local_tax():
