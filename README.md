@@ -2,7 +2,7 @@
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
 
-**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF clients sont intitulés « décomptes d'électricité », sans encadré de statut fiscal anxiogène et sans fausse référence, signature ou QR DGI. Les règles tarifaires et fiscales sont à confirmer par SEL ; la fiscalisation officielle reste une procédure distincte. Ne jamais présenter ces PDF comme des factures normalisées ou homologuées sans authentification par le dispositif autorisé.
+**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF clients sont intitulés « décomptes d'électricité », sans encadré de statut fiscal anxiogène et sans fausse référence, signature ou QR DGI. L'identité officielle SEL et les règles tarifaires confirmées sont préchargées ; la fiscalisation officielle reste une procédure distincte. Ne jamais présenter ces PDF comme des factures normalisées ou homologuées sans authentification par le dispositif autorisé.
 
 ### Règles de facturation actuellement implémentées
 
@@ -51,7 +51,7 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 ## Parcours agent
 
 1. Créer le mot de passe au premier lancement.
-2. Dans **Paramètres**, renseigner les références SEL et **confirmer** tarifs, taux et assiette de TVA. Les chiffres initiaux sont seulement ceux de l'exemple et **ne sont pas validés**.
+2. Dans **Paramètres**, vérifier les références SEL préchargées et **confirmer** les tarifs, le taux de change et l'assiette de TVA avant la première émission.
 3. Dans **Abonnés**, enregistrer nom, adresse, contrat, numéro de compteur, coefficient et NIF le cas échéant.
 4. Dans **Nouvelle facture**, choisir l'abonné, mois, deux index et date d'échéance.
 5. Le serveur calcule les tranches, les taxes configurées, le total et attribue un numéro unique.
