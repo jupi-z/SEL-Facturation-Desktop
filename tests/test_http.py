@@ -36,13 +36,13 @@ def test_complete_flow(client):
     token=csrf(client,'/login')
     assert client.post('/login',data={'_csrf':token,'password':'TestPassword2026!'}).status_code==302
     token=csrf(client,'/settings')
-    s={'_csrf':token,'company_name':'SEL','tagline':'Test','address':'Kolwezi','phone':'','email':'','website':'','rccm':'','nif':'','id_nat':'',
-       'tiers':'1-100:300\n101-200:320','local_rate':'1','vat_rate':'16','vat_base':'ENERGY','currency':'CDF','confirmed':'yes'}
+    s={'_csrf':token,'section':'tariffs','residential_rate':'0.095','commercial_rate':'0.12',
+       'exchange_rate_usd_cdf':'2360','vat_rate':'16','confirmed':'yes'}
     assert client.post('/settings',data=s).status_code==302
     token=csrf(client,'/clients')
-    assert client.post('/clients',data={'_csrf':token,'name':'Abonné A','address':'Kolwezi','meter_number':'M123','coefficient':'1','contract_number':'C1'}).status_code==302
+    assert client.post('/clients',data={'_csrf':token,'name':'Abonné A','address':'Kolwezi','customer_type':'RESIDENTIAL','meter_number':'','coefficient':'1','contract_number':'C1'}).status_code==302
     token=csrf(client,'/invoices/new')
-    data={'_csrf':token,'client_id':'1','billing_period':'2026-08','previous':'450','current':'650','fee':'0','due_date':'2026-10-31'}
+    data={'_csrf':token,'client_id':'1','billing_period':'2026-08','consumption_kwh':'200','due_date':'2026-10-31'}
     preview=client.post('/invoices/new',data=data)
     assert preview.status_code==200
     preview_token=re.search(r'name="_csrf" value="([^"]+)"',preview.get_data(as_text=True)).group(1)
@@ -52,14 +52,14 @@ def test_complete_flow(client):
         assert inv['number'].startswith('SEL-')
         iid=inv['id']
     dashboard=client.get('/')
-    assert '72 540,00' in dashboard.get_data(as_text=True)
+    assert '22,04' in dashboard.get_data(as_text=True)
     pdf=client.get(f'/invoices/{iid}/pdf')
     assert pdf.status_code==200 and pdf.data.startswith(b'%PDF-')
     r=client.post('/invoices/new',data=data,follow_redirects=True)
     assert 'déjà facturée' in r.get_data(as_text=True) or 'déjà' in r.get_data(as_text=True)
     assert len(list(connect().execute('SELECT id FROM invoices')))==1
     token=csrf(client,f'/invoices/{iid}')
-    r=client.post(f'/invoices/{iid}/payments',data={'_csrf':token,'amount':'20000','method':'Espèces','paid_on':'2026-10-14'})
+    r=client.post(f'/invoices/{iid}/payments',data={'_csrf':token,'amount':'20.00','method':'Espèces','paid_on':'2026-10-14'})
     assert r.status_code==302
     portable=client.get('/export/portable.json')
     assert portable.status_code==200

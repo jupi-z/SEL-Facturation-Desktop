@@ -1,4 +1,5 @@
 import re
+from datetime import date
 
 from app import create_app
 import db
@@ -40,3 +41,32 @@ def test_monthly_direct_consumption_invoice_without_meter(tmp_path, monkeypatch)
         assert row[1] == "USD"
     variant = client.get(f"/invoices/{invoice_id}/pdf?currency=CDF&rate=2360")
     assert variant.status_code == 200 and variant.data.startswith(b"%PDF-")
+
+
+def test_current_month_invoice_still_works_after_mid_month_tariff_save(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    client = create_app().test_client()
+    client.post("/setup", data={"_csrf": _token(client, "/setup"), "password": "TestPassword2026!", "confirm": "TestPassword2026!"})
+    client.post("/login", data={"_csrf": _token(client, "/login"), "password": "TestPassword2026!"})
+
+    settings = client.post("/settings", data={
+        "_csrf": _token(client, "/settings"), "section": "tariffs",
+        "residential_rate": "0.095", "commercial_rate": "0.12",
+        "exchange_rate_usd_cdf": "2360", "vat_rate": "16", "confirmed": "yes",
+    })
+    assert settings.status_code == 302
+
+    client.post("/clients", data={
+        "_csrf": _token(client, "/clients"), "name": "Client du mois",
+        "address": "Kolwezi", "customer_type": "RESIDENTIAL", "contract_number": "C-2",
+        "meter_number": "", "coefficient": "1",
+    })
+    period = date.today().strftime("%Y-%m")
+    preview = client.post("/invoices/new", data={
+        "_csrf": _token(client, "/invoices/new"), "client_id": "1",
+        "billing_period": period, "consumption_kwh": "100",
+        "due_date": date.today().replace(day=28).isoformat(),
+    })
+
+    assert preview.status_code == 200
+    assert "11,02" in preview.get_data(as_text=True)

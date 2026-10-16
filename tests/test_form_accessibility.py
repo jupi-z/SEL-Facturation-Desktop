@@ -45,3 +45,11 @@ def test_settings_form_separates_company_from_tariffs(authenticated_client):
     assert 'id="company_name"' in html
     assert 'for="residential_rate"' in html
     assert 'id="residential_rate"' in html
+
+
+def test_official_tariff_form_does_not_expose_legacy_tier_or_local_tax_fields(authenticated_client):
+    html = authenticated_client.get("/settings").get_data(as_text=True)
+
+    assert 'name="tiers"' not in html
+    assert 'name="local_rate"' not in html
+    assert 'name="vat_base"' not in html

@@ -162,10 +162,10 @@ def tariff_plan_for(c, customer_type: str, on_date: str):
     if customer_type not in ('RESIDENTIAL', 'COMMERCIAL'):
         raise ValueError('Type d’abonné invalide.')
     row = c.execute('''SELECT * FROM tariff_plans
-        WHERE customer_type=? AND active=1 AND effective_from<=?
+        WHERE customer_type=? AND effective_from<=?
         ORDER BY effective_from DESC, id DESC LIMIT 1''', (customer_type, on_date)).fetchone()
     if not row:
-        raise ValueError('Aucun tarif applicable pour ce type et cette date.')
+        raise ValueError(f'Aucun tarif applicable pour le type {customer_type} à la date {on_date}.')
     return row
 
 

@@ -17,6 +17,6 @@ Le certificat doit être émis par une autorité publique reconnue. Microsoft Ar
 2. Ajouter les deux secrets dans les paramètres GitHub du dépôt.
 3. Déclencher `Build Windows Desktop` avec `publish_release=true` et `sign_release=true`.
 4. Vérifier dans les logs que les trois artefacts portent une signature valide.
-5. Distribuer le bootstrapper `SEL-Facturation-Setup-0.3.1.exe`, qui embarque déjà le runtime WebView2 hors ligne.
+5. Distribuer le bootstrapper `SEL-Facturation-Setup-0.3.2.exe`, qui embarque déjà le runtime WebView2 hors ligne.
 
 La signature n’élimine pas nécessairement le premier avertissement SmartScreen : la réputation du nouvel éditeur et du fichier se construit progressivement. Elle permet toutefois à Windows d’identifier clairement SEL comme éditeur et évite la situation actuelle de fichier non signé.

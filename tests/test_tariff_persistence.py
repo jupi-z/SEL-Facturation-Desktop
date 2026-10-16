@@ -27,6 +27,32 @@ def test_tariff_lookup_rejects_unknown_type(tmp_path, monkeypatch):
             raise AssertionError("unknown customer type was accepted")
 
 
+def test_tariff_lookup_error_identifies_type_and_date(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    db.initialize()
+    with db.connect() as connection:
+        try:
+            db.tariff_plan_for(connection, "RESIDENTIAL", "2025-12-01")
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError("missing tariff was accepted")
+
+    assert "RESIDENTIAL" in message
+    assert "2025-12-01" in message
+
+
+def test_tariff_lookup_keeps_an_effective_historical_version_queryable(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    db.initialize()
+    with db.connect() as connection:
+        connection.execute("UPDATE tariff_plans SET active=0 WHERE customer_type='RESIDENTIAL'")
+        connection.commit()
+        plan = db.tariff_plan_for(connection, "RESIDENTIAL", "2026-10-01")
+
+    assert plan["unit_price"] == "0.095"
+
+
 def test_tariff_settings_can_be_saved_without_resubmitting_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
     db.initialize()

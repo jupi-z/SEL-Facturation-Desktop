@@ -22,7 +22,7 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
 import db
 from domain import (BillingError, calculate_flat_rate, calculate_from_readings,
                     calculate_from_settings, convert_amount, decimal, fmt, money,
-                    parse_tiers, validate_due_date, validate_payment_reference)
+                    validate_due_date, validate_payment_reference)
 from invoice_pdf import render_invoice
 from update_client import fetch_manifest
 from version import APP_VERSION
@@ -272,7 +272,7 @@ def create_app():
         conf=db.settings(g.db)
         if request.method=='POST':
             section=request.form.get('section','tariffs')
-            fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','tiers','local_rate','vat_rate','vat_base','currency','residential_rate','commercial_rate','exchange_rate_usd_cdf']
+            fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','vat_rate','residential_rate','commercial_rate','exchange_rate_usd_cdf']
             values={k:request.form.get(k,'').strip() for k in fields}
             try:
                 if section == 'identity' and (not values['company_name'] or not values['address']):
@@ -283,38 +283,26 @@ def create_app():
                         for k in identity_fields: g.db.execute('UPDATE settings SET value=? WHERE key=?',(values[k],k))
                     flash('Identité SEL mise à jour. Les anciennes factures restent inchangées.','success')
                     return redirect(url_for('settings_view'))
-                if section not in ('tariffs','all'):
+                if section != 'tariffs':
                     raise BillingError('Section de paramètres invalide.')
-                if values['residential_rate'] or values['commercial_rate'] or values['exchange_rate_usd_cdf']:
-                    residential=decimal(values['residential_rate'],'Tarif résidentiel',allow_zero=False)
-                    commercial=decimal(values['commercial_rate'],'Tarif commercial',allow_zero=False)
-                    rate=decimal(values['exchange_rate_usd_cdf'],'Taux USD/CDF',allow_zero=False)
-                    if values['vat_rate'] != '16':
-                        raise BillingError('La TVA SEL doit être fixée à 16 %.')
-                    if rate <= 0: raise BillingError('Le taux USD/CDF doit être positif.')
-                    with g.db:
-                        g.db.execute("UPDATE settings SET value=? WHERE key='local_rate'", ('0',))
-                        g.db.execute("UPDATE settings SET value='16' WHERE key='vat_rate'")
-                        g.db.execute("UPDATE settings SET value='ENERGY' WHERE key='vat_base'")
-                        g.db.execute("UPDATE settings SET value='USD' WHERE key='currency'")
-                        g.db.execute("UPDATE settings SET value=? WHERE key='exchange_rate_usd_cdf'", (str(rate),))
-                        g.db.execute("UPDATE settings SET value=? WHERE key='exchange_rate_date'", (date.today().isoformat(),))
-                        g.db.execute("UPDATE tariff_plans SET unit_price=?, vat_rate='16', currency='USD', active=0 WHERE customer_type='RESIDENTIAL'", (str(residential),))
-                        g.db.execute("UPDATE tariff_plans SET unit_price=?, vat_rate='16', currency='USD', active=0 WHERE customer_type='COMMERCIAL'", (str(commercial),))
-                        g.db.execute("INSERT OR REPLACE INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f"RESIDENTIAL-{date.today().isoformat()}",'RESIDENTIAL','KWH',str(residential),'USD','16',date.today().isoformat()))
-                        g.db.execute("INSERT OR REPLACE INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f"COMMERCIAL-{date.today().isoformat()}",'COMMERCIAL','KWH',str(commercial),'USD','16',date.today().isoformat()))
-                        g.db.execute("UPDATE settings SET value='1' WHERE key='configured'")
-                    flash('Tarifs SEL enregistrés. Les factures existantes restent inchangées.','success')
-                    return redirect(url_for('settings_view'))
-                if not re.fullmatch(r'[A-Z]{3}',values['currency']): raise BillingError('Devise attendue, ex. CDF ou USD.')
-                parse_tiers(values['tiers'])
-                for k in ('local_rate','vat_rate'):
-                    if decimal(values[k],k)>100: raise BillingError('Taux fiscal supérieur à 100 %.')
-                if values['vat_base'] not in ('ENERGY','ENERGY_LOCAL','ENERGY_LOCAL_FEES'): raise BillingError('Assiette TVA invalide.')
+                residential=decimal(values['residential_rate'],'Tarif résidentiel',allow_zero=False)
+                commercial=decimal(values['commercial_rate'],'Tarif commercial',allow_zero=False)
+                rate=decimal(values['exchange_rate_usd_cdf'],'Taux USD/CDF',allow_zero=False)
+                if values['vat_rate'] != '16':
+                    raise BillingError('La TVA SEL doit être fixée à 16 %.')
+                if rate <= 0: raise BillingError('Le taux USD/CDF doit être positif.')
                 if request.form.get('confirmed')!='yes':
-                    raise BillingError('Confirmez que les tarifs et taxes ont été validés auprès de SEL avant d’activer la facturation.')
+                    raise BillingError('Confirmez les tarifs officiels SEL avant d’activer la facturation.')
                 with g.db:
-                    for k,v in values.items(): g.db.execute('UPDATE settings SET value=? WHERE key=?',(v,k))
+                    g.db.execute("UPDATE settings SET value='0' WHERE key='local_rate'")
+                    g.db.execute("UPDATE settings SET value='16' WHERE key='vat_rate'")
+                    g.db.execute("UPDATE settings SET value='ENERGY' WHERE key='vat_base'")
+                    g.db.execute("UPDATE settings SET value='USD' WHERE key='currency'")
+                    g.db.execute("UPDATE settings SET value=? WHERE key='exchange_rate_usd_cdf'", (str(rate),))
+                    g.db.execute("UPDATE settings SET value=? WHERE key='exchange_rate_date'", (date.today().isoformat(),))
+                    effective_from = date.today().replace(day=1).isoformat()
+                    g.db.execute("INSERT OR REPLACE INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f"RESIDENTIAL-{effective_from[:7]}",'RESIDENTIAL','KWH',str(residential),'USD','16',effective_from))
+                    g.db.execute("INSERT OR REPLACE INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f"COMMERCIAL-{effective_from[:7]}",'COMMERCIAL','KWH',str(commercial),'USD','16',effective_from))
                     g.db.execute("UPDATE settings SET value='1' WHERE key='configured'")
                 flash('Paramètres validés. Les anciennes factures restent inchangées.','success')
                 return redirect(url_for('settings_view'))
