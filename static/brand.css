@@ -44,8 +44,8 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .sum .total { border-top-color: var(--sel-yellow); background: var(--sel-blue-soft); color: var(--sel-navy); }
 
 .auth-brand { background: #fff; color: var(--sel-navy); padding-inline: clamp(24px, 4vw, 56px); }
-.auth-identity { display: block; width: min(100%, 360px); background: transparent; border-radius: 0; padding: 0; box-shadow: none; }
-.auth-identity .official-logo { display: block; width: 100%; max-width: 360px; height: auto; max-height: none; object-fit: contain; object-position: left center; }
+.auth-identity { display: block; width: min(100%, 400px); overflow: visible; background: transparent; border-radius: 0; padding: 0; box-shadow: none; }
+.auth-identity .official-logo { display: block; width: 100%; max-width: 400px; height: auto; max-height: none; object-fit: contain; object-position: left center; overflow: visible; }
 .auth-brand .eyebrow { color: var(--sel-blue); }
 .auth-brand-copy h1 { color: var(--sel-navy); }
 .auth-brand-copy p { color: #36516c; }
