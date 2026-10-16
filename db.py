@@ -226,3 +226,13 @@ def automatic_backup():
     old=sorted(d.glob('sel-*.sqlite3'))
     for fp in old[:-14]:
         fp.unlink(missing_ok=True)
+
+
+def pre_update_backup():
+    """Create a timestamped snapshot before schema migration or replacement."""
+    if not db_path().exists():
+        return None
+    folder = home() / 'sauvegardes'
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+    return backup(folder / f'sel-preupdate-{stamp}.sqlite3')

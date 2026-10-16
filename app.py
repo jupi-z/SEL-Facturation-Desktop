@@ -24,6 +24,7 @@ from domain import (BillingError, calculate_flat_rate, calculate_from_readings,
                     calculate_from_settings, convert_amount, decimal, fmt, money,
                     parse_tiers, validate_due_date, validate_payment_reference)
 from invoice_pdf import render_invoice
+from update_client import fetch_manifest
 from version import APP_VERSION
 
 PAGE_SIZE = 50
@@ -63,6 +64,8 @@ def read_secret():
 
 
 def create_app():
+    if db.db_path().exists():
+        db.pre_update_backup()
     db.initialize()
     db.automatic_backup()
     app=Flask(__name__, template_folder=resource('templates'), static_folder=resource('static'))
@@ -129,6 +132,18 @@ def create_app():
     @app.get('/health')
     def health():
         return {'app':'SEL-Facturation-Local','status':'ok','version':APP_VERSION}
+
+    @app.get('/updates/status')
+    @protected
+    def update_status():
+        """Check availability only; never downloads or executes an installer."""
+        manifest_url = os.environ.get('SEL_UPDATE_MANIFEST_URL', '').strip()
+        if not manifest_url:
+            return {'state': 'not_configured', 'version': APP_VERSION}
+        try:
+            return fetch_manifest(manifest_url, current_version=APP_VERSION)
+        except (OSError, ValueError, TimeoutError):
+            return {'state': 'unavailable', 'version': APP_VERSION}
 
     @app.route('/setup',methods=['GET','POST'])
     def setup():

@@ -63,6 +63,16 @@ def test_automatic_backup_refreshes_after_same_day_changes(monkeypatch,tmp_path)
         assert saved.execute('SELECT name FROM clients').fetchone()[0]=='Abonné sauvegardé'
 
 
+def test_pre_update_backup_preserves_database_before_migration(monkeypatch, tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR', str(tmp_path))
+    db.initialize()
+    with db.connect() as c:
+        c.execute("INSERT INTO clients(code,name,address,meter_number) VALUES(?,?,?,?)", ('SEL-C-PRE', 'Avant migration', 'Kolwezi', ''))
+    snapshot = db.pre_update_backup()
+    with db.sqlite3.connect(snapshot) as saved:
+        assert saved.execute("SELECT name FROM clients WHERE code='SEL-C-PRE'").fetchone()[0] == 'Avant migration'
+
+
 def test_backup_preserves_previous_snapshot_if_refresh_fails(monkeypatch,tmp_path):
     monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
     db.initialize()
