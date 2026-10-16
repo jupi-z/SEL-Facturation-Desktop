@@ -9,10 +9,12 @@ from invoice_pdf import render_invoice
 def test_pdf_uses_full_official_logo_and_direct_billing_layout():
     source = __import__('pathlib').Path(__file__).resolve().parents[1]
     code = (source / 'invoice_pdf.py').read_text(encoding='utf-8')
-    assert "'sel-official-logo.png'" in code
+    assert "'sel-icon.png'" in code
+    assert "'sel-official-logo.png'" not in code
     assert "'sel-logo.png'" not in code
     assert "#003078" in code
-    assert (source / 'static' / 'sel-official-logo.png').exists()
+    assert (source / 'static' / 'sel-icon.png').exists()
+    assert (source / 'static' / 'sel-icon.png').read_bytes() == __import__('pathlib').Path(r'C:\Users\MonarQue\Downloads\Icône_SEL.png').read_bytes()
 
 
 def test_new_fixed_rate_pdf_shows_type_rate_vat_and_no_local_tax():

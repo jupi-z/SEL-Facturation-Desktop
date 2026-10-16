@@ -62,9 +62,9 @@ def render_invoice(invoice, payments) -> bytes:
     story=[]
 
     # identite SEL + titre de document
-    logo=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'static'/'sel-official-logo.png'
-    # Le PNG officiel est 4:3. Le ratio est conservé pour afficher le logotype complet.
-    mark=Image(str(logo),width=35*mm,height=26.25*mm,hAlign='LEFT') if logo.exists() else Paragraph('<b>SEL</b>',title)
+    logo=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'static'/'sel-icon.png'
+    # L’icône fournie par SEL est embarquée telle quelle : aucune retouche ni rognage.
+    mark=Image(str(logo),width=20*mm,height=20*mm,hAlign='LEFT') if logo.exists() else Paragraph('<b>SEL</b>',title)
     company_cells=[mark,
         [Paragraph('<b>'+p(co.get('company_name','SOCIÉTÉ D’ÉNERGIE DU LUALABA'))+'</b>',ParagraphStyle('co',parent=normal,fontName='Helvetica-Bold',fontSize=10.8,leading=13,textColor=BLUE)),
          Paragraph(p(co.get('tagline','')),muted),
@@ -73,7 +73,7 @@ def render_invoice(invoice, payments) -> bytes:
         [Paragraph('DÉCOMPTE D’ÉLECTRICITÉ',document_title),
          Paragraph('N° '+p(inv['number']),ParagraphStyle('ref',parent=normal,fontName='Helvetica-Bold',fontSize=9,alignment=TA_RIGHT,textColor=BLUE)),
          Paragraph('Émis le '+p(inv['issue_date']),right)]]
-    table=Table([company_cells],colWidths=[40*mm,80*mm,58*mm])
+    table=Table([company_cells],colWidths=[26*mm,94*mm,58*mm])
     table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),4),('TOPPADDING',(0,0),(-1,-1),1),('BOTTOMPADDING',(0,0),(-1,-1),8),('LINEBELOW',(0,0),(-1,-1),2,BLUE)]))
     story.extend([table,Spacer(1,7)])
     # Les mentions de conformité internes n'appartiennent pas au document client.
