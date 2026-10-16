@@ -21,6 +21,12 @@ def test_bundle_uses_wix4_exe_arguments():
     assert "DisplayInternalUI" not in msi.attrib
 
 
+def test_bundle_uses_the_sel_application_icon():
+    root = ET.parse(ROOT / "packaging" / "bundle" / "Bundle.wxs").getroot()
+
+    assert root.find("wix:Bundle", NS).get("IconSourceFile") == "$(var.IconPath)"
+
+
 def test_msi_keeps_program_files_separate_from_local_data():
     root = ET.parse(ROOT / "packaging" / "wix" / "Product.wxs").getroot()
     ns = {"wix": "http://wixtoolset.org/schemas/v4/wxs"}
