@@ -20,8 +20,10 @@ $webview = (Resolve-Path 'build\webview2').Path + '\MicrosoftEdgeWebView2Runtime
 if (-not (Test-Path $webview)) {
   Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webview
 }
-& wix build packaging\wix\Product.wxs -d ProductVersion=$version -d ExePath="$(Resolve-Path 'dist\SEL-Facturation.exe').Path" -o 'dist\installer\SEL-Facturation.msi'
+$exePath = (Resolve-Path 'dist\SEL-Facturation.exe').Path
+& wix build packaging\wix\Product.wxs -d "ProductVersion=$version" -d "ExePath=$exePath" -o 'dist\installer\SEL-Facturation.msi'
 if ($LASTEXITCODE -ne 0) { throw 'Compilation MSI WiX échouée.' }
-& wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d ProductVersion=$version -d MsiPath="$(Resolve-Path 'dist\installer\SEL-Facturation.msi').Path" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
+$msiPath = (Resolve-Path 'dist\installer\SEL-Facturation.msi').Path
+& wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d "ProductVersion=$version" -d "MsiPath=$msiPath" -d "WebView2Installer=$webview" -d "IconPath=$((Resolve-Path 'packaging\sel-facturation.ico').Path)" -o "dist\installer\SEL-Facturation-Setup-$version.exe"
 if ($LASTEXITCODE -ne 0) { throw 'Compilation bootstrapper WiX échouée.' }
 Write-Host "Installateur officiel créé dans dist\installer\SEL-Facturation-Setup-$version.exe" -ForegroundColor Green

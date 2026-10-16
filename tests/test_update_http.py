@@ -30,4 +30,4 @@ def test_update_status_is_explicitly_not_configured_without_manifest(authenticat
     response = authenticated_client.get("/updates/status")
 
     assert response.status_code == 200
-    assert response.json == {"state": "not_configured", "version": "0.3.2"}
+    assert response.json == {"state": "not_configured", "version": "0.3.3"}

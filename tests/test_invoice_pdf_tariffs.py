@@ -6,6 +6,15 @@ from pypdf import PdfReader
 from invoice_pdf import render_invoice
 
 
+def test_pdf_uses_full_official_logo_and_direct_billing_layout():
+    source = __import__('pathlib').Path(__file__).resolve().parents[1]
+    code = (source / 'invoice_pdf.py').read_text(encoding='utf-8')
+    assert "'sel-official-logo.png'" in code
+    assert "'sel-logo.png'" not in code
+    assert "#003078" in code
+    assert (source / 'static' / 'sel-official-logo.png').exists()
+
+
 def test_new_fixed_rate_pdf_shows_type_rate_vat_and_no_local_tax():
     invoice = {
         "number": "SEL-2026-000101", "issue_date": "2026-10-16", "due_date": "2026-10-31",
@@ -19,6 +28,10 @@ def test_new_fixed_rate_pdf_shows_type_rate_vat_and_no_local_tax():
     assert "0,095" in text or "0.095" in text
     assert "TVA" in text and "16" in text
     assert "Taxe locale" not in text
+    assert "INFORMATIONS COMPTEUR" not in text
+    assert "N° compteur" not in text
+    assert "Coefficient" not in text
+    assert "PÉRIODE ET FACTURATION" in text
 
 
 def test_cdf_variant_pdf_discloses_source_currency_and_rate():

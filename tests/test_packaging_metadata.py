@@ -65,3 +65,14 @@ def test_release_workflow_has_one_supported_installer_path():
     assert "wix build packaging\\wix\\Product.wxs" in build_script
     assert "WebView2RuntimeInstallerX64.exe" in build_script
 
+
+def test_wix_build_resolves_paths_before_preprocessing():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+    for source in (workflow, build_script):
+        assert "$exePath" in source
+        assert "$msiPath" in source
+        assert "ExePath=$((Resolve-Path" not in source
+        assert "MsiPath=$((Resolve-Path" not in source
+    assert '"IconPath=$iconPath"' in workflow
+
