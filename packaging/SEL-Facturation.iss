@@ -1,3 +1,5 @@
+; LEGACY COMPATIBILITY PACKAGE — not used for SEL release delivery.
+; Use the WiX bootstrapper generated from packaging/bundle/Bundle.wxs.
 #define AppName "SEL Facturation"
 #define AppVersion "0.3.0"
 [Setup]

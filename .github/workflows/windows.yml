@@ -36,15 +36,6 @@ jobs:
         run: python -c "import webview, clr; from webview import FileDialog; print('Desktop runtime import OK')"
       - name: Build Windows EXE
         run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon packaging\sel-facturation.ico --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
-      - name: Install Inno Setup
-        run: choco install innosetup --yes --no-progress
-      - name: Compile Windows installer
-        shell: pwsh
-        run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler unavailable: $iscc" }
-          & $iscc packaging\SEL-Facturation.iss
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
       - name: Install WiX Toolset 4
         run: |
           dotnet tool install --global wix --version 4.0.5

@@ -11,9 +11,17 @@ if ($LASTEXITCODE -ne 0) { throw 'Tests en échec : compilation annulée.' }
 & .\.venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon 'packaging\sel-facturation.ico' --add-data 'templates;templates' --add-data 'static;static' --hidden-import clr --collect-all webview desktop.py
 if ($LASTEXITCODE -ne 0) { throw 'Compilation Windows échouée.' }
 Write-Host 'Application de bureau creee dans dist\SEL-Facturation.exe' -ForegroundColor Green
-$iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-if (Test-Path $iscc) {
-  & $iscc 'packaging\SEL-Facturation.iss'
-  if ($LASTEXITCODE -ne 0) { throw 'Création de l’installateur Inno Setup échouée.' }
-  Write-Host 'Installateur cree dans dist\installer\' -ForegroundColor Green
-} else { Write-Host 'Inno Setup absent : installez-le pour créer Setup.exe.' -ForegroundColor Yellow }
+$wix = Get-Command wix -ErrorAction SilentlyContinue
+if (-not $wix) { throw 'WiX Toolset 4 est requis pour construire le paquet officiel.' }
+$version = (Select-String -Path version.py -Pattern 'APP_VERSION\s*=\s*["'']([^"'']+)["'']').Matches.Groups[1].Value
+if ([string]::IsNullOrWhiteSpace($version)) { throw 'APP_VERSION introuvable.' }
+New-Item -ItemType Directory -Force -Path 'build\webview2','dist\installer' | Out-Null
+$webview = (Resolve-Path 'build\webview2').Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+if (-not (Test-Path $webview)) {
+  Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webview
+}
+& wix build packaging\wix\Product.wxs -d ProductVersion=$version -d ExePath="$(Resolve-Path 'dist\SEL-Facturation.exe').Path" -o 'dist\installer\SEL-Facturation.msi'
+if ($LASTEXITCODE -ne 0) { throw 'Compilation MSI WiX échouée.' }
+& wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d ProductVersion=$version -d MsiPath="$(Resolve-Path 'dist\installer\SEL-Facturation.msi').Path" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
+if ($LASTEXITCODE -ne 0) { throw 'Compilation bootstrapper WiX échouée.' }
+Write-Host "Installateur officiel créé dans dist\installer\SEL-Facturation-Setup-$version.exe" -ForegroundColor Green

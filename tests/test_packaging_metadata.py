@@ -47,3 +47,15 @@ def test_windows_build_embeds_webview2_and_requires_signing_for_published_releas
     assert "SEL_CODESIGN_PFX_BASE64" in workflow
     assert "Get-AuthenticodeSignature" in workflow
 
+
+def test_release_workflow_has_one_supported_installer_path():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+
+    assert "Install Inno Setup" not in workflow
+    assert "Compile Windows installer" not in workflow
+    assert "Inno Setup absent" not in build_script
+    assert "bootstrapper WiX" in build_script
+    assert "wix build packaging\\wix\\Product.wxs" in build_script
+    assert "WebView2RuntimeInstallerX64.exe" in build_script
+
