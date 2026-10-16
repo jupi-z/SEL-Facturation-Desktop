@@ -28,11 +28,12 @@ def test_subscriber_form_groups_data_and_has_explicit_labels(authenticated_clien
     html = authenticated_client.get("/clients").get_data(as_text=True)
 
     assert "Identité de l’abonné" in html
-    assert "Contrat et compteur futur" in html
+    assert "Contrat et compteur futur" not in html
+    assert "Coefficient futur" not in html
+    assert "N° du compteur" not in html
+    assert "Abonnés et compteurs" not in html
     assert 'for="name"' in html
     assert 'id="name"' in html
-    assert 'for="meter_number"' in html
-    assert 'id="meter_number"' in html
 
 
 def test_settings_form_separates_company_from_tariffs(authenticated_client):

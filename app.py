@@ -231,7 +231,7 @@ def create_app():
         total=g.db.execute(f'SELECT COUNT(*) FROM clients {where}',search_args).fetchone()[0]
         result=g.db.execute(f'SELECT * FROM clients {where} ORDER BY id DESC LIMIT ? OFFSET ?',search_args+[PAGE_SIZE,offset]).fetchall()
         pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
-        return render_template('clients.html',title='Abonnés et compteurs',clients=result,query=term,page=page,pages=pages,total=total)
+        return render_template('clients.html',title='Abonnés',clients=result,query=term,page=page,pages=pages,total=total)
 
     @app.route('/clients/<int:cid>/edit',methods=['GET','POST'])
     @protected
