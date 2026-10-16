@@ -88,3 +88,11 @@ Le shell d'authentification utilise maintenant une composition SEL dédiée sans
 La branche `monarque/consumption-tariffs` ajoute le modèle de facturation confirmé par SEL : Résidentiel 0,095 USD/kWh HT, Commercial 0,12 USD/kWh HT, TVA 16 %, aucune taxe locale pour les nouvelles factures, émission mensuelle en USD, conversion CDF optionnelle au taux configurable initial de 2 360. La consommation directe est disponible sans compteur ; les relevés restent un mode futur optionnel. Les anciennes données et snapshots restent compatibles.
 
 Validation locale de la branche : 82 tests exécutés par groupes, tous passants ; EXE PyInstaller produit et démarré dans un dossier de données isolé. L'installateur WiX/Inno Setup, l'imprimante SEL et le poste cible restent à valider séparément.
+
+### Addendum de validation — 16 octobre 2026
+
+- La branche contient en plus la correction du tableau de bord qui évite de masquer des factures USD lorsqu'une ancienne configuration conserve CDF comme devise d'affichage. Régression dédiée ajoutée.
+- Suite actuelle : **83 tests collectés, 83 passants**, exécutés en groupes bornés sous Python 3.12 ; `git diff --check` est propre.
+- PyInstaller a produit `dist/SEL-Facturation.exe` (23 384 724 octets). Le runtime WebView2 est présent sur ce poste, mais le smoke test de l'EXE reconstruit n'a pas créé la base isolée et le processus s'est terminé ; ce comportement doit être reproduit avec journal détaillé avant de qualifier l'EXE comme validé.
+- Le MSI WiX a été recompilé et son extraction administrative a réussi (code 0, EXE retrouvé dans l'arborescence extraite). Le bootstrapper WiX avec l'installeur autonome WebView2 a été recompilé sans avertissement après ajout de la détection du runtime.
+- Inno Setup n'est pas installé localement ; aucun installeur Inno n'est donc déclaré validé. Aucun test d'installation réel ne doit être annoncé tant que le bootstrapper n'est pas exécuté sur un Windows 10/11 propre et que la conservation/mise à jour des données n'est pas constatée.
