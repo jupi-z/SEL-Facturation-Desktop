@@ -177,7 +177,17 @@ def create_app():
         invoice_rows=g.db.execute('SELECT status,currency,calc_snapshot FROM invoices').fetchall()
         conf=db.settings(g.db)
         currency=conf.get('currency')
-        issued_rows=[row for row in invoice_rows if row['status']=='ISSUED' and row['currency']==currency]
+        issued_all=[row for row in invoice_rows if row['status']=='ISSUED']
+        issued_rows=[row for row in issued_all if row['currency']==currency]
+        # An older installation may still have CDF in settings while the
+        # current SEL tariff model emits USD invoices.  Do not hide those
+        # invoices merely because the legacy display preference survived an
+        # additive migration.  We only fall back when the data has one
+        # unambiguous currency; mixed-currency history remains explicit.
+        currencies={row['currency'] for row in issued_all}
+        if not issued_rows and len(currencies)==1:
+            currency=next(iter(currencies))
+            issued_rows=list(issued_all)
         billed=sum_money(json.loads(row['calc_snapshot'])['total'] for row in issued_rows)
         clients=g.db.execute('SELECT COUNT(*) AS n FROM clients').fetchone()['n']
         recent=g.db.execute('''SELECT i.*, c.name as client_name FROM invoices i
@@ -185,6 +195,7 @@ def create_app():
         paid=sum_money(row['amount'] for row in g.db.execute("SELECT p.amount FROM payments p JOIN invoices i ON i.id=p.invoice_id WHERE i.status='ISSUED' AND i.currency=?", (currency,)))
         backups=sorted((db.home()/'sauvegardes').glob('sel-*.sqlite3'), key=lambda path: path.stat().st_mtime, reverse=True)
         stats={'n':len(issued_rows),'billed':billed,'paid':paid,'balance':money(billed-paid),
+               'currency':currency,
                'configured':conf.get('configured')=='1','last_backup':backups[0].name if backups else None}
         return render_template('dashboard.html',title='Tableau de bord',stats=stats,clients=clients,recent=recent)
 
