@@ -27,3 +27,10 @@ def test_templates_reference_the_official_logo_for_ui_surfaces():
 
     assert "filename='sel-official-logo.png'" in base
     assert "filename='sel-logo.png'" not in base
+
+
+def test_official_logo_has_contrast_support_on_the_auth_panel():
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert ".auth-identity .official-logo" in css
+    assert "background: #fff" in css
