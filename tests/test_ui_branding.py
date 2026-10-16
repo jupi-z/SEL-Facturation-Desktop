@@ -52,3 +52,18 @@ def test_authentication_surface_is_inverted_with_a_blue_form_panel():
     assert "background: var(--sel-blue)" in css
     assert ".auth-content h2" in css
     assert ".auth-content label" in css
+
+
+def test_auth_logo_uses_a_deterministic_width_without_clipping():
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert ".auth-identity { display: block; width: min(100%, 340px);" in css
+    assert ".auth-identity .official-logo { display: block; width: 100%;" in css
+
+
+def test_authentication_hint_remains_readable_on_the_blue_panel():
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert ".auth-content .auth-hint" in css
+    assert "color: #fff" in css
+    assert "background: rgba(255, 255, 255, .12)" in css
