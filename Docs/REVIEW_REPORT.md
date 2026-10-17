@@ -134,12 +134,12 @@ Validation locale de la branche : 82 tests exécutés par groupes, tous passants
 
 ### Preuves de build 0.3.8 — 17/10/2026
 
-- Suite complète locale : **178 tests passants**.
+- Suite complète locale : **182 tests passants**.
 - Vérifications statiques : `compileall`, `node --check static/desktop.js` et `git diff --check` passants.
 - Build Windows local : `BUILD_EXIT=0` avec PyInstaller et WiX 4.
-- `SEL-Facturation.exe` — SHA-256 `54A6C156FAB0A7BA478A435A4A260F1A4C650C2507F1E3B5653EF1E61272D9DF`.
-- `SEL-Facturation.msi` — SHA-256 `01937B29D1B785685A98D25B1EA7A603AC172936DB23BB63FB6F90D631C7BB4A`.
-- `SEL-Facturation-Setup-0.3.8.exe` — SHA-256 `239DFE6FC2CF4346EAFC941CF716D3544D81E9E663A5073260128DE4D3487DCA`.
+- `SEL-Facturation.exe` — SHA-256 `E6371D96223C7A9A8CE0503AF286AE4D33AEB120BDD1B46E9413399313F3E152`.
+- `SEL-Facturation.msi` — SHA-256 `ED151366D00379F69C1ED6DC5CD9AA0E8A5E050F3762E9A096A3793550F47F7B`.
+- `SEL-Facturation-Setup-0.3.8.exe` — SHA-256 `C8451689E1A4FDE0A5DA0BDF8761F48D0B4B2EF766D3BAA75F7D13EB2968F15A`.
 - Signature Authenticode locale des trois artefacts : **NotSigned** ; aucun artefact ne doit être présenté comme version de production avant signature.
 - Avertissements PyInstaller observés : imports optionnels Android WebView2 et tables optionnelles pycparser uniquement.
 - Validation d’installation, mise à niveau, restauration, WebView2 et impression sur le poste SEL : **non effectuée** ; statut : **pilote non validé sur poste cible**.
