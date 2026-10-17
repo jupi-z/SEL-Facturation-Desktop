@@ -69,6 +69,19 @@ def _normalise_guid(value: Any) -> str:
     return str(value or "").replace("{", "").replace("}", "").upper()
 
 
+def _command_executable(command: Any) -> str | None:
+    """Extract the executable path from a Windows uninstall command."""
+
+    text = str(command or "").strip()
+    if not text:
+        return None
+    if text.startswith('"'):
+        end = text.find('"', 1)
+        return text[1:end] if end > 1 else None
+    match = re.match(r"(.+?\.exe)(?:\s|$)", text, flags=re.IGNORECASE)
+    return match.group(1) if match else None
+
+
 def _query_values(hive: Any, key_path: str, access: int = 0) -> dict[str, Any] | None:
     if os.name != "nt":
         return None
@@ -141,7 +154,14 @@ def discover_installations() -> list[dict[str, Any]]:
 
     for root_name, key_name, values in _uninstall_entries():
         if _normalise_guid(values.get("BundleUpgradeCode")) == _normalise_guid(BUNDLE_UPGRADE_CODE):
-            installations.append({"kind": "burn", "version": values.get("BundleVersion") or values.get("DisplayVersion"), "key": key_name})
+            installations.append(
+                {
+                    "kind": "burn",
+                    "version": values.get("BundleVersion") or values.get("DisplayVersion"),
+                    "key": key_name,
+                    "bundle_path": _command_executable(values.get("UninstallString")),
+                }
+            )
             continue
         if (
             values.get("DisplayName") == SEL_DISPLAY_NAME

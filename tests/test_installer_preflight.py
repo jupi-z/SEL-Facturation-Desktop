@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +54,14 @@ def test_registry_guid_normalization_handles_windows_multisz_values():
     ) == "block"
 
 
+def test_registry_uninstall_command_extracts_cached_bundle_path():
+    command = '"C:\\Users\\Test User\\AppData\\Local\\Package Cache\\setup.exe" /burn.clean.room /uninstall'
+
+    assert installer_version._command_executable(command) == (
+        "C:\\Users\\Test User\\AppData\\Local\\Package Cache\\setup.exe"
+    )
+
+
 def test_preflight_exposes_a_native_status_message_and_preserves_arguments():
     assert preflight.status_message("install", [], "0.3.3")
     assert preflight.status_message("migrate", [{"kind": "legacy", "version": "0.3.2"}], "0.3.3")
@@ -65,6 +74,46 @@ def test_preflight_finds_versioned_embedded_burn_engine(tmp_path):
     embedded.write_bytes(b"burn")
 
     assert preflight.resolve_core_path(tmp_path) == embedded
+
+
+def test_preflight_reuses_cached_bundle_for_same_version_repair(tmp_path):
+    cached = tmp_path / "SEL-Facturation-Setup-0.3.3.exe"
+    cached.write_bytes(b"burn")
+
+    assert preflight.resolve_repair_path(
+        [{"kind": "burn", "bundle_path": str(cached)}]
+    ) == cached
+
+
+def test_preflight_repair_requires_cached_bundle_when_missing(tmp_path):
+    assert preflight.resolve_repair_path(
+        [{"kind": "burn", "bundle_path": str(tmp_path / "missing.exe")}]
+    ) is None
+
+
+def test_preflight_launches_cached_bundle_in_repair_mode(monkeypatch, tmp_path):
+    fallback = tmp_path / "new-setup.exe"
+    cached = tmp_path / "cached-setup.exe"
+    fallback.write_bytes(b"new")
+    cached.write_bytes(b"cached")
+    calls = []
+
+    monkeypatch.setattr(preflight, "_core_path", lambda: fallback)
+    monkeypatch.setattr(preflight, "current_version", lambda: "0.3.3")
+    monkeypatch.setattr(
+        preflight,
+        "discover_installations",
+        lambda: [{"kind": "burn", "version": "0.3.3", "bundle_path": str(cached)}],
+    )
+    monkeypatch.setattr(preflight, "_notify", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        lambda arguments, check: (calls.append(arguments) or SimpleNamespace(returncode=0)),
+    )
+
+    assert preflight.main([]) == 0
+    assert calls == [[str(cached), "/repair"]]
 
 
 def test_setup_build_wraps_the_wix_bundle_with_preflight():

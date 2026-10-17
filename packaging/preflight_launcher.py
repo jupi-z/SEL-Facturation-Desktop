@@ -60,6 +60,26 @@ def resolve_core_path(base: Path) -> Path | None:
     return versioned[0] if versioned else None
 
 
+def resolve_repair_path(installations: list[dict]) -> Path | None:
+    """Use the exact cached Burn bundle for same-version maintenance."""
+
+    for installation in installations:
+        if installation.get("kind") != "burn":
+            continue
+        candidate = installation.get("bundle_path")
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.is_file() and path.suffix.lower() == ".exe":
+            return path
+    return None
+
+
+def _has_action_argument(arguments: list[str]) -> bool:
+    actions = {"/install", "/modify", "/repair", "/uninstall", "/layout", "/help", "/?"}
+    return any(argument.lower().split("=", 1)[0] in actions for argument in arguments)
+
+
 def _core_path() -> Path | None:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return resolve_core_path(base)
@@ -85,7 +105,19 @@ def main(argv: list[str] | None = None) -> int:
         return 20
     if not any(argument.lower() in {"/quiet", "/passive"} for argument in arguments):
         _notify(message)
-    return subprocess.run([str(core), *arguments], check=False).returncode
+    launch_core = core
+    launch_arguments = list(arguments)
+    if action == "repair" and not _has_action_argument(launch_arguments):
+        launch_core = resolve_repair_path(installations)
+        if launch_core is None:
+            _notify(
+                "La version SEL est déjà installée, mais son moteur de maintenance est introuvable. "
+                "Aucune nouvelle installation ne sera créée pour protéger les données.",
+                error=True,
+            )
+            return 31
+        launch_arguments.append("/repair")
+    return subprocess.run([str(launch_core), *launch_arguments], check=False).returncode
 
 
 if __name__ == "__main__":
