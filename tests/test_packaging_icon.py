@@ -27,9 +27,8 @@ def test_windows_icon_is_sel_brand_and_multiresolution():
 
 def test_windows_packaging_uses_the_shared_sel_icon():
     build = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
-    spec = (ROOT / "SEL-Facturation.spec").read_text(encoding="utf-8")
     bundle = (ROOT / "packaging" / "bundle" / "Bundle.wxs").read_text(encoding="utf-8")
     assert "packaging\\prepare-icon.py" in build
     assert "--icon 'packaging\\sel-facturation.ico'" in build
-    assert "icon=['packaging/sel-facturation.ico']" in spec
+    assert "--icon 'packaging\\sel-facturation.ico'" in build
     assert "IconSourceFile=\"$(var.IconPath)\"" in bundle

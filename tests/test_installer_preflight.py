@@ -92,6 +92,29 @@ def test_preflight_repair_requires_cached_bundle_when_missing(tmp_path):
     ) is None
 
 
+def test_preflight_installs_over_same_version_portable_copy_without_repair(monkeypatch, tmp_path):
+    fallback = tmp_path / "new-setup.exe"
+    fallback.write_bytes(b"new")
+    calls = []
+
+    monkeypatch.setattr(preflight, "_core_path", lambda: fallback)
+    monkeypatch.setattr(preflight, "current_version", lambda: "0.3.8")
+    monkeypatch.setattr(
+        preflight,
+        "discover_installations",
+        lambda: [{"kind": "portable", "version": "0.3.8", "executable_path": "C:/portable/SEL-Facturation.exe"}],
+    )
+    monkeypatch.setattr(preflight, "_notify", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        lambda arguments, check: (calls.append(arguments) or SimpleNamespace(returncode=0)),
+    )
+
+    assert preflight.main([]) == 0
+    assert calls == [[str(fallback)]]
+
+
 def test_preflight_launches_cached_bundle_in_repair_mode(monkeypatch, tmp_path):
     fallback = tmp_path / "new-setup.exe"
     cached = tmp_path / "cached-setup.exe"

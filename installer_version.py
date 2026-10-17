@@ -99,6 +99,21 @@ def installation_marker_path(data_root: Path | None = None) -> Path:
     return (Path(data_root) if data_root is not None else _data_root()) / INSTALLATION_MARKER_NAME
 
 
+def canonical_installation_executable() -> Path:
+    """Return the executable path owned by the official per-user installer."""
+
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    root = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+    return root / "Programs" / DATA_DIRECTORY_NAME / "SEL-Facturation.exe"
+
+
+def is_canonical_installation_executable(executable_path: Path) -> bool:
+    try:
+        return Path(executable_path).resolve() == canonical_installation_executable().resolve()
+    except OSError:
+        return False
+
+
 def write_installation_marker(executable_path: Path, version: str, data_root: Path | None = None) -> Path:
     """Record a portable copy that has actually been launched.
 
@@ -269,6 +284,12 @@ def choose_preflight_action(installations: list[dict[str, Any]], current_version
         return "block"
     if any(installation["kind"] == "legacy" and comparison < 0 for installation, comparison in comparisons):
         return "migrate"
-    if any(comparison == 0 for _, comparison in comparisons):
+    # A registered Burn bundle has a reliable cached maintenance engine. A
+    # portable copy (or an MSI-only registration) does not; the current
+    # bootstrapper must be allowed to install/repair it instead of failing
+    # with a missing cached-bundle error or creating a second repair path.
+    if any(installation["kind"] == "burn" and comparison == 0 for installation, comparison in comparisons):
         return "repair"
+    if any(comparison == 0 for _, comparison in comparisons):
+        return "upgrade"
     return "upgrade"

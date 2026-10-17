@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from werkzeug.serving import make_server
 import db
-from installer_version import write_installation_marker
+from installer_version import is_canonical_installation_executable, write_installation_marker
 from version import APP_VERSION
 
 
@@ -164,7 +164,7 @@ def main():
     # only copies that have actually been launched so the setup preflight can
     # identify them later; the official installed path is registry-owned.
     executable = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
-    if executable.parent.name.lower() != "sel facturation":
+    if getattr(sys, "frozen", False) and not is_canonical_installation_executable(executable):
         try:
             write_installation_marker(executable, APP_VERSION, db.home())
         except (OSError, ValueError):

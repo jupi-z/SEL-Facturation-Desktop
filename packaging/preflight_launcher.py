@@ -37,7 +37,7 @@ def status_message(action: str, installations: list[dict], version: str) -> str:
     if action == "repair":
         return f"Vérification terminée : {installed}. La version {version} est déjà présente; le mode maintenance va s'ouvrir."
     if action == "upgrade":
-        return f"Vérification terminée : {installed}. La mise à niveau vers la version {version} va démarrer."
+        return f"Vérification terminée : {installed}. L'installation de maintenance vers la version {version} va démarrer."
     return f"Installation refusée : {installed} est plus récente ou incompatible avec la version {version}."
 
 

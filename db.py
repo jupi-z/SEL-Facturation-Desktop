@@ -9,6 +9,7 @@ import sys
 import tempfile
 
 APP_NAME = 'SEL Facturation'
+PRE_UPDATE_RETENTION_COUNT = 30
 
 
 def home() -> Path:
@@ -336,4 +337,8 @@ def pre_update_backup():
     folder = home() / 'sauvegardes'
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-    return backup(folder / f'sel-preupdate-{stamp}.sqlite3')
+    snapshot = backup(folder / f'sel-preupdate-{stamp}.sqlite3')
+    snapshots = sorted(folder.glob('sel-preupdate-*.sqlite3'))
+    for old in snapshots[:-PRE_UPDATE_RETENTION_COUNT]:
+        old.unlink(missing_ok=True)
+    return snapshot

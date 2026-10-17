@@ -109,6 +109,22 @@ def test_pre_update_backup_preserves_database_before_migration(monkeypatch, tmp_
         assert saved.execute("SELECT name FROM clients WHERE code='SEL-C-PRE'").fetchone()[0] == 'Avant migration'
 
 
+def test_pre_update_backup_has_a_separate_bounded_retention(monkeypatch, tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR', str(tmp_path))
+    db.initialize()
+    folder = tmp_path / 'sauvegardes'
+    folder.mkdir()
+    for index in range(db.PRE_UPDATE_RETENTION_COUNT + 3):
+        path = folder / f'sel-preupdate-20260101-010101-{index:06d}.sqlite3'
+        path.write_bytes(b'old')
+
+    db.pre_update_backup()
+
+    snapshots = sorted(folder.glob('sel-preupdate-*.sqlite3'))
+    assert len(snapshots) == db.PRE_UPDATE_RETENTION_COUNT
+    assert snapshots[-1].stat().st_size > 0
+
+
 def test_backup_preserves_previous_snapshot_if_refresh_fails(monkeypatch,tmp_path):
     monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
     db.initialize()

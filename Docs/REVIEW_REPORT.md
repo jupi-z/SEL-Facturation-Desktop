@@ -143,3 +143,12 @@ Validation locale de la branche : 82 tests exécutés par groupes, tous passants
 - Signature Authenticode locale des trois artefacts : **NotSigned** ; aucun artefact ne doit être présenté comme version de production avant signature.
 - Avertissements PyInstaller observés : imports optionnels Android WebView2 et tables optionnelles pycparser uniquement.
 - Validation d’installation, mise à niveau, restauration, WebView2 et impression sur le poste SEL : **non effectuée** ; statut : **pilote non validé sur poste cible**.
+
+### Addendum de revue indépendante — corrections finales
+
+- Le test d’icône ne dépend plus du fichier `.spec` généré et ignoré par Git ; un checkout propre peut donc exécuter la suite sans artefact local.
+- Le pré-vérificateur traite une copie portable ou une inscription MSI de même version comme une installation de maintenance via le bootstrapper courant lorsqu’aucun bundle Burn enregistré n’est disponible ; le mode `/repair` reste réservé au bundle Burn mis en cache.
+- Les snapshots `sel-preupdate-*` disposent d’une rétention dédiée bornée à 30 copies. Ils restent exclus du nettoyage quotidien, tout en évitant une croissance illimitée lors des démarrages répétés.
+- La détection WebView2 utilise les deux emplacements officiels Evergreen : HKLM machine et HKCU utilisateur, avec l’identifiant documenté `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`.
+- Le workflow provisionne l’extension WiX Util et signe dans l’ordre les exécutables internes, le MSI avant Burn, le bundle Burn avant son encapsulation par le pré-vérificateur, puis le lanceur final. Cela évite de signer uniquement l’enveloppe après inclusion de charges non signées.
+- Nouvelle validation locale après ces corrections : **182 tests passants**. La reconstruction Windows et la validation cryptographique avec un certificat SEL restent nécessaires ; sans certificat, les artefacts locaux restent **NotSigned** et le statut demeure **pilote non validé sur poste cible**.
