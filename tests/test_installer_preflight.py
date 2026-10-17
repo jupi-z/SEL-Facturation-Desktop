@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,4 +126,21 @@ def test_setup_build_wraps_the_wix_bundle_with_preflight():
         assert "-core.exe" in source
         assert "--add-binary" in source
         assert "version.py;." in source
+
+
+def test_installation_marker_records_only_portable_identity_metadata(monkeypatch, tmp_path):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    executable = tmp_path / "portable" / "SEL-Facturation.exe"
+
+    marker = installer_version.write_installation_marker(executable, "0.3.8")
+
+    assert marker == tmp_path / installer_version.INSTALLATION_MARKER_NAME
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    assert payload == {
+        "schema_version": 1,
+        "kind": "portable",
+        "version": "0.3.8",
+        "executable_path": str(executable.resolve()),
+    }
+    assert "password" not in marker.read_text(encoding="utf-8").lower()
 

@@ -105,7 +105,7 @@ jobs:
             $signature = Get-AuthenticodeSignature $artifact
             if ($signature.Status -ne 'Valid') { throw "Artefact non signé: $artifact" }
           }
-          $tag = 'v0.3.0-rc5'
+          $tag = "v$version"
           $exe = 'dist/SEL-Facturation.exe'
           $setup = "dist/installer/SEL-Facturation-Setup-$version.exe"
           $msi = 'dist/installer/SEL-Facturation.msi'

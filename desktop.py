@@ -9,12 +9,15 @@ import sqlite3
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import re
+import sys
 import threading
 import time
 from uuid import uuid4
 
 from werkzeug.serving import make_server
 import db
+from installer_version import write_installation_marker
+from version import APP_VERSION
 
 
 DOCUMENT_NAME = re.compile(r"SEL-\d{4}-\d{6}\.pdf\Z", re.IGNORECASE)
@@ -157,6 +160,15 @@ def startup_error_message(error: Exception) -> str:
 
 def main():
     db.home().mkdir(parents=True, exist_ok=True)
+    # A standalone EXE is allowed for diagnostics and portable use. Record
+    # only copies that have actually been launched so the setup preflight can
+    # identify them later; the official installed path is registry-owned.
+    executable = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
+    if executable.parent.name.lower() != "sel facturation":
+        try:
+            write_installation_marker(executable, APP_VERSION, db.home())
+        except (OSError, ValueError):
+            logging.warning("Impossible d'enregistrer le marqueur d'installation portable", exc_info=True)
     logging.basicConfig(
         level=logging.INFO,
         handlers=[

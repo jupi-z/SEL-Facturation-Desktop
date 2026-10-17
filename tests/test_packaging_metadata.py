@@ -76,3 +76,10 @@ def test_wix_build_resolves_paths_before_preprocessing():
         assert "MsiPath=$((Resolve-Path" not in source
     assert '"IconPath=$iconPath"' in workflow
 
+
+def test_release_tag_is_derived_from_the_application_version():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+
+    assert "$tag = \"v$version\"" in workflow
+    assert "v0.3.0-rc5" not in workflow
+

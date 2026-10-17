@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import json
+import tempfile
 from typing import Any
 
 
@@ -16,6 +18,7 @@ BUNDLE_UPGRADE_CODE = "{C84DF0E9-3C3B-4C54-8A31-B2B3C28B94CF}"
 SEL_DISPLAY_NAME = "SEL Facturation"
 SEL_PUBLISHER = "Société d'Énergie du Lualaba"
 DATA_DIRECTORY_NAME = "SEL Facturation"
+INSTALLATION_MARKER_NAME = "installation.json"
 VERSION_PATTERN = re.compile(
     r"^\s*v?(?P<major>\d+)(?:\.(?P<minor>\d+))?"
     r"(?:\.(?P<patch>\d+))?(?:[-+.]?(?P<suffix>[0-9A-Za-z.-]+))?\s*$"
@@ -80,6 +83,77 @@ def _command_executable(command: Any) -> str | None:
         return text[1:end] if end > 1 else None
     match = re.match(r"(.+?\.exe)(?:\s|$)", text, flags=re.IGNORECASE)
     return match.group(1) if match else None
+
+
+def _data_root() -> Path:
+    configured = os.environ.get("SEL_DATA_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        return Path(local_app_data) / DATA_DIRECTORY_NAME
+    return Path.home() / "AppData" / "Local" / DATA_DIRECTORY_NAME
+
+
+def installation_marker_path(data_root: Path | None = None) -> Path:
+    return (Path(data_root) if data_root is not None else _data_root()) / INSTALLATION_MARKER_NAME
+
+
+def write_installation_marker(executable_path: Path, version: str, data_root: Path | None = None) -> Path:
+    """Record a portable copy that has actually been launched.
+
+    The marker contains no credentials or business data. It is intentionally
+    limited to the executable identity needed by the preflight checker.
+    """
+
+    executable = Path(executable_path).resolve()
+    if not executable.name.lower().endswith(".exe"):
+        raise ValueError("L'exécutable SEL doit être un fichier .exe.")
+    if not VERSION_PATTERN.fullmatch(str(version)):
+        raise ValueError("Version SEL invalide.")
+    destination = installation_marker_path(data_root)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "kind": "portable",
+        "version": str(version),
+        "executable_path": str(executable),
+    }
+    temporary_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=destination.parent,
+            prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+        ) as temporary:
+            temporary_name = temporary.name
+            json.dump(payload, temporary, ensure_ascii=False, separators=(",", ":"))
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_name, destination)
+    except Exception:
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+        raise
+    return destination
+
+
+def read_installation_marker(data_root: Path | None = None) -> dict[str, str] | None:
+    marker = installation_marker_path(data_root)
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        return None
+    if payload.get("kind") != "portable":
+        return None
+    version = payload.get("version")
+    executable = payload.get("executable_path")
+    if not isinstance(version, str) or not VERSION_PATTERN.fullmatch(version):
+        return None
+    if not isinstance(executable, str) or not executable.lower().endswith(".exe"):
+        return None
+    return {"kind": "portable", "version": version, "executable_path": executable}
 
 
 def _query_values(hive: Any, key_path: str, access: int = 0) -> dict[str, Any] | None:
@@ -169,6 +243,9 @@ def discover_installations() -> list[dict[str, Any]]:
             and "msiexec" in str(values.get("UninstallString") or "").lower()
         ):
             installations.append({"kind": "msi", "version": values.get("DisplayVersion"), "key": key_name})
+    marker = read_installation_marker()
+    if marker:
+        installations.append(marker)
     return installations
 
 
