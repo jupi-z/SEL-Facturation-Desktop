@@ -1,14 +1,14 @@
 {% extends 'base.html' %}
 {% block body %}
 <div class="actions"><a class="primary button" href="{{ url_for('new_invoice') }}">+ Créer un décompte</a><a class="button secondary" href="{{ url_for('clients') }}">Ajouter un abonné</a></div>
-<div class="kpis">
+<div class="kpis dashboard-kpis">
   <article class="panel metric"><div class="eyebrow">ABONNÉS</div><div class="figure">{{ clients }}</div><span class="sub">Enregistrés localement</span></article>
   <article class="panel metric"><div class="eyebrow">DÉCOMPTES ÉMIS</div><div class="figure">{{ stats['n'] }}</div><span class="sub">Documents actifs conservés</span></article>
   <article class="panel metric"><div class="eyebrow">Montant émis</div><div class="figure">{{ fmt(stats['billed']) }}</div><span class="sub">Devise courante : {{ stats['currency'] }}</span></article>
   <article class="panel metric"><div class="eyebrow">Montant encaissé</div><div class="figure">{{ fmt(stats['paid']) }}</div><span class="sub">Paiements enregistrés</span></article>
   <article class="panel metric"><div class="eyebrow">Solde à suivre</div><div class="figure">{{ fmt(stats['balance']) }}</div><span class="sub">Montant restant à recouvrer</span></article>
 </div>
-<section class="statusbar {{ 'status-ok' if stats['configured'] else 'status-warning' }}">
+<section class="statusbar dashboard-status {{ 'status-ok' if stats['configured'] else 'status-warning' }}">
   <div><strong>{{ 'Facturation prête' if stats['configured'] else 'Configuration à terminer' }}</strong><span>{{ 'Le barème validé peut être utilisé.' if stats['configured'] else 'Validez les coordonnées, le barème et les taxes dans les paramètres.' }}</span></div>
   <div><strong>Sauvegarde locale</strong><span>{{ stats['last_backup'] or 'Aucune sauvegarde détectée' }}</span></div>
   <div><strong>Documents</strong><span>{{ stats['n'] if stats['n'] else 'Aucune facture émise' }}</span></div>

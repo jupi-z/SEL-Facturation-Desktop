@@ -4,6 +4,25 @@
   const openModal = (modal, trigger) => {
     if (!modal) return;
     modal._lastTrigger = trigger;
+    if (!modal._focusTrapReady) {
+      modal.addEventListener('keydown', (event) => {
+        if (event.key !== 'Tab') return;
+        const focusable = Array.from(modal.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter((element) => element.getClientRects().length > 0);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      });
+      modal._focusTrapReady = true;
+    }
     if (typeof modal.showModal === 'function') modal.showModal();
     else modal.setAttribute('open', '');
     const first = modal.querySelector('input, select, textarea, button');
