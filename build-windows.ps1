@@ -7,7 +7,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Installation des outils Python impossible.' }
 & .\.venv\Scripts\python.exe -m pip install -r requirements-build.txt pytest
 if ($LASTEXITCODE -ne 0) { throw 'Dépendances Python non installées.' }
 & .\.venv\Scripts\python.exe packaging\prepare-icon.py
-if ($LASTEXITCODE -ne 0) { throw 'Génération de l’icône Windows échouée.' }
+if ($LASTEXITCODE -ne 0) { throw 'Generation de l icone Windows echouee.' }
 & .\.venv\Scripts\python.exe -m pytest -q
 if ($LASTEXITCODE -ne 0) { throw 'Tests en échec : compilation annulée.' }
 & .\.venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon 'packaging\sel-facturation.ico' --add-data 'templates;templates' --add-data 'static;static' --hidden-import clr --collect-all webview desktop.py

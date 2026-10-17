@@ -98,7 +98,7 @@ def calculate(*, previous: str, current: str, coefficient: str, tiers: list,
     if local_percent > 100 or vat_percent > 100:
         raise BillingError("Un taux supérieur à 100 % doit être contrôlé.")
     if vat_base not in ("ENERGY", "ENERGY_LOCAL", "ENERGY_LOCAL_FEES"):
-        raise BillingError("Assiette de TVA non configurée.")
+        raise BillingError("La configuration de la TVA est incomplète.")
     consumed = Decimal("0")
     rows = []
     for tr in tiers:
