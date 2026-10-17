@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlparse
@@ -104,4 +105,11 @@ def verify_authenticode(path: str | Path, *, expected_subject: str) -> bool:
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
         capture_output=True, text=True, timeout=15, check=False,
     )
-    return result.returncode == 0 and expected_subject.lower() in result.stdout.lower()
+    if result.returncode != 0:
+        return False
+    subject = re.sub(r"\s+", " ", result.stdout.strip()).casefold()
+    expected = re.sub(r"\s+", " ", expected_subject.strip()).casefold()
+    # PowerShell may return either the complete subject or the common-name
+    # form when the configured identity is intentionally just the CN. Never
+    # accept a subject merely because it contains the expected text.
+    return subject in {expected, f"cn={expected}"}
