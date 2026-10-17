@@ -108,6 +108,50 @@ def initialize():
           source TEXT NOT NULL DEFAULT '',
           UNIQUE(base_currency, quote_currency, effective_on)
         );
+        CREATE TABLE IF NOT EXISTS customer_types (
+          code TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          sort_order INTEGER NOT NULL DEFAULT 100
+        );
+        CREATE TABLE IF NOT EXISTS currency_catalog (
+          code TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          decimals INTEGER NOT NULL DEFAULT 2 CHECK(decimals BETWEEN 0 AND 6),
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          sort_order INTEGER NOT NULL DEFAULT 100
+        );
+        CREATE TABLE IF NOT EXISTS tax_profiles (
+          code TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          vat_rate TEXT NOT NULL,
+          vat_base TEXT NOT NULL,
+          local_rate TEXT NOT NULL DEFAULT '0',
+          effective_from TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))
+        );
+        CREATE INDEX IF NOT EXISTS tax_profiles_lookup
+          ON tax_profiles(effective_from, active);
+        CREATE TABLE IF NOT EXISTS billing_policy (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS payment_methods (
+          code TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          reference_required INTEGER NOT NULL DEFAULT 0 CHECK(reference_required IN (0,1)),
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          sort_order INTEGER NOT NULL DEFAULT 100
+        );
+        CREATE TABLE IF NOT EXISTS configuration_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          section TEXT NOT NULL,
+          config_key TEXT NOT NULL,
+          old_value TEXT NOT NULL DEFAULT '',
+          new_value TEXT NOT NULL DEFAULT '',
+          changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          reason TEXT NOT NULL DEFAULT ''
+        );
         CREATE TRIGGER IF NOT EXISTS immutable_invoice
           BEFORE UPDATE ON invoices
           WHEN NEW.number != OLD.number OR NEW.client_snapshot != OLD.client_snapshot
@@ -143,13 +187,40 @@ def initialize():
         }
         for k, v in defaults.items():
             c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)', (k,v))
+        c.execute('''INSERT OR IGNORE INTO customer_types(code,label,active,sort_order)
+                     VALUES ('RESIDENTIAL','Résidentiel',1,10),
+                            ('COMMERCIAL','Commercial',1,20)''')
+        # Preserve any pre-existing tariff category during the additive migration.
+        c.execute('''INSERT OR IGNORE INTO customer_types(code,label,active,sort_order)
+                     SELECT DISTINCT customer_type, customer_type, 1, 100
+                     FROM tariff_plans WHERE customer_type <> '' ''')
+        c.execute('''INSERT OR IGNORE INTO currency_catalog(code,label,decimals,active,sort_order)
+                     VALUES ('USD','Dollar américain',2,1,10),
+                            ('CDF','Franc congolais',2,1,20)''')
+        c.execute('''INSERT OR IGNORE INTO tax_profiles
+                     (code,label,vat_rate,vat_base,local_rate,effective_from,active)
+                     VALUES ('SEL_STANDARD','TVA SEL standard','16','ENERGY','0','2026-01-01',1)''')
+        c.execute('''INSERT OR IGNORE INTO billing_policy(key,value)
+                     VALUES ('billing_frequency','MONTHLY'),
+                            ('primary_currency','USD'),
+                            ('secondary_currency','CDF'),
+                            ('invoice_prefix','SEL'),
+                            ('invoice_sequence_width','6'),
+                            ('due_date_mode','MANUAL'),
+                            ('backup_retention_count','14'),
+                            ('meter_mode_enabled','0')''')
+        c.execute('''INSERT OR IGNORE INTO payment_methods(code,label,reference_required,active,sort_order)
+                     VALUES ('CASH','Espèces',0,1,10),
+                            ('BANK','Banque',1,1,20),
+                            ('MOBILE_MONEY','Mobile Money',1,1,30),
+                            ('OTHER','Autre',0,1,40)''')
         c.execute('''INSERT OR IGNORE INTO tariff_plans
             (code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active)
             VALUES ('RESIDENTIAL-2026','RESIDENTIAL','KWH','0.095','USD','16','2026-01-01',1),
                    ('COMMERCIAL-2026','COMMERCIAL','KWH','0.12','USD','16','2026-01-01',1)''')
         c.execute('''INSERT OR IGNORE INTO exchange_rates
             (base_currency,quote_currency,rate,effective_on,source)
-            VALUES ('USD','CDF','2360',?,?)''', (date.today().isoformat(), 'SEL'))
+            VALUES ('USD','CDF','2360','2026-01-01',?)''', ('SEL',))
     finally:
         c.close()
 
@@ -159,7 +230,8 @@ def settings(c) -> dict:
 
 
 def tariff_plan_for(c, customer_type: str, on_date: str):
-    if customer_type not in ('RESIDENTIAL', 'COMMERCIAL'):
+    known = c.execute('SELECT code FROM customer_types WHERE code=? AND active=1', (customer_type,)).fetchone()
+    if not known:
         raise ValueError('Type d’abonné invalide.')
     row = c.execute('''SELECT * FROM tariff_plans
         WHERE customer_type=? AND effective_from<=?
@@ -223,8 +295,14 @@ def automatic_backup():
     # later writes to the same database.
     if db_path().exists():
         backup(filename)
+    with connect() as c:
+        policy = {row['key']: row['value'] for row in c.execute('SELECT key,value FROM billing_policy')}
+    try:
+        retention = max(1, min(365, int(policy.get('backup_retention_count', '14'))))
+    except ValueError:
+        retention = 14
     old=sorted(d.glob('sel-*.sqlite3'))
-    for fp in old[:-14]:
+    for fp in old[:-retention]:
         fp.unlink(missing_ok=True)
 
 

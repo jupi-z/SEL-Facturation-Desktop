@@ -63,6 +63,20 @@ def test_automatic_backup_refreshes_after_same_day_changes(monkeypatch,tmp_path)
         assert saved.execute('SELECT name FROM clients').fetchone()[0]=='Abonné sauvegardé'
 
 
+def test_automatic_backup_uses_configured_retention_count(monkeypatch,tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
+    db.initialize()
+    folder=tmp_path/'sauvegardes'
+    folder.mkdir()
+    for name in ('sel-2026-01-01.sqlite3','sel-2026-01-02.sqlite3','sel-2026-01-03.sqlite3'):
+        (folder/name).write_bytes(b'old')
+    with db.connect() as c:
+        c.execute("UPDATE billing_policy SET value='2' WHERE key='backup_retention_count'")
+        c.commit()
+    db.automatic_backup()
+    assert len(list(folder.glob('sel-*.sqlite3'))) == 2
+
+
 def test_pre_update_backup_preserves_database_before_migration(monkeypatch, tmp_path):
     monkeypatch.setenv('SEL_DATA_DIR', str(tmp_path))
     db.initialize()

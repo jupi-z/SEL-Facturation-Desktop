@@ -11,6 +11,8 @@ Auditer **le projet actuellement livré** sur `main` puis corriger les défauts 
 - Données persistantes : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` ; scripts `db.py`, `desktop.py`, `domain.py`, `invoice_pdf.py`, `app.py`.
 - Flux : créer client/compteur → paramétrer barème → index période → calcul progressif/taxes → décompte PDF A4 → historique/paiements → export CSV/JSON.
 - Les données historiques de facture sont des snapshots immuables ; les exports JSON `sel-facturation-portable` schema_version 1 préparent la migration éventuelle vers Monarque Connect, **sans dépendance runtime**.
+- La configuration métier structurée est additive : `customer_types`, `currency_catalog`, `tax_profiles`, `billing_policy`, `payment_methods` et `configuration_history` complètent les anciennes clés `settings`, `tariff_plans` et `exchange_rates` sans les supprimer.
+- Les types d’abonnés, tarifs, taux de change, numérotation, méthodes de paiement et rétention des sauvegardes sont administrables depuis l’interface ; les règles de sécurité, signatures, schéma d’export et immutabilité restent verrouillées dans le code.
 - SEL ne dispose pas à ce jour d'un dispositif fiscal DGI opérationnel. Conserver la distinction : PDF de consommation **non présenté comme normalisé/certifié** ; ne créer aucun QR fiscal, code d'authentification ou homologation fictif. La mention alarmiste a été retirée du PDF client à la demande du donneur d'ordre ; cela **ne confère aucune validité fiscale**.
 
 ## Priorités impératives — P0 (avant remise)

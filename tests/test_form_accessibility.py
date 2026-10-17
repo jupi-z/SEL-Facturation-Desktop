@@ -43,8 +43,8 @@ def test_settings_form_separates_company_from_tariffs(authenticated_client):
     assert "Barème et taxes" in html
     assert 'for="company_name"' in html
     assert 'id="company_name"' in html
-    assert 'for="residential_rate"' in html
-    assert 'id="residential_rate"' in html
+    assert 'for="tariff_rate_RESIDENTIAL"' in html
+    assert 'id="tariff_rate_RESIDENTIAL"' in html
 
 
 def test_official_tariff_form_does_not_expose_legacy_tier_or_local_tax_fields(authenticated_client):

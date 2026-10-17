@@ -1,4 +1,5 @@
 import db
+from config_service import active_customer_types, billing_configuration
 
 
 def test_new_database_seeds_official_sel_tariffs_and_settings(tmp_path, monkeypatch):
@@ -22,6 +23,40 @@ def test_new_database_seeds_official_sel_tariffs_and_settings(tmp_path, monkeypa
     assert settings["id_nat"] == ""
     assert plans["RESIDENTIAL"]["unit_price"] == "0.095"
     assert plans["COMMERCIAL"]["unit_price"] == "0.12"
+
+
+def test_new_database_seeds_typed_configuration_catalogs(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    db.initialize()
+    with db.connect() as connection:
+        types = active_customer_types(connection)
+        config = billing_configuration(connection, "2026-10-01")
+
+    assert {item["code"] for item in types} == {"RESIDENTIAL", "COMMERCIAL"}
+    assert config["currency"]["code"] == "USD"
+    assert config["tax"]["code"] == "SEL_STANDARD"
+    assert config["tax"]["vat_rate"] == "16"
+    assert config["tax"]["local_rate"] == "0"
+    assert config["exchange_rate"]["rate"] == "2360"
+
+
+def test_new_customer_type_can_receive_a_tariff_without_code_change(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    db.initialize()
+    with db.connect() as connection:
+        connection.execute(
+            "INSERT INTO customer_types(code,label,active,sort_order) VALUES(?,?,1,?)",
+            ("INDUSTRIAL", "Industriel", 3),
+        )
+        connection.execute(
+            "INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) "
+            "VALUES(?,?,?,?,?,?,?,1)",
+            ("INDUSTRIAL-2026", "INDUSTRIAL", "KWH", "0.15", "USD", "16", "2026-01-01"),
+        )
+        connection.commit()
+        plan = db.tariff_plan_for(connection, "INDUSTRIAL", "2026-10-01")
+
+    assert plan["unit_price"] == "0.15"
 
 
 def test_tariff_lookup_rejects_unknown_type(tmp_path, monkeypatch):

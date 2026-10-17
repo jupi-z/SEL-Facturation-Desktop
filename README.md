@@ -14,6 +14,19 @@ Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** :
 - Les compteurs et relevés restent facultatifs et pourront être activés ultérieurement.
 - Les anciens barèmes progressifs et anciennes taxes restent lisibles dans les factures historiques mais ne contrôlent pas le nouveau parcours.
 
+### Configuration administrable
+
+Les paramètres métier se gèrent depuis **Paramètres de facturation**, sans modifier le code :
+
+- types d’abonnés actifs et tarif initial par kWh ;
+- tarifs datés par type, conservés avec leur période d’application ;
+- taux USD/CDF datés, utilisés par la variante CDF ;
+- préfixe et largeur des numéros de décompte ;
+- méthodes de paiement actives et exigences de référence ;
+- nombre de sauvegardes automatiques conservées.
+
+Les tarifs, devises et politiques sont stockés dans des catalogues SQLite structurés. Les anciennes clés `settings`, les anciens barèmes et l’export portable v1 restent conservés pour compatibilité. Une facture émise contient toujours les valeurs réellement appliquées au moment de son émission et n’est jamais recalculée après une modification de configuration.
+
 ## Démarrage développeur
 
 Python 3.11 ou 3.12 sur Windows :

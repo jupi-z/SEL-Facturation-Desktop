@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import re
+from datetime import date
 
 import pytest
 
@@ -62,6 +63,25 @@ def test_invoice_confirmation_creates_one_document_after_preview(prepared_client
         assert db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 1
 
 
+def test_invoice_confirmation_keeps_the_tariff_used_by_preview(prepared_client):
+    client, token = prepared_client
+    data = dict(invoice_data(token("/invoices/new")), billing_period=date.today().strftime("%Y-%m"))
+    preview = client.post("/invoices/new", data=data)
+    confirm_token = re.search(r'name="_csrf" value="([^"]+)"', preview.get_data(as_text=True)).group(1)
+
+    client.post("/settings", data={
+        "_csrf": token("/settings"), "section": "tariffs",
+        "tariff_rate_RESIDENTIAL": "0.20", "tariff_rate_COMMERCIAL": "0.12",
+        "exchange_rate_usd_cdf": "2360", "vat_rate": "16", "confirmed": "yes",
+    })
+    client.post("/invoices/new/confirm", data={"_csrf": confirm_token})
+
+    with connect() as db:
+        calc = json.loads(db.execute("SELECT calc_snapshot FROM invoices").fetchone()[0])
+    assert calc["unit_price"] == "0.095"
+    assert calc["tariff_code"] == "RESIDENTIAL-2026-10"
+
+
 def test_invalid_invoice_preview_does_not_consume_sequence(prepared_client):
     client, token = prepared_client
     data = invoice_data(token("/invoices/new"))
@@ -90,3 +110,18 @@ def test_invalid_resubmission_clears_previous_preview(prepared_client):
     assert response.location.endswith("/invoices/new")
     with connect() as db:
         assert db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0
+
+
+def test_invoice_number_uses_configured_prefix_and_width(prepared_client):
+    client, token = prepared_client
+    with connect() as db:
+        db.execute("UPDATE billing_policy SET value='DOC' WHERE key='invoice_prefix'")
+        db.execute("UPDATE billing_policy SET value='4' WHERE key='invoice_sequence_width'")
+        db.commit()
+    client.post("/invoices/new", data=invoice_data(token("/invoices/new")))
+    confirm_token = re.search(r'name="_csrf" value="([^"]+)"', client.get("/invoices/new").get_data(as_text=True)).group(1)
+    client.post("/invoices/new/confirm", data={"_csrf": confirm_token})
+
+    with connect() as db:
+        number = db.execute("SELECT number FROM invoices").fetchone()[0]
+    assert number.startswith("DOC-") and number.endswith("-0001")

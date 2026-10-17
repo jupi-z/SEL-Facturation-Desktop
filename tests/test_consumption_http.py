@@ -1,5 +1,8 @@
 import re
 from datetime import date
+from io import BytesIO
+
+from pypdf import PdfReader
 
 from app import create_app
 import db
@@ -39,8 +42,13 @@ def test_monthly_direct_consumption_invoice_without_meter(tmp_path, monkeypatch)
         row = connection.execute("SELECT id,currency FROM invoices").fetchone()
         invoice_id = row[0]
         assert row[1] == "USD"
-    variant = client.get(f"/invoices/{invoice_id}/pdf?currency=CDF&rate=2360")
+    with db.connect() as connection:
+        connection.execute("UPDATE exchange_rates SET rate='2500' WHERE base_currency='USD' AND quote_currency='CDF'")
+        connection.commit()
+    variant = client.get(f"/invoices/{invoice_id}/pdf?currency=CDF")
     assert variant.status_code == 200 and variant.data.startswith(b"%PDF-")
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(variant.data)).pages)
+    assert "2500" in text
 
 
 def test_current_month_invoice_still_works_after_mid_month_tariff_save(tmp_path, monkeypatch):

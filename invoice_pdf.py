@@ -82,7 +82,7 @@ def render_invoice(invoice, payments) -> bytes:
     info_left='<b>INFORMATIONS CLIENT</b><br/>' + '<br/>'.join([
          f"<b>Nom :</b> {p(client.get('name'))}",f"<b>Code :</b> {p(client.get('code'))}",
          f"<b>Contrat :</b> {p(client.get('contract_number'))}",f"<b>Adresse :</b> {p(client.get('address'))}",
-             f"<b>Type d’abonné :</b> {p({'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category')))}",f"<b>NIF client :</b> {p(client.get('nif'))}"])
+             f"<b>Type d’abonné :</b> {p(d.get('customer_type_label') or {'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category')))}",f"<b>NIF client :</b> {p(client.get('nif'))}"])
     direct_billing = d.get('pricing_model', 'METER') == 'FLAT_KWH'
     if direct_billing:
         info_right='<b>PÉRIODE ET FACTURATION</b><br/>'+'<br/>'.join([
