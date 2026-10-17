@@ -12,71 +12,17 @@ import argparse
 import ctypes
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 from typing import Any
 
-
-LEGACY_UNINSTALL_KEY = (
-    "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\"
-    "{7B258C72-AE0B-4D4E-84DE-725C08F20EA1}_is1"
+from installer_version import (
+    DATA_DIRECTORY_NAME,
+    LEGACY_UNINSTALL_KEY,
+    choose_action,
+    compare_versions,
+    is_safe_uninstaller,
 )
-DATA_DIRECTORY_NAME = "SEL Facturation"
-VERSION_PATTERN = re.compile(
-    r"^\s*v?(?P<major>\d+)(?:\.(?P<minor>\d+))?"
-    r"(?:\.(?P<patch>\d+))?(?:[-+.]?(?P<suffix>[0-9A-Za-z.-]+))?\s*$"
-)
-
-
-def _version_key(value: str) -> tuple[tuple[int, int, int], tuple[tuple[int, str], ...]]:
-    match = VERSION_PATTERN.fullmatch(str(value))
-    if not match:
-        raise ValueError(f"Version non reconnue: {value!r}")
-
-    core = tuple(int(match.group(name) or 0) for name in ("major", "minor", "patch"))
-    suffix = match.group("suffix")
-    if not suffix:
-        return core, ((1, ""),)
-
-    tokens: list[tuple[int, str]] = []
-    for token in suffix.split("."):
-        if token.isdigit():
-            tokens.append((0, f"{int(token):012d}"))
-        else:
-            tokens.append((0, token.lower()))
-    return core, ((0, ""), *tokens)
-
-
-def compare_versions(left: str, right: str) -> int:
-    """Compare two installer versions using numeric semantic components."""
-
-    left_key = _version_key(left)
-    right_key = _version_key(right)
-    return (left_key > right_key) - (left_key < right_key)
-
-
-def choose_action(legacy_version: str | None, current_version: str) -> str:
-    """Return ``none``, ``cleanup`` or ``block`` for the installer matrix."""
-
-    if legacy_version is None:
-        return "none"
-    try:
-        return "cleanup" if compare_versions(legacy_version, current_version) < 0 else "block"
-    except ValueError:
-        return "block"
-
-
-def is_safe_uninstaller(uninstaller: Path, install_root: Path) -> bool:
-    """Ensure only an Inno uninstaller below the registered install root runs."""
-
-    try:
-        uninstaller_path = uninstaller.resolve(strict=False)
-        root_path = install_root.resolve(strict=False)
-        inside_root = uninstaller_path.is_relative_to(root_path)
-    except (OSError, ValueError):
-        return False
-    return inside_root and uninstaller_path.suffix.lower() == ".exe" and uninstaller_path.name.lower().startswith("unins")
 
 
 def _read_legacy_installation() -> dict[str, Any] | None:

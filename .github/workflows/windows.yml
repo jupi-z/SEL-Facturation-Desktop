@@ -37,7 +37,7 @@ jobs:
       - name: Build Windows EXE
         run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon packaging\sel-facturation.ico --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
       - name: Build legacy installation migrator
-        run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-LegacyCleanup packaging\legacy_cleanup.py
+        run: pyinstaller --clean --noconfirm --onefile --noconsole --paths . --name SEL-LegacyCleanup packaging\legacy_cleanup.py
       - name: Install WiX Toolset 4
         run: |
           dotnet tool install --global wix --version 4.0.5
@@ -58,8 +58,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'WiX MSI build failed' }
           $msiPath = (Resolve-Path dist\installer\SEL-Facturation.msi).Path
           $iconPath = (Resolve-Path packaging\sel-facturation.ico).Path
-          wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d "ProductVersion=$version" -d "MsiPath=$msiPath" -d "WebView2Installer=$webview" -d "LegacyCleanupPath=$legacyCleanupPath" -d "IconPath=$iconPath" -o "dist\installer\SEL-Facturation-Setup-$version.exe"
+          wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d "ProductVersion=$version" -d "MsiPath=$msiPath" -d "WebView2Installer=$webview" -d "LegacyCleanupPath=$legacyCleanupPath" -d "IconPath=$iconPath" -o "dist\installer\SEL-Facturation-Setup-${version}-core.exe"
           if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper build failed' }
+          $corePath = (Resolve-Path "dist/installer/SEL-Facturation-Setup-${version}-core.exe").Path
+          pyinstaller --clean --noconfirm --onefile --noconsole --paths . --name "SEL-Facturation-Setup-$version" --icon packaging\sel-facturation.ico --add-binary "$corePath;." --add-data "version.py;." packaging\preflight_launcher.py
+          if ($LASTEXITCODE -ne 0) { throw 'Preflight launcher build failed' }
+          Move-Item -LiteralPath "dist/SEL-Facturation-Setup-${version}.exe" -Destination "dist/installer/SEL-Facturation-Setup-${version}.exe" -Force
       - name: Sign Windows artifacts
         if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true
         shell: pwsh
