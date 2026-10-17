@@ -50,15 +50,25 @@ def _notify(message: str, error: bool = False) -> None:
         return
 
 
-def _core_path() -> Path:
+def resolve_core_path(base: Path) -> Path | None:
+    """Resolve the embedded Burn engine even when its build name is versioned."""
+
+    exact = base / "SEL-Facturation-Setup-core.exe"
+    if exact.is_file():
+        return exact
+    versioned = sorted(base.glob("SEL-Facturation-Setup-*-core.exe"))
+    return versioned[0] if versioned else None
+
+
+def _core_path() -> Path | None:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base / "SEL-Facturation-Setup-core.exe"
+    return resolve_core_path(base)
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     core = _core_path()
-    if not core.is_file():
+    if core is None:
         _notify("Le moteur d'installation SEL est introuvable.", error=True)
         return 30
 

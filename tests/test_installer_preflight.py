@@ -60,6 +60,13 @@ def test_preflight_exposes_a_native_status_message_and_preserves_arguments():
     assert preflight.status_message("block", [{"kind": "burn", "version": "0.4.0"}], "0.3.3")
 
 
+def test_preflight_finds_versioned_embedded_burn_engine(tmp_path):
+    embedded = tmp_path / "SEL-Facturation-Setup-0.3.3-core.exe"
+    embedded.write_bytes(b"burn")
+
+    assert preflight.resolve_core_path(tmp_path) == embedded
+
+
 def test_setup_build_wraps_the_wix_bundle_with_preflight():
     script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
