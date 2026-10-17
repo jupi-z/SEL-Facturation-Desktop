@@ -11,7 +11,7 @@
     <util:RegistrySearch Id="WebView2RuntimeVersionUser" Variable="WebView2RuntimeVersionUser" Root="HKCU" Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Value="pv" Result="value" />
     <Chain>
       <ExePackage Id="LegacyInnoCleanup" SourceFile="$(var.LegacyCleanupPath)" DisplayName="Migration de l'ancienne installation SEL" Permanent="yes" Vital="yes" DetectCondition="NOT LegacyInnoDetected" InstallArguments="--cleanup-legacy --current-version &quot;[WixBundleVersion]&quot;" />
-        <ExePackage Id="WebView2EvergreenStandalone" SourceFile="$(var.WebView2Installer)" PerMachine="yes" Permanent="yes" DetectCondition="WebView2RuntimeVersionMachine OR WebView2RuntimeVersionUser" InstallArguments="/silent /install">
+        <ExePackage Id="WebView2EvergreenStandalone" SourceFile="$(var.WebView2Installer)" PerMachine="no" Permanent="yes" DetectCondition="WebView2RuntimeVersionMachine OR WebView2RuntimeVersionUser" InstallArguments="/silent /install">
       </ExePackage>
       <MsiPackage SourceFile="$(var.MsiPath)" />
     </Chain>

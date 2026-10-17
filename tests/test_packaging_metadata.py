@@ -13,7 +13,9 @@ def test_bundle_uses_wix4_exe_arguments():
     exe = next(node for node in chain.findall("wix:ExePackage", NS) if node.attrib["Id"] == "WebView2EvergreenStandalone")
     msi = chain.find("wix:MsiPackage", NS)
     assert exe.attrib["SourceFile"] == "$(var.WebView2Installer)"
-    assert exe.attrib["PerMachine"] == "yes"
+    # The application MSI is per-user; keeping WebView2 per-user avoids
+    # requiring an elevated token just to secure C:\\ProgramData\\Package Cache.
+    assert exe.attrib["PerMachine"] == "no"
     assert exe.attrib["InstallArguments"] == "/silent /install"
     assert "UninstallArguments" not in exe.attrib
     assert exe.find("wix:InstallCommand", NS) is None

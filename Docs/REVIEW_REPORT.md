@@ -152,3 +152,19 @@ Validation locale de la branche : 82 tests exécutés par groupes, tous passants
 - La détection WebView2 utilise les deux emplacements officiels Evergreen : HKLM machine et HKCU utilisateur, avec l’identifiant documenté `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`.
 - Le workflow provisionne l’extension WiX Util et signe dans l’ordre les exécutables internes, le MSI avant Burn, le bundle Burn avant son encapsulation par le pré-vérificateur, puis le lanceur final. Cela évite de signer uniquement l’enveloppe après inclusion de charges non signées.
 - Nouvelle validation locale après ces corrections : **182 tests passants**. La reconstruction Windows et la validation cryptographique avec un certificat SEL restent nécessaires ; sans certificat, les artefacts locaux restent **NotSigned** et le statut demeure **pilote non validé sur poste cible**.
+
+### Incident d’installation 0.3.8 et correctif 0.3.9
+
+- Le journal Burn du poste utilisateur a confirmé `0x80070005` sur `C:\ProgramData\Package Cache`, lors de la préparation de `WebView2EvergreenStandalone`. Le bundle SEL était par utilisateur, mais le paquet WebView2 était déclaré `PerMachine="yes"`; le compte non élevé ne pouvait donc pas sécuriser le cache machine.
+- WebView2 est maintenant déclaré par utilisateur (`PerMachine="no"`) afin de rester cohérent avec le MSI SEL `Scope="perUser"`. La détection conserve les emplacements runtime HKLM et HKCU, et l’installation peut fonctionner sans privilèges administrateur lorsque Windows l’autorise.
+- La correction est versionnée **0.3.9** afin que Burn ne réutilise pas le bundle 0.3.8 déjà enregistré sur la machine.
+- Une nouvelle validation sur le poste cible reste indispensable : le comportement dépend aussi de la politique UAC, de l’antivirus et des droits Windows locaux.
+
+### Preuves de build 0.3.9 — correctif accès cache
+
+- Suite complète locale : **182 tests passants**.
+- `build-windows.ps1` : `BUILD_EXIT=0`; compilation WiX du bundle : code 0.
+- `SEL-Facturation.exe` — SHA-256 `BB4FA84960532E052F299A3AFBD21E81D6BC174DA7075C2E85108C8772F86D9B`.
+- `SEL-Facturation.msi` — SHA-256 `AEA6C5E9BD7C63E46B5DD3CFB8EAD9D4E593B60FB90DEE89F185049C6C5F452E`.
+- `SEL-Facturation-Setup-0.3.9.exe` — SHA-256 `70212D3823073E2BD1447BDAE068B1AE006981F68AC3CBF872CA9AD8F910C06A`.
+- Les artefacts locaux sont `NotSigned` en l’absence du certificat Authenticode SEL. Le journal du poste cible devra confirmer l’installation réelle ; statut : **pilote non validé sur poste cible**.
