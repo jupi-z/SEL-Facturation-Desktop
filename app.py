@@ -30,6 +30,18 @@ from config_service import active_customer_types, active_payment_methods, billin
 
 PAGE_SIZE = 50
 
+DEVELOPER_LEGAL = {
+    'name': 'MonarQue Group S.A.S.',
+    'role': 'Pôle informatique LTEX',
+    'legal_form': 'Société par Actions Simplifiée de droit congolais',
+    'rccm': 'CD/KWZ/RCCM/26-B-00523',
+    'national_id': '14-14300-N00001Y',
+    'address': 'N° 900, Avenue Bunkeya, Quartier Mutoshi, Commune de Manika, Ville de Kolwezi, Province du Lualaba, République Démocratique du Congo',
+    'email': 'contact@monarquegrp.com',
+    'phones': '+243 840 855 547 et +243 971 666 441',
+    'website': 'https://monarquegrp.com/',
+}
+
 
 def page_number(value):
     try:
@@ -133,6 +145,11 @@ def create_app():
     @app.get('/health')
     def health():
         return {'app':'SEL-Facturation-Local','status':'ok','version':APP_VERSION}
+
+    @app.get('/about')
+    @protected
+    def about():
+        return render_template('about.html', title='À propos et mentions légales', developer=DEVELOPER_LEGAL)
 
     @app.get('/updates/status')
     @protected

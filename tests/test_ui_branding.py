@@ -78,3 +78,14 @@ def test_authentication_hint_remains_readable_on_the_blue_panel():
     assert ".auth-content .auth-hint" in css
     assert "color: #fff" in css
     assert "background: rgba(255, 255, 255, .12)" in css
+
+
+def test_about_surface_keeps_sel_primary_and_developer_marks_secondary():
+    base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+    about = ROOT / "templates" / "about.html"
+    assert "url_for('about')" in base
+    assert about.is_file()
+    about_text = about.read_text(encoding="utf-8")
+    assert "monarque-group-horizontal.png" in about_text
+    assert "ltex.png" in about_text
+    assert "SOCIÉTÉ D’ÉNERGIE DU LUALABA" in about_text
