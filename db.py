@@ -172,6 +172,26 @@ def initialize():
             c.execute("ALTER TABLE clients ADD COLUMN customer_type TEXT NOT NULL DEFAULT ''")
         if 'billing_frequency' not in columns:
             c.execute("ALTER TABLE clients ADD COLUMN billing_frequency TEXT NOT NULL DEFAULT 'MONTHLY'")
+        # Migrate the currency catalog introduced by the previous release.
+        # CREATE TABLE IF NOT EXISTS does not change an existing table shape.
+        currency_columns = {row['name'] for row in c.execute('PRAGMA table_info(currency_catalog)')}
+        if 'label' not in currency_columns:
+            c.execute("ALTER TABLE currency_catalog ADD COLUMN label TEXT NOT NULL DEFAULT ''")
+        if 'decimals' not in currency_columns:
+            c.execute("ALTER TABLE currency_catalog ADD COLUMN decimals INTEGER NOT NULL DEFAULT 2 CHECK(decimals BETWEEN 0 AND 6)")
+        if 'sort_order' not in currency_columns:
+            c.execute("ALTER TABLE currency_catalog ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 100")
+        if 'name' in currency_columns:
+            c.execute("UPDATE currency_catalog SET label=COALESCE(NULLIF(label,''),name,code)")
+        if 'decimal_digits' in currency_columns:
+            c.execute("UPDATE currency_catalog SET decimals=decimal_digits")
+        if 'display_order' in currency_columns:
+            c.execute("UPDATE currency_catalog SET sort_order=display_order")
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='currency_rates'").fetchone():
+            c.execute('''INSERT OR IGNORE INTO exchange_rates
+                (base_currency,quote_currency,rate,effective_on,source)
+                SELECT base_currency,quote_currency,rate,effective_on,source
+                FROM currency_rates''')
         defaults = {
             'company_name': 'SOCIÉTÉ D’ÉNERGIE DU LUALABA',
             'tagline': 'S.E.L. SASU',

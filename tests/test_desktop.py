@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,11 +11,20 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from desktop import DesktopDocuments
+from desktop import DesktopDocuments, startup_error_message
 
 
 def pdf_payload():
     return base64.b64encode(b"%PDF-1.4\n%essai\n%%EOF\n").decode("ascii")
+
+
+def test_startup_error_identifies_database_failures_separately_from_webview2():
+    database_message = startup_error_message(sqlite3.OperationalError("table currency_catalog has no column named label"))
+    webview_message = startup_error_message(RuntimeError("WebView2 indisponible"))
+
+    assert "base de données locale" in database_message
+    assert "WebView2" not in database_message
+    assert "WebView2" in webview_message
 
 
 def test_documents_validate_inputs_and_fiscal_neutrality():
