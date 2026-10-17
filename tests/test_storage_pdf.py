@@ -77,6 +77,28 @@ def test_automatic_backup_uses_configured_retention_count(monkeypatch,tmp_path):
     assert len(list(folder.glob('sel-*.sqlite3'))) == 2
 
 
+def test_daily_retention_preserves_preupdate_and_export_snapshots(monkeypatch, tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR', str(tmp_path))
+    db.initialize()
+    folder = tmp_path / 'sauvegardes'
+    folder.mkdir()
+    for name in ('sel-2026-01-01.sqlite3', 'sel-2026-01-02.sqlite3', 'sel-2026-01-03.sqlite3'):
+        (folder / name).write_bytes(b'daily')
+    preupdate = folder / 'sel-preupdate-20260101-010101-000001.sqlite3'
+    export = folder / 'sel-export-20260101-010101-000001.sqlite3'
+    preupdate.write_bytes(b'preupdate')
+    export.write_bytes(b'export')
+    with db.connect() as c:
+        c.execute("UPDATE billing_policy SET value='2' WHERE key='backup_retention_count'")
+        c.commit()
+
+    db.automatic_backup()
+
+    assert preupdate.read_bytes() == b'preupdate'
+    assert export.read_bytes() == b'export'
+    assert len(list(folder.glob('sel-2026-*.sqlite3'))) == 2
+
+
 def test_pre_update_backup_preserves_database_before_migration(monkeypatch, tmp_path):
     monkeypatch.setenv('SEL_DATA_DIR', str(tmp_path))
     db.initialize()

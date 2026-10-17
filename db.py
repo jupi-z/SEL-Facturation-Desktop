@@ -321,7 +321,10 @@ def automatic_backup():
         retention = max(1, min(365, int(policy.get('backup_retention_count', '14'))))
     except ValueError:
         retention = 14
-    old=sorted(d.glob('sel-*.sqlite3'))
+    # Retention applies only to the daily snapshots.  Pre-update snapshots
+    # and manual exports are recovery artifacts and must never be pruned by
+    # the daily cleanup pass.
+    old=sorted(d.glob('sel-????-??-??.sqlite3'))
     for fp in old[:-retention]:
         fp.unlink(missing_ok=True)
 
