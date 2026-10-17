@@ -122,3 +122,12 @@ Validation locale de la branche : 82 tests exécutés par groupes, tous passants
 - Les contrôles de recherche, de déconnexion et d’authentification ne sont pas transformés en brouillons. Les formulaires validés nettoient leur copie temporaire pour éviter de réinjecter une ancienne saisie lors d’une prochaine visite.
 - Version applicative/installeur : **0.3.7**. Suite complète : **170 tests passants**. `node --check static/desktop.js` et `git diff --check` sont propres. Build Windows local validé : `dist/SEL-Facturation.exe` et `dist/installer/SEL-Facturation-Setup-0.3.7.exe` générés. Les avertissements PyInstaller restent limités aux imports optionnels WebView2 Android et pycparser.
 - La validation graphique et l’installation sur le poste matériel SEL restent à effectuer ; statut : **pilote non validé sur poste cible**.
+
+## Addendum — attribution légale et durcissement de livraison (0.3.8)
+
+- SEL reste l’identité métier principale. Les logos MonarQue Group et LTEX sont limités à l’écran « À propos et mentions légales » ; le shell affiche uniquement une attribution discrète `Designed and secured by LTEX · MonarQue Group`. Aucun logo développeur n’est ajouté aux PDF client.
+- Les sauvegardes quotidiennes sont maintenant séparées du nettoyage des snapshots pré-mise à jour et des exports manuels.
+- Le pré-vérificateur reconnaît les copies portables déjà lancées au moyen d’un marqueur local sans données sensibles ; les copies arbitraires jamais exécutées ne sont pas prétendues détectables.
+- La validation Authenticode de l’updater refuse désormais les sujets de certificat qui ne correspondent pas exactement à l’identité configurée.
+- Le tag de publication GitHub est dérivé de `APP_VERSION` et ne réutilise plus un tag historique codé en dur.
+- Version candidate : **0.3.8**. La signature Authenticode et la recette sur le poste SEL restent à effectuer ; statut : **pilote non validé sur poste cible**.

@@ -1,4 +1,4 @@
-# SEL Facturation Desktop — V0.3 locale native Windows
+# SEL Facturation Desktop — V0.3.8 locale native Windows
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
 
@@ -122,4 +122,10 @@ powershell -ExecutionPolicy Bypass -File .\publish-to-github.ps1
 
 Le script clone `jupi-z/SEL-Facturation-Desktop`, copie les sources, crée un commit et pousse sur `main`. Il exige **Git** et une session GitHub autorisée. Aucun mot de passe ni jeton n'est stocké dans le script. Le workflow `Build Windows Desktop` peut alors produire les exécutables Windows dans les artefacts GitHub Actions après réussite des tests.
 
-Si les sources sont déjà sur la machine Windows, `powershell -ExecutionPolicy Bypass -File .\build-windows.ps1` exécute la suite de tests puis tente de compiler l'EXE (et l'installateur si Inno Setup est installé).
+Si les sources sont déjà sur la machine Windows, `powershell -ExecutionPolicy Bypass -File .\build-windows.ps1` exécute la suite de tests puis compile l’EXE, le MSI WiX et le bootstrapper WiX Burn.
+
+Le build officiel utilise désormais exclusivement WiX Burn pour le bootstrapper et WiX MSI ; Inno Setup est conservé uniquement comme compatibilité historique. Les fichiers distribués doivent être signés et validés sur le poste Windows de SEL avant utilisation en production.
+
+## Développeur et attribution
+
+SEL Facturation est développé par le pôle informatique LTEX de MonarQue Group S.A.S. Les mentions légales complètes et les informations publiques du développeur sont accessibles dans l’écran « À propos et mentions légales » de l’application. Le logiciel reste une application locale de la Société d’Énergie du Lualaba ; aucun logo développeur n’est imprimé sur les documents clients.
