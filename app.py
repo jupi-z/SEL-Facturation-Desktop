@@ -276,12 +276,23 @@ def create_app():
         conf=db.settings(g.db)
         customer_types=active_customer_types(g.db)
         tariffs=current_tariffs(g.db)
+        settings_tabs={'overview','identity','tariffs','customer-types','operations'}
+        section_tabs={'identity':'identity','tariffs':'tariffs','customer_type':'customer-types','operations':'operations'}
+        requested_tab=request.args.get('tab','overview')
+        active_tab=requested_tab if requested_tab in settings_tabs else 'overview'
+
+        def settings_redirect(tab):
+            selected=tab if tab in settings_tabs else 'overview'
+            return redirect(url_for('settings_view', tab=selected) + f'#{selected}')
+
         try:
             current_exchange_rate=db.exchange_rate_for(g.db,'USD','CDF',date.today().isoformat())['rate']
         except ValueError:
             current_exchange_rate=conf.get('exchange_rate_usd_cdf','2360')
         if request.method=='POST':
             section=request.form.get('section','tariffs')
+            requested_return_tab=request.form.get('return_tab','').strip()
+            active_tab=requested_return_tab if requested_return_tab in settings_tabs else section_tabs.get(section,'overview')
             fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','vat_rate','residential_rate','commercial_rate','exchange_rate_usd_cdf']
             values={k:request.form.get(k,'').strip() for k in fields}
             try:
@@ -300,7 +311,7 @@ def create_app():
                             record_change(g.db,'operations',key,old['value'] if old else '',value,'Modification depuis Paramètres')
                             g.db.execute('INSERT INTO billing_policy(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,value))
                     flash('Politique opérationnelle mise à jour.','success')
-                    return redirect(url_for('settings_view'))
+                    return settings_redirect(active_tab)
                 if section == 'customer_type':
                     code=request.form.get('code','').strip().upper()
                     label=request.form.get('label','').strip()
@@ -318,7 +329,7 @@ def create_app():
                             g.db.execute("INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f'{code}-{effective_from[:7]}',code,'KWH',str(initial_rate),'USD','16',effective_from))
                             record_change(g.db,'tariffs',code,'',str(initial_rate),'Tarif initial depuis Paramètres')
                     flash('Type d’abonné ajouté.','success')
-                    return redirect(url_for('settings_view'))
+                    return settings_redirect(active_tab)
                 if section == 'identity' and (not values['company_name'] or not values['address']):
                     raise BillingError('Société et adresse obligatoires.')
                 if section == 'identity':
@@ -326,7 +337,7 @@ def create_app():
                     with g.db:
                         for k in identity_fields: g.db.execute('UPDATE settings SET value=? WHERE key=?',(values[k],k))
                     flash('Identité SEL mise à jour. Les anciennes factures restent inchangées.','success')
-                    return redirect(url_for('settings_view'))
+                    return settings_redirect(active_tab)
                 if section != 'tariffs':
                     raise BillingError('Section de paramètres invalide.')
                 legacy_rates={'RESIDENTIAL': 'residential_rate', 'COMMERCIAL': 'commercial_rate'}
@@ -366,10 +377,10 @@ def create_app():
                             g.db.execute("INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (tariff_code,code,'KWH',str(submitted_rates[code]),'USD','16',effective_from))
                     g.db.execute("UPDATE settings SET value='1' WHERE key='configured'")
                 flash('Paramètres validés. Les anciennes factures restent inchangées.','success')
-                return redirect(url_for('settings_view'))
+                return settings_redirect(active_tab)
             except (BillingError, sqlite3.IntegrityError) as e: flash(str(e),'error')
             conf.update(values)
-        return render_template('settings.html',title='Paramètres SEL',settings=conf,customer_types=customer_types,tariffs=tariffs,policy=billing_policy(g.db),exchange_rate=current_exchange_rate)
+        return render_template('settings.html',title='Paramètres SEL',settings=conf,customer_types=customer_types,tariffs=tariffs,policy=billing_policy(g.db),exchange_rate=current_exchange_rate,active_tab=active_tab)
 
     @app.get('/invoices')
     @protected

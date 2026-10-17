@@ -124,3 +124,57 @@
     }
   });
 })();
+
+// Navigation clavier et persistance légère de l'onglet Paramètres.
+(() => {
+  const root = document.querySelector('[data-settings-root]');
+  if (!root) return;
+
+  const tabs = Array.from(root.querySelectorAll('[data-settings-tab]'));
+  const panels = new Map(
+    tabs.map((tab) => [tab.dataset.settingsTab, document.getElementById(tab.getAttribute('aria-controls'))])
+  );
+  const ids = tabs.map((tab) => tab.dataset.settingsTab);
+  const knownIds = new Set(ids);
+
+  const activate = (id, {focus = false, updateHash = true} = {}) => {
+    const selected = knownIds.has(id) ? id : (root.dataset.initialTab || ids[0]);
+    tabs.forEach((tab) => {
+      const isSelected = tab.dataset.settingsTab === selected;
+      tab.setAttribute('aria-selected', String(isSelected));
+      tab.tabIndex = isSelected ? 0 : -1;
+    });
+    panels.forEach((panel, panelId) => {
+      if (!panel) return;
+      panel.hidden = panelId !== selected;
+    });
+    if (updateHash && window.history && window.history.replaceState) {
+      window.history.replaceState(null, '', `#${selected}`);
+    }
+    if (focus) {
+      const tab = tabs.find((item) => item.dataset.settingsTab === selected);
+      if (tab) tab.focus();
+    }
+  };
+
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => activate(tab.dataset.settingsTab));
+    tab.addEventListener('keydown', (event) => {
+      if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      let nextIndex = index;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (index + 1) % tabs.length;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === 'Home') nextIndex = 0;
+      if (event.key === 'End') nextIndex = tabs.length - 1;
+      activate(tabs[nextIndex].dataset.settingsTab, {focus: true});
+    });
+  });
+
+  const hashId = window.location.hash.slice(1);
+  activate(knownIds.has(hashId) ? hashId : (root.dataset.initialTab || ids[0]), {updateHash: false});
+  window.addEventListener('hashchange', () => {
+    const nextId = window.location.hash.slice(1);
+    if (knownIds.has(nextId)) activate(nextId, {updateHash: false});
+  });
+})();

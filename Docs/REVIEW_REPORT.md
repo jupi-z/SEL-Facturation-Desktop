@@ -106,3 +106,12 @@ Validation locale de la branche : 82 tests exécutés par groupes, tous passants
 - La protection pré-migration est maintenant exécutée avant `db.initialize()` pour toute base existante ; un snapshot `sel-preupdate-*.sqlite3` est conservé avant les migrations additives.
 - Le client de mise à jour valide désormais la taille du manifest/package, l'HTTPS final, la version sémantique, le produit, le type de package, le SHA-256 et exige une signature Authenticode du publisher attendu avant qu'un package puisse être remis à l'installeur. L'endpoint `/updates/status` ne télécharge ni n'exécute de fichier.
 - Validation actuelle : **99 tests passants**, compilation Python, smoke EXE répondant avec base et sauvegarde isolées, compilation MSI/bootstrapper et extraction MSI réussies.
+
+### Addendum interface Paramètres — 17 octobre 2026
+
+- La page **Paramètres SEL** est passée d’un affichage simultané de quatre blocs et de quatre modales à une navigation par onglets : Vue d’ensemble, Identité SEL, Barème et taxes, Types d’abonnés et Politique.
+- Les formulaires sont désormais visibles dans leur contexte, sans modale, avec une synthèse compacte et sans effet de carte. L’onglet actif est conservé après enregistrement via une URL `?tab=...#...`.
+- Les onglets implémentent `role=tablist`, `role=tab`, `role=tabpanel`, `aria-selected`, le focus roving et la navigation clavier par flèches, Home et End. Les autres modales de l’application restent inchangées.
+- Version applicative/installeur : **0.3.6**. Suite complète : **163 tests passants**. `node --check static/desktop.js` et `git diff --check` sont propres.
+- Build Windows local validé : `dist/SEL-Facturation.exe` et `dist/installer/SEL-Facturation-Setup-0.3.6.exe` générés. Les avertissements PyInstaller concernent uniquement des imports optionnels WebView2 Android et pycparser ; le build est terminé avec succès.
+- La validation graphique et l’installation sur le poste matériel SEL restent à effectuer ; statut : **pilote non validé sur poste cible**.

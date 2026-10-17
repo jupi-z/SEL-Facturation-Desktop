@@ -40,13 +40,39 @@ def test_client_directory_uses_modal_for_creation(authenticated_client):
     assert '<form method="post" class="form">' in html
 
 
-def test_settings_uses_separate_edit_modals(authenticated_client):
+def test_settings_uses_accessible_tabs_instead_of_edit_modals(authenticated_client):
     html = authenticated_client.get("/settings").get_data(as_text=True)
 
-    assert '<dialog id="identity-settings-modal"' in html
-    assert '<dialog id="tariff-settings-modal"' in html
-    assert 'data-modal-open="identity-settings-modal"' in html
-    assert 'data-modal-open="tariff-settings-modal"' in html
+    assert 'role="tablist"' in html
+    assert 'data-settings-tab="overview"' in html
+    assert 'data-settings-tab="identity"' in html
+    assert 'data-settings-tab="tariffs"' in html
+    assert 'data-settings-tab="customer-types"' in html
+    assert 'data-settings-tab="operations"' in html
+    assert 'role="tabpanel"' in html
+    assert 'id="settings-panel-identity"' in html
+    assert '<dialog id="identity-settings-modal"' not in html
+    assert '<dialog id="tariff-settings-modal"' not in html
+
+
+def test_settings_post_returns_to_the_changed_tab(authenticated_client):
+    html = authenticated_client.get("/settings").get_data(as_text=True)
+    token = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
+
+    response = authenticated_client.post(
+        "/settings",
+        data={
+            "_csrf": token,
+            "section": "operations",
+            "return_tab": "operations",
+            "invoice_prefix": "SEL",
+            "invoice_sequence_width": "6",
+            "backup_retention_count": "14",
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/settings?tab=operations#operations")
 
 
 def test_identity_settings_can_be_saved_without_reconfirming_tariffs(authenticated_client):
@@ -81,3 +107,12 @@ def test_modal_styles_and_keyboard_behavior_are_present():
     assert "dialog.modal" in css
     assert "event.key === 'Escape'" in js
     assert "showModal()" in js
+
+
+def test_settings_tabs_support_keyboard_navigation_and_hashes():
+    js = open("static/desktop.js", encoding="utf-8").read()
+
+    assert "data-settings-root" in js
+    assert "ArrowRight" in js and "ArrowLeft" in js
+    assert "window.location.hash" in js
+    assert "aria-selected" in js
