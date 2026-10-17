@@ -37,7 +37,7 @@ def test_client_directory_uses_modal_for_creation(authenticated_client):
     assert '<dialog id="client-create-modal"' in html
     assert 'aria-modal="true"' in html
     assert 'data-modal-open="client-create-modal"' in html
-    assert '<form method="post" class="form">' in html
+    assert 'data-draft-key="client-create"' in html
 
 
 def test_settings_uses_accessible_tabs_instead_of_edit_modals(authenticated_client):

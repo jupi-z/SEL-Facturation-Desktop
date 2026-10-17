@@ -114,4 +114,11 @@ Validation locale de la branche : 82 tests exécutés par groupes, tous passants
 - Les onglets implémentent `role=tablist`, `role=tab`, `role=tabpanel`, `aria-selected`, le focus roving et la navigation clavier par flèches, Home et End. Les autres modales de l’application restent inchangées.
 - Version applicative/installeur : **0.3.6**. Suite complète : **163 tests passants**. `node --check static/desktop.js` et `git diff --check` sont propres.
 - Build Windows local validé : `dist/SEL-Facturation.exe` et `dist/installer/SEL-Facturation-Setup-0.3.6.exe` générés. Les avertissements PyInstaller concernent uniquement des imports optionnels WebView2 Android et pycparser ; le build est terminé avec succès.
+
+## Addendum — brouillons de formulaires (0.3.7)
+
+- Les formulaires métier conservent maintenant leur saisie dans la session Flask après une validation refusée et la restaurent après actualisation : nouveau décompte, création/modification d’abonné, paramètres SEL, paiement et annulation.
+- Une sauvegarde temporaire `sessionStorage` couvre aussi une actualisation avant l’envoi. Elle est limitée au formulaire concerné, exclut les champs de mot de passe et ne remplace jamais la session serveur après une erreur.
+- Les contrôles de recherche, de déconnexion et d’authentification ne sont pas transformés en brouillons. Les formulaires validés nettoient leur copie temporaire pour éviter de réinjecter une ancienne saisie lors d’une prochaine visite.
+- Version applicative/installeur : **0.3.7**. Suite complète : **170 tests passants**. `node --check static/desktop.js` et `git diff --check` sont propres. Build Windows local validé : `dist/SEL-Facturation.exe` et `dist/installer/SEL-Facturation-Setup-0.3.7.exe` générés. Les avertissements PyInstaller restent limités aux imports optionnels WebView2 Android et pycparser.
 - La validation graphique et l’installation sur le poste matériel SEL restent à effectuer ; statut : **pilote non validé sur poste cible**.

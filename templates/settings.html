@@ -7,6 +7,10 @@
   ('customer-types', 'Types d’abonnés'),
   ('operations', 'Politique')
 ] %}
+{% set identity_form = settings_drafts.get('identity', {}) %}
+{% set tariffs_form = settings_drafts.get('tariffs', {}) %}
+{% set customer_type_form = settings_drafts.get('customer_type', {}) %}
+{% set operations_form = settings_drafts.get('operations', {}) %}
 <section class="panel settings-overview" data-settings-root data-initial-tab="{{ active_tab }}">
   <div class="sectionhead">
     <div>
@@ -37,18 +41,18 @@
 
   <div id="settings-panel-identity" class="settings-tabpanel" role="tabpanel" aria-labelledby="settings-tab-identity" tabindex="0"{% if active_tab != 'identity' %} hidden{% endif %}>
     <div class="settings-tabpanel-head"><div><div class="eyebrow">COORDONNÉES</div><h3>Identité SEL</h3><p class="sub">Ces informations sont reprises dans les nouveaux décomptes. Les documents déjà émis restent inchangés.</p></div></div>
-    <form method="post" class="form settings-form">
+    <form method="post" class="form settings-form" data-draft-key="settings-identity" data-draft-server="{{ 'true' if identity_form else 'false' }}">
       <input type="hidden" name="_csrf" value="{{ csrf() }}"><input type="hidden" name="section" value="identity"><input type="hidden" name="return_tab" value="identity">
-      <div class="fields cols3"><label for="company_name">Dénomination<input id="company_name" name="company_name" value="{{ settings['company_name'] }}"></label><label for="tagline">Signature<input id="tagline" name="tagline" value="{{ settings['tagline'] }}"></label><label for="address">Adresse<input id="address" name="address" value="{{ settings['address'] }}"></label><label for="phone">Téléphone<input id="phone" name="phone" value="{{ settings['phone'] }}"></label><label for="email">Email<input id="email" name="email" value="{{ settings['email'] }}"></label><label for="website">Site web<input id="website" name="website" value="{{ settings['website'] }}"></label><label for="rccm">RCCM<input id="rccm" name="rccm" value="{{ settings['rccm'] }}"></label><label for="nif">NIF / numéro d’impôt<input id="nif" name="nif" value="{{ settings['nif'] }}"></label><label for="id_nat">Identification nationale<input id="id_nat" name="id_nat" value="{{ settings['id_nat'] }}"></label></div>
+      <div class="fields cols3"><label for="company_name">Dénomination<input id="company_name" name="company_name" value="{{ identity_form.get('company_name', settings['company_name']) }}"></label><label for="tagline">Signature<input id="tagline" name="tagline" value="{{ identity_form.get('tagline', settings['tagline']) }}"></label><label for="address">Adresse<input id="address" name="address" value="{{ identity_form.get('address', settings['address']) }}"></label><label for="phone">Téléphone<input id="phone" name="phone" value="{{ identity_form.get('phone', settings['phone']) }}"></label><label for="email">Email<input id="email" name="email" value="{{ identity_form.get('email', settings['email']) }}"></label><label for="website">Site web<input id="website" name="website" value="{{ identity_form.get('website', settings['website']) }}"></label><label for="rccm">RCCM<input id="rccm" name="rccm" value="{{ identity_form.get('rccm', settings['rccm']) }}"></label><label for="nif">NIF / numéro d’impôt<input id="nif" name="nif" value="{{ identity_form.get('nif', settings['nif']) }}"></label><label for="id_nat">Identification nationale<input id="id_nat" name="id_nat" value="{{ identity_form.get('id_nat', settings['id_nat']) }}"></label></div>
       <div class="settings-panel-actions"><span class="note">L’identité ne change pas le calcul des factures.</span><button class="primary" type="submit">Enregistrer l’identité</button></div>
     </form>
   </div>
 
   <div id="settings-panel-tariffs" class="settings-tabpanel" role="tabpanel" aria-labelledby="settings-tab-tariffs" tabindex="0"{% if active_tab != 'tariffs' %} hidden{% endif %}>
     <div class="settings-tabpanel-head"><div><div class="eyebrow">CALCUL</div><h3>Barème et taxes</h3><p class="sub">Tarifs hors TVA, par type d’abonné. La TVA SEL reste fixée à 16 % et la taxe locale à 0 %.</p></div></div>
-    <form method="post" class="form settings-form">
+    <form method="post" class="form settings-form" data-draft-key="settings-tariffs" data-draft-server="{{ 'true' if tariffs_form else 'false' }}">
       <input type="hidden" name="_csrf" value="{{ csrf() }}"><input type="hidden" name="section" value="tariffs"><input type="hidden" name="return_tab" value="tariffs">
-      <div class="fields cols3">{% for tariff in tariffs %}<label for="tariff_rate_{{ tariff['code'] }}">Tarif {{ tariff['label'] }} HT ({{ tariff['currency'] }}/kWh)<input id="tariff_rate_{{ tariff['code'] }}" name="tariff_rate_{{ tariff['code'] }}" value="{{ tariff['unit_price'] }}" inputmode="decimal" required></label>{% endfor %}<label for="vat_rate">TVA (%)<input id="vat_rate" name="vat_rate" value="16" readonly></label><label for="exchange_rate_usd_cdf">Taux USD/CDF<input id="exchange_rate_usd_cdf" name="exchange_rate_usd_cdf" value="{{ exchange_rate }}" inputmode="decimal" required></label></div>
+      <div class="fields cols3">{% for tariff in tariffs %}<label for="tariff_rate_{{ tariff['code'] }}">Tarif {{ tariff['label'] }} HT ({{ tariff['currency'] }}/kWh)<input id="tariff_rate_{{ tariff['code'] }}" name="tariff_rate_{{ tariff['code'] }}" value="{{ tariffs_form.get('tariff_rate_' ~ tariff['code'], tariff['unit_price']) }}" inputmode="decimal" required></label>{% endfor %}<label for="vat_rate">TVA (%)<input id="vat_rate" name="vat_rate" value="{{ tariffs_form.get('vat_rate','16') }}" readonly></label><label for="exchange_rate_usd_cdf">Taux USD/CDF<input id="exchange_rate_usd_cdf" name="exchange_rate_usd_cdf" value="{{ tariffs_form.get('exchange_rate_usd_cdf', exchange_rate) }}" inputmode="decimal" required></label></div>
       <label class="check"><input type="checkbox" name="confirmed" value="yes" required> J’ai obtenu confirmation auprès de SEL que ces tarifs, taxes et règles de calcul sont effectivement applicables.</label>
       <div class="settings-panel-actions"><span class="note">Une facture émise conserve toujours le tarif appliqué au moment de son émission.</span><button class="primary" type="submit">Valider et enregistrer</button></div>
     </form>
@@ -57,10 +61,10 @@
   <div id="settings-panel-customer-types" class="settings-tabpanel" role="tabpanel" aria-labelledby="settings-tab-customer-types" tabindex="0"{% if active_tab != 'customer-types' %} hidden{% endif %}>
     <div class="settings-tabpanel-head"><div><div class="eyebrow">EXTENSION DU BARÈME</div><h3>Types d’abonnés</h3><p class="sub">Ajoutez un type uniquement lorsqu’un tarif officiel correspondant est disponible.</p></div></div>
     <div class="settings-type-list" aria-label="Types d’abonnés actifs">{% for customer_type in customer_types %}<div><strong>{{ customer_type['label'] }}</strong><span>{% for tariff in tariffs if tariff['customer_type'] == customer_type['code'] %}{{ tariff['unit_price']|replace('.', ',') }} {{ tariff['currency'] }}/kWh{% else %}Tarif non défini{% endfor %}</span></div>{% endfor %}</div>
-    <form method="post" class="form settings-form">
+    <form method="post" class="form settings-form" data-draft-key="settings-customer-type" data-draft-server="{{ 'true' if customer_type_form else 'false' }}">
       <input type="hidden" name="_csrf" value="{{ csrf() }}"><input type="hidden" name="section" value="customer_type"><input type="hidden" name="return_tab" value="customer-types">
-      <div class="fields cols3"><label for="customer_type_code">Code interne<input id="customer_type_code" name="code" maxlength="32" placeholder="INDUSTRIAL" required></label><label for="customer_type_label">Libellé affiché<input id="customer_type_label" name="label" maxlength="80" placeholder="Industriel" required></label><label for="customer_type_rate">Tarif initial HT (USD/kWh)<input id="customer_type_rate" name="initial_rate" inputmode="decimal" placeholder="0,15"></label></div>
-      <label class="check"><input type="checkbox" name="active" value="yes" checked> Activer immédiatement ce type</label>
+      <div class="fields cols3"><label for="customer_type_code">Code interne<input id="customer_type_code" name="code" value="{{ customer_type_form.get('code','') }}" maxlength="32" placeholder="INDUSTRIAL" required></label><label for="customer_type_label">Libellé affiché<input id="customer_type_label" name="label" value="{{ customer_type_form.get('label','') }}" maxlength="80" placeholder="Industriel" required></label><label for="customer_type_rate">Tarif initial HT (USD/kWh)<input id="customer_type_rate" name="initial_rate" value="{{ customer_type_form.get('initial_rate','') }}" inputmode="decimal" placeholder="0,15"></label></div>
+      <label class="check"><input type="checkbox" name="active" value="yes" {{ 'checked' if customer_type_form.get('active','yes') == 'yes' else '' }}> Activer immédiatement ce type</label>
       <p class="note">Un type actif doit recevoir un tarif initial. Les règles restent datées et les factures émises ne changent jamais.</p>
       <div class="settings-panel-actions"><span></span><button class="primary" type="submit">Ajouter le type</button></div>
     </form>
@@ -68,9 +72,9 @@
 
   <div id="settings-panel-operations" class="settings-tabpanel" role="tabpanel" aria-labelledby="settings-tab-operations" tabindex="0"{% if active_tab != 'operations' %} hidden{% endif %}>
     <div class="settings-tabpanel-head"><div><div class="eyebrow">EXPLOITATION</div><h3>Politique opérationnelle</h3><p class="sub">Ces réglages contrôlent la numérotation et la rétention locale des sauvegardes.</p></div></div>
-    <form method="post" class="form settings-form">
+    <form method="post" class="form settings-form" data-draft-key="settings-operations" data-draft-server="{{ 'true' if operations_form else 'false' }}">
       <input type="hidden" name="_csrf" value="{{ csrf() }}"><input type="hidden" name="section" value="operations"><input type="hidden" name="return_tab" value="operations">
-      <div class="fields cols3"><label for="invoice_prefix">Préfixe des documents<input id="invoice_prefix" name="invoice_prefix" value="{{ policy.get('invoice_prefix','SEL') }}" maxlength="16" required></label><label for="invoice_sequence_width">Largeur de séquence<input id="invoice_sequence_width" name="invoice_sequence_width" value="{{ policy.get('invoice_sequence_width','6') }}" inputmode="numeric" required></label><label for="backup_retention_count">Sauvegardes conservées<input id="backup_retention_count" name="backup_retention_count" value="{{ policy.get('backup_retention_count','14') }}" inputmode="numeric" required></label></div>
+      <div class="fields cols3"><label for="invoice_prefix">Préfixe des documents<input id="invoice_prefix" name="invoice_prefix" value="{{ operations_form.get('invoice_prefix', policy.get('invoice_prefix','SEL')) }}" maxlength="16" required></label><label for="invoice_sequence_width">Largeur de séquence<input id="invoice_sequence_width" name="invoice_sequence_width" value="{{ operations_form.get('invoice_sequence_width', policy.get('invoice_sequence_width','6')) }}" inputmode="numeric" required></label><label for="backup_retention_count">Sauvegardes conservées<input id="backup_retention_count" name="backup_retention_count" value="{{ operations_form.get('backup_retention_count', policy.get('backup_retention_count','14')) }}" inputmode="numeric" required></label></div>
       <p class="note">Les documents déjà émis et leurs numéros restent inchangés. La sauvegarde active n’est jamais supprimée par cette politique.</p>
       <div class="settings-panel-actions"><span></span><button class="primary" type="submit">Enregistrer la politique</button></div>
     </form>

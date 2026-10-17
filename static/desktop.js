@@ -78,8 +78,18 @@
   });
 
   document.addEventListener('submit', (event) => {
-    const form = event.target.closest('form[data-confirm]');
-    if (form && !window.confirm(form.dataset.confirm)) event.preventDefault();
+    const form = event.target.closest('form');
+    if (!form) return;
+    if (form.getAttribute('data-confirm') && !window.confirm(form.getAttribute('data-confirm'))) {
+      event.preventDefault();
+      return;
+    }
+    // La confirmation est passée : la saisie a été acceptée par l'utilisateur.
+    // La copie locale peut être supprimée avant la navigation ; les erreurs
+    // serveur sont, elles, sauvegardées dans la session Flask.
+    if (form.dataset.draftKey) {
+      try { window.sessionStorage.removeItem(`sel.form-draft.${form.dataset.draftKey}`); } catch (_error) { /* best effort */ }
+    }
   });
 
   document.addEventListener('click', async (event) => {
@@ -122,6 +132,89 @@
       delete anchor.dataset.busy;
       anchor.removeAttribute('aria-busy');
     }
+  });
+
+  document.querySelectorAll('dialog[data-modal-autopen="true"]').forEach((modal) => openModal(modal, null));
+})();
+
+// Conservation temporaire des saisies non envoyées.
+// sessionStorage couvre les actualisations dans la session courante sans
+// persister de données sensibles sur le disque. Les formulaires de connexion
+// et d'initialisation ne portent volontairement pas data-draft-key.
+(() => {
+  const storagePrefix = 'sel.form-draft.';
+  const excludedTypes = new Set(['password', 'file', 'submit', 'button', 'reset']);
+
+  const storage = (() => {
+    try {
+      const probe = `${storagePrefix}probe`;
+      window.sessionStorage.setItem(probe, '1');
+      window.sessionStorage.removeItem(probe);
+      return window.sessionStorage;
+    } catch (_error) {
+      return null;
+    }
+  })();
+
+  if (!storage) return;
+
+  const keyFor = (form) => `${storagePrefix}${form.dataset.draftKey}`;
+
+  const fieldsFor = (form) => Array.from(form.elements).filter((field) => {
+    const type = (field.type || '').toLowerCase();
+    return field.name && field.name !== '_csrf' && type !== 'hidden' && !excludedTypes.has(type) && !field.disabled;
+  });
+
+  const serialize = (form) => fieldsFor(form).map((field) => ({
+    name: field.name,
+    type: (field.type || '').toLowerCase(),
+    value: field.value,
+    checked: field.type === 'checkbox' || field.type === 'radio' ? field.checked : undefined,
+  }));
+
+  const save = (form) => {
+    try {
+      storage.setItem(keyFor(form), JSON.stringify(serialize(form)));
+    } catch (_error) {
+      // Le formulaire reste pleinement utilisable si le stockage est plein ou bloqué.
+    }
+  };
+
+  const restore = (form) => {
+    let saved;
+    try {
+      saved = JSON.parse(storage.getItem(keyFor(form)) || 'null');
+    } catch (_error) {
+      saved = null;
+    }
+    if (!Array.isArray(saved)) return;
+
+    const byName = new Map();
+    fieldsFor(form).forEach((field) => {
+      if (!byName.has(field.name)) byName.set(field.name, []);
+      byName.get(field.name).push(field);
+    });
+    saved.forEach((item) => {
+      const fields = byName.get(item.name) || [];
+      const field = fields.find((candidate) => (candidate.type || '').toLowerCase() === item.type) || fields[0];
+      if (!field) return;
+      if (field.type === 'checkbox' || field.type === 'radio') field.checked = Boolean(item.checked);
+      else field.value = item.value ?? '';
+    });
+  };
+
+  document.querySelectorAll('form[data-draft-key]').forEach((form) => {
+    const key = form.dataset.draftKey;
+    if (!key) return;
+
+    // Une valeur reconstruite par le serveur après une erreur est prioritaire
+    // sur une ancienne copie locale.
+    if (form.dataset.draftServer === 'true') storage.removeItem(keyFor(form));
+    else restore(form);
+
+    form.addEventListener('input', () => save(form));
+    form.addEventListener('change', () => save(form));
+    form.addEventListener('reset', () => storage.removeItem(keyFor(form)));
   });
 })();
 
