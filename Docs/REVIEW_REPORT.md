@@ -131,3 +131,15 @@ Validation locale de la branche : 82 tests exécutés par groupes, tous passants
 - La validation Authenticode de l’updater refuse désormais les sujets de certificat qui ne correspondent pas exactement à l’identité configurée.
 - Le tag de publication GitHub est dérivé de `APP_VERSION` et ne réutilise plus un tag historique codé en dur.
 - Version candidate : **0.3.8**. La signature Authenticode et la recette sur le poste SEL restent à effectuer ; statut : **pilote non validé sur poste cible**.
+
+### Preuves de build 0.3.8 — 17/10/2026
+
+- Suite complète locale : **178 tests passants**.
+- Vérifications statiques : `compileall`, `node --check static/desktop.js` et `git diff --check` passants.
+- Build Windows local : `BUILD_EXIT=0` avec PyInstaller et WiX 4.
+- `SEL-Facturation.exe` — SHA-256 `54A6C156FAB0A7BA478A435A4A260F1A4C650C2507F1E3B5653EF1E61272D9DF`.
+- `SEL-Facturation.msi` — SHA-256 `01937B29D1B785685A98D25B1EA7A603AC172936DB23BB63FB6F90D631C7BB4A`.
+- `SEL-Facturation-Setup-0.3.8.exe` — SHA-256 `239DFE6FC2CF4346EAFC941CF716D3544D81E9E663A5073260128DE4D3487DCA`.
+- Signature Authenticode locale des trois artefacts : **NotSigned** ; aucun artefact ne doit être présenté comme version de production avant signature.
+- Avertissements PyInstaller observés : imports optionnels Android WebView2 et tables optionnelles pycparser uniquement.
+- Validation d’installation, mise à niveau, restauration, WebView2 et impression sur le poste SEL : **non effectuée** ; statut : **pilote non validé sur poste cible**.
