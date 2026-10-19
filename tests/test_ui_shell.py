@@ -54,6 +54,8 @@ def test_shared_shell_and_action_layout_rules_are_present():
 
     assert ".side{position:sticky;top:0;" in css
     assert "overflow-y:auto" in css
+    assert ".main{display:flex;flex-direction:column;min-height:100vh}" in css
+    assert ".main>main{flex:1 0 auto}" in css
     assert ".app-footer{" in css
     assert ".form-actions{" in css
     assert ".lifecycle-actions{" in css
