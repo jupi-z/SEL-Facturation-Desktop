@@ -77,10 +77,22 @@ def evaluate_manifest(manifest: dict, *, current_version: str) -> dict:
         return {"state": "rejected", "reason": "unsupported_package"}
     if manifest.get("product") != "SEL-Facturation":
         return {"state": "rejected", "reason": "unsupported_product"}
+    channel = manifest.get("channel")
+    if channel is not None and channel not in {"stable", "preview"}:
+        return {"state": "rejected", "reason": "unsupported_channel"}
+    signed = manifest.get("signed")
+    if signed is not None and not isinstance(signed, bool):
+        return {"state": "rejected", "reason": "invalid_signature_metadata"}
     comparison = _compare(version, current_version)
     if comparison < 0:
         return {"state": "rejected", "reason": "downgrade_blocked"}
     if comparison == 0:
-        return {"state": "current", "reason": "already_current", "version": version}
-    return {"state": "available", "version": version, "url": url,
-            "sha256": manifest["sha256"].lower(), "product": manifest["product"]}
+        result = {"state": "current", "reason": "already_current", "version": version}
+    else:
+        result = {"state": "available", "version": version, "url": url,
+                  "sha256": manifest["sha256"].lower(), "product": manifest["product"]}
+    if channel is not None:
+        result["channel"] = channel
+    if signed is not None:
+        result["signed"] = signed
+    return result

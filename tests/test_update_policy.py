@@ -52,6 +52,16 @@ def test_semantic_prerelease_order_is_not_lexicographic():
     assert result["state"] == "available"
 
 
+def test_preserves_signed_channel_metadata_for_the_update_ui():
+    result = evaluate_manifest(
+        manifest(version="0.4.0", channel="preview", signed=False),
+        current_version="0.3.0",
+    )
+
+    assert result["channel"] == "preview"
+    assert result["signed"] is False
+
+
 def test_verifies_downloaded_package_bytes(tmp_path):
     package = tmp_path / "setup.exe"
     package.write_bytes(b"SEL package")

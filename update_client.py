@@ -64,6 +64,8 @@ def download_package(manifest: dict, destination: str | Path, *, current_version
     decision = evaluate_manifest(manifest, current_version=current_version)
     if decision["state"] != "available":
         raise ValueError(decision.get("reason", "Aucune mise à jour disponible"))
+    if decision.get("signed") is False:
+        raise ValueError("préversion non signée")
     url = decision["url"]
     _https(url)
     target_dir = Path(destination)

@@ -62,6 +62,27 @@ def test_download_requires_publisher_signature(tmp_path):
         download_package(manifest, tmp_path, current_version="0.3.0", opener=lambda *_args, **_kwargs: pytest.fail("network called"))
 
 
+def test_download_rejects_an_explicitly_unsigned_preview_before_network(tmp_path):
+    manifest = {
+        "product": "SEL-Facturation",
+        "version": "0.4.0",
+        "url": "https://sel.shuleops.com/setup.exe",
+        "sha256": "a" * 64,
+        "package_type": "bootstrapper",
+        "channel": "preview",
+        "signed": False,
+    }
+
+    with pytest.raises(ValueError, match="non signé"):
+        download_package(
+            manifest,
+            tmp_path,
+            current_version="0.3.0",
+            expected_publisher="SEL",
+            opener=lambda *_args, **_kwargs: pytest.fail("network called"),
+        )
+
+
 def test_authenticode_publisher_match_is_not_a_substring(monkeypatch, tmp_path):
     package = tmp_path / "setup.exe"
     package.write_bytes(b"setup")
