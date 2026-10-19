@@ -233,6 +233,12 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .app-footer{border-top:1px solid var(--border);padding:10px clamp(20px,2.2vw,40px) 14px;color:var(--muted);font-size:10px;line-height:1.4;text-align:right;letter-spacing:.02em}
 .app-footer a{color:var(--sel-navy);font-weight:700}
 .app-footer a:hover{text-decoration:underline}
+.updates-main{display:flex;align-items:center;justify-content:center;min-height:0}
+.updates-panel{width:min(100%,760px);margin:0 auto;padding:clamp(24px,4vw,40px)}
+.updates-panel .sectionhead{align-items:flex-start}
+.updates-panel .sectionhead>div{min-width:0}
+.updates-panel .form-actions{justify-content:flex-end}
+.updates-panel>.note{margin:22px 0 0}
 .page-actions,.form-actions,.lifecycle-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin:0 0 18px}
 .form-actions{margin-top:4px}
 .lifecycle-actions{justify-content:flex-start;align-items:flex-end;margin:18px 0 0}
@@ -262,6 +268,8 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 }
 
 @media(max-width:600px){
+  .updates-main{align-items:stretch;justify-content:flex-start}
+  .updates-panel{width:100%;padding:20px}
   .settings-tabs{gap:4px}
   .settings-tab{flex:1 1 auto;min-width:9rem}
   .page-actions,.form-actions,.lifecycle-actions{align-items:stretch;flex-direction:column}

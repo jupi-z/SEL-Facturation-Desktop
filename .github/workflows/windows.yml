@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      publish_unsigned_preview:
+        description: 'Publier une préversion GitHub non signée pour acceptation manuelle uniquement'
+        required: true
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths: ['*.py', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', '.github/workflows/windows.yml']
@@ -144,20 +149,31 @@ jobs:
           & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SEL_CODESIGN_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "dist/installer/SEL-Facturation-Setup-$version.exe"
           if ($LASTEXITCODE -ne 0) { throw 'Signature du lanceur de pré-vérification échouée.' }
           Remove-Item -LiteralPath $pfx -Force
-      - name: Publish private GitHub prerelease without overwriting
+      - name: Publish GitHub prerelease without overwriting
         if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_SIGNED: ${{ inputs.sign_release }}
+          PUBLISH_UNSIGNED_PREVIEW: ${{ inputs.publish_unsigned_preview }}
         run: |
-          if ($env:PUBLISH_SIGNED -ne 'true') { throw 'Publication bloquée: activez sign_release pour publier uniquement des artefacts signés.' }
+          if ($env:PUBLISH_SIGNED -ne 'true' -and $env:PUBLISH_UNSIGNED_PREVIEW -ne 'true') {
+            throw 'Publication bloquée: activez sign_release ou demandez explicitement une préversion non signée.'
+          }
           $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
           if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
           $version = $Matches[1]
-          foreach ($artifact in @('dist/SEL-Facturation.exe', 'dist/installer/SEL-Facturation.msi', "dist/installer/SEL-Facturation-Setup-$version.exe")) {
-            $signature = Get-AuthenticodeSignature $artifact
-            if ($signature.Status -ne 'Valid') { throw "Artefact non signé: $artifact" }
+          if ($env:PUBLISH_SIGNED -eq 'true') {
+            foreach ($artifact in @('dist/SEL-Facturation.exe', 'dist/installer/SEL-Facturation.msi', "dist/installer/SEL-Facturation-Setup-$version.exe")) {
+              $signature = Get-AuthenticodeSignature $artifact
+              if ($signature.Status -ne 'Valid') { throw "Artefact non signé: $artifact" }
+            }
+            $title = "SEL Facturation Desktop v$version - installateur Windows"
+            $notes = 'Release préversion signée pour SEL : bootstrapper WebView2 autonome, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4. Essai réel sur le PC cible indispensable.'
+          } else {
+            $title = "SEL Facturation Desktop v$version - aperçu non signé"
+            $notes = 'Préversion GitHub non signée destinée uniquement à l’acceptation manuelle. Elle ne doit pas être distribuée comme version de production et ne peut pas être installée automatiquement par le programme tant que la signature Authenticode SEL n’est pas disponible.'
+            Write-Host 'Signature Authenticode absente : publication limitée à une préversion d’acceptation manuelle.'
           }
           $tag = "v$version"
           $exe = 'dist/SEL-Facturation.exe'
@@ -168,7 +184,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw "Release $tag already exists; bump the application/installer version before publishing. Existing assets are never overwritten."
           } else {
-            gh release create $tag $exe $setup $msi --prerelease --title "SEL Facturation Desktop v$version - installateur Windows" --notes 'Préversion native Windows 10/11 : bootstrapper WebView2, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
+            gh release create $tag $exe $setup $msi --prerelease --title $title --notes $notes --repo ${{ github.repository }}
           }
           if ($LASTEXITCODE -ne 0) { throw "Publication GitHub Releases failed" }
       - name: Upload unsigned acceptance packages

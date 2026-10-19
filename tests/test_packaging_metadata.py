@@ -47,7 +47,7 @@ def test_windows_builds_use_sel_logo_icon():
     assert "--icon packaging\\sel-facturation.ico" in workflow
 
 
-def test_windows_build_embeds_webview2_and_requires_signing_for_published_releases():
+def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview_publication():
     workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
 
     assert "MicrosoftEdgeWebView2RuntimeInstallerX64.exe" in workflow
@@ -55,6 +55,10 @@ def test_windows_build_embeds_webview2_and_requires_signing_for_published_releas
     assert "SEL_CODESIGN_PFX_BASE64" in workflow
     assert "Get-AuthenticodeSignature" in workflow
     assert "wix extension add -g WixToolset.Util.wixext/4.0.5" in workflow
+    assert "publish_unsigned_preview" in workflow
+    assert "PUBLISH_UNSIGNED_PREVIEW" in workflow
+    assert "aperçu non signé" in workflow
+    assert "Signature Authenticode absente" in workflow
 
 
 def test_webview2_detection_covers_machine_and_user_runtime_locations():
