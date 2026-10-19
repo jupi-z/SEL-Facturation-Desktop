@@ -5,6 +5,6 @@
   "signed": false,
   "package_type": "bootstrapper",
   "url": "https://github.com/jupi-z/SEL-Facturation-Desktop/releases/download/v0.3.24/SEL-Facturation-Setup-0.3.24.exe",
-  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sha256": "c29007d17887e232304a16f9997a92b85c354d5a3587c59c77af2a243c90e330",
   "release_url": "https://github.com/jupi-z/SEL-Facturation-Desktop/releases/tag/v0.3.24"
 }
