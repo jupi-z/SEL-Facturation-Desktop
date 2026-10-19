@@ -212,6 +212,11 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .inline-action{display:inline-flex;align-items:center;margin:0}
 .inline-action button{white-space:nowrap}
 .settings-panel-actions{margin-top:22px}
+.empty-state{display:grid;gap:6px;justify-items:start;padding:22px 4px;color:var(--muted)}
+.empty-state strong{color:var(--sel-navy);font-size:14px}
+.empty-state span{max-width:54ch}
+.empty-state .button,.empty-state button{margin-top:6px}
+.empty-state.compact{padding:10px 0}
 
 @media(max-width:980px){
   .side{position:static;height:auto;max-height:none;overflow:visible}
