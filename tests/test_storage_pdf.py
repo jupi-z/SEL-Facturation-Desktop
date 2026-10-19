@@ -12,6 +12,17 @@ from domain import calculate_from_settings
 from invoice_pdf import render_invoice
 
 
+def test_pdf_generator_points_to_full_official_logo():
+    source = Path(__file__).resolve().parents[1] / 'invoice_pdf.py'
+    code = source.read_text(encoding='utf-8')
+    assert "'sel-official-logo.png'" in code
+    assert "'sel-logo.png'" not in code
+    assert "#003078" in code
+    logo = source.parent / 'static' / 'sel-official-logo.png'
+    assert logo.exists()
+    assert logo.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+
+
 def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     monkeypatch.setenv('SEL_DATA_DIR',str(tmp_path))
     db.initialize()
@@ -46,6 +57,44 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     db.backup(tmp_path/'check.sqlite3')
     assert (tmp_path/'check.sqlite3').exists()
     c.close()
+
+
+def test_pdf_uses_current_sel_branding_and_hides_future_meter_fields_for_direct_billing(monkeypatch, tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR', str(tmp_path))
+    db.initialize()
+    with db.connect() as c:
+        settings = dict(db.settings(c))
+        settings.update({
+            'company_name': 'S.E.L. SASU',
+            'address': '225, Boulevard LD Kabila, Kolwezi, Lualaba',
+            'phone': '+243 902 190 779',
+            'rccm': 'CD/KVZ/RCCM/25-B-00736',
+            'nif': 'A2620672Z',
+        })
+        c.execute("INSERT INTO clients(code,name,address,meter_number,category,center,service_point) VALUES(?,?,?,?,?,?,?)",
+                  ('SEL-C-00001', 'Abonné Test', 'Kolwezi', '', 'RESIDENTIAL', 'KOLWEZI', 'KOLWEZI VILLE'))
+        calc = {
+            'previous': '—', 'current': '—', 'kwh': '350', 'energy': '33.25',
+            'local_rate': '0', 'local_tax': '0', 'fee': '0', 'vat_rate': '16',
+            'vat_basis': '33.25', 'vat': '5.32', 'total': '38.57',
+            'lines': [{'range': 'Consommation', 'quantity': '350', 'unit_price': '0.095', 'amount': '33.25'}],
+            'pricing_model': 'FLAT_KWH', 'coefficient': '1',
+        }
+        c.execute('''INSERT INTO invoices(number,client_id,billing_period,issue_date,due_date,client_snapshot,company_snapshot,calc_snapshot,currency)
+                     VALUES(?,?,?,?,?,?,?,?,?)''',
+                  ('SEL-2026-000001', 1, '2026-10', '2026-10-17', '2026-10-31',
+                   json.dumps(dict(c.execute('SELECT * FROM clients').fetchone())),
+                   json.dumps(settings), json.dumps(calc), 'USD'))
+        c.commit()
+        row = c.execute('SELECT * FROM invoices').fetchone()
+
+    pdf = render_invoice(row, [])
+    text = '\n'.join(page.extract_text() or '' for page in PdfReader(BytesIO(pdf)).pages)
+    assert 'SITUATION DU COMPTE' in text
+    assert 'INFORMATIONS COMPTEUR' not in text
+    assert 'N° compteur' not in text
+    assert 'Coefficient' not in text
+    assert 'PÉRIODE ET FACTURATION' in text
 
 
 def test_automatic_backup_refreshes_after_same_day_changes(monkeypatch,tmp_path):
