@@ -18,6 +18,13 @@ def active_customer_types(connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def all_customer_types(connection) -> list[dict]:
+    rows = connection.execute(
+        "SELECT code,label,active,sort_order FROM customer_types ORDER BY sort_order, code"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def customer_type_label(connection, code: str) -> str:
     row = connection.execute("SELECT label FROM customer_types WHERE code=?", (code,)).fetchone()
     return row["label"] if row else code
@@ -31,10 +38,54 @@ def active_currencies(connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def all_currencies(connection) -> list[dict]:
+    rows = connection.execute(
+        "SELECT code,label,decimals,active,sort_order FROM currency_catalog ORDER BY sort_order, code"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def active_payment_methods(connection) -> list[dict]:
     rows = connection.execute(
         "SELECT code,label,reference_required,active,sort_order FROM payment_methods "
         "WHERE active=1 ORDER BY sort_order, code"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def all_payment_methods(connection) -> list[dict]:
+    rows = connection.execute(
+        "SELECT code,label,reference_required,active,sort_order FROM payment_methods ORDER BY sort_order, code"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def all_tax_profiles(connection) -> list[dict]:
+    rows = connection.execute(
+        "SELECT * FROM tax_profiles ORDER BY effective_from DESC, code"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def tariff_history(connection) -> list[dict]:
+    rows = connection.execute(
+        """SELECT t.*, c.label AS customer_type_label
+           FROM tariff_plans t LEFT JOIN customer_types c ON c.code=t.customer_type
+           ORDER BY t.effective_from DESC, t.customer_type, t.id DESC"""
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def exchange_rate_history(connection) -> list[dict]:
+    rows = connection.execute(
+        "SELECT * FROM exchange_rates ORDER BY effective_on DESC, id DESC"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def configuration_history(connection, limit: int = 200) -> list[dict]:
+    rows = connection.execute(
+        "SELECT * FROM configuration_history ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()
     return [dict(row) for row in rows]
 

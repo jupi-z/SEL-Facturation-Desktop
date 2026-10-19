@@ -26,7 +26,13 @@ from domain import (BillingError, calculate_flat_rate, calculate_from_readings,
 from invoice_pdf import render_invoice
 from update_client import download_package, fetch_manifest, staging_dir
 from version import APP_VERSION
-from config_service import active_customer_types, active_payment_methods, billing_policy, current_tariffs, customer_type_label, record_change
+from config_service import (
+    active_customer_types, active_payment_methods, all_currencies,
+    all_customer_types, all_payment_methods, all_tax_profiles,
+    billing_policy, configuration_history, current_tariffs,
+    customer_type_label, exchange_rate_history, record_change,
+    tariff_history,
+)
 
 PAGE_SIZE = 50
 DEFAULT_UPDATE_MANIFEST_URL = 'https://sel.shuleops.com/updates/latest.json'
@@ -272,7 +278,7 @@ def create_app():
             currency=next(iter(currencies))
             issued_rows=list(issued_all)
         billed=sum_money(json.loads(row['calc_snapshot'])['total'] for row in issued_rows)
-        clients=g.db.execute('SELECT COUNT(*) AS n FROM clients').fetchone()['n']
+        clients=g.db.execute("SELECT COUNT(*) AS n FROM clients WHERE status='ACTIVE'").fetchone()['n']
         recent=g.db.execute('''SELECT i.*, c.name as client_name FROM invoices i
           JOIN clients c ON c.id=i.client_id ORDER BY i.id DESC LIMIT 8''').fetchall()
         paid=sum_money(row['amount'] for row in g.db.execute("SELECT p.amount FROM payments p JOIN invoices i ON i.id=p.invoice_id WHERE i.status='ISSUED' AND i.currency=?", (currency,)))
@@ -306,18 +312,29 @@ def create_app():
             except (BillingError,sqlite3.IntegrityError) as e:
                 g.db.rollback();session['client_form']=values;client_form=values;flash(str(e),'error')
         term=request.args.get('q','').strip()[:120]
+        status=request.args.get('status','ACTIVE').strip().upper()
+        if status not in ('ACTIVE','ARCHIVED','ALL'):
+            status='ACTIVE'
         page=page_number(request.args.get('page','1'))
         offset=(page-1)*PAGE_SIZE
         search_args=[]
+        status_clause='' if status == 'ALL' else 'status=?'
+        if status_clause:
+            search_args.append(status)
         if term:
-            where='WHERE name LIKE ? OR code LIKE ? OR meter_number LIKE ? OR contract_number LIKE ?'
+            search_clause='(name LIKE ? OR code LIKE ? OR meter_number LIKE ? OR contract_number LIKE ?)'
             search_args=['%'+term+'%']*4
+            if status_clause:
+                search_args.insert(0,status)
+                where=f'WHERE {status_clause} AND {search_clause}'
+            else:
+                where=f'WHERE {search_clause}'
         else:
-            where=''
+            where=f'WHERE {status_clause}' if status_clause else ''
         total=g.db.execute(f'SELECT COUNT(*) FROM clients {where}',search_args).fetchone()[0]
         result=g.db.execute(f'SELECT * FROM clients {where} ORDER BY id DESC LIMIT ? OFFSET ?',search_args+[PAGE_SIZE,offset]).fetchall()
         pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
-        return render_template('clients.html',title='Abonnés',clients=result,query=term,page=page,pages=pages,total=total,customer_types=customer_types,client_form=client_form)
+        return render_template('clients.html',title='Abonnés',clients=result,query=term,status=status,page=page,pages=pages,total=total,customer_types=customer_types,client_form=client_form)
 
     @app.route('/clients/<int:cid>/edit',methods=['GET','POST'])
     @protected
@@ -327,9 +344,11 @@ def create_app():
         draft_key=f'client_edit_{cid}'
         form_client=dict(current)
         form_client.update(session.get(draft_key,{}))
-        customer_type_codes = {item['code'] for item in active_customer_types(g.db)}
+        all_types = all_customer_types(g.db)
+        customer_type_codes = {item['code'] for item in all_types if item['active'] or item['code'] == current['customer_type']}
         if request.method=='POST':
-            values={k:request.form.get(k,'').strip() for k in ('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient')}
+            editable=('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient')
+            values={k:request.form.get(k, current[k] or '').strip() for k in editable}
             try:
                 if not values['name'] or not values['address']: raise BillingError('Nom et adresse obligatoires.')
                 if values['customer_type'] and values['customer_type'] not in customer_type_codes: raise BillingError('Type d’abonné invalide.')
@@ -340,16 +359,63 @@ def create_app():
                 g.db.commit();session.pop(draft_key,None);flash('Fiche mise à jour. Les anciennes factures conservent leurs données.','success');return redirect(url_for('clients'))
             except BillingError as e:
                 session[draft_key]=values;form_client=dict(current);form_client.update(values);flash(str(e),'error')
-        return render_template('client_edit.html',title='Modifier le client',client=form_client,client_draft_active=bool(session.get(draft_key)))
+        return render_template('client_edit.html',title='Modifier le client',client=form_client,customer_types=all_types,client_draft_active=bool(session.get(draft_key)))
+
+    @app.post('/clients/<int:cid>/archive')
+    @protected
+    def archive_client(cid):
+        reason=request.form.get('reason','').strip()[:240]
+        if len(reason)<3:
+            flash('Un motif d’archivage est obligatoire.','error')
+            return redirect(url_for('edit_client',cid=cid))
+        with g.db:
+            row=g.db.execute('SELECT status FROM clients WHERE id=?',(cid,)).fetchone()
+            if not row: abort(404)
+            if row['status']=='ARCHIVED':
+                flash('Cet abonné est déjà archivé.','error')
+            else:
+                g.db.execute("UPDATE clients SET status='ARCHIVED',archived_at=?,archive_reason=? WHERE id=?",(date.today().isoformat(),reason,cid))
+                flash('Abonné archivé. Il ne sera plus proposé pour une nouvelle facturation.','success')
+        return redirect(url_for('clients',status='ARCHIVED'))
+
+    @app.post('/clients/<int:cid>/restore')
+    @protected
+    def restore_client(cid):
+        with g.db:
+            row=g.db.execute('SELECT customer_type,status FROM clients WHERE id=?',(cid,)).fetchone()
+            if not row: abort(404)
+            if row['customer_type'] and not g.db.execute('SELECT 1 FROM customer_types WHERE code=? AND active=1',(row['customer_type'],)).fetchone():
+                flash('Impossible de restaurer : le type d’abonné est inactif. Réactivez-le d’abord.','error')
+            else:
+                g.db.execute("UPDATE clients SET status='ACTIVE',archived_at='',archive_reason='' WHERE id=?",(cid,))
+                flash('Abonné restauré.','success')
+        return redirect(url_for('clients'))
+
+    @app.post('/clients/<int:cid>/delete')
+    @protected
+    def delete_client(cid):
+        with g.db:
+            row=g.db.execute('SELECT name FROM clients WHERE id=?',(cid,)).fetchone()
+            if not row: abort(404)
+            dependency=g.db.execute('SELECT 1 FROM invoices WHERE client_id=? LIMIT 1',(cid,)).fetchone()
+            if dependency:
+                flash('Suppression refusée : cet abonné possède un historique de décomptes. Archivez-le à la place.','error')
+                return redirect(url_for('edit_client',cid=cid))
+            g.db.execute('DELETE FROM clients WHERE id=?',(cid,))
+            flash('Abonné supprimé définitivement car aucun document historique ne le référence.','success')
+        return redirect(url_for('clients'))
 
     @app.route('/settings',methods=['GET','POST'])
     @protected
     def settings_view():
         conf=db.settings(g.db)
-        customer_types=active_customer_types(g.db)
+        customer_types=all_customer_types(g.db)
         tariffs=current_tariffs(g.db)
-        settings_tabs={'overview','identity','tariffs','customer-types','operations'}
-        section_tabs={'identity':'identity','tariffs':'tariffs','customer_type':'customer-types','operations':'operations'}
+        settings_tabs={'overview','identity','tariffs','customer-types','catalogs','operations','history'}
+        section_tabs={'identity':'identity','tariffs':'tariffs','customer_type':'customer-types',
+                      'customer_type_edit':'customer-types','currency':'catalogs',
+                      'payment_method':'catalogs','tax_profile':'catalogs',
+                      'tariff':'catalogs','exchange_rate':'catalogs','operations':'operations'}
         settings_drafts=dict(session.get('settings_drafts',{}))
         requested_tab=request.args.get('tab','').strip()
         if requested_tab in settings_tabs:
@@ -373,6 +439,12 @@ def create_app():
             current_exchange_rate=db.exchange_rate_for(g.db,'USD','CDF',date.today().isoformat())['rate']
         except ValueError:
             current_exchange_rate=conf.get('exchange_rate_usd_cdf','2360')
+        currencies=all_currencies(g.db)
+        payment_methods=all_payment_methods(g.db)
+        tax_profiles=all_tax_profiles(g.db)
+        tariffs_history=tariff_history(g.db)
+        exchange_rates=exchange_rate_history(g.db)
+        changes=configuration_history(g.db)
         if request.method=='POST':
             section=request.form.get('section','tariffs')
             requested_return_tab=request.form.get('return_tab','').strip()
@@ -419,6 +491,159 @@ def create_app():
                     flash('Type d’abonné ajouté.','success')
                     clear_settings_draft(section)
                     return settings_redirect(active_tab)
+                if section == 'customer_type_edit':
+                    code=request.form.get('code','').strip().upper()
+                    label=request.form.get('label','').strip()
+                    active=1 if request.form.get('active')=='yes' else 0
+                    try:
+                        sort_order=int(request.form.get('sort_order','100'))
+                    except ValueError:
+                        raise BillingError('L’ordre d’affichage doit être un nombre entier.')
+                    if not re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', code):
+                        raise BillingError('Code de type d’abonné invalide.')
+                    if not label or len(label)>80:
+                        raise BillingError('Le libellé du type d’abonné est obligatoire et limité à 80 caractères.')
+                    existing=g.db.execute('SELECT label,active,sort_order FROM customer_types WHERE code=?',(code,)).fetchone()
+                    if not existing: raise BillingError('Type d’abonné introuvable.')
+                    with g.db:
+                        record_change(g.db,'customer_types',code,str(existing['label']),label,'Modification depuis Paramètres')
+                        g.db.execute('UPDATE customer_types SET label=?,active=?,sort_order=? WHERE code=?',(label,active,sort_order,code))
+                    flash('Type d’abonné mis à jour.','success')
+                    clear_settings_draft(section)
+                    return settings_redirect(active_tab)
+                if section == 'currency':
+                    code=request.form.get('code','').strip().upper()
+                    label=request.form.get('label','').strip()
+                    active=1 if request.form.get('active')=='yes' else 0
+                    try:
+                        decimals=int(request.form.get('decimals','2'))
+                        sort_order=int(request.form.get('sort_order','100'))
+                    except ValueError:
+                        raise BillingError('Les décimales et l’ordre doivent être des nombres entiers.')
+                    if not re.fullmatch(r'[A-Z][A-Z0-9]{2,9}', code):
+                        raise BillingError('Code devise invalide.')
+                    if not label or not 0 <= decimals <= 6:
+                        raise BillingError('Libellé ou nombre de décimales invalide.')
+                    configured_currency=conf.get('currency','USD')
+                    if code==configured_currency and not active:
+                        raise BillingError('La devise principale configurée ne peut pas être désactivée.')
+                    old=g.db.execute('SELECT label,active,decimals,sort_order FROM currency_catalog WHERE code=?',(code,)).fetchone()
+                    with g.db:
+                        if old:
+                            record_change(g.db,'currencies',code,str(old['label']),label,'Modification depuis Paramètres')
+                            g.db.execute('UPDATE currency_catalog SET label=?,decimals=?,active=?,sort_order=? WHERE code=?',(label,decimals,active,sort_order,code))
+                        else:
+                            g.db.execute('INSERT INTO currency_catalog(code,label,decimals,active,sort_order) VALUES(?,?,?,?,?)',(code,label,decimals,active,sort_order))
+                            record_change(g.db,'currencies',code,'',label,'Création depuis Paramètres')
+                    flash('Devise enregistrée.','success')
+                    clear_settings_draft(section)
+                    return settings_redirect('catalogs')
+                if section == 'payment_method':
+                    code=request.form.get('code','').strip().upper()
+                    label=request.form.get('label','').strip()
+                    active=1 if request.form.get('active')=='yes' else 0
+                    required=1 if request.form.get('reference_required')=='yes' else 0
+                    try:
+                        sort_order=int(request.form.get('sort_order','100'))
+                    except ValueError:
+                        raise BillingError('L’ordre d’affichage doit être un nombre entier.')
+                    if not re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', code) or not label:
+                        raise BillingError('Code et libellé de mode de paiement obligatoires.')
+                    old=g.db.execute('SELECT label FROM payment_methods WHERE code=?',(code,)).fetchone()
+                    with g.db:
+                        if old:
+                            record_change(g.db,'payment_methods',code,str(old['label']),label,'Modification depuis Paramètres')
+                            g.db.execute('UPDATE payment_methods SET label=?,reference_required=?,active=?,sort_order=? WHERE code=?',(label,required,active,sort_order,code))
+                        else:
+                            g.db.execute('INSERT INTO payment_methods(code,label,reference_required,active,sort_order) VALUES(?,?,?,?,?)',(code,label,required,active,sort_order))
+                            record_change(g.db,'payment_methods',code,'',label,'Création depuis Paramètres')
+                    flash('Mode de paiement enregistré.','success')
+                    clear_settings_draft(section)
+                    return settings_redirect('catalogs')
+                if section == 'tariff':
+                    customer_type=request.form.get('customer_type','').strip().upper()
+                    unit_price=decimal(request.form.get('unit_price',''),'Tarif',allow_zero=False)
+                    currency=request.form.get('currency','USD').strip().upper()
+                    vat_rate=decimal(request.form.get('vat_rate','16'),'TVA')
+                    effective_from=request.form.get('effective_from','').strip()
+                    try:
+                        date.fromisoformat(effective_from)
+                    except ValueError:
+                        raise BillingError('Date d’application du tarif invalide.')
+                    if not g.db.execute('SELECT 1 FROM customer_types WHERE code=?',(customer_type,)).fetchone():
+                        raise BillingError('Type d’abonné introuvable.')
+                    if not g.db.execute('SELECT 1 FROM currency_catalog WHERE code=? AND active=1',(currency,)).fetchone():
+                        raise BillingError('Devise inactive ou inconnue.')
+                    existing=g.db.execute('SELECT 1 FROM tariff_plans WHERE customer_type=? AND effective_from=?',(customer_type,effective_from)).fetchone()
+                    if existing:
+                        raise BillingError('Un tarif existe déjà pour ce type et cette date. Créez une nouvelle date d’application.')
+                    prefix=f'{customer_type}-{effective_from[:7].replace("-","")}'
+                    count=g.db.execute('SELECT COUNT(*) FROM tariff_plans WHERE code LIKE ?',(prefix+'%',)).fetchone()[0]+1
+                    code=f'{prefix}-{count}'
+                    with g.db:
+                        g.db.execute('INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)',(code,customer_type,'KWH',str(unit_price),currency,str(vat_rate),effective_from))
+                        record_change(g.db,'tariffs',code,'',str(unit_price),'Création datée depuis Paramètres')
+                    flash('Tarif daté enregistré.','success')
+                    clear_settings_draft(section)
+                    return settings_redirect('catalogs')
+                if section == 'exchange_rate':
+                    base=request.form.get('base_currency','').strip().upper()
+                    quote=request.form.get('quote_currency','').strip().upper()
+                    rate=decimal(request.form.get('rate',''),'Taux de change',allow_zero=False)
+                    effective_on=request.form.get('effective_on','').strip()
+                    source=request.form.get('source','').strip()[:120]
+                    try:
+                        date.fromisoformat(effective_on)
+                    except ValueError:
+                        raise BillingError('Date d’application du taux invalide.')
+                    if base==quote or not source:
+                        raise BillingError('Paire de devises ou source invalide.')
+                    if not g.db.execute('SELECT 1 FROM currency_catalog WHERE code=? AND active=1',(base,)).fetchone() or not g.db.execute('SELECT 1 FROM currency_catalog WHERE code=? AND active=1',(quote,)).fetchone():
+                        raise BillingError('Les deux devises doivent exister et être actives dans le référentiel.')
+                    old=g.db.execute('SELECT rate FROM exchange_rates WHERE base_currency=? AND quote_currency=? AND effective_on=?',(base,quote,effective_on)).fetchone()
+                    with g.db:
+                        g.db.execute('''INSERT INTO exchange_rates(base_currency,quote_currency,rate,effective_on,source) VALUES(?,?,?,?,?)
+                                        ON CONFLICT(base_currency,quote_currency,effective_on) DO UPDATE SET rate=excluded.rate,source=excluded.source''',(base,quote,str(rate),effective_on,source))
+                        record_change(g.db,'exchange_rates',f'{base}/{quote}/{effective_on}',old['rate'] if old else '',str(rate),'Enregistrement depuis Paramètres')
+                    flash('Taux de change enregistré.','success')
+                    clear_settings_draft(section)
+                    return settings_redirect('catalogs')
+                if section == 'tax_profile':
+                    code=request.form.get('code','').strip().upper()
+                    label=request.form.get('label','').strip()
+                    vat_base=request.form.get('vat_base','ENERGY').strip().upper()
+                    effective_from=request.form.get('effective_from','').strip()
+                    active=1 if request.form.get('active')=='yes' else 0
+                    vat_rate=decimal(request.form.get('vat_rate',''),'TVA')
+                    local_rate=decimal(request.form.get('local_rate','0'),'Taxe locale')
+                    try:
+                        date.fromisoformat(effective_from)
+                    except ValueError:
+                        raise BillingError('Date d’application du profil fiscal invalide.')
+                    if not re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', code):
+                        raise BillingError('Code de profil fiscal invalide.')
+                    if not label or len(label)>100:
+                        raise BillingError('Le libellé du profil fiscal est obligatoire et limité à 100 caractères.')
+                    if vat_base not in ('ENERGY','ENERGY_LOCAL','ENERGY_LOCAL_FEES'):
+                        raise BillingError('Base de TVA invalide.')
+                    if vat_rate>100 or local_rate>100:
+                        raise BillingError('Les taux fiscaux doivent être compris entre 0 et 100 %.')
+                    old=g.db.execute('SELECT * FROM tax_profiles WHERE code=?',(code,)).fetchone()
+                    with g.db:
+                        if old:
+                            old_value=f"{old['label']}|{old['vat_rate']}|{old['vat_base']}|{old['local_rate']}|{old['effective_from']}|{old['active']}"
+                            new_value=f"{label}|{vat_rate}|{vat_base}|{local_rate}|{effective_from}|{active}"
+                            record_change(g.db,'tax_profiles',code,old_value,new_value,'Modification depuis Paramètres')
+                            g.db.execute('''UPDATE tax_profiles SET label=?,vat_rate=?,vat_base=?,local_rate=?,effective_from=?,active=? WHERE code=?''',
+                                         (label,str(vat_rate),vat_base,str(local_rate),effective_from,active,code))
+                        else:
+                            g.db.execute('''INSERT INTO tax_profiles(code,label,vat_rate,vat_base,local_rate,effective_from,active)
+                                            VALUES(?,?,?,?,?,?,?)''',
+                                         (code,label,str(vat_rate),vat_base,str(local_rate),effective_from,active))
+                            record_change(g.db,'tax_profiles',code,'',label,'Création depuis Paramètres')
+                    flash('Profil fiscal enregistré.','success')
+                    clear_settings_draft(section)
+                    return settings_redirect('catalogs')
                 if section == 'identity' and (not values['company_name'] or not values['address']):
                     raise BillingError('Société et adresse obligatoires.')
                 if section == 'identity':
@@ -473,7 +698,7 @@ def create_app():
                 settings_drafts=dict(session.get('settings_drafts',{}));settings_drafts[section]=section_values;session['settings_drafts']=settings_drafts
                 flash(str(e),'error')
             conf.update(values)
-        return render_template('settings.html',title='Paramètres SEL',settings=conf,customer_types=customer_types,tariffs=tariffs,policy=billing_policy(g.db),exchange_rate=current_exchange_rate,active_tab=active_tab,settings_drafts=settings_drafts if request.method=='POST' else dict(session.get('settings_drafts',{})))
+        return render_template('settings.html',title='Paramètres SEL',settings=conf,customer_types=customer_types,tariffs=tariffs,policy=billing_policy(g.db),exchange_rate=current_exchange_rate,active_tab=active_tab,settings_drafts=settings_drafts if request.method=='POST' else dict(session.get('settings_drafts',{})),currencies=currencies,payment_methods=payment_methods,tax_profiles=tax_profiles,tariffs_history=tariffs_history,exchange_rates=exchange_rates,changes=changes)
 
     @app.get('/invoices')
     @protected
@@ -511,7 +736,7 @@ def create_app():
     @protected
     def new_invoice():
         conf=db.settings(g.db)
-        options=g.db.execute('SELECT * FROM clients ORDER BY name').fetchall()
+        options=g.db.execute("SELECT * FROM clients WHERE status='ACTIVE' ORDER BY name").fetchall()
         if request.method=='POST':
             # Une nouvelle tentative invalide ne doit jamais pouvoir confirmer
             # un aperçu plus ancien resté en session.
