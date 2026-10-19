@@ -66,10 +66,24 @@ def test_sel_navy_is_the_dominant_surface_color_not_the_light_blue_accent():
 def test_auth_logo_uses_a_deterministic_width_without_clipping():
     css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
 
-    assert ".auth-identity { display: block; width: min(100%, 400px);" in css
+    assert ".auth-identity { display: block; width: min(100%, 340px);" in css
     assert ".auth-identity .official-logo { display: block; width: 100%;" in css
     assert ".auth-brand {" in css
     assert "padding-inline: clamp(24px, 4vw, 56px);" in css
+
+
+def test_auth_layout_keeps_brand_and_form_balanced_on_wide_windows():
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert ".auth-shell { grid-template-columns: minmax(420px, 44%) minmax(520px, 1fr);" in css
+    assert ".auth-brand { min-height: 100vh; overflow: hidden;" in css
+    assert ".auth-identity { display: block; width: min(100%, 340px);" in css
+    assert "padding: clamp(32px, 5vw, 72px) clamp(32px, 6vw, 96px);" in css
+    assert ".auth-form { width: 100%; max-width: 460px;" in css
+    assert "@media (min-width: 761px) and (max-width: 1100px)" in css
+    assert ".auth-shell { grid-template-columns: minmax(360px, 40%) minmax(0, 1fr);" in css
+    assert "@media (max-width: 760px)" in css
+    assert ".auth-brand { min-height: 250px;" in css
 
 
 def test_authentication_hint_remains_readable_on_the_blue_panel():
