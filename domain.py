@@ -18,12 +18,10 @@ def validate_due_date(issue_date: str, due_date: str) -> None:
     if not due_date:
         return
     try:
-        issued = date.fromisoformat(issue_date)
-        due = date.fromisoformat(due_date)
+        date.fromisoformat(issue_date)
+        date.fromisoformat(due_date)
     except ValueError:
         raise BillingError("Date d’échéance invalide.") from None
-    if due < issued:
-        raise BillingError("La date d’échéance ne peut pas précéder la date d’émission.")
 
 
 def validate_payment_reference(method: str, reference: str) -> None:

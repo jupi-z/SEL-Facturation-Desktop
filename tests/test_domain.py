@@ -47,9 +47,14 @@ def test_invalid_readings(prev,cur):
     with pytest.raises(BillingError):amount(prev,cur)
 
 
-def test_due_date_cannot_precede_issue_date():
-    with pytest.raises(BillingError, match='échéance'):
-        validate_due_date('2026-10-14', '2026-10-13')
+def test_due_date_can_be_before_issue_date_for_late_billing():
+    validate_due_date('2026-10-14', '2026-10-13')
+
+
+@pytest.mark.parametrize('due_date', ['2026-13-01', 'not-a-date'])
+def test_due_date_still_requires_a_valid_calendar_date(due_date):
+    with pytest.raises(BillingError, match='Date d’échéance invalide'):
+        validate_due_date('2026-10-14', due_date)
 
 
 def test_payment_reference_required_for_traceable_methods():
