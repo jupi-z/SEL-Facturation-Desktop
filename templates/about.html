@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+{% block body %}
+<section class="panel about-page" aria-labelledby="about-title">
+  <div class="sectionhead">
+    <div>
+      <div class="eyebrow">IDENTITÉ DU LOGICIEL</div>
+      <h2 id="about-title">À propos et mentions légales</h2>
+      <p class="sub">SEL Facturation Desktop est un logiciel local conçu pour la gestion de la facturation de la Société d’Énergie du Lualaba.</p>
+    </div>
+    <span class="pill">Version {{ app_version }}</span>
+  </div>
+
+  <div class="about-rule"></div>
+  <section class="about-section" aria-labelledby="sel-identity-title">
+    <div class="eyebrow" id="sel-identity-title">PROPRIÉTAIRE MÉTIER</div>
+    <h3>SOCIÉTÉ D’ÉNERGIE DU LUALABA</h3>
+    <p>Les écrans, les paramètres de facturation et les documents générés par cette application sont établis pour les besoins opérationnels de SEL.</p>
+    <p class="note">SEL Facturation accompagne la préparation, l’émission et le suivi des décomptes d’électricité.</p>
+  </section>
+
+  <section class="about-section" aria-labelledby="developer-title">
+    <div class="eyebrow" id="developer-title">DÉVELOPPEMENT DU LOGICIEL</div>
+    <div class="developer-marks">
+      <img src="{{ url_for('static', filename='brand/monarque-group-horizontal.png') }}" alt="MonarQue Group" class="developer-logo developer-logo-monarque">
+      <img src="{{ url_for('static', filename='brand/ltex.png') }}" alt="LTEX" class="developer-logo developer-logo-ltex">
+    </div>
+    <h3>{{ developer.name }}</h3>
+    <p>{{ developer.role }} · {{ developer.legal_form }}</p>
+    <dl class="legal-details">
+      <div><dt>RCCM</dt><dd>{{ developer.rccm }}</dd></div>
+      <div><dt>Identification nationale</dt><dd>{{ developer.national_id }}</dd></div>
+      <div><dt>Siège social</dt><dd>{{ developer.address }}</dd></div>
+      <div><dt>Contact</dt><dd><a href="mailto:{{ developer.email }}">{{ developer.email }}</a><br>{{ developer.phones }}</dd></div>
+      <div><dt>Site officiel</dt><dd><a href="{{ developer.website }}" rel="noreferrer">{{ developer.website }}</a></dd></div>
+    </dl>
+  </section>
+
+  <footer class="about-footer">Designed and secured by LTEX · MonarQue Group · © 2026 MonarQue Group S.A.S. Tous droits réservés.</footer>
+</section>
+{% endblock %}

@@ -7,6 +7,7 @@ if not importlib.util.find_spec("flask"):
     pytest.skip("Flask is not installed", allow_module_level=True)
 
 from app import create_app
+from version import APP_VERSION
 
 
 @pytest.fixture
@@ -30,4 +31,4 @@ def test_update_status_is_explicitly_not_configured_without_manifest(authenticat
     response = authenticated_client.get("/updates/status")
 
     assert response.status_code == 200
-    assert response.json == {"state": "not_configured", "version": "0.3.3"}
+    assert response.json == {"state": "not_configured", "version": APP_VERSION}

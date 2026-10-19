@@ -15,5 +15,5 @@
   {% if not stats['configured'] %}<a class="button secondary" href="{{ url_for('settings_view') }}">Ouvrir les paramètres</a>{% endif %}
 </section>
 <section class="panel"><div class="sectionhead"><h2>Documents récents</h2><a href="{{ url_for('invoices') }}">Tout l'historique →</a></div><div class="tablewrap"><table><thead><tr><th>Document</th><th>Client</th><th>Période</th><th>État</th><th>Action</th></tr></thead><tbody>{% for row in recent %}<tr><td><b>{{ row['number'] }}</b></td><td>{{ row['client_name'] }}</td><td>{{ row['billing_period'] }}</td><td><span class="pill">{{ 'Annulé' if row['status']=='VOID' else 'Enregistré' }}</span></td><td><a href="{{ url_for('invoice_detail',iid=row['id']) }}">Ouvrir →</a></td></tr>{% else %}<tr><td colspan="5">Aucun document pour le moment.</td></tr>{% endfor %}</tbody></table></div></section>
-<p class="note">⚠ Les montants et les factures de ce logiciel ne sont pas authentifiés par la DGI. Vérifiez les tarifs et leur assiette avant toute utilisation réelle.</p>
+<p class="note">Les décomptes sont calculés selon le barème actif et conservés localement sur cet ordinateur.</p>
 {% endblock %}

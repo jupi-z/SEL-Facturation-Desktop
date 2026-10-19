@@ -41,6 +41,14 @@ def test_dashboard_explains_configuration_and_data_protection(authenticated_clie
     assert "Solde à suivre" in html
 
 
+def test_dashboard_stays_operational_without_compliance_disclaimer(authenticated_client):
+    html = authenticated_client.get("/").get_data(as_text=True)
+
+    assert "DGI" not in html
+    assert "authentifi" not in html.lower()
+    assert "assiette" not in html.lower()
+
+
 def test_dashboard_does_not_call_issued_amount_an_estimation(authenticated_client):
     html = authenticated_client.get("/").get_data(as_text=True)
 

@@ -50,3 +50,15 @@ def test_cdf_variant_pdf_discloses_source_currency_and_rate():
     text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_invoice(invoice, []))).pages)
     assert "2360" in text
     assert "USD" in text and "CDF" in text
+
+
+def test_pdf_uses_the_snapshot_label_for_a_future_customer_type():
+    invoice = {
+        "number": "SEL-2026-000103", "issue_date": "2026-10-16", "due_date": "2026-10-31",
+        "billing_period": "2026-10", "currency": "USD", "status": "ISSUED", "note": "",
+        "client_snapshot": json.dumps({"name": "Client industriel", "address": "Kolwezi", "meter_number": "", "contract_number": "C1"}),
+        "company_snapshot": json.dumps({"company_name": "SEL", "address": "Kolwezi"}),
+        "calc_snapshot": json.dumps({"pricing_model": "FLAT_KWH", "customer_type": "INDUSTRIAL", "customer_type_label": "Industriel", "unit_price": "0.15", "kwh": "100", "lines": [{"range": "Consommation", "quantity": "100", "unit_price": "0.15", "amount": "15.00"}], "energy": "15.00", "local_rate": "0", "local_tax": "0.00", "vat_rate": "16", "vat_basis": "15.00", "vat": "2.40", "fee": "0.00", "total": "17.40"}),
+    }
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_invoice(invoice, []))).pages)
+    assert "Industriel" in text

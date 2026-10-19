@@ -5,15 +5,19 @@ import base64
 import ctypes
 import logging
 import os
+import sqlite3
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import re
+import sys
 import threading
 import time
 from uuid import uuid4
 
 from werkzeug.serving import make_server
 import db
+from installer_version import is_canonical_installation_executable, write_installation_marker
+from version import APP_VERSION
 
 
 DOCUMENT_NAME = re.compile(r"SEL-\d{4}-\d{6}\.pdf\Z", re.IGNORECASE)
@@ -139,8 +143,32 @@ def _acquire_single_instance():
     return mutex
 
 
+def startup_error_message(error: Exception) -> str:
+    """Return an actionable native startup message for the failing layer."""
+    if isinstance(error, sqlite3.Error):
+        return (
+            "Le démarrage a échoué lors de l'ouverture ou de la mise à niveau "
+            "de la base de données locale. Aucune suppression de données n'est "
+            "effectuée automatiquement. Consultez application.log dans le "
+            "dossier de données SEL."
+        )
+    return (
+        "Le démarrage a échoué. Consultez application.log dans le dossier de "
+        "données SEL.\nVérifiez que Microsoft Edge WebView2 Runtime est installé."
+    )
+
+
 def main():
     db.home().mkdir(parents=True, exist_ok=True)
+    # A standalone EXE is allowed for diagnostics and portable use. Record
+    # only copies that have actually been launched so the setup preflight can
+    # identify them later; the official installed path is registry-owned.
+    executable = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
+    if getattr(sys, "frozen", False) and not is_canonical_installation_executable(executable):
+        try:
+            write_installation_marker(executable, APP_VERSION, db.home())
+        except (OSError, ValueError):
+            logging.warning("Impossible d'enregistrer le marqueur d'installation portable", exc_info=True)
     logging.basicConfig(
         level=logging.INFO,
         handlers=[
@@ -184,16 +212,16 @@ def main():
         )
         # WebView2 : l'interface ne nécessite plus de navigateur externe.
         webview.start(gui="edgechromium", debug=False)
-    except Exception:
+    except Exception as error:
         logging.exception("Échec du démarrage de SEL Facturation")
         if os.name == "nt":
             ctypes.windll.user32.MessageBoxW(
                 None,
-                "Le démarrage a échoué. Consultez application.log dans le dossier de données SEL.\n"
-                "Vérifiez que Microsoft Edge WebView2 Runtime est installé.",
+                startup_error_message(error),
                 "SEL Facturation",
                 0x10,
             )
+            return
         raise
     finally:
         if server is not None:

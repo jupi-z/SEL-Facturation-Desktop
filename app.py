@@ -22,12 +22,25 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
 import db
 from domain import (BillingError, calculate_flat_rate, calculate_from_readings,
                     calculate_from_settings, convert_amount, decimal, fmt, money,
-                    validate_due_date, validate_payment_reference)
+                    validate_due_date)
 from invoice_pdf import render_invoice
 from update_client import fetch_manifest
 from version import APP_VERSION
+from config_service import active_customer_types, active_payment_methods, billing_policy, current_tariffs, customer_type_label, record_change
 
 PAGE_SIZE = 50
+
+DEVELOPER_LEGAL = {
+    'name': 'MonarQue Group S.A.S.',
+    'role': 'Pôle informatique LTEX',
+    'legal_form': 'Société par Actions Simplifiée de droit congolais',
+    'rccm': 'CD/KWZ/RCCM/26-B-00523',
+    'national_id': '14-14300-N00001Y',
+    'address': 'N° 900, Avenue Bunkeya, Quartier Mutoshi, Commune de Manika, Ville de Kolwezi, Province du Lualaba, République Démocratique du Congo',
+    'email': 'contact@monarquegrp.com',
+    'phones': '+243 840 855 547 et +243 971 666 441',
+    'website': 'https://monarquegrp.com/',
+}
 
 
 def page_number(value):
@@ -133,6 +146,11 @@ def create_app():
     def health():
         return {'app':'SEL-Facturation-Local','status':'ok','version':APP_VERSION}
 
+    @app.get('/about')
+    @protected
+    def about():
+        return render_template('about.html', title='À propos et mentions légales', developer=DEVELOPER_LEGAL)
+
     @app.get('/updates/status')
     @protected
     def update_status():
@@ -217,12 +235,15 @@ def create_app():
     @app.route('/clients',methods=['GET','POST'])
     @protected
     def clients():
+        customer_types = active_customer_types(g.db)
+        customer_type_codes = {item['code'] for item in customer_types}
+        client_form=session.get('client_form',{})
         if request.method=='POST':
             values={k:request.form.get(k,'').strip() for k in ('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient')}
             try:
                 if not values['name'] or not values['address']:
                     raise BillingError('Nom et adresse sont obligatoires.')
-                if values['customer_type'] and values['customer_type'] not in ('RESIDENTIAL','COMMERCIAL'):
+                if values['customer_type'] and values['customer_type'] not in customer_type_codes:
                     raise BillingError('Type d’abonné invalide.')
                 decimal(values['coefficient'] or '1','Coefficient',allow_zero=False)
                 if len(values['name'])>180 or len(values['meter_number'])>80: raise BillingError('Nom ou numéro de compteur trop long.')
@@ -231,9 +252,9 @@ def create_app():
                 code=f'SEL-C-{next_id:05d}'
                 g.db.execute('''INSERT INTO clients(code,name,address,category,client_type,customer_type,billing_frequency,contract_number,meter_number,center,service_point,nif,phone,coefficient)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(code,values['name'],values['address'],values['category'] or '',values['client_type'] or '',values['customer_type'],values['billing_frequency'] or 'MONTHLY',values['contract_number'],values['meter_number'],values['center'] or 'KOLWEZI',values['service_point'],values['nif'],values['phone'],values['coefficient'] or '1'))
-                g.db.commit();flash('Client enregistré.','success');return redirect(url_for('clients'))
+                g.db.commit();session.pop('client_form',None);flash('Client enregistré.','success');return redirect(url_for('clients'))
             except (BillingError,sqlite3.IntegrityError) as e:
-                g.db.rollback();flash(str(e),'error')
+                g.db.rollback();session['client_form']=values;client_form=values;flash(str(e),'error')
         term=request.args.get('q','').strip()[:120]
         page=page_number(request.args.get('page','1'))
         offset=(page-1)*PAGE_SIZE
@@ -246,35 +267,108 @@ def create_app():
         total=g.db.execute(f'SELECT COUNT(*) FROM clients {where}',search_args).fetchone()[0]
         result=g.db.execute(f'SELECT * FROM clients {where} ORDER BY id DESC LIMIT ? OFFSET ?',search_args+[PAGE_SIZE,offset]).fetchall()
         pages=max(1,(total+PAGE_SIZE-1)//PAGE_SIZE)
-        return render_template('clients.html',title='Abonnés',clients=result,query=term,page=page,pages=pages,total=total)
+        return render_template('clients.html',title='Abonnés',clients=result,query=term,page=page,pages=pages,total=total,customer_types=customer_types,client_form=client_form)
 
     @app.route('/clients/<int:cid>/edit',methods=['GET','POST'])
     @protected
     def edit_client(cid):
         current=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
         if not current: abort(404)
+        draft_key=f'client_edit_{cid}'
+        form_client=dict(current)
+        form_client.update(session.get(draft_key,{}))
+        customer_type_codes = {item['code'] for item in active_customer_types(g.db)}
         if request.method=='POST':
             values={k:request.form.get(k,'').strip() for k in ('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient')}
             try:
                 if not values['name'] or not values['address']: raise BillingError('Nom et adresse obligatoires.')
-                if values['customer_type'] and values['customer_type'] not in ('RESIDENTIAL','COMMERCIAL'): raise BillingError('Type d’abonné invalide.')
+                if values['customer_type'] and values['customer_type'] not in customer_type_codes: raise BillingError('Type d’abonné invalide.')
                 decimal(values['coefficient'] or '1','Coefficient',allow_zero=False)
                 if len(values['name'])>180 or len(values['meter_number'])>80:
                     raise BillingError('Nom ou numéro de compteur trop long.')
                 g.db.execute('''UPDATE clients SET name=?,address=?,category=?,client_type=?,customer_type=?,billing_frequency=?,contract_number=?,meter_number=?,center=?,service_point=?,nif=?,phone=?,coefficient=? WHERE id=?''',(*[values[k] for k in values],cid))
-                g.db.commit();flash('Fiche mise à jour. Les anciennes factures conservent leurs données.','success');return redirect(url_for('clients'))
-            except BillingError as e: flash(str(e),'error')
-        return render_template('client_edit.html',title='Modifier le client',client=current)
+                g.db.commit();session.pop(draft_key,None);flash('Fiche mise à jour. Les anciennes factures conservent leurs données.','success');return redirect(url_for('clients'))
+            except BillingError as e:
+                session[draft_key]=values;form_client=dict(current);form_client.update(values);flash(str(e),'error')
+        return render_template('client_edit.html',title='Modifier le client',client=form_client,client_draft_active=bool(session.get(draft_key)))
 
     @app.route('/settings',methods=['GET','POST'])
     @protected
     def settings_view():
         conf=db.settings(g.db)
+        customer_types=active_customer_types(g.db)
+        tariffs=current_tariffs(g.db)
+        settings_tabs={'overview','identity','tariffs','customer-types','operations'}
+        section_tabs={'identity':'identity','tariffs':'tariffs','customer_type':'customer-types','operations':'operations'}
+        settings_drafts=dict(session.get('settings_drafts',{}))
+        requested_tab=request.args.get('tab','').strip()
+        if requested_tab in settings_tabs:
+            active_tab=requested_tab
+        else:
+            active_tab=next((section_tabs.get(section,'overview') for section in settings_drafts if section_tabs.get(section) in settings_tabs),'overview')
+
+        def settings_redirect(tab):
+            selected=tab if tab in settings_tabs else 'overview'
+            return redirect(url_for('settings_view', tab=selected) + f'#{selected}')
+
+        def clear_settings_draft(section):
+            drafts=dict(session.get('settings_drafts',{}))
+            drafts.pop(section,None)
+            if drafts:
+                session['settings_drafts']=drafts
+            else:
+                session.pop('settings_drafts',None)
+
+        try:
+            current_exchange_rate=db.exchange_rate_for(g.db,'USD','CDF',date.today().isoformat())['rate']
+        except ValueError:
+            current_exchange_rate=conf.get('exchange_rate_usd_cdf','2360')
         if request.method=='POST':
             section=request.form.get('section','tariffs')
+            requested_return_tab=request.form.get('return_tab','').strip()
+            active_tab=requested_return_tab if requested_return_tab in settings_tabs else section_tabs.get(section,'overview')
             fields=['company_name','tagline','address','phone','email','website','rccm','nif','id_nat','vat_rate','residential_rate','commercial_rate','exchange_rate_usd_cdf']
             values={k:request.form.get(k,'').strip() for k in fields}
+            section_values={k:request.form.get(k,'').strip() for k in request.form.keys() if k not in ('_csrf','section','return_tab')}
+            if section == 'customer_type':
+                section_values['active']='yes' if request.form.get('active')=='yes' else ''
             try:
+                if section == 'operations':
+                    prefix=request.form.get('invoice_prefix','').strip().upper()
+                    if not re.fullmatch(r'[A-Z0-9][A-Z0-9_-]{0,15}', prefix):
+                        raise BillingError('Le préfixe doit contenir 1 à 16 caractères A-Z, chiffres, tiret ou underscore.')
+                    try:
+                        width=max(1,min(12,int(request.form.get('invoice_sequence_width','6'))))
+                        retention=max(1,min(365,int(request.form.get('backup_retention_count','14'))))
+                    except ValueError:
+                        raise BillingError('La largeur de numérotation et la rétention doivent être des nombres entiers.')
+                    with g.db:
+                        for key,value in (('invoice_prefix',prefix),('invoice_sequence_width',str(width)),('backup_retention_count',str(retention))):
+                            old=g.db.execute('SELECT value FROM billing_policy WHERE key=?',(key,)).fetchone()
+                            record_change(g.db,'operations',key,old['value'] if old else '',value,'Modification depuis Paramètres')
+                            g.db.execute('INSERT INTO billing_policy(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,value))
+                    flash('Politique opérationnelle mise à jour.','success')
+                    clear_settings_draft(section)
+                    return settings_redirect(active_tab)
+                if section == 'customer_type':
+                    code=request.form.get('code','').strip().upper()
+                    label=request.form.get('label','').strip()
+                    if not re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', code):
+                        raise BillingError('Le code doit contenir 2 à 32 caractères A-Z, chiffres ou underscore.')
+                    if not label or len(label)>80:
+                        raise BillingError('Le libellé du type d’abonné est obligatoire et limité à 80 caractères.')
+                    active=request.form.get('active')=='yes'
+                    initial_rate=decimal(request.form.get('initial_rate',''),'Tarif initial',allow_zero=False) if active else None
+                    effective_from=date.today().replace(day=1).isoformat()
+                    with g.db:
+                        g.db.execute("INSERT INTO customer_types(code,label,active,sort_order) VALUES(?,?,?,?)", (code,label,1 if active else 0,100))
+                        record_change(g.db,'customer_types',code,'',label,'Création depuis Paramètres')
+                        if active:
+                            g.db.execute("INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f'{code}-{effective_from[:7]}',code,'KWH',str(initial_rate),'USD','16',effective_from))
+                            record_change(g.db,'tariffs',code,'',str(initial_rate),'Tarif initial depuis Paramètres')
+                    flash('Type d’abonné ajouté.','success')
+                    clear_settings_draft(section)
+                    return settings_redirect(active_tab)
                 if section == 'identity' and (not values['company_name'] or not values['address']):
                     raise BillingError('Société et adresse obligatoires.')
                 if section == 'identity':
@@ -282,11 +376,18 @@ def create_app():
                     with g.db:
                         for k in identity_fields: g.db.execute('UPDATE settings SET value=? WHERE key=?',(values[k],k))
                     flash('Identité SEL mise à jour. Les anciennes factures restent inchangées.','success')
-                    return redirect(url_for('settings_view'))
+                    clear_settings_draft(section)
+                    return settings_redirect(active_tab)
                 if section != 'tariffs':
                     raise BillingError('Section de paramètres invalide.')
-                residential=decimal(values['residential_rate'],'Tarif résidentiel',allow_zero=False)
-                commercial=decimal(values['commercial_rate'],'Tarif commercial',allow_zero=False)
+                legacy_rates={'RESIDENTIAL': 'residential_rate', 'COMMERCIAL': 'commercial_rate'}
+                submitted_rates={}
+                for customer_type in customer_types:
+                    code=customer_type['code']
+                    raw=request.form.get(f'tariff_rate_{code}','').strip()
+                    if not raw and code in legacy_rates:
+                        raw=values[legacy_rates[code]]
+                    submitted_rates[code]=decimal(raw, f"Tarif {customer_type['label']}", allow_zero=False)
                 rate=decimal(values['exchange_rate_usd_cdf'],'Taux USD/CDF',allow_zero=False)
                 if values['vat_rate'] != '16':
                     raise BillingError('La TVA SEL doit être fixée à 16 %.')
@@ -300,15 +401,29 @@ def create_app():
                     g.db.execute("UPDATE settings SET value='USD' WHERE key='currency'")
                     g.db.execute("UPDATE settings SET value=? WHERE key='exchange_rate_usd_cdf'", (str(rate),))
                     g.db.execute("UPDATE settings SET value=? WHERE key='exchange_rate_date'", (date.today().isoformat(),))
+                    previous_rate=g.db.execute("SELECT rate FROM exchange_rates WHERE base_currency='USD' AND quote_currency='CDF' AND effective_on=?", (date.today().isoformat(),)).fetchone()
+                    record_change(g.db, 'exchange_rates', 'USD/CDF', previous_rate['rate'] if previous_rate else '', str(rate), 'Modification depuis Paramètres')
+                    g.db.execute("INSERT INTO exchange_rates(base_currency,quote_currency,rate,effective_on,source) VALUES('USD','CDF',?,?,?) ON CONFLICT(base_currency,quote_currency,effective_on) DO UPDATE SET rate=excluded.rate,source=excluded.source", (str(rate),date.today().isoformat(),'SEL'))
                     effective_from = date.today().replace(day=1).isoformat()
-                    g.db.execute("INSERT OR REPLACE INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f"RESIDENTIAL-{effective_from[:7]}",'RESIDENTIAL','KWH',str(residential),'USD','16',effective_from))
-                    g.db.execute("INSERT OR REPLACE INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f"COMMERCIAL-{effective_from[:7]}",'COMMERCIAL','KWH',str(commercial),'USD','16',effective_from))
+                    for customer_type in customer_types:
+                        code=customer_type['code']
+                        tariff_code=f"{code}-{effective_from[:7]}"
+                        previous=g.db.execute("SELECT unit_price FROM tariff_plans WHERE code=?", (tariff_code,)).fetchone()
+                        if previous:
+                            record_change(g.db, 'tariffs', code, previous['unit_price'], str(submitted_rates[code]), 'Modification depuis Paramètres')
+                            g.db.execute("UPDATE tariff_plans SET unit_price=?,currency='USD',vat_rate='16',active=1 WHERE code=?", (str(submitted_rates[code]),tariff_code))
+                        else:
+                            record_change(g.db, 'tariffs', code, '', str(submitted_rates[code]), 'Création depuis Paramètres')
+                            g.db.execute("INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (tariff_code,code,'KWH',str(submitted_rates[code]),'USD','16',effective_from))
                     g.db.execute("UPDATE settings SET value='1' WHERE key='configured'")
                 flash('Paramètres validés. Les anciennes factures restent inchangées.','success')
-                return redirect(url_for('settings_view'))
-            except BillingError as e: flash(str(e),'error')
+                clear_settings_draft(section)
+                return settings_redirect(active_tab)
+            except (BillingError, sqlite3.IntegrityError) as e:
+                settings_drafts=dict(session.get('settings_drafts',{}));settings_drafts[section]=section_values;session['settings_drafts']=settings_drafts
+                flash(str(e),'error')
             conf.update(values)
-        return render_template('settings.html',title='Paramètres SEL',settings=conf)
+        return render_template('settings.html',title='Paramètres SEL',settings=conf,customer_types=customer_types,tariffs=tariffs,policy=billing_policy(g.db),exchange_rate=current_exchange_rate,active_tab=active_tab,settings_drafts=settings_drafts if request.method=='POST' else dict(session.get('settings_drafts',{})))
 
     @app.get('/invoices')
     @protected
@@ -348,7 +463,11 @@ def create_app():
         conf=db.settings(g.db)
         options=g.db.execute('SELECT * FROM clients ORDER BY name').fetchall()
         if request.method=='POST':
+            # Une nouvelle tentative invalide ne doit jamais pouvoir confirmer
+            # un aperçu plus ancien resté en session.
             session.pop('invoice_draft',None)
+            submitted_form={key:request.form.get(key,'').strip() for key in ('client_id','billing_period','consumption_kwh','due_date','note','previous','current','fee')}
+            session['invoice_form']=submitted_form
             try:
                 if conf.get('configured')!='1': raise BillingError('Validez d’abord le barème et les taxes dans Paramètres.')
                 cid=int(request.form.get('client_id','0'))
@@ -363,25 +482,27 @@ def create_app():
                 direct_kwh=request.form.get('consumption_kwh','').strip()
                 if direct_kwh:
                     customer_type=client['customer_type']
-                    if customer_type not in ('RESIDENTIAL','COMMERCIAL'):
-                        raise BillingError('Attribuez un type Résidentiel ou Commercial avant de facturer.')
+                    if not customer_type:
+                        raise BillingError('Attribuez un type d’abonné avant de facturer.')
                     plan=db.tariff_plan_for(g.db,customer_type,period+'-01')
                     calc=calculate_flat_rate(consumption_kwh=direct_kwh,unit_price=plan['unit_price'],vat_rate=plan['vat_rate'],currency='USD')
-                    calc.update({'customer_type':customer_type,'tariff_code':plan['code'],'unit_price':plan['unit_price']})
+                    calc.update({'customer_type':customer_type,'customer_type_label':customer_type_label(g.db, customer_type),'tariff_code':plan['code'],'tariff_effective_from':plan['effective_from'],'unit_price':plan['unit_price']})
                 else:
                     calc=calculate_from_settings(request.form.get('previous',''),request.form.get('current',''),client['coefficient'],conf,request.form.get('fee','0') or '0')
                 if db.active_invoice(g.db,cid,period): raise BillingError('Une facture active existe déjà pour ce client et cette période.')
-                session['invoice_draft']={'client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'consumption_kwh':direct_kwh,'fee':request.form.get('fee','0').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500]}
+                session['invoice_draft']={'client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'consumption_kwh':direct_kwh,'fee':request.form.get('fee','').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500], 'tariff_code':calc.get('tariff_code',''), 'tariff_effective_from':calc.get('tariff_effective_from',''), 'unit_price':calc.get('unit_price',''), 'vat_rate':calc.get('vat_rate',''), 'currency':calc.get('currency','USD')}
+                session.pop('invoice_form',None)
                 return render_template('invoice_preview.html',title='Vérifier le décompte',draft=session['invoice_draft'],client=client,calc=calc,configured=True)
             except (BillingError,ValueError,sqlite3.IntegrityError) as e:
                 g.db.rollback();flash(f'Émission interrompue : {e}','error')
-        period=date.today().strftime('%Y-%m')
-        return render_template('new_invoice.html',title='Nouveau décompte',clients=options,period=period,configured=conf.get('configured')=='1')
+        form_draft=session.get('invoice_form') or session.get('invoice_draft') or {}
+        period=form_draft.get('billing_period') or date.today().strftime('%Y-%m')
+        return render_template('new_invoice.html',title='Nouveau décompte',clients=options,period=period,configured=conf.get('configured')=='1',draft=form_draft)
 
     @app.post('/invoices/new/confirm')
     @protected
     def confirm_invoice():
-        draft=session.pop('invoice_draft',None)
+        draft=session.get('invoice_draft')
         if not draft:
             flash('Aucun décompte en attente de confirmation.','error')
             return redirect(url_for('new_invoice'))
@@ -395,11 +516,14 @@ def create_app():
             client=dict(client)
             if draft.get('consumption_kwh'):
                 customer_type=client['customer_type']
-                if customer_type not in ('RESIDENTIAL','COMMERCIAL'):
+                if not customer_type:
                     raise BillingError('Type d’abonné manquant ou invalide.')
                 plan=db.tariff_plan_for(g.db,customer_type,period+'-01')
-                calc=calculate_flat_rate(consumption_kwh=draft['consumption_kwh'],unit_price=plan['unit_price'],vat_rate=plan['vat_rate'],currency='USD')
-                calc.update({'customer_type':customer_type,'tariff_code':plan['code'],'unit_price':plan['unit_price']})
+                unit_price=draft.get('unit_price') or plan['unit_price']
+                vat_rate=draft.get('vat_rate') or plan['vat_rate']
+                invoice_currency=draft.get('currency') or plan['currency']
+                calc=calculate_flat_rate(consumption_kwh=draft['consumption_kwh'],unit_price=unit_price,vat_rate=vat_rate,currency=invoice_currency)
+                calc.update({'customer_type':customer_type,'customer_type_label':customer_type_label(g.db, customer_type),'tariff_code':draft.get('tariff_code') or plan['code'],'tariff_effective_from':draft.get('tariff_effective_from') or plan['effective_from'],'unit_price':unit_price})
             else:
                 calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft['fee'])
             g.db.execute('BEGIN IMMEDIATE')
@@ -408,7 +532,15 @@ def create_app():
             row=g.db.execute('SELECT last_number FROM sequences WHERE year=?',(year,)).fetchone()
             next_n=(row['last_number']+1) if row else 1
             g.db.execute('INSERT INTO sequences(year,last_number) VALUES(?,?) ON CONFLICT(year) DO UPDATE SET last_number=excluded.last_number',(year,next_n))
-            number=f'SEL-{year}-{next_n:06d}'
+            policy=billing_policy(g.db)
+            prefix=policy.get('invoice_prefix','SEL').strip() or 'SEL'
+            if not re.fullmatch(r'[A-Z0-9][A-Z0-9_-]{0,15}', prefix):
+                raise BillingError('Préfixe de numérotation invalide.')
+            try:
+                width=max(1,min(12,int(policy.get('invoice_sequence_width','6'))))
+            except ValueError:
+                width=6
+            number=f'{prefix}-{year}-{next_n:0{width}d}'
             s_client={k:client[k] for k in client.keys() if k!='created_at'}
             s_company={k:v for k,v in conf.items() if k not in ('configured',)}
             invoice_currency=calc.get('currency', conf['currency'])
@@ -416,6 +548,7 @@ def create_app():
                 VALUES(?,?,?,?,?,?,?,?,?,?)''',(number,cid,period,issue_date,draft['due_date'],json.dumps(s_client,ensure_ascii=False),json.dumps(s_company,ensure_ascii=False),json.dumps(calc,ensure_ascii=False),invoice_currency,draft['note']))
             inv_id=cur.lastrowid
             g.db.commit();flash('Décompte enregistré. Vérifiez le PDF avant impression.','success')
+            session.pop('invoice_draft',None)
             return redirect(url_for('invoice_detail',iid=inv_id))
         except (BillingError,ValueError,sqlite3.IntegrityError) as e:
             g.db.rollback();flash(f'Émission interrompue : {e}','error')
@@ -432,18 +565,23 @@ def create_app():
         balance=money(total-paid)
         payment_status='ANNULÉ' if inv['status']=='VOID' else ('PAYÉ' if balance<=0 else ('PARTIELLEMENT PAYÉ' if paid>0 else 'IMPAYÉ'))
         return render_template('invoice_detail.html',title='Décompte '+inv['number'],invoice=inv,calc=calc,
-                               client=json.loads(inv['client_snapshot']),payments=payments,paid=paid,balance=balance,payment_status=payment_status)
+                               client=json.loads(inv['client_snapshot']),payments=payments,paid=paid,balance=balance,payment_status=payment_status,
+                               payment_methods=active_payment_methods(g.db),payment_form=session.get(f'payment_form_{iid}',{}),void_form=session.get(f'void_form_{iid}',{}))
 
     @app.post('/invoices/<int:iid>/payments')
     @protected
     def add_payment(iid):
+        draft_key=f'payment_form_{iid}'
+        submitted={key:request.form.get(key,'').strip() for key in ('amount','method','paid_on','reference')}
         try:
             amount=decimal(request.form.get('amount',''), 'Montant du paiement',allow_zero=False)
             if money(amount)!=amount: raise BillingError('Le paiement ne peut pas avoir plus de deux décimales.')
             method=request.form.get('method','').strip()
-            if method not in ('Espèces','Banque','Mobile Money','Autre'): raise BillingError('Mode de paiement invalide.')
+            payment_methods={item['label']: item for item in active_payment_methods(g.db)}
+            if method not in payment_methods: raise BillingError('Mode de paiement invalide.')
             reference=request.form.get('reference','').strip()[:120]
-            validate_payment_reference(method, reference)
+            if payment_methods[method]['reference_required'] and not reference:
+                raise BillingError('Une référence est obligatoire pour ce mode de paiement.')
             paid_on=request.form.get('paid_on',date.today().isoformat())
             date.fromisoformat(paid_on)
             g.db.execute('BEGIN IMMEDIATE')
@@ -455,15 +593,16 @@ def create_app():
             paid=sum((Decimal(p['amount']) for p in payments),Decimal('0'))
             if amount > total-paid: raise BillingError('Le paiement dépasse le solde dû.')
             g.db.execute('INSERT INTO payments(invoice_id,amount,method,reference,paid_on) VALUES(?,?,?,?,?)',(iid,str(money(amount)),method,reference,paid_on))
-            g.db.commit();flash('Paiement enregistré.','success')
+            g.db.commit();session.pop(draft_key,None);flash('Paiement enregistré.','success')
         except (BillingError,ValueError) as e:
-            g.db.rollback();flash(str(e),'error')
+            g.db.rollback();session[draft_key]=submitted;flash(str(e),'error')
         return redirect(url_for('invoice_detail',iid=iid))
 
     @app.post('/invoices/<int:iid>/void')
     @protected
     def void_invoice(iid):
         reason=request.form.get('reason','').strip()
+        draft_key=f'void_form_{iid}'
         try:
             if len(reason)<6: raise BillingError('Un motif précis d’annulation (6 caractères minimum) est obligatoire.')
             g.db.execute('BEGIN IMMEDIATE')
@@ -473,9 +612,9 @@ def create_app():
             if invoice['status']!='ISSUED': raise BillingError('Facture déjà annulée.')
             if payments: raise BillingError('Annulation bloquée : des paiements existent. Effectuer une correction supervisée.')
             g.db.execute("UPDATE invoices SET status='VOID',void_reason=? WHERE id=?",(reason,iid))
-            g.db.commit();flash('Facture annulée, conservée dans l’historique.','success')
+            g.db.commit();session.pop(draft_key,None);flash('Facture annulée, conservée dans l’historique.','success')
         except BillingError as e:
-            g.db.rollback();flash(str(e),'error')
+            g.db.rollback();session[draft_key]={'reason':reason};flash(str(e),'error')
         return redirect(url_for('invoice_detail',iid=iid))
 
     @app.get('/invoices/<int:iid>/pdf')
@@ -487,7 +626,7 @@ def create_app():
         if request.args.get('currency') == 'CDF':
             if inv['currency'] != 'USD':
                 raise BillingError('La variante CDF est disponible pour les factures USD.')
-            rate_value=request.args.get('rate') or db.settings(g.db).get('exchange_rate_usd_cdf','2360')
+            rate_value=request.args.get('rate') or db.exchange_rate_for(g.db,'USD','CDF',date.today().isoformat())['rate']
             rate=decimal(rate_value,'Taux USD/CDF',allow_zero=False)
             inv=dict(inv); inv['currency']='CDF'
             calc=json.loads(inv['calc_snapshot'])

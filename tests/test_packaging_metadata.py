@@ -10,10 +10,12 @@ def test_bundle_uses_wix4_exe_arguments():
     root = ET.parse(ROOT / "packaging" / "bundle" / "Bundle.wxs").getroot()
     bundle = root.find("wix:Bundle", NS)
     chain = bundle.find("wix:Chain", NS)
-    exe = chain.find("wix:ExePackage", NS)
+    exe = next(node for node in chain.findall("wix:ExePackage", NS) if node.attrib["Id"] == "WebView2EvergreenStandalone")
     msi = chain.find("wix:MsiPackage", NS)
     assert exe.attrib["SourceFile"] == "$(var.WebView2Installer)"
-    assert exe.attrib["PerMachine"] == "yes"
+    # The application MSI is per-user; keeping WebView2 per-user avoids
+    # requiring an elevated token just to secure C:\\ProgramData\\Package Cache.
+    assert exe.attrib["PerMachine"] == "no"
     assert exe.attrib["InstallArguments"] == "/silent /install"
     assert "UninstallArguments" not in exe.attrib
     assert exe.find("wix:InstallCommand", NS) is None
@@ -52,6 +54,25 @@ def test_windows_build_embeds_webview2_and_requires_signing_for_published_releas
     assert "Invoke-WebRequest" in workflow
     assert "SEL_CODESIGN_PFX_BASE64" in workflow
     assert "Get-AuthenticodeSignature" in workflow
+    assert "wix extension add -g WixToolset.Util.wixext/4.0.5" in workflow
+
+
+def test_webview2_detection_covers_machine_and_user_runtime_locations():
+    bundle = (ROOT / "packaging" / "bundle" / "Bundle.wxs").read_text(encoding="utf-8")
+
+    assert "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" in bundle
+    assert "Root=\"HKLM\"" in bundle
+    assert "Root=\"HKCU\"" in bundle
+    assert "WebView2RuntimeVersionMachine OR WebView2RuntimeVersionUser" in bundle
+
+
+def test_signing_order_protects_embedded_payloads():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+
+    assert workflow.index("Sign application payloads before MSI") < workflow.index("Compile MSI")
+    assert workflow.index("Sign MSI before Burn") < workflow.index("wix build packaging\\bundle\\Bundle.wxs")
+    assert workflow.index("Sign Burn core before preflight wrapper") < workflow.index("preflight_launcher.py")
+    assert workflow.index("Sign final setup launcher") > workflow.index("preflight_launcher.py")
 
 
 def test_release_workflow_has_one_supported_installer_path():
@@ -75,6 +96,14 @@ def test_wix_build_resolves_paths_before_preprocessing():
         assert "ExePath=$((Resolve-Path" not in source
         assert "MsiPath=$((Resolve-Path" not in source
     assert '"IconPath=$iconPath"' in workflow
+
+
+def test_release_tag_is_derived_from_the_application_version():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+
+    assert "$tag = \"v$version\"" in workflow
+    assert "v0.3.0-rc5" not in workflow
+    assert 'SEL Facturation Desktop v$version - installateur Windows' in workflow
 
 
 def test_wix_workflow_installs_all_extensions_used_by_bundle_build():

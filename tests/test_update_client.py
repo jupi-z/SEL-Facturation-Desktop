@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from update_client import download_package, fetch_manifest
+from update_client import download_package, fetch_manifest, verify_authenticode
 
 
 class FakeResponse:
@@ -60,3 +60,16 @@ def test_download_requires_publisher_signature(tmp_path):
 
     with pytest.raises(ValueError, match="signature"):
         download_package(manifest, tmp_path, current_version="0.3.0", opener=lambda *_args, **_kwargs: pytest.fail("network called"))
+
+
+def test_authenticode_publisher_match_is_not_a_substring(monkeypatch, tmp_path):
+    package = tmp_path / "setup.exe"
+    package.write_bytes(b"setup")
+
+    class Result:
+        returncode = 0
+        stdout = "CN=MonarQue Group S.A.S. (unrelated publisher)"
+
+    monkeypatch.setattr("update_client.subprocess.run", lambda *args, **kwargs: Result())
+
+    assert not verify_authenticode(package, expected_subject="MonarQue Group S.A.S.")

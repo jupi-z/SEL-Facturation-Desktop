@@ -106,3 +106,65 @@ Validation locale de la branche : 82 tests exécutés par groupes, tous passants
 - La protection pré-migration est maintenant exécutée avant `db.initialize()` pour toute base existante ; un snapshot `sel-preupdate-*.sqlite3` est conservé avant les migrations additives.
 - Le client de mise à jour valide désormais la taille du manifest/package, l'HTTPS final, la version sémantique, le produit, le type de package, le SHA-256 et exige une signature Authenticode du publisher attendu avant qu'un package puisse être remis à l'installeur. L'endpoint `/updates/status` ne télécharge ni n'exécute de fichier.
 - Validation actuelle : **99 tests passants**, compilation Python, smoke EXE répondant avec base et sauvegarde isolées, compilation MSI/bootstrapper et extraction MSI réussies.
+
+### Addendum interface Paramètres — 17 octobre 2026
+
+- La page **Paramètres SEL** est passée d’un affichage simultané de quatre blocs et de quatre modales à une navigation par onglets : Vue d’ensemble, Identité SEL, Barème et taxes, Types d’abonnés et Politique.
+- Les formulaires sont désormais visibles dans leur contexte, sans modale, avec une synthèse compacte et sans effet de carte. L’onglet actif est conservé après enregistrement via une URL `?tab=...#...`.
+- Les onglets implémentent `role=tablist`, `role=tab`, `role=tabpanel`, `aria-selected`, le focus roving et la navigation clavier par flèches, Home et End. Les autres modales de l’application restent inchangées.
+- Version applicative/installeur : **0.3.6**. Suite complète : **163 tests passants**. `node --check static/desktop.js` et `git diff --check` sont propres.
+- Build Windows local validé : `dist/SEL-Facturation.exe` et `dist/installer/SEL-Facturation-Setup-0.3.6.exe` générés. Les avertissements PyInstaller concernent uniquement des imports optionnels WebView2 Android et pycparser ; le build est terminé avec succès.
+
+## Addendum — brouillons de formulaires (0.3.7)
+
+- Les formulaires métier conservent maintenant leur saisie dans la session Flask après une validation refusée et la restaurent après actualisation : nouveau décompte, création/modification d’abonné, paramètres SEL, paiement et annulation.
+- Une sauvegarde temporaire `sessionStorage` couvre aussi une actualisation avant l’envoi. Elle est limitée au formulaire concerné, exclut les champs de mot de passe et ne remplace jamais la session serveur après une erreur.
+- Les contrôles de recherche, de déconnexion et d’authentification ne sont pas transformés en brouillons. Les formulaires validés nettoient leur copie temporaire pour éviter de réinjecter une ancienne saisie lors d’une prochaine visite.
+- Version applicative/installeur : **0.3.7**. Suite complète : **170 tests passants**. `node --check static/desktop.js` et `git diff --check` sont propres. Build Windows local validé : `dist/SEL-Facturation.exe` et `dist/installer/SEL-Facturation-Setup-0.3.7.exe` générés. Les avertissements PyInstaller restent limités aux imports optionnels WebView2 Android et pycparser.
+- La validation graphique et l’installation sur le poste matériel SEL restent à effectuer ; statut : **pilote non validé sur poste cible**.
+
+## Addendum — attribution légale et durcissement de livraison (0.3.8)
+
+- SEL reste l’identité métier principale. Les logos MonarQue Group et LTEX sont limités à l’écran « À propos et mentions légales » ; le shell affiche uniquement une attribution discrète `Designed and secured by LTEX · MonarQue Group`. Aucun logo développeur n’est ajouté aux PDF client.
+- Les sauvegardes quotidiennes sont maintenant séparées du nettoyage des snapshots pré-mise à jour et des exports manuels.
+- Le pré-vérificateur reconnaît les copies portables déjà lancées au moyen d’un marqueur local sans données sensibles ; les copies arbitraires jamais exécutées ne sont pas prétendues détectables.
+- La validation Authenticode de l’updater refuse désormais les sujets de certificat qui ne correspondent pas exactement à l’identité configurée.
+- Le tag de publication GitHub est dérivé de `APP_VERSION` et ne réutilise plus un tag historique codé en dur.
+- Version candidate : **0.3.8**. La signature Authenticode et la recette sur le poste SEL restent à effectuer ; statut : **pilote non validé sur poste cible**.
+
+### Preuves de build 0.3.8 — 17/10/2026
+
+- Suite complète locale : **182 tests passants**.
+- Vérifications statiques : `compileall`, `node --check static/desktop.js` et `git diff --check` passants.
+- Build Windows local : `BUILD_EXIT=0` avec PyInstaller et WiX 4.
+- `SEL-Facturation.exe` — SHA-256 `E6371D96223C7A9A8CE0503AF286AE4D33AEB120BDD1B46E9413399313F3E152`.
+- `SEL-Facturation.msi` — SHA-256 `ED151366D00379F69C1ED6DC5CD9AA0E8A5E050F3762E9A096A3793550F47F7B`.
+- `SEL-Facturation-Setup-0.3.8.exe` — SHA-256 `C8451689E1A4FDE0A5DA0BDF8761F48D0B4B2EF766D3BAA75F7D13EB2968F15A`.
+- Signature Authenticode locale des trois artefacts : **NotSigned** ; aucun artefact ne doit être présenté comme version de production avant signature.
+- Avertissements PyInstaller observés : imports optionnels Android WebView2 et tables optionnelles pycparser uniquement.
+- Validation d’installation, mise à niveau, restauration, WebView2 et impression sur le poste SEL : **non effectuée** ; statut : **pilote non validé sur poste cible**.
+
+### Addendum de revue indépendante — corrections finales
+
+- Le test d’icône ne dépend plus du fichier `.spec` généré et ignoré par Git ; un checkout propre peut donc exécuter la suite sans artefact local.
+- Le pré-vérificateur traite une copie portable ou une inscription MSI de même version comme une installation de maintenance via le bootstrapper courant lorsqu’aucun bundle Burn enregistré n’est disponible ; le mode `/repair` reste réservé au bundle Burn mis en cache.
+- Les snapshots `sel-preupdate-*` disposent d’une rétention dédiée bornée à 30 copies. Ils restent exclus du nettoyage quotidien, tout en évitant une croissance illimitée lors des démarrages répétés.
+- La détection WebView2 utilise les deux emplacements officiels Evergreen : HKLM machine et HKCU utilisateur, avec l’identifiant documenté `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`.
+- Le workflow provisionne l’extension WiX Util et signe dans l’ordre les exécutables internes, le MSI avant Burn, le bundle Burn avant son encapsulation par le pré-vérificateur, puis le lanceur final. Cela évite de signer uniquement l’enveloppe après inclusion de charges non signées.
+- Nouvelle validation locale après ces corrections : **182 tests passants**. La reconstruction Windows et la validation cryptographique avec un certificat SEL restent nécessaires ; sans certificat, les artefacts locaux restent **NotSigned** et le statut demeure **pilote non validé sur poste cible**.
+
+### Incident d’installation 0.3.8 et correctif 0.3.9
+
+- Le journal Burn du poste utilisateur a confirmé `0x80070005` sur `C:\ProgramData\Package Cache`, lors de la préparation de `WebView2EvergreenStandalone`. Le bundle SEL était par utilisateur, mais le paquet WebView2 était déclaré `PerMachine="yes"`; le compte non élevé ne pouvait donc pas sécuriser le cache machine.
+- WebView2 est maintenant déclaré par utilisateur (`PerMachine="no"`) afin de rester cohérent avec le MSI SEL `Scope="perUser"`. La détection conserve les emplacements runtime HKLM et HKCU, et l’installation peut fonctionner sans privilèges administrateur lorsque Windows l’autorise.
+- La correction est versionnée **0.3.9** afin que Burn ne réutilise pas le bundle 0.3.8 déjà enregistré sur la machine.
+- Une nouvelle validation sur le poste cible reste indispensable : le comportement dépend aussi de la politique UAC, de l’antivirus et des droits Windows locaux.
+
+### Preuves de build 0.3.9 — correctif accès cache
+
+- Suite complète locale : **182 tests passants**.
+- `build-windows.ps1` : `BUILD_EXIT=0`; compilation WiX du bundle : code 0.
+- `SEL-Facturation.exe` — SHA-256 `BB4FA84960532E052F299A3AFBD21E81D6BC174DA7075C2E85108C8772F86D9B`.
+- `SEL-Facturation.msi` — SHA-256 `AEA6C5E9BD7C63E46B5DD3CFB8EAD9D4E593B60FB90DEE89F185049C6C5F452E`.
+- `SEL-Facturation-Setup-0.3.9.exe` — SHA-256 `70212D3823073E2BD1447BDAE068B1AE006981F68AC3CBF872CA9AD8F910C06A`.
+- Les artefacts locaux sont `NotSigned` en l’absence du certificat Authenticode SEL. Le journal du poste cible devra confirmer l’installation réelle ; statut : **pilote non validé sur poste cible**.

@@ -6,11 +6,13 @@ Auditer **le projet actuellement livré** sur `main` puis corriger les défauts 
 **Baseline auditée** : `main@0fbbfbcb7ada4ba00e29be7330315c9532594770` ; préversion distribuée : `v0.2.0-rc1`. [Build Windows réussi](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/38614705237) mais **aucune recette matérielle Windows et imprimante SEL n'est attestée**.
 
 ## Architecture réelle
-- Python 3.12, Flask, Waitress/Werkzeug, pywebview + WebView2, ReportLab, SQLite ; installateur Inno Setup et EXE PyInstaller.
+- Python 3.12, Flask, Waitress/Werkzeug, pywebview + WebView2, ReportLab, SQLite ; bootstrapper WiX Burn, MSI WiX et EXE PyInstaller. Inno Setup est historique uniquement.
 - Interface dans fenêtre Windows ; serveur HTTP éphémère lié à `127.0.0.1` seulement.
 - Données persistantes : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` ; scripts `db.py`, `desktop.py`, `domain.py`, `invoice_pdf.py`, `app.py`.
 - Flux : créer client/compteur → paramétrer barème → index période → calcul progressif/taxes → décompte PDF A4 → historique/paiements → export CSV/JSON.
 - Les données historiques de facture sont des snapshots immuables ; les exports JSON `sel-facturation-portable` schema_version 1 préparent la migration éventuelle vers Monarque Connect, **sans dépendance runtime**.
+- La configuration métier structurée est additive : `customer_types`, `currency_catalog`, `tax_profiles`, `billing_policy`, `payment_methods` et `configuration_history` complètent les anciennes clés `settings`, `tariff_plans` et `exchange_rates` sans les supprimer.
+- Les types d’abonnés, tarifs, taux de change, numérotation, méthodes de paiement et rétention des sauvegardes sont administrables depuis l’interface ; les règles de sécurité, signatures, schéma d’export et immutabilité restent verrouillées dans le code.
 - SEL ne dispose pas à ce jour d'un dispositif fiscal DGI opérationnel. Conserver la distinction : PDF de consommation **non présenté comme normalisé/certifié** ; ne créer aucun QR fiscal, code d'authentification ou homologation fictif. La mention alarmiste a été retirée du PDF client à la demande du donneur d'ordre ; cela **ne confère aucune validité fiscale**.
 
 ## Priorités impératives — P0 (avant remise)
@@ -29,7 +31,7 @@ Auditer **le projet actuellement livré** sur `main` puis corriger les défauts 
 - **Références DGI** : la clé `footnote` héritée dans `db.py` et les exports n'est pas utilisée pour le PDF ; supprimer/nettoyer les mentions inutiles si besoin sans altérer l'historique.
 - **Permissions** : un seul compte administrateur dans cette V1 ; ne pas prétendre à un journal multi-agent inexistant.
 - **Sécurité de la fenêtre locale** : origine `127.0.0.1`, CSRF, sessions, CSP, pont `window.pywebview.api` et téléchargements ; refuser navigation externe malveillante / exposition réseau / traversal.
-- **Test d'upgrade logiciel** : sauvegarder, installer version supérieure en conservant le même `AppId` Inno Setup, vérifier que la DB et les PDF anciens demeurent identiques.
+- **Test d'upgrade logiciel** : sauvegarder, installer une version supérieure avec les mêmes identités WiX, vérifier que la DB et les PDF anciens demeurent identiques.
 
 ## Contraintes de correction
 - Priorité aux correctifs minimaux, additive-only pour SQLite ; ne pas recréer une application, ni transformer Flask en client web distant.

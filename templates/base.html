@@ -30,12 +30,13 @@
         <a href="{{ url_for('export_clients') }}">Clients CSV</a>
         <a href="{{ url_for('export_invoices') }}">Factures CSV</a>
         <a href="{{ url_for('export_payments') }}">Paiements CSV</a>
+        <a href="{{ url_for('about') }}">À propos et mentions légales</a>
         <form method="post" action="{{ url_for('logout') }}">
           <input type="hidden" name="_csrf" value="{{ csrf() }}">
           <button class="linklike" type="submit">Se déconnecter</button>
         </form>
       </div>
-      <div class="legal">SEL Facturation · Application locale<br>Données enregistrées sur cet ordinateur</div>
+      <div class="legal">SEL Facturation · Application locale<br>Données enregistrées sur cet ordinateur<br><a href="{{ url_for('about') }}">Mentions légales</a></div>
     </aside>
     <div class="main">
       <header class="top"><div><div class="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</div><h1>{{ title }}</h1></div><span class="local"><span class="dot"></span>Local · Hors ligne</span></header>
@@ -57,7 +58,7 @@
     </div>
   </div>
 {% else %}
-      <footer class="auth-footer">SEL Facturation · Version {{ app_version }} · Application locale</footer>
+      <footer class="auth-footer">SEL Facturation · Version {{ app_version }} · Application locale<br><span class="developer-attribution">Designed and secured by LTEX · MonarQue Group</span></footer>
     </main>
   </div>
 {% endif %}
