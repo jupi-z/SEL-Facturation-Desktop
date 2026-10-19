@@ -102,10 +102,10 @@ def initialize():
         ''')
         defaults = {
             'company_name': 'SOCIÉTÉ D’ÉNERGIE DU LUALABA',
-            'tagline': 'Énergie solaire pour un Lualaba durable',
-            'address': 'Avenue de la Province, Commune de Dilala, Kolwezi, Lualaba – RDC',
-            'phone': '', 'email': '', 'website': '',
-            'rccm': '', 'nif': '', 'id_nat': '',
+            'tagline': 'S.E.L. SASU',
+            'address': '225, Boulevard LD Kabila, C. Manika, Kolwezi, Lualaba – RDC',
+            'phone': '+243 902 190 779', 'email': '', 'website': '',
+            'rccm': 'CD/KVZ/RCCM/25-B-00736', 'nif': 'A2620672Z', 'id_nat': '',
             'tiers': '1-100:300\n101-200:320',
             'local_rate': '1', 'vat_rate': '16', 'vat_base': 'ENERGY',
             'currency': 'CDF', 'footnote': 'Document non authentifié par un dispositif fiscal DGI.',

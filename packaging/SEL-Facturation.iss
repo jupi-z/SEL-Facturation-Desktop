@@ -1,5 +1,5 @@
 #define AppName "SEL Facturation"
-#define AppVersion "0.3.0"
+#define AppVersion "0.3.1"
 [Setup]
 AppId={{7B258C72-AE0B-4D4E-84DE-725C08F20EA1}
 AppName={#AppName}
@@ -7,7 +7,7 @@ AppVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\SEL Facturation
 DefaultGroupName=SEL Facturation
 OutputDir=..\dist\installer
-OutputBaseFilename=SEL-Facturation-Setup-0.3.0
+OutputBaseFilename=SEL-Facturation-Setup-0.3.1
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest

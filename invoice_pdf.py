@@ -8,20 +8,21 @@ from xml.sax.saxutils import escape
 import sys
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
-                                TableStyle, Image, KeepTogether)
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from domain import fmt
 
-BLUE=colors.HexColor('#084479')
-GREEN=colors.HexColor('#268D5C')
-PALE=colors.HexColor('#E8F3FA')
-INK=colors.HexColor('#1A2A3A')
-GREY=colors.HexColor('#566575')
-BORDER=colors.HexColor('#D8E2E9')
+# Palette officielle SEL : bleu institutionnel dominant, bleu d'accent et jaune du logo.
+BLUE=colors.HexColor('#003078')
+ACCENT=colors.HexColor('#1080F8')
+YELLOW=colors.HexColor('#F8D800')
+PALE=colors.HexColor('#EAF4FF')
+INK=colors.HexColor('#142B43')
+GREY=colors.HexColor('#5C7185')
+BORDER=colors.HexColor('#D7E2EC')
 
 
 def p(value):
@@ -48,7 +49,7 @@ def render_invoice(invoice, payments) -> bytes:
     small=ParagraphStyle('small',parent=normal,fontSize=7.5,leading=11)
     section=ParagraphStyle('section',fontName='Helvetica-Bold',fontSize=10.3,leading=14,textColor=BLUE,spaceBefore=9,spaceAfter=5)
     title=ParagraphStyle('title',fontName='Helvetica-Bold',fontSize=17,leading=22,textColor=BLUE,spaceAfter=4)
-    document_title=ParagraphStyle('document_title',parent=title,fontSize=11.5,leading=14,alignment=TA_RIGHT,spaceAfter=3)
+    document_title=ParagraphStyle('document_title',parent=title,fontSize=10.8,leading=13,alignment=TA_RIGHT,spaceAfter=3)
     twhite=ParagraphStyle('twhite',fontName='Helvetica-Bold',fontSize=8.2,leading=11,textColor=colors.white)
     right=ParagraphStyle('right',parent=normal,alignment=TA_RIGHT)
     val=ParagraphStyle('val',parent=normal,alignment=TA_RIGHT,fontSize=9)
@@ -57,18 +58,20 @@ def render_invoice(invoice, payments) -> bytes:
     story=[]
 
     # identite SEL + titre de document
-    logo=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'static'/'sel-logo.png'
-    mark=Image(str(logo),width=31*mm,height=30*mm) if logo.exists() else Paragraph('<b>SEL</b>',title)
+    logo=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'static'/'sel-official-logo.png'
+    # Le fichier officiel est un PNG 4:3. Les dimensions respectent son ratio pour
+    # afficher le logotype complet, sans rognage ni forme d'encadrement.
+    mark=Image(str(logo),width=35*mm,height=26.25*mm,hAlign='LEFT') if logo.exists() else Paragraph('<b>SEL</b>',title)
     company_cells=[mark,
-        [Paragraph('<b>'+p(co.get('company_name','SOCIÉTÉ D’ÉNERGIE DU LUALABA'))+'</b>',ParagraphStyle('co',parent=normal,fontName='Helvetica-Bold',fontSize=12.4,leading=15,textColor=BLUE)),
+        [Paragraph('<b>'+p(co.get('company_name','SOCIÉTÉ D’ÉNERGIE DU LUALABA'))+'</b>',ParagraphStyle('co',parent=normal,fontName='Helvetica-Bold',fontSize=10.8,leading=13,textColor=BLUE)),
          Paragraph(p(co.get('tagline','')),muted),
          Paragraph(p(co.get('address','')),small),
          Paragraph(' · '.join([p(v) for v in (co.get('phone'),co.get('email'),co.get('website')) if v]),small)],
         [Paragraph('DÉCOMPTE D’ÉLECTRICITÉ',document_title),
          Paragraph('N° '+p(inv['number']),ParagraphStyle('ref',parent=normal,fontName='Helvetica-Bold',fontSize=9,alignment=TA_RIGHT,textColor=BLUE)),
          Paragraph('Émis le '+p(inv['issue_date']),right)]]
-    table=Table([company_cells],colWidths=[32*mm,80*mm,66*mm])
-    table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),9),('LINEBELOW',(0,0),(-1,-1),2,BLUE)]))
+    table=Table([company_cells],colWidths=[40*mm,80*mm,58*mm])
+    table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),4),('TOPPADDING',(0,0),(-1,-1),1),('BOTTOMPADDING',(0,0),(-1,-1),8),('LINEBELOW',(0,0),(-1,-1),2,BLUE)]))
     story.extend([table,Spacer(1,7)])
     # Les mentions de conformité internes n'appartiennent pas au document client.
     # Aucun logo, QR code, numéro ou certification DGI fictif n'est généré.
@@ -77,15 +80,30 @@ def render_invoice(invoice, payments) -> bytes:
          f"<b>Nom :</b> {p(client.get('name'))}",f"<b>Code :</b> {p(client.get('code'))}",
          f"<b>Contrat :</b> {p(client.get('contract_number'))}",f"<b>Adresse :</b> {p(client.get('address'))}",
          f"<b>Catégorie :</b> {p(client.get('category'))}",f"<b>NIF client :</b> {p(client.get('nif'))}"])
-    info_right='<b>INFORMATIONS COMPTEUR</b><br/>'+'<br/>'.join([
-         f"<b>Centre :</b> {p(client.get('center'))}",f"<b>Point de service :</b> {p(client.get('service_point'))}",
-         f"<b>N° compteur :</b> {p(client.get('meter_number'))}",f"<b>Coefficient :</b> {p(d.get('coefficient'))}",
-         f"<b>Période :</b> {p(period_fr(inv['billing_period']))}",f"<b>Échéance :</b> {p(inv['due_date'])}"])
+    direct_billing = d.get('pricing_model', 'METER') == 'FLAT_KWH'
+    if direct_billing:
+        info_right='<b>PÉRIODE ET FACTURATION</b><br/>'+'<br/>'.join([
+             f"<b>Centre :</b> {p(client.get('center'))}",
+             f"<b>Point de service :</b> {p(client.get('service_point'))}",
+             f"<b>Type d’abonné :</b> {p(client.get('category'))}",
+             f"<b>Période :</b> {p(period_fr(inv['billing_period']))}",
+             f"<b>Échéance :</b> {p(inv['due_date'])}",
+             '<b>Mode :</b> Consommation directe'])
+    else:
+        info_right='<b>INFORMATIONS COMPTEUR</b><br/>'+'<br/>'.join([
+             f"<b>Centre :</b> {p(client.get('center'))}",f"<b>Point de service :</b> {p(client.get('service_point'))}",
+             f"<b>N° compteur :</b> {p(client.get('meter_number'))}",f"<b>Coefficient :</b> {p(d.get('coefficient'))}",
+             f"<b>Période :</b> {p(period_fr(inv['billing_period']))}",f"<b>Échéance :</b> {p(inv['due_date'])}"])
     details=Table([[Paragraph(info_left,normal),Paragraph(info_right,normal)]],colWidths=[89*mm,89*mm])
     details.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.6,BORDER),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),11),('BOTTOMPADDING',(0,0),(-1,-1),11),('LEFTPADDING',(0,0),(-1,-1),11)]))
     story.extend([details,Paragraph('RELEVÉ ET CONSOMMATION',section)])
-    usage=Table([[Paragraph('Index précédent',twhite),Paragraph('Index actuel',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite)],
-                 [p(d['previous']),p(d['current']),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period']))]],colWidths=[43*mm,43*mm,43*mm,49*mm])
+    if direct_billing:
+        usage=Table([[Paragraph('Type d’abonné',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite),Paragraph('Échéance',twhite)],
+                     [p(client.get('category')),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period'])),p(inv['due_date'])]],
+                    colWidths=[43*mm,43*mm,43*mm,49*mm])
+    else:
+        usage=Table([[Paragraph('Index précédent',twhite),Paragraph('Index actuel',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite)],
+                     [p(d['previous']),p(d['current']),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period']))]],colWidths=[43*mm,43*mm,43*mm,49*mm])
     usage.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('LINEBELOW',(0,0),(-1,0),.8,BLUE),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('BOX',(0,0),(-1,-1),.65,BORDER),('ALIGN',(0,0),(-1,-1),'CENTER'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
     story.extend([usage,Paragraph('DÉTAIL DE LA CONSOMMATION FACTURÉE',section)])
     lines=[[Paragraph('Tranche tarifaire',twhite),Paragraph('Quantité (kWh)',twhite),Paragraph('Prix unitaire',twhite),Paragraph('Montant',twhite)]]
@@ -95,9 +113,13 @@ def render_invoice(invoice, payments) -> bytes:
     table=Table(lines,colWidths=[49*mm,44*mm,43*mm,42*mm],repeatRows=1)
     table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F7FAFC')]),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('BOX',(0,0),(-1,-1),.6,BORDER),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'RIGHT'),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
     story.append(table)
-    recap=[('Sous-total énergie',fmt(d['energy'])),(f"Taxe locale ({p(d['local_rate'])} %)",fmt(d['local_tax'])),
-           ('Frais supplémentaires',fmt(d['fee'])),(f"TVA ({p(d['vat_rate'])} %) — base {fmt(d['vat_basis'])}",fmt(d['vat'])),
-           ('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total']))]
+    recap=[('Sous-total énergie',fmt(d['energy']))]
+    if Decimal(str(d.get('local_rate', '0'))) != 0:
+        recap.append((f"Taxe locale ({p(d['local_rate'])} %)",fmt(d['local_tax'])))
+    if Decimal(str(d.get('fee', '0'))) != 0:
+        recap.append(('Frais supplémentaires',fmt(d['fee'])))
+    recap.extend([(f"TVA ({p(d['vat_rate'])} %) — base {fmt(d['vat_basis'])}",fmt(d['vat'])),
+                  ('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total']))])
     rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
     rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
     story.extend([Spacer(1,7),rec,Spacer(1,10)])
