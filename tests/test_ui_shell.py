@@ -54,6 +54,29 @@ def test_external_links_use_the_native_browser_bridge():
     assert 'open_external_url' in script
 
 
+def test_primary_navigation_uses_local_inline_icons_without_remote_dependencies():
+    root = Path(__file__).resolve().parents[1]
+    base = (root / "templates" / "base.html").read_text(encoding="utf-8")
+    icons = (root / "templates" / "_icons.html").read_text(encoding="utf-8")
+
+    assert "{% from '_icons.html' import nav_icon %}" in base
+    assert base.count('class="nav-icon"') == 6
+    for icon_name in ("dashboard", "clients", "invoice", "history", "settings", "updates"):
+        assert f"nav_icon('{icon_name}')" in base
+    assert icons.count("<svg") == 1
+    assert "currentColor" in icons
+    assert "fonts.googleapis.com" not in base
+    assert "cdnjs.cloudflare.com" not in base
+
+
+def test_navigation_icon_layout_is_accessible_and_aligned():
+    css = (Path(__file__).resolve().parents[1] / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert ".nav{display:flex;align-items:center;gap:10px;" in css
+    assert ".nav-icon{display:inline-flex;align-items:center;justify-content:center;" in css
+    assert ".nav-icon svg{width:18px;height:18px;" in css
+
+
 def test_update_screen_retains_explicit_update_controls(authenticated_client):
     html = authenticated_client.get("/updates").get_data(as_text=True)
 

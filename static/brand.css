@@ -27,6 +27,10 @@ a:hover { color: var(--sel-blue); }
 .identity b { color: var(--sel-navy); }
 .identity small, .eyebrow { color: var(--sel-navy); }
 .nav { color: #294863; border-left: 3px solid transparent; padding-left: 8px; }
+.nav{display:flex;align-items:center;gap:10px;}
+.nav-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;flex:0 0 20px;color:currentColor;}
+.nav-icon svg{width:18px;height:18px;display:block;}
+.nav>span:last-child{min-width:0;}
 .nav:hover { color: var(--sel-navy); background: var(--sel-blue-soft); }
 .nav.active { color: var(--sel-navy); background: var(--sel-blue-soft); box-shadow: none; border-left-color: var(--sel-yellow); }
 .navfooter .eyebrow { color: var(--sel-navy); }
