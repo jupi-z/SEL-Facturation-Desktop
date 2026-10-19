@@ -59,7 +59,8 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .auth-local .dot { background: var(--sel-yellow); }
 .auth-hint { border-left-color: var(--sel-yellow); }
 .auth-content { max-width: none; margin: 0; background: var(--sel-primary); color: #fff; align-items: center; padding: clamp(32px, 5vw, 72px) clamp(32px, 6vw, 96px); }
-.auth-form { width: 100%; max-width: 460px; }
+.auth-stage { width: min(100%, 460px); margin-inline: auto; }
+.auth-form { width: 100%; max-width: none; }
 @media (min-width: 761px) and (max-width: 1100px) {
   .auth-shell { grid-template-columns: minmax(360px, 40%) minmax(0, 1fr); }
   .auth-brand { padding-inline: 32px; }
@@ -74,9 +75,14 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
   .auth-content { padding: 42px 24px; }
 }
 .auth-content > .alert { width: min(100%, 520px); }
+.auth-stage > .alert { width: 100%; }
 .auth-content h2 { color: #fff; }
 .auth-content .eyebrow { color: var(--sel-yellow); }
 .auth-content .auth-intro, .auth-content .auth-footer { color: #eaf4ff; }
+.auth-footer { width: 100%; margin-top: 44px; text-align: center; }
+.auth-content .auth-footer a { color: #fff; text-decoration: underline; text-decoration-color: var(--sel-yellow); text-underline-offset: 2px; }
+.auth-content .auth-footer a:hover { color: var(--sel-yellow); }
+.auth-content .auth-footer a:focus-visible { outline: 2px solid var(--sel-yellow); outline-offset: 3px; }
 .auth-content label { color: #fff; }
 .auth-content .auth-hint { color: #fff; background: rgba(255, 255, 255, .12); border-left-color: var(--sel-yellow); padding: 12px 14px; }
 .auth-content input { border-color: #fff; box-shadow: 0 0 0 1px rgba(0, 48, 120, .12); }
