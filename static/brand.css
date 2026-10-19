@@ -48,16 +48,31 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .pill { color: var(--sel-navy); background: var(--sel-blue-soft); }
 .sum .total { border-top-color: var(--sel-yellow); background: var(--sel-blue-soft); color: var(--sel-navy); }
 
-.auth-brand { background: #fff; color: var(--sel-navy); padding-inline: clamp(24px, 4vw, 56px); }
-.auth-identity { display: block; width: min(100%, 400px); overflow: visible; background: transparent; border-radius: 0; padding: 0; box-shadow: none; }
-.auth-identity .official-logo { display: block; width: 100%; max-width: 400px; height: auto; max-height: none; object-fit: contain; object-position: left center; overflow: visible; }
+.auth-shell { grid-template-columns: minmax(420px, 44%) minmax(520px, 1fr); }
+.auth-brand { min-height: 100vh; overflow: hidden; background: #fff; color: var(--sel-navy); padding-inline: clamp(24px, 4vw, 56px); }
+.auth-identity { display: block; width: min(100%, 340px); overflow: visible; background: transparent; border-radius: 0; padding: 0; box-shadow: none; }
+.auth-identity .official-logo { display: block; width: 100%; max-width: 340px; height: auto; max-height: none; object-fit: contain; object-position: left center; overflow: visible; }
 .auth-brand .eyebrow { color: var(--sel-blue); }
 .auth-brand-copy h1 { color: var(--sel-navy); }
 .auth-brand-copy p { color: #36516c; }
 .auth-local { color: #36516c; }
 .auth-local .dot { background: var(--sel-yellow); }
 .auth-hint { border-left-color: var(--sel-yellow); }
-.auth-content { max-width: none; margin: 0; background: var(--sel-primary); color: #fff; align-items: center; }
+.auth-content { max-width: none; margin: 0; background: var(--sel-primary); color: #fff; align-items: center; padding: clamp(32px, 5vw, 72px) clamp(32px, 6vw, 96px); }
+.auth-form { width: 100%; max-width: 460px; }
+@media (min-width: 761px) and (max-width: 1100px) {
+  .auth-shell { grid-template-columns: minmax(360px, 40%) minmax(0, 1fr); }
+  .auth-brand { padding-inline: 32px; }
+  .auth-identity { width: min(100%, 280px); }
+  .auth-identity .official-logo { max-width: 280px; }
+  .auth-content { padding-inline: 32px; }
+}
+@media (max-width: 760px) {
+  .auth-brand { min-height: 250px; overflow: visible; }
+  .auth-identity { width: min(100%, 260px); }
+  .auth-identity .official-logo { max-width: 260px; }
+  .auth-content { padding: 42px 24px; }
+}
 .auth-content > .alert { width: min(100%, 520px); }
 .auth-content h2 { color: #fff; }
 .auth-content .eyebrow { color: var(--sel-yellow); }
