@@ -116,7 +116,7 @@ def test_update_check_renders_current_state(authenticated_client, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert "dernière version" in response.get_data(as_text=True)
+    assert "Votre version est à jour." in response.get_data(as_text=True)
 
 
 def test_update_check_explains_that_an_unsigned_preview_cannot_be_installed(authenticated_client, monkeypatch):
