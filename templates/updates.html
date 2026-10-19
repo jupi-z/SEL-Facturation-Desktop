@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
 {% block body %}
 <section class="panel updates-panel">
-  <div class="sectionhead">
-    <div><div class="eyebrow">MAINTENANCE SÉCURISÉE</div><h2>Mises à jour</h2><p class="sub">La vérification ne bloque pas l’application. Aucun installateur n’est exécuté sans validation du hash et de la signature.</p></div>
-    <span class="pill">Version {{ app_version }}</span>
+  <div class="sectionhead updates-header">
+    <div><div class="eyebrow">MAINTENANCE DU SYSTÈME</div><h2>Mises à jour</h2><p class="sub">Vérifiez si une version plus récente de SEL Facturation est disponible.</p></div>
+    <span class="pill">Version installée {{ app_version }}</span>
   </div>
-  <form method="post" action="{{ url_for('updates_check') }}" class="form">
+  <form method="post" action="{{ url_for('updates_check') }}" class="form update-check-form">
     <input type="hidden" name="_csrf" value="{{ csrf() }}">
     <div class="form-actions"><button class="primary" type="submit">Rechercher une mise à jour</button></div>
   </form>
@@ -23,7 +23,7 @@
       </form>
     {% endif %}
   {% elif update and update.state == 'current' %}
-    <div class="alert ok" role="status">Vous utilisez déjà la dernière version connue.</div>
+    <div class="alert ok" role="status">Votre version est à jour.</div>
   {% elif update and update.state == 'offline' %}
     <div class="alert" role="status">{{ update.message }}</div>
   {% elif update and update.state == 'invalid' %}
