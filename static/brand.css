@@ -198,6 +198,8 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 }
 
 /* Shared shell and action rhythm: keep navigation visible and actions intentional. */
+.main{display:flex;flex-direction:column;min-height:100vh}
+.main>main{flex:1 0 auto}
 .side{position:sticky;top:0;height:100vh;max-height:100vh;overflow-y:auto;align-self:start;overscroll-behavior:contain}
 .app-footer{border-top:1px solid var(--border);padding:10px clamp(20px,2.2vw,40px) 14px;color:var(--muted);font-size:10px;line-height:1.4;text-align:right;letter-spacing:.02em}
 .app-footer a{color:var(--sel-navy);font-weight:700}
