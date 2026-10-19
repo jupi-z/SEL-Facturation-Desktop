@@ -56,7 +56,10 @@ def initialize():
           center TEXT NOT NULL DEFAULT 'KOLWEZI', service_point TEXT NOT NULL DEFAULT '',
           nif TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
           coefficient TEXT NOT NULL DEFAULT '1', customer_type TEXT NOT NULL DEFAULT '',
-          billing_frequency TEXT NOT NULL DEFAULT 'MONTHLY', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          billing_frequency TEXT NOT NULL DEFAULT 'MONTHLY',
+          status TEXT NOT NULL DEFAULT 'ACTIVE', archived_at TEXT NOT NULL DEFAULT '',
+          archive_reason TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS invoices (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,6 +176,13 @@ def initialize():
             c.execute("ALTER TABLE clients ADD COLUMN customer_type TEXT NOT NULL DEFAULT ''")
         if 'billing_frequency' not in columns:
             c.execute("ALTER TABLE clients ADD COLUMN billing_frequency TEXT NOT NULL DEFAULT 'MONTHLY'")
+        if 'status' not in columns:
+            c.execute("ALTER TABLE clients ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE'")
+        if 'archived_at' not in columns:
+            c.execute("ALTER TABLE clients ADD COLUMN archived_at TEXT NOT NULL DEFAULT ''")
+        if 'archive_reason' not in columns:
+            c.execute("ALTER TABLE clients ADD COLUMN archive_reason TEXT NOT NULL DEFAULT ''")
+        c.execute("CREATE INDEX IF NOT EXISTS clients_status_lookup ON clients(status, name, code)")
         # Migrate the currency catalog introduced by the previous release.
         # CREATE TABLE IF NOT EXISTS does not change an existing table shape.
         currency_columns = {row['name'] for row in c.execute('PRAGMA table_info(currency_catalog)')}
