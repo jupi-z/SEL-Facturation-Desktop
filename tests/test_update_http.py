@@ -64,7 +64,7 @@ def test_update_status_uses_public_manifest_endpoint(authenticated_client, monke
 
     assert response.status_code == 200
     assert response.json["state"] == "current"
-    assert calls == [("https://raw.githubusercontent.com/jupi-z/SEL-Facturation-Desktop/main/updates/latest.json", APP_VERSION)]
+    assert calls == [("https://raw.githubusercontent.com/jupi-z/SEL-Facturation-Desktop/refs/heads/main/updates/latest.json", APP_VERSION)]
 
 
 def test_update_status_distinguishes_an_unreachable_server(authenticated_client, monkeypatch):
