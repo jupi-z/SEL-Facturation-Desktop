@@ -172,8 +172,8 @@ jobs:
             $notes = 'Release préversion signée pour SEL : bootstrapper WebView2 autonome, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4. Essai réel sur le PC cible indispensable.'
           } else {
             $title = "SEL Facturation Desktop v$version - aperçu non signé"
-            $notes = 'Préversion GitHub non signée destinée uniquement a une acceptation manuelle. Elle ne doit pas être distribuée comme version de production et ne peut pas être installée automatiquement par le programme tant que la signature Authenticode SEL n’est pas disponible.'
-            Write-Host 'Signature Authenticode absente : publication limitée à une préversion d’acceptation manuelle.'
+            $notes = 'Preversion GitHub non signee destinee uniquement a une acceptation manuelle. Elle ne doit pas etre distribuee comme version de production et ne peut pas etre installee automatiquement par le programme tant que la signature Authenticode SEL reste indisponible.'
+            Write-Host 'Signature Authenticode absente : publication limitee a une preversion d acceptation manuelle.'
           }
           $tag = "v$version"
           $exe = 'dist/SEL-Facturation.exe'

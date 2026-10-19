@@ -60,6 +60,8 @@ def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview
     assert "aperçu non signé" in workflow
     assert "Signature Authenticode absente" in workflow
     assert "l’acceptation" not in workflow
+    publish_block = workflow.split("Publish GitHub prerelease without overwriting", 1)[1].split("Upload unsigned acceptance packages", 1)[0]
+    assert "’" not in publish_block
 
 
 def test_webview2_detection_covers_machine_and_user_runtime_locations():
