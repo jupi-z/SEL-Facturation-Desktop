@@ -30,8 +30,8 @@
       <div><dt>RCCM</dt><dd>{{ developer.rccm }}</dd></div>
       <div><dt>Identification nationale</dt><dd>{{ developer.national_id }}</dd></div>
       <div><dt>Siège social</dt><dd>{{ developer.address }}</dd></div>
-      <div><dt>Contact</dt><dd><a href="mailto:{{ developer.email }}">{{ developer.email }}</a><br>{{ developer.phones }}</dd></div>
-      <div><dt>Site officiel</dt><dd><a href="{{ developer.website }}" rel="noreferrer">{{ developer.website }}</a></dd></div>
+      <div><dt>Contact</dt><dd><a data-external-link href="mailto:{{ developer.email }}" rel="noopener noreferrer external">{{ developer.email }}</a><br>{{ developer.phones }}</dd></div>
+      <div><dt>Site officiel</dt><dd><a data-external-link href="{{ developer.website }}" rel="noopener noreferrer external">{{ developer.website }}</a></dd></div>
     </dl>
   </section>
 

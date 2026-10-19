@@ -55,6 +55,24 @@ def test_open_pdf_uses_os_default_viewer_and_app_data(tmp_path, monkeypatch):
     assert target.read_bytes().startswith(b"%PDF-")
 
 
+def test_open_external_url_delegates_to_windows_default_handler(monkeypatch):
+    opened = []
+    monkeypatch.setattr(os, "startfile", lambda target: opened.append(target), raising=False)
+
+    response = DesktopDocuments().open_external_url("https://monarquegrp.com/")
+
+    assert response == {"ok": True}
+    assert opened == ["https://monarquegrp.com/"]
+
+
+def test_open_external_url_rejects_non_external_schemes(monkeypatch):
+    monkeypatch.setattr(os, "startfile", lambda *_args: pytest.fail("URL should not be opened"), raising=False)
+
+    response = DesktopDocuments().open_external_url("javascript:alert(1)")
+
+    assert response["ok"] is False
+
+
 def test_print_pdf_calls_windows_print_verb(tmp_path, monkeypatch):
     monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
     opened = []

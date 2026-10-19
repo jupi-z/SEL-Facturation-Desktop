@@ -56,11 +56,11 @@
         {% block body %}{% endblock %}
 {% if is_logged %}
       </main>
-      <footer class="app-footer">Application développée et sécurisée par LTEX · <a href="https://monarquegrp.com/">MonarQue Group</a></footer>
+      <footer class="app-footer">Application développée et sécurisée par LTEX · <a data-external-link href="https://monarquegrp.com/" rel="noopener noreferrer external">MonarQue Group</a></footer>
     </div>
   </div>
 {% else %}
-      <footer class="auth-footer">SEL Facturation · Version {{ app_version }} · Application locale<br><span class="developer-attribution">Application développée et sécurisée par LTEX · <a href="https://monarquegrp.com/">MonarQue Group</a></span></footer>
+      <footer class="auth-footer">SEL Facturation · Version {{ app_version }} · Application locale<br><span class="developer-attribution">Application développée et sécurisée par LTEX · <a data-external-link href="https://monarquegrp.com/" rel="noopener noreferrer external">MonarQue Group</a></span></footer>
     </main>
   </div>
 {% endif %}

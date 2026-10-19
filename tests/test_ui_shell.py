@@ -38,7 +38,20 @@ def test_logged_in_pages_keep_update_check_off_the_global_shell(authenticated_cl
     assert 'data-update-poll' not in html
     assert html.count('class="app-footer"') == 1
     assert 'Application développée et sécurisée par LTEX' in html
-    assert '<a href="https://monarquegrp.com/">MonarQue Group</a>' in html
+    assert '<a data-external-link href="https://monarquegrp.com/"' in html
+    assert 'rel="noopener noreferrer external">MonarQue Group</a>' in html
+
+
+def test_external_links_use_the_native_browser_bridge():
+    root = Path(__file__).resolve().parents[1]
+    base = (root / "templates" / "base.html").read_text(encoding="utf-8")
+    about = (root / "templates" / "about.html").read_text(encoding="utf-8")
+    script = (root / "static" / "desktop.js").read_text(encoding="utf-8")
+
+    assert base.count('data-external-link') == 2
+    assert 'data-external-link href="https://monarquegrp.com/"' in base
+    assert 'data-external-link' in about
+    assert 'open_external_url' in script
 
 
 def test_update_screen_retains_explicit_update_controls(authenticated_client):

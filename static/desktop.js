@@ -1,6 +1,30 @@
 /* Actions de documents intégrées à la fenêtre SEL.
    Dans un navigateur de développement, les liens PDF restent ordinaires. */
 (() => {
+  // Les liens externes ne doivent jamais remplacer l'interface SEL dans la
+  // WebView2. En développement, sans pont pywebview, les liens restent natifs
+  // au navigateur utilisé pour servir l'application.
+  document.addEventListener('click', async (event) => {
+    const link = event.target.closest('a[data-external-link]');
+    if (!link || !window.pywebview) return;
+    event.preventDefault();
+    const openExternal = window.pywebview.api && window.pywebview.api.open_external_url;
+    if (!openExternal) {
+      alert('Le navigateur externe n’est pas disponible. Réessayez dans un instant.');
+      return;
+    }
+    if (link.dataset.busy) return;
+    link.dataset.busy = '1';
+    try {
+      const result = await openExternal(link.href);
+      if (!result.ok) throw new Error(result.message || 'Impossible d’ouvrir le lien externe.');
+    } catch (error) {
+      alert('Lien externe : ' + (error.message || String(error)));
+    } finally {
+      delete link.dataset.busy;
+    }
+  });
+
   const openModal = (modal, trigger) => {
     if (!modal) return;
     modal._lastTrigger = trigger;
