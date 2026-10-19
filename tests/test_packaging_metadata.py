@@ -59,6 +59,7 @@ def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview
     assert "PUBLISH_UNSIGNED_PREVIEW" in workflow
     assert "aperçu non signé" in workflow
     assert "Signature Authenticode absente" in workflow
+    assert "l’acceptation" not in workflow
 
 
 def test_webview2_detection_covers_machine_and_user_runtime_locations():
