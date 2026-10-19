@@ -171,3 +171,13 @@ jobs:
             gh release create $tag $exe $setup $msi --prerelease --title "SEL Facturation Desktop v$version - installateur Windows" --notes 'Préversion native Windows 10/11 : bootstrapper WebView2, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4, sauvegardes. Tarifs à valider par SEL ; statut fiscal à vérifier avant émission officielle. Essai réel sur le PC cible indispensable.' --repo ${{ github.repository }}
           }
           if ($LASTEXITCODE -ne 0) { throw "Publication GitHub Releases failed" }
+      - name: Upload unsigned acceptance packages
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release != true
+        uses: actions/upload-artifact@v4
+        with:
+          name: SEL-Facturation-Windows-${{ github.run_number }}
+          if-no-files-found: error
+          path: |
+            dist/SEL-Facturation.exe
+            dist/installer/SEL-Facturation.msi
+            dist/installer/SEL-Facturation-Setup-*.exe
