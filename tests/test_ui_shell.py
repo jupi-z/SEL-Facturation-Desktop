@@ -108,3 +108,14 @@ def test_action_templates_use_explicit_groups_instead_of_stretched_defaults():
     assert 'class="form-actions"' in invoice_detail
     assert 'class="form-actions"' in new_invoice
     assert 'class="form-actions"' in updates
+
+
+def test_client_lifecycle_actions_share_one_aligned_desktop_row():
+    client_edit = (ROOT / "templates" / "client_edit.html").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert 'class="lifecycle-form-actions"' in client_edit
+    assert '.lifecycle-form{display:flex;align-items:flex-end;gap:10px;' in css
+    assert '.lifecycle-form-actions{display:flex;align-items:center;' in css
+    assert '.lifecycle-actions .danger-zone{margin:0;padding:0;border-top:0;' in css
+    assert '.lifecycle-form{flex-direction:column;align-items:stretch}' in css

@@ -56,7 +56,7 @@
       <form method="post" action="{{ url_for('archive_client',cid=client['id']) }}" class="form lifecycle-form">
         <input type="hidden" name="_csrf" value="{{ csrf() }}">
         <label for="archive-reason">Motif d’archivage<input id="archive-reason" name="reason" minlength="3" required placeholder="Fin de contrat, suspension…"></label>
-        <div class="form-actions"><button class="secondary" type="submit">Archiver l’abonné</button></div>
+        <div class="lifecycle-form-actions"><button class="secondary" type="submit">Archiver l’abonné</button></div>
       </form>
       <form method="post" action="{{ url_for('delete_client',cid=client['id']) }}" class="inline-action danger-zone" data-confirm="Supprimer définitivement cet abonné s’il n’a aucun décompte ?">
         <input type="hidden" name="_csrf" value="{{ csrf() }}">
