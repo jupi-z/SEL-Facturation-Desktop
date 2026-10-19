@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import sqlite3
 import sys
@@ -79,6 +80,38 @@ def test_print_pdf_falls_back_to_open_viewer_when_print_association_fails(tmp_pa
     assert response["fallback"] == "open"
     assert opened[0][1] == ("print",)
     assert opened[1][1] == ()
+
+
+def test_install_update_launches_only_verified_staged_bootstrapper(tmp_path, monkeypatch):
+    staging = tmp_path / "updates"
+    staging.mkdir()
+    package = staging / "SEL-Facturation-Setup-0.4.0.exe"
+    payload = b"signed setup placeholder"
+    package.write_bytes(payload)
+    launched = []
+
+    monkeypatch.setattr("desktop.staging_dir", lambda: staging)
+    monkeypatch.setenv("SEL_UPDATE_EXPECTED_PUBLISHER", "Test Publisher")
+    monkeypatch.setattr("desktop.verify_authenticode", lambda *args, **kwargs: True)
+    monkeypatch.setattr("desktop.subprocess.Popen", lambda args, **kwargs: launched.append((args, kwargs)))
+
+    api = DesktopDocuments()
+    response = api.install_update(package.name, hashlib.sha256(payload).hexdigest())
+
+    assert response == {"ok": True}
+    assert launched == [([str(package), "/norestart"], {"close_fds": True})]
+
+
+def test_install_update_rejects_path_traversal_and_wrong_hash(tmp_path, monkeypatch):
+    staging = tmp_path / "updates"
+    staging.mkdir()
+    package = staging / "SEL-Facturation-Setup-0.4.0.exe"
+    package.write_bytes(b"setup")
+    monkeypatch.setattr("desktop.staging_dir", lambda: staging)
+
+    api = DesktopDocuments()
+    assert api.install_update("..\\setup.exe", "0" )["ok"] is False
+    assert api.install_update(package.name, "0" )["ok"] is False
 
 
 def test_desktop_script_reports_print_fallback_as_guidance():

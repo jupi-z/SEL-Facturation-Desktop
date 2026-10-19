@@ -24,11 +24,12 @@ from domain import (BillingError, calculate_flat_rate, calculate_from_readings,
                     calculate_from_settings, convert_amount, decimal, fmt, money,
                     validate_due_date)
 from invoice_pdf import render_invoice
-from update_client import fetch_manifest
+from update_client import download_package, fetch_manifest, staging_dir
 from version import APP_VERSION
 from config_service import active_customer_types, active_payment_methods, billing_policy, current_tariffs, customer_type_label, record_change
 
 PAGE_SIZE = 50
+DEFAULT_UPDATE_MANIFEST_URL = 'https://sel.shuleops.com/updates/latest.json'
 
 DEVELOPER_LEGAL = {
     'name': 'MonarQue Group S.A.S.',
@@ -155,13 +156,62 @@ def create_app():
     @protected
     def update_status():
         """Check availability only; never downloads or executes an installer."""
-        manifest_url = os.environ.get('SEL_UPDATE_MANIFEST_URL', '').strip()
-        if not manifest_url:
-            return {'state': 'not_configured', 'version': APP_VERSION}
+        manifest_url = os.environ.get('SEL_UPDATE_MANIFEST_URL', '').strip() or DEFAULT_UPDATE_MANIFEST_URL
         try:
             return fetch_manifest(manifest_url, current_version=APP_VERSION)
-        except (OSError, ValueError, TimeoutError):
-            return {'state': 'unavailable', 'version': APP_VERSION}
+        except ValueError as exc:
+            return {'state': 'unavailable', 'version': APP_VERSION,
+                    'message': f'Le manifeste de mise à jour a été refusé : {exc}.'}
+        except (OSError, TimeoutError):
+            return {'state': 'unavailable', 'version': APP_VERSION,
+                    'message': 'Le service de mise à jour est indisponible ou aucun canal n’est publié.'}
+
+    def check_update():
+        manifest_url = os.environ.get('SEL_UPDATE_MANIFEST_URL', '').strip() or DEFAULT_UPDATE_MANIFEST_URL
+        try:
+            return fetch_manifest(manifest_url, current_version=APP_VERSION)
+        except ValueError as exc:
+            return {'state': 'unavailable', 'version': APP_VERSION,
+                    'message': f'Le manifeste de mise à jour a été refusé : {exc}.'}
+        except (OSError, TimeoutError):
+            return {'state': 'unavailable', 'version': APP_VERSION,
+                    'message': 'Le service de mise à jour est indisponible ou aucun canal n’est publié.'}
+
+    @app.get('/updates')
+    @protected
+    def updates_view():
+        return render_template('updates.html', title='Mises à jour',
+                               update=session.get('update_result'))
+
+    @app.post('/updates/check')
+    @protected
+    def updates_check():
+        session['update_result'] = check_update()
+        return redirect(url_for('updates_view'))
+
+    @app.post('/updates/download')
+    @protected
+    def updates_download():
+        update = session.get('update_result') or {}
+        if update.get('state') != 'available':
+            flash('Aucune mise à jour prête à être téléchargée.','error')
+            return redirect(url_for('updates_view'))
+        publisher = os.environ.get('SEL_UPDATE_EXPECTED_PUBLISHER', '').strip()
+        if not publisher:
+            session['update_result'] = {**update, 'state': 'unavailable',
+                                        'message': 'Le téléchargement automatique attend la validation du certificat de signature SEL.'}
+            return redirect(url_for('updates_view'))
+        try:
+            backup = db.pre_update_backup()
+            package = download_package(update, staging_dir(), current_version=APP_VERSION,
+                                       expected_publisher=publisher)
+            session['update_result'] = {**update, 'state': 'ready',
+                                        'filename': package.name,
+                                        'backup_name': backup.name if backup else ''}
+        except (OSError, ValueError, TimeoutError) as exc:
+            session['update_result'] = {**update, 'state': 'unavailable',
+                                        'message': f'Préparation de la mise à jour refusée : {exc}.'}
+        return redirect(url_for('updates_view'))
 
     @app.route('/setup',methods=['GET','POST'])
     def setup():
