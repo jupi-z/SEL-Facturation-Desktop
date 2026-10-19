@@ -40,4 +40,3 @@ def test_invoice_form_explains_both_blocking_prerequisites(authenticated_client)
     assert 'href="/clients"' in html
     assert 'aria-describedby="invoice-preview-help"' in html
     assert 'id="invoice-preview-help"' in html
-
