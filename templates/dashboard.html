@@ -1,6 +1,17 @@
 {% extends 'base.html' %}
 {% block body %}
-<div class="page-actions"><a class="primary button" href="{{ url_for('new_invoice') }}">+ Créer un décompte</a><a class="button secondary" href="{{ url_for('clients') }}">Ajouter un abonné</a></div>
+<div class="page-actions">
+  {% if not stats['configured'] %}
+  <a class="primary button" href="{{ url_for('settings_view', tab='tariffs') }}">Terminer la configuration</a>
+  <a class="button secondary" href="{{ url_for('clients') }}">Ajouter un abonné</a>
+  {% elif not clients %}
+  <a class="primary button" href="{{ url_for('clients') }}">Ajouter un abonné</a>
+  <a class="button secondary" href="{{ url_for('settings_view') }}">Paramètres</a>
+  {% else %}
+  <a class="primary button" href="{{ url_for('new_invoice') }}">+ Créer un décompte</a>
+  <a class="button secondary" href="{{ url_for('clients') }}">Ajouter un abonné</a>
+  {% endif %}
+</div>
 <div class="kpis dashboard-kpis">
   <article class="panel metric"><div class="eyebrow">ABONNÉS</div><div class="figure">{{ clients }}</div><span class="sub">Enregistrés localement</span></article>
   <article class="panel metric"><div class="eyebrow">DÉCOMPTES ÉMIS</div><div class="figure">{{ stats['n'] }}</div><span class="sub">Documents actifs conservés</span></article>
