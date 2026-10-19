@@ -1,3 +1,4 @@
+{% from '_icons.html' import nav_icon %}
 <!doctype html>
 <html lang="fr">
 <head>
@@ -17,12 +18,12 @@
         <img class="official-logo" src="{{ url_for('static',filename='sel-official-logo.png') }}" alt="S.E.L. SASU">
       </a>
       <nav aria-label="Navigation">
-        <a class="nav{{ ' active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}"{% if request.endpoint == 'dashboard' %} aria-current="page"{% endif %}>Vue d'ensemble</a>
-        <a class="nav{{ ' active' if request.endpoint in ('clients','edit_client') else '' }}" href="{{ url_for('clients') }}"{% if request.endpoint in ('clients','edit_client') %} aria-current="page"{% endif %}>Abonnés</a>
-        <a class="nav{{ ' active' if request.endpoint == 'new_invoice' else '' }}" href="{{ url_for('new_invoice') }}"{% if request.endpoint == 'new_invoice' %} aria-current="page"{% endif %}>Nouveau décompte</a>
-        <a class="nav{{ ' active' if request.endpoint in ('invoices','invoice_detail') else '' }}" href="{{ url_for('invoices') }}"{% if request.endpoint in ('invoices','invoice_detail') %} aria-current="page"{% endif %}>Historique des décomptes</a>
-        <a class="nav{{ ' active' if request.endpoint == 'settings_view' else '' }}" href="{{ url_for('settings_view') }}"{% if request.endpoint == 'settings_view' %} aria-current="page"{% endif %}>Paramètres de facturation</a>
-        <a class="nav{{ ' active' if request.endpoint in ('updates_view','updates_check','updates_download') else '' }}" href="{{ url_for('updates_view') }}"{% if request.endpoint in ('updates_view','updates_check','updates_download') %} aria-current="page"{% endif %}>Mises à jour</a>
+        <a class="nav{{ ' active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}"{% if request.endpoint == 'dashboard' %} aria-current="page"{% endif %}><span class="nav-icon">{{ nav_icon('dashboard') }}</span><span>Vue d'ensemble</span></a>
+        <a class="nav{{ ' active' if request.endpoint in ('clients','edit_client') else '' }}" href="{{ url_for('clients') }}"{% if request.endpoint in ('clients','edit_client') %} aria-current="page"{% endif %}><span class="nav-icon">{{ nav_icon('clients') }}</span><span>Abonnés</span></a>
+        <a class="nav{{ ' active' if request.endpoint == 'new_invoice' else '' }}" href="{{ url_for('new_invoice') }}"{% if request.endpoint == 'new_invoice' %} aria-current="page"{% endif %}><span class="nav-icon">{{ nav_icon('invoice') }}</span><span>Nouveau décompte</span></a>
+        <a class="nav{{ ' active' if request.endpoint in ('invoices','invoice_detail') else '' }}" href="{{ url_for('invoices') }}"{% if request.endpoint in ('invoices','invoice_detail') %} aria-current="page"{% endif %}><span class="nav-icon">{{ nav_icon('history') }}</span><span>Historique des décomptes</span></a>
+        <a class="nav{{ ' active' if request.endpoint == 'settings_view' else '' }}" href="{{ url_for('settings_view') }}"{% if request.endpoint == 'settings_view' %} aria-current="page"{% endif %}><span class="nav-icon">{{ nav_icon('settings') }}</span><span>Paramètres de facturation</span></a>
+        <a class="nav{{ ' active' if request.endpoint in ('updates_view','updates_check','updates_download') else '' }}" href="{{ url_for('updates_view') }}"{% if request.endpoint in ('updates_view','updates_check','updates_download') %} aria-current="page"{% endif %}><span class="nav-icon">{{ nav_icon('updates') }}</span><span>Mises à jour</span></a>
       </nav>
       <div class="navfooter">
         <div class="eyebrow">SAUVEGARDER / MIGRER</div>
