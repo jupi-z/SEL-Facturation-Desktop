@@ -30,3 +30,15 @@ def test_settings_uses_flat_tabs_and_modals_remain_available_elsewhere():
     assert "data-settings-tab" in html
     assert "settings-cards" not in html
     assert ".modal {" in css and "box-shadow:" in css
+
+
+def test_settings_catalog_rows_keep_summary_and_edit_controls_compact():
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+    html = (ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
+
+    assert 'class="settings-type-summary"' in html
+    assert ".settings-type-list>div{display:grid;grid-template-columns:minmax(220px,1fr) minmax(500px,1.4fr);" in css
+    assert ".settings-type-list>div{display:grid;grid-template-columns:minmax(220px,1fr) minmax(500px,1.4fr);align-items:center;gap:24px;padding:14px 0;background:transparent;border:0;" in css
+    assert ".settings-type-summary{display:flex;align-items:center;" in css
+    assert ".settings-catalog-grid section{display:grid;align-content:start;" in css
+    assert ".settings-type-list>div{grid-template-columns:1fr;gap:10px}" in css
