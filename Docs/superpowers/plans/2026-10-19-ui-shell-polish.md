@@ -86,4 +86,3 @@
 - [ ] Review the diff for unchanged business logic and no accidental legal/DGI copy.
 - [ ] Commit any documentation-only adjustment if required.
 - [ ] Prepare a concise delivery report including test/build status and the target-hardware validation status.
-
