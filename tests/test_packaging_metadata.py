@@ -21,6 +21,12 @@ def test_bundle_uses_wix4_exe_arguments():
     assert "DisplayInternalUI" not in msi.attrib
 
 
+def test_bundle_uses_the_sel_application_icon():
+    root = ET.parse(ROOT / "packaging" / "bundle" / "Bundle.wxs").getroot()
+
+    assert root.find("wix:Bundle", NS).get("IconSourceFile") == "$(var.IconPath)"
+
+
 def test_msi_keeps_program_files_separate_from_local_data():
     root = ET.parse(ROOT / "packaging" / "wix" / "Product.wxs").getroot()
     ns = {"wix": "http://wixtoolset.org/schemas/v4/wxs"}
@@ -46,4 +52,35 @@ def test_windows_build_embeds_webview2_and_requires_signing_for_published_releas
     assert "Invoke-WebRequest" in workflow
     assert "SEL_CODESIGN_PFX_BASE64" in workflow
     assert "Get-AuthenticodeSignature" in workflow
+
+
+def test_release_workflow_has_one_supported_installer_path():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+
+    assert "Install Inno Setup" not in workflow
+    assert "Compile Windows installer" not in workflow
+    assert "Inno Setup absent" not in build_script
+    assert "bootstrapper WiX" in build_script
+    assert "wix build packaging\\wix\\Product.wxs" in build_script
+    assert "WebView2RuntimeInstallerX64.exe" in build_script
+
+
+def test_wix_build_resolves_paths_before_preprocessing():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+    for source in (workflow, build_script):
+        assert "$exePath" in source
+        assert "$msiPath" in source
+        assert "ExePath=$((Resolve-Path" not in source
+        assert "MsiPath=$((Resolve-Path" not in source
+    assert '"IconPath=$iconPath"' in workflow
+
+
+def test_wix_workflow_installs_all_extensions_used_by_bundle_build():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+
+    assert "wix extension add -g WixToolset.Bal.wixext/4.0.5" in workflow
+    assert "wix extension add -g WixToolset.Util.wixext/4.0.5" in workflow
+    assert "-ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext" in workflow
 

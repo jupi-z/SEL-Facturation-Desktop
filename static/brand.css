@@ -1,0 +1,80 @@
+/* Official S.E.L. SASU visual layer. Keep app.css as the compatibility base. */
+:root {
+  --sel-primary: #003078;
+  --sel-navy: #003078;
+  --sel-navy-deep: #002058;
+  --sel-blue: #1080f8;
+  --sel-blue-soft: #eaf4ff;
+  --sel-yellow: #f8d800;
+  --sel-yellow-soft: #fff8d6;
+  --focus-ring: #1080f8;
+  --blue: var(--sel-navy);
+  --blue2: var(--sel-blue);
+  --ink: #142b43;
+  --muted: #5c7185;
+  --border: #d7e2ec;
+  --bg: #f4f8fc;
+  --pale: #eaf4ff;
+}
+
+body { background: var(--bg); color: var(--ink); }
+a { color: var(--sel-navy); }
+a:hover { color: var(--sel-blue); }
+
+.side { border-right-color: var(--border); padding: 22px 18px; }
+.identity { min-height: 88px; padding: 0 2px 18px; color: var(--sel-navy); }
+.identity .official-logo { width: 184px; height: 68px; object-fit: contain; object-position: left center; }
+.identity b { color: var(--sel-navy); }
+.identity small, .eyebrow { color: var(--sel-navy); }
+.nav { color: #294863; border-left: 3px solid transparent; padding-left: 8px; }
+.nav:hover { color: var(--sel-navy); background: var(--sel-blue-soft); }
+.nav.active { color: var(--sel-navy); background: var(--sel-blue-soft); box-shadow: none; border-left-color: var(--sel-yellow); }
+.navfooter .eyebrow { color: var(--sel-navy); }
+
+.top { border-bottom-color: var(--border); }
+h1, h2, h3, legend, .figure { color: var(--sel-navy); }
+.dot { background: var(--sel-primary); }
+.button:focus-visible, button:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible { outline-color: var(--focus-ring); }
+button.primary, .button.primary { background: var(--sel-primary); }
+button.primary:hover, .button.primary:hover { background: var(--sel-navy-deep); }
+button.secondary, .button.secondary { color: var(--sel-navy); border-color: #bfd0df; }
+button.secondary:hover, .button.secondary:hover { background: var(--sel-blue-soft); border-color: var(--sel-blue); }
+th { background: var(--sel-blue-soft); color: var(--sel-navy); }
+.pill { color: var(--sel-navy); background: var(--sel-blue-soft); }
+.sum .total { border-top-color: var(--sel-yellow); background: var(--sel-blue-soft); color: var(--sel-navy); }
+
+.auth-brand { background: #fff; color: var(--sel-navy); padding-inline: clamp(24px, 4vw, 56px); }
+.auth-identity { display: block; width: min(100%, 400px); overflow: visible; background: transparent; border-radius: 0; padding: 0; box-shadow: none; }
+.auth-identity .official-logo { display: block; width: 100%; max-width: 400px; height: auto; max-height: none; object-fit: contain; object-position: left center; overflow: visible; }
+.auth-brand .eyebrow { color: var(--sel-blue); }
+.auth-brand-copy h1 { color: var(--sel-navy); }
+.auth-brand-copy p { color: #36516c; }
+.auth-local { color: #36516c; }
+.auth-local .dot { background: var(--sel-yellow); }
+.auth-hint { border-left-color: var(--sel-yellow); }
+.auth-content { max-width: none; margin: 0; background: var(--sel-primary); color: #fff; align-items: center; }
+.auth-content > .alert { width: min(100%, 520px); }
+.auth-content h2 { color: #fff; }
+.auth-content .eyebrow { color: var(--sel-yellow); }
+.auth-content .auth-intro, .auth-content .auth-footer { color: #eaf4ff; }
+.auth-content label { color: #fff; }
+.auth-content .auth-hint { color: #fff; background: rgba(255, 255, 255, .12); border-left-color: var(--sel-yellow); padding: 12px 14px; }
+.auth-content input { border-color: #fff; box-shadow: 0 0 0 1px rgba(0, 48, 120, .12); }
+.auth-content input:focus-visible { outline-color: var(--sel-yellow); }
+.password-toggle { color: var(--sel-navy); }
+.auth-submit { background: #fff !important; color: var(--sel-navy) !important; }
+.auth-submit:hover { background: var(--sel-yellow) !important; color: var(--sel-navy) !important; }
+.auth-content .alert { background: #fff; color: var(--sel-navy); border-color: #fff; }
+.auth-content .alert.err { background: #fff0ef; color: #8d2d2a; border-color: #f1b8b5; }
+
+.statusbar { border-left-color: var(--sel-primary); }
+.status-warning { border-left-color: var(--sel-yellow); }
+.settings-cards article { background: #fff; }
+.settings-cards strong { color: var(--sel-navy); }
+.modal { box-shadow: 0 24px 80px rgba(0, 48, 120, .22); }
+.modal-close:hover { color: var(--sel-navy); }
+
+@media (max-width: 980px) {
+  .identity .official-logo { width: 164px; height: 58px; }
+}

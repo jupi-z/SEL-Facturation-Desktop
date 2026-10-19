@@ -7,18 +7,18 @@
   <script defer src="{{ url_for('static',filename='desktop.js') }}"></script>
   <title>{{ title }} | SEL Facturation</title>
   <link rel="stylesheet" href="{{ url_for('static',filename='app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='brand.css') }}">
 </head>
 <body>
 {% if is_logged %}
   <div class="shell">
     <aside class="side">
       <a href="{{ url_for('dashboard') }}" class="identity">
-        <img src="{{ url_for('static',filename='sel-logo.png') }}" alt="SEL">
-        <span><b>SEL</b><small>FACTURATION</small></span>
+        <img class="official-logo" src="{{ url_for('static',filename='sel-official-logo.png') }}" alt="S.E.L. SASU">
       </a>
       <nav aria-label="Navigation">
         <a class="nav{{ ' active' if request.endpoint == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}"{% if request.endpoint == 'dashboard' %} aria-current="page"{% endif %}>Vue d'ensemble</a>
-        <a class="nav{{ ' active' if request.endpoint in ('clients','edit_client') else '' }}" href="{{ url_for('clients') }}"{% if request.endpoint in ('clients','edit_client') %} aria-current="page"{% endif %}>Abonnés et compteurs</a>
+        <a class="nav{{ ' active' if request.endpoint in ('clients','edit_client') else '' }}" href="{{ url_for('clients') }}"{% if request.endpoint in ('clients','edit_client') %} aria-current="page"{% endif %}>Abonnés</a>
         <a class="nav{{ ' active' if request.endpoint == 'new_invoice' else '' }}" href="{{ url_for('new_invoice') }}"{% if request.endpoint == 'new_invoice' %} aria-current="page"{% endif %}>Nouveau décompte</a>
         <a class="nav{{ ' active' if request.endpoint in ('invoices','invoice_detail') else '' }}" href="{{ url_for('invoices') }}"{% if request.endpoint in ('invoices','invoice_detail') %} aria-current="page"{% endif %}>Historique des décomptes</a>
         <a class="nav{{ ' active' if request.endpoint == 'settings_view' else '' }}" href="{{ url_for('settings_view') }}"{% if request.endpoint == 'settings_view' %} aria-current="page"{% endif %}>Paramètres de facturation</a>
@@ -44,7 +44,7 @@
 {% else %}
   <div class="auth-shell">
     <section class="auth-brand" aria-label="Identité SEL">
-      <a href="{{ url_for('login') }}" class="auth-identity"><img src="{{ url_for('static',filename='sel-logo.png') }}" alt="Logo SEL"><span><strong>SEL</strong><small>FACTURATION</small></span></a>
+      <a href="{{ url_for('login') }}" class="auth-identity"><img class="official-logo" src="{{ url_for('static',filename='sel-official-logo.png') }}" alt="S.E.L. SASU"></a>
       <div class="auth-brand-copy"><div class="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</div><h1>Une facturation claire,<br>sur votre poste SEL.</h1><p>Une application locale pour gérer les abonnés, les décomptes et les paiements, même hors connexion.</p></div>
       <div class="auth-local"><span class="dot"></span>Données conservées sur cet ordinateur</div>
     </section>

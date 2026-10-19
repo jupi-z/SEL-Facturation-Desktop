@@ -82,3 +82,27 @@ Le shell d'authentification utilise maintenant une composition SEL dédiée sans
 ## Avis de livraison
 
 **NO-GO pour remise commerciale immédiate.** La CI et le packaging sont maintenant verts, mais le statut reste **pilote non validé sur poste cible** : il manque l'installation/exécution du bootstrapper sur le PC Windows 10/11 SEL, la recette avec imprimante/PDF par défaut, la restauration sur copie et la validation SEL des tarifs, taxes et identifiants d'entreprise. Aucun GO commercial ne doit être annoncé avant ces preuves.
+
+## Mise à jour métier du 16 octobre 2026
+
+La branche `monarque/consumption-tariffs` ajoute le modèle de facturation confirmé par SEL : Résidentiel 0,095 USD/kWh HT, Commercial 0,12 USD/kWh HT, TVA 16 %, aucune taxe locale pour les nouvelles factures, émission mensuelle en USD, conversion CDF optionnelle au taux configurable initial de 2 360. La consommation directe est disponible sans compteur ; les relevés restent un mode futur optionnel. Les anciennes données et snapshots restent compatibles.
+
+Validation locale de la branche : 82 tests exécutés par groupes, tous passants ; EXE PyInstaller produit et démarré dans un dossier de données isolé. L'installateur WiX/Inno Setup, l'imprimante SEL et le poste cible restent à valider séparément.
+
+### Addendum de validation — 16 octobre 2026
+
+- La branche contient en plus la correction du tableau de bord qui évite de masquer des factures USD lorsqu'une ancienne configuration conserve CDF comme devise d'affichage. Régression dédiée ajoutée.
+- Suite actuelle : **83 tests collectés, 83 passants**, exécutés en groupes bornés sous Python 3.12 ; `git diff --check` est propre.
+- PyInstaller a produit `dist/SEL-Facturation.exe` (23 384 724 octets). Avec un dossier `SEL_DATA_DIR` isolé, le smoke test de l'EXE reste répondant pendant huit secondes et crée `sel.sqlite3`, `session.key`, `application.log` et `sauvegardes` ; ce test ne remplace pas une recette graphique sur le poste SEL.
+- Le MSI WiX a été recompilé et son extraction administrative a réussi (code 0, EXE retrouvé dans l'arborescence extraite). Le bootstrapper WiX avec l'installeur autonome WebView2 a été recompilé sans avertissement après ajout de la détection du runtime.
+- Inno Setup n'est pas installé localement ; aucun installeur Inno n'est donc déclaré validé. Aucun test d'installation réel ne doit être annoncé tant que le bootstrapper n'est pas exécuté sur un Windows 10/11 propre et que la conservation/mise à jour des données n'est pas constatée.
+
+### Addendum installation et mise à jour — 16 octobre 2026
+
+- L'audit a confirmé que la coexistence Inno Setup/WiX pouvait produire des comportements différents selon le fichier lancé. WiX Burn devient maintenant le seul chemin de livraison supporté ; Inno est explicitement marqué legacy et n'est plus compilé ni publié par le workflow Windows.
+- `build-windows.ps1` construit désormais l'EXE, le MSI et le bootstrapper WiX avec WebView2, et échoue explicitement si WiX 4 est absent au lieu de produire un paquet incomplet.
+- La politique `update_policy.py` accepte uniquement un manifest HTTPS pour un bootstrapper, avec SHA-256 valide et version strictement supérieure ; elle refuse les versions identiques, les rétrogradations, les URL HTTP et les packages non supportés. Cette politique ne télécharge ni n'exécute de package depuis une requête web.
+- La séparation des données reste inchangée : les mises à jour remplacent les programmes, jamais `%LOCALAPPDATA%\\SEL Facturation`. Une recette Windows doit encore confirmer le comportement exact du bootstrapper installé sur un profil propre et la migration depuis une ancienne installation Inno.
+- La protection pré-migration est maintenant exécutée avant `db.initialize()` pour toute base existante ; un snapshot `sel-preupdate-*.sqlite3` est conservé avant les migrations additives.
+- Le client de mise à jour valide désormais la taille du manifest/package, l'HTTPS final, la version sémantique, le produit, le type de package, le SHA-256 et exige une signature Authenticode du publisher attendu avant qu'un package puisse être remis à l'installeur. L'endpoint `/updates/status` ne télécharge ni n'exécute de fichier.
+- Validation actuelle : **99 tests passants**, compilation Python, smoke EXE répondant avec base et sauvegarde isolées, compilation MSI/bootstrapper et extraction MSI réussies.

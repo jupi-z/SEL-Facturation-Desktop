@@ -4,7 +4,7 @@
 <div class="kpis">
   <article class="panel metric"><div class="eyebrow">ABONNÉS</div><div class="figure">{{ clients }}</div><span class="sub">Enregistrés localement</span></article>
   <article class="panel metric"><div class="eyebrow">DÉCOMPTES ÉMIS</div><div class="figure">{{ stats['n'] }}</div><span class="sub">Documents actifs conservés</span></article>
-  <article class="panel metric"><div class="eyebrow">Montant émis</div><div class="figure">{{ fmt(stats['billed']) }}</div><span class="sub">Devise courante : {{ company['currency'] }}</span></article>
+  <article class="panel metric"><div class="eyebrow">Montant émis</div><div class="figure">{{ fmt(stats['billed']) }}</div><span class="sub">Devise courante : {{ stats['currency'] }}</span></article>
   <article class="panel metric"><div class="eyebrow">Montant encaissé</div><div class="figure">{{ fmt(stats['paid']) }}</div><span class="sub">Paiements enregistrés</span></article>
   <article class="panel metric"><div class="eyebrow">Solde à suivre</div><div class="figure">{{ fmt(stats['balance']) }}</div><span class="sub">Montant restant à recouvrer</span></article>
 </div>

@@ -31,7 +31,7 @@ def authenticated_client(tmp_path, monkeypatch):
     ("path", "label"),
     [
         ("/", "Vue d'ensemble"),
-        ("/clients", "Abonnés et compteurs"),
+            ("/clients", "Abonnés"),
         ("/invoices/new", "Nouveau décompte"),
         ("/invoices", "Historique des décomptes"),
         ("/settings", "Paramètres de facturation"),

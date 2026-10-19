@@ -137,3 +137,61 @@ def calculate_from_settings(previous: str, current: str, coefficient: str, setti
     return calculate(previous=previous, current=current, coefficient=coefficient,
                      tiers=parse_tiers(settings['tiers']), local_rate=settings['local_rate'],
                      vat_rate=settings['vat_rate'], vat_base=settings['vat_base'], fixed_fee=fee)
+
+
+def calculate_flat_rate(*, consumption_kwh: str, unit_price: str,
+                        vat_rate: str = "16", currency: str = "USD") -> dict:
+    """Calculate the current SEL model: one fixed price per consumed kWh."""
+    kwh = decimal(consumption_kwh, "Consommation", allow_zero=True)
+    price = decimal(unit_price, "Prix unitaire", allow_zero=False)
+    vat_percent = decimal(vat_rate, "Taux de TVA")
+    if vat_percent > 100:
+        raise BillingError("Le taux de TVA ne peut pas dépasser 100 %.")
+    energy = money(kwh * price)
+    vat = money(energy * vat_percent / Decimal("100"))
+    total = money(energy + vat)
+    return {
+        "pricing_model": "FLAT_KWH",
+        "previous": "",
+        "current": "",
+        "coefficient": "1",
+        "kwh": str(kwh),
+        "lines": [{"range": "Consommation", "quantity": str(kwh),
+                   "unit_price": str(price), "amount": str(energy)}] if kwh else [],
+        "energy": str(energy),
+        "local_rate": "0",
+        "local_tax": "0.00",
+        "vat_rate": str(vat_percent),
+        "vat_base": "ENERGY",
+        "vat_basis": str(energy),
+        "vat": str(vat),
+        "fee": "0.00",
+        "total": str(total),
+        "currency": currency,
+    }
+
+
+def calculate_from_readings(*, previous: str, current: str, coefficient: str = "1",
+                            unit_price: str, vat_rate: str = "16",
+                            currency: str = "USD") -> dict:
+    """Future meter mode, sharing the fixed-rate VAT rules."""
+    prev = decimal(previous, "Ancien index")
+    curr = decimal(current, "Nouvel index")
+    coef = decimal(coefficient, "Coefficient", allow_zero=False)
+    if curr < prev:
+        raise BillingError("Nouvel index inférieur à l'ancien.")
+    result = calculate_flat_rate(consumption_kwh=str((curr - prev) * coef),
+                                 unit_price=unit_price, vat_rate=vat_rate,
+                                 currency=currency)
+    result["previous"] = str(prev)
+    result["current"] = str(curr)
+    result["coefficient"] = str(coef)
+    return result
+
+
+def convert_amount(amount_usd: str, exchange_rate: str, quote_currency: str = "CDF") -> dict:
+    """Create a presentation conversion without changing the USD invoice."""
+    source = money(decimal(amount_usd, "Montant USD"))
+    rate = decimal(exchange_rate, "Taux de change", allow_zero=False)
+    return {"source_amount": str(source), "source_currency": "USD", "rate": str(rate),
+            "currency": quote_currency, "amount": str(money(source * rate))}

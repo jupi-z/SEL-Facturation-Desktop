@@ -2,7 +2,17 @@
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
 
-**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF clients sont intitulés « décomptes d'électricité », sans encadré de statut fiscal anxiogène et sans fausse référence, signature ou QR DGI. Les règles tarifaires et fiscales sont à confirmer par SEL ; la fiscalisation officielle reste une procédure distincte. Ne jamais présenter ces PDF comme des factures normalisées ou homologuées sans authentification par le dispositif autorisé.
+**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF clients sont intitulés « décomptes d'électricité », sans encadré de statut fiscal anxiogène et sans fausse référence, signature ou QR DGI. L'identité officielle SEL et les règles tarifaires confirmées sont préchargées ; la fiscalisation officielle reste une procédure distincte. Ne jamais présenter ces PDF comme des factures normalisées ou homologuées sans authentification par le dispositif autorisé.
+
+### Règles de facturation actuellement implémentées
+
+- Facturation mensuelle selon la consommation en kWh, saisie directement tant que les compteurs ne sont pas disponibles.
+- Abonné résidentiel : 0,095 USD/kWh hors TVA.
+- Abonné commercial : 0,12 USD/kWh hors TVA.
+- TVA : 16 %. Aucune taxe locale n'est appliquée aux nouvelles factures.
+- Devise principale : USD. Une variante CDF peut être produite avec un taux configurable, initialement 1 USD = 2 360 CDF.
+- Les compteurs et relevés restent facultatifs et pourront être activés ultérieurement.
+- Les anciens barèmes progressifs et anciennes taxes restent lisibles dans les factures historiques mais ne contrôlent pas le nouveau parcours.
 
 ## Démarrage développeur
 
@@ -26,7 +36,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --icon "packaging\sel-facturation.ico" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
 ```
 
-`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée avec l'icône du logo SEL ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Pour la distribution, le workflow Windows compile un installateur MSI par utilisateur et un bootstrapper WiX qui installe silencieusement le WebView2 Evergreen Standalone puis le MSI. L'utilisateur peut donc utiliser SEL après une seule installation ; l'installation de WebView2 peut demander l'élévation Windows selon la politique du poste. Inno Setup reste disponible comme paquet de compatibilité développeur, mais le bootstrapper WiX est le paquet de livraison recommandé. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**
+`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée avec l'icône du logo SEL ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Pour la distribution, le workflow Windows compile un MSI par utilisateur et le bootstrapper WiX qui installe silencieusement le WebView2 Evergreen Standalone puis le MSI. Le bootstrapper WiX est l'unique paquet de livraison supporté. `packaging\SEL-Facturation.iss` est conservé uniquement pour compatibilité historique et ne doit plus être utilisé pour une nouvelle installation ou une mise à jour. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**
 
 ## Où sont les données ?
 
@@ -41,7 +51,7 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 ## Parcours agent
 
 1. Créer le mot de passe au premier lancement.
-2. Dans **Paramètres**, renseigner les références SEL et **confirmer** tarifs, taux et assiette de TVA. Les chiffres initiaux sont seulement ceux de l'exemple et **ne sont pas validés**.
+2. Dans **Paramètres**, vérifier les références SEL préchargées et **confirmer** les tarifs, le taux de change et l'assiette de TVA avant la première émission.
 3. Dans **Abonnés**, enregistrer nom, adresse, contrat, numéro de compteur, coefficient et NIF le cas échéant.
 4. Dans **Nouvelle facture**, choisir l'abonné, mois, deux index et date d'échéance.
 5. Le serveur calcule les tranches, les taxes configurées, le total et attribue un numéro unique.

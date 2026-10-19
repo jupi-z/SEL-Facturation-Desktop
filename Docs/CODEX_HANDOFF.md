@@ -36,7 +36,7 @@ Auditer **le projet actuellement livré** sur `main` puis corriger les défauts 
 - Aucune suppression d'abonnés, de factures, de paiements ou de snapshots historiques ; pas de reset implicite de DB.
 - Ne pas transformer la V1 en ERP/Monarque Connect ; préserver l'export `sel-facturation-portable` version 1 ; toute extension de format doit être versionnée et testée.
 - Garder l'identité visuelle SEL et les documents clients sobres. Ne pas prétendre à la conformité DGI avant confirmation ; ne pas supprimer des informations fiscales réellement obligatoires par simple préférence esthétique.
-- Les corrections passent par **branche dédiée → PR → CI Windows verte → fusion contrôlée**. Eviter les changements directement sur `main`. Aucun nouveau binaire annoncé sans build/release confirmé.
+- Les corrections passent par **branche dédiée → PR → CI Windows verte → fusion contrôlée**. Eviter les changements directement sur `main`. Aucun nouveau binaire annoncé sans build/release confirmé. Le bootstrapper WiX est le seul installeur de livraison supporté ; Inno Setup est historique et ne doit pas être utilisé pour les nouvelles installations.
 - Ne pas écraser/supprimer la préversion `v0.1.0-rc1` tant que la nouvelle n'a pas passé une recette sur le PC cible ; elle constitue un recours technique, pas la version recommandée.
 - Exposer les limites, les hypothèses et les blocages au lieu de maquiller le statut de la production.
 

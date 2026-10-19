@@ -36,20 +36,12 @@ jobs:
         run: python -c "import webview, clr; from webview import FileDialog; print('Desktop runtime import OK')"
       - name: Build Windows EXE
         run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon packaging\sel-facturation.ico --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
-      - name: Install Inno Setup
-        run: choco install innosetup --yes --no-progress
-      - name: Compile Windows installer
-        shell: pwsh
-        run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler unavailable: $iscc" }
-          & $iscc packaging\SEL-Facturation.iss
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
       - name: Install WiX Toolset 4
         run: |
           dotnet tool install --global wix --version 4.0.5
           echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
           wix extension add -g WixToolset.Bal.wixext/4.0.5
+          wix extension add -g WixToolset.Util.wixext/4.0.5
       - name: Compile MSI and autonomous bootstrapper
         shell: pwsh
         run: |
@@ -59,9 +51,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path build\webview2, dist\installer | Out-Null
           $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
           Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webview
-          wix build packaging\wix\Product.wxs -d ProductVersion=$version -d ExePath="$((Resolve-Path dist\SEL-Facturation.exe).Path)" -o dist\installer\SEL-Facturation.msi
+          $exePath = (Resolve-Path dist\SEL-Facturation.exe).Path
+          wix build packaging\wix\Product.wxs -d "ProductVersion=$version" -d "ExePath=$exePath" -o dist\installer\SEL-Facturation.msi
           if ($LASTEXITCODE -ne 0) { throw 'WiX MSI build failed' }
-          wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -d ProductVersion=$version -d MsiPath="$((Resolve-Path dist\installer\SEL-Facturation.msi).Path)" -d WebView2Installer=$webview -o "dist\installer\SEL-Facturation-Setup-$version.exe"
+          $msiPath = (Resolve-Path dist\installer\SEL-Facturation.msi).Path
+          $iconPath = (Resolve-Path packaging\sel-facturation.ico).Path
+          wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d "ProductVersion=$version" -d "MsiPath=$msiPath" -d "WebView2Installer=$webview" -d "IconPath=$iconPath" -o "dist\installer\SEL-Facturation-Setup-$version.exe"
           if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper build failed' }
       - name: Sign Windows artifacts
         if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true

@@ -12,15 +12,14 @@ from domain import calculate_from_settings
 from invoice_pdf import render_invoice
 
 
-def test_pdf_generator_points_to_full_official_logo():
+def test_pdf_generator_points_to_the_official_sel_icon():
     source = Path(__file__).resolve().parents[1] / 'invoice_pdf.py'
     code = source.read_text(encoding='utf-8')
-    assert "'sel-official-logo.png'" in code
+    assert "'sel-icon.png'" in code
     assert "'sel-logo.png'" not in code
-    assert "#003078" in code
-    logo = source.parent / 'static' / 'sel-official-logo.png'
-    assert logo.exists()
-    assert logo.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+    icon = source.parent / 'static' / 'sel-icon.png'
+    assert icon.exists()
+    assert icon.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
 
 
 def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
@@ -29,6 +28,8 @@ def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
     c=db.connect()
     s=db.settings(c)
     assert s['configured']=='0'
+    s['local_rate']='1'
+    s['currency']='CDF'
     assert db.db_path().exists()
     c.execute('INSERT INTO clients(code,name,address,meter_number,coefficient) VALUES(?,?,?,?,?)',('SEL-C-00001','Abonné Test','Kolwezi','M123','1'))
     calc=calculate_from_settings('450','650','1',s)
@@ -108,6 +109,16 @@ def test_automatic_backup_refreshes_after_same_day_changes(monkeypatch,tmp_path)
     db.automatic_backup()
     with db.sqlite3.connect(backup_path) as saved:
         assert saved.execute('SELECT name FROM clients').fetchone()[0]=='Abonné sauvegardé'
+
+
+def test_pre_update_backup_preserves_database_before_migration(monkeypatch, tmp_path):
+    monkeypatch.setenv('SEL_DATA_DIR', str(tmp_path))
+    db.initialize()
+    with db.connect() as c:
+        c.execute("INSERT INTO clients(code,name,address,meter_number) VALUES(?,?,?,?)", ('SEL-C-PRE', 'Avant migration', 'Kolwezi', ''))
+    snapshot = db.pre_update_backup()
+    with db.sqlite3.connect(snapshot) as saved:
+        assert saved.execute("SELECT name FROM clients WHERE code='SEL-C-PRE'").fetchone()[0] == 'Avant migration'
 
 
 def test_backup_preserves_previous_snapshot_if_refresh_fails(monkeypatch,tmp_path):

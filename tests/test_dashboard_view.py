@@ -61,3 +61,19 @@ def test_dashboard_paid_amount_uses_current_currency(authenticated_client):
 
     assert "100,00" in html
     assert "1 099,00" not in html
+
+
+def test_dashboard_keeps_new_usd_invoices_visible_after_legacy_cdf_configuration(authenticated_client):
+    with connect() as db:
+        db.execute("UPDATE settings SET value='CDF' WHERE key='currency'")
+        db.execute("INSERT INTO clients(code,name,address,meter_number,customer_type) VALUES(?,?,?,?,?)",
+                   ("SEL-C-USD", "Abonné USD", "Kolwezi", "", "RESIDENTIAL"))
+        client_id = db.execute("SELECT id FROM clients WHERE code='SEL-C-USD'").fetchone()[0]
+        db.execute("INSERT INTO invoices(number,client_id,billing_period,issue_date,client_snapshot,company_snapshot,calc_snapshot,currency) VALUES(?,?,?,?,?,?,?,?)",
+                   ("SEL-2026-USD", client_id, "2026-11", "2026-11-01", "{}", "{}",
+                    json.dumps({"total": "12.34"}), "USD"))
+
+    html = authenticated_client.get("/").get_data(as_text=True)
+
+    assert "12,34" in html
+    assert "Devise courante : USD" in html
