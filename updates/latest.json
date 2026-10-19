@@ -1,10 +1,10 @@
 {
   "product": "SEL-Facturation",
-  "version": "0.3.23",
+  "version": "0.3.24",
   "channel": "preview",
   "signed": false,
   "package_type": "bootstrapper",
-  "url": "https://github.com/jupi-z/SEL-Facturation-Desktop/releases/download/v0.3.23/SEL-Facturation-Setup-0.3.23.exe",
-  "sha256": "c9ccc29a7db49d89b2040791714c846fbab1efcf7d79e1d94fe988eb5c0600c6",
-  "release_url": "https://github.com/jupi-z/SEL-Facturation-Desktop/releases/tag/v0.3.23"
+  "url": "https://github.com/jupi-z/SEL-Facturation-Desktop/releases/download/v0.3.24/SEL-Facturation-Setup-0.3.24.exe",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "release_url": "https://github.com/jupi-z/SEL-Facturation-Desktop/releases/tag/v0.3.24"
 }
