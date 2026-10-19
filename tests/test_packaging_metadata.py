@@ -105,3 +105,11 @@ def test_release_tag_is_derived_from_the_application_version():
     assert "v0.3.0-rc5" not in workflow
     assert 'SEL Facturation Desktop v$version - installateur Windows' in workflow
 
+
+def test_wix_workflow_installs_all_extensions_used_by_bundle_build():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+
+    assert "wix extension add -g WixToolset.Bal.wixext/4.0.5" in workflow
+    assert "wix extension add -g WixToolset.Util.wixext/4.0.5" in workflow
+    assert "-ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext" in workflow
+
