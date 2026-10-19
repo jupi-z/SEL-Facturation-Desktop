@@ -22,6 +22,7 @@
         <a class="nav{{ ' active' if request.endpoint == 'new_invoice' else '' }}" href="{{ url_for('new_invoice') }}"{% if request.endpoint == 'new_invoice' %} aria-current="page"{% endif %}>Nouveau décompte</a>
         <a class="nav{{ ' active' if request.endpoint in ('invoices','invoice_detail') else '' }}" href="{{ url_for('invoices') }}"{% if request.endpoint in ('invoices','invoice_detail') %} aria-current="page"{% endif %}>Historique des décomptes</a>
         <a class="nav{{ ' active' if request.endpoint == 'settings_view' else '' }}" href="{{ url_for('settings_view') }}"{% if request.endpoint == 'settings_view' %} aria-current="page"{% endif %}>Paramètres de facturation</a>
+        <a class="nav{{ ' active' if request.endpoint in ('updates_view','updates_check','updates_download') else '' }}" href="{{ url_for('updates_view') }}"{% if request.endpoint in ('updates_view','updates_check','updates_download') %} aria-current="page"{% endif %}>Mises à jour</a>
       </nav>
       <div class="navfooter">
         <div class="eyebrow">SAUVEGARDER / MIGRER</div>
@@ -41,6 +42,7 @@
     <div class="main">
       <header class="top"><div><div class="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</div><h1>{{ title }}</h1></div><span class="local"><span class="dot"></span>Local · Hors ligne</span></header>
       <main>
+        <section class="statusbar" data-update-status data-update-poll="{{ url_for('update_status') }}" aria-live="polite"><div><strong data-update-title>Vérification des mises à jour…</strong><span data-update-message>La disponibilité du canal SEL est contrôlée.</span></div><a class="button secondary" data-update-link href="{{ url_for('updates_view') }}" hidden>Voir les mises à jour</a></section>
         {% with notices=get_flashed_messages(with_categories=true) %}{% if notices %}{% for category,msg in notices %}<div class="alert {{ 'err' if category=='error' else 'ok' }}" role="{{ 'alert' if category=='error' else 'status' }}" aria-live="polite">{{ msg }}</div>{% endfor %}{% endif %}{% endwith %}
 {% else %}
   <div class="auth-shell">

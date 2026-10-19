@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -21,6 +22,12 @@ from update_policy import evaluate_manifest, verify_sha256
 MAX_MANIFEST_BYTES = 128 * 1024
 MAX_PACKAGE_BYTES = 512 * 1024 * 1024
 USER_AGENT = "SEL-Facturation-Updater/1"
+UPDATE_FILENAME = re.compile(r"SEL-Facturation-Setup-\d+\.\d+\.\d+\.exe\Z", re.IGNORECASE)
+
+
+def staging_dir() -> Path:
+    """Return the private temporary directory used for verified installers."""
+    return Path(tempfile.gettempdir()) / "SEL-Facturation-Updater"
 
 
 def _https(url: str) -> None:

@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block body %}
+<section class="panel">
+  <div class="sectionhead">
+    <div><div class="eyebrow">MAINTENANCE SÉCURISÉE</div><h2>Mises à jour</h2><p class="sub">La vérification ne bloque pas l’application. Aucun installateur n’est exécuté sans validation du hash et de la signature.</p></div>
+    <span class="pill">Version {{ app_version }}</span>
+  </div>
+  <form method="post" action="{{ url_for('updates_check') }}" class="form">
+    <input type="hidden" name="_csrf" value="{{ csrf() }}">
+    <button class="primary" type="submit">Rechercher une mise à jour</button>
+  </form>
+  {% if update and update.state == 'ready' %}
+    <div class="alert ok" role="status">Une sauvegarde vérifiée{% if update.backup_name %} ({{ update.backup_name }}){% endif %} est prête avant l’installation.</div>
+    <button class="primary" type="button" data-update-install data-update-file="{{ update.filename }}" data-update-sha256="{{ update.sha256 }}">Installer la mise à jour</button>
+  {% elif update and update.state == 'available' %}
+    <div class="notice-warning" role="status"><strong>Version {{ update.version }} disponible.</strong><p>Le package sera téléchargé uniquement après vérification de son hash et de sa signature Authenticode.</p></div>
+    <form method="post" action="{{ url_for('updates_download') }}" class="form">
+      <input type="hidden" name="_csrf" value="{{ csrf() }}">
+      <button class="secondary" type="submit">Télécharger et préparer l’installation</button>
+    </form>
+  {% elif update and update.state == 'current' %}
+    <div class="alert ok" role="status">Vous utilisez déjà la dernière version connue.</div>
+  {% elif update and update.state == 'unavailable' %}
+    <div class="alert" role="status">{{ update.message or 'Le service de mise à jour est temporairement indisponible. Réessayez plus tard.' }}</div>
+  {% endif %}
+  <p class="note">Les données locales restent séparées du programme. Une sauvegarde SQLite est créée avant toute préparation d’installation.</p>
+</section>
+{% endblock %}

@@ -6,6 +6,7 @@ import ctypes
 import logging
 import os
 import sqlite3
+import subprocess
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import re
@@ -17,6 +18,8 @@ from uuid import uuid4
 from werkzeug.serving import make_server
 import db
 from installer_version import is_canonical_installation_executable, write_installation_marker
+from update_client import UPDATE_FILENAME, staging_dir, verify_authenticode
+from update_policy import verify_sha256
 from version import APP_VERSION
 
 
@@ -118,6 +121,28 @@ class DesktopDocuments:
             return {"ok": True}
         except Exception as exc:
             logging.exception("Impossible d'imprimer le document")
+            return {"ok": False, "message": str(exc)}
+
+    def install_update(self, filename: str, expected_sha256: str) -> dict:
+        """Launch only a staged bootstrapper that passed hash and signature checks."""
+        try:
+            if not isinstance(filename, str) or UPDATE_FILENAME.fullmatch(filename) is None:
+                raise ValueError("Installateur non autorisé.")
+            root = staging_dir().resolve()
+            target = (root / filename).resolve()
+            if target.parent != root or not target.is_file():
+                raise ValueError("Installateur introuvable dans la zone temporaire.")
+            if not verify_sha256(target, expected_sha256):
+                raise ValueError("L'intégrité de l'installateur n'a pas pu être vérifiée.")
+            publisher = os.environ.get("SEL_UPDATE_EXPECTED_PUBLISHER", "").strip()
+            if not publisher or not verify_authenticode(target, expected_subject=publisher):
+                raise ValueError("La signature Authenticode de l'installateur n'est pas valide.")
+            subprocess.Popen([str(target), "/norestart"], close_fds=True)
+            if self._window is not None:
+                threading.Timer(0.5, self._window.destroy).start()
+            return {"ok": True}
+        except Exception as exc:
+            logging.exception("Impossible de lancer la mise à jour")
             return {"ok": False, "message": str(exc)}
 
 
