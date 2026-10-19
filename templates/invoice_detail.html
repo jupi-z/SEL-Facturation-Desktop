@@ -24,7 +24,7 @@
 
 <section class="panel">
   <h2>Encaissements constatés</h2>
-  <div class="tablewrap"><table><caption class="sr-only">Paiements enregistrés</caption><thead><tr><th scope="col">Date</th><th scope="col">Montant</th><th scope="col">Mode</th><th scope="col">Référence</th></tr></thead><tbody>{% for item in payments %}<tr><td>{{ item['paid_on'] }}</td><td>{{ fmt(item['amount']) }}</td><td>{{ item['method'] }}</td><td>{{ item['reference'] or '—' }}</td></tr>{% else %}<tr><td colspan="4">Aucun paiement enregistré.</td></tr>{% endfor %}</tbody></table></div>
+  <div class="tablewrap"><table><caption class="sr-only">Paiements enregistrés</caption><thead><tr><th scope="col">Date</th><th scope="col">Montant</th><th scope="col">Mode</th><th scope="col">Référence</th></tr></thead><tbody>{% for item in payments %}<tr><td>{{ item['paid_on'] }}</td><td>{{ fmt(item['amount']) }}</td><td>{{ item['method'] }}</td><td>{{ item['reference'] or '—' }}</td></tr>{% else %}<tr><td colspan="4"><div class="empty-state compact"><strong>Aucun paiement enregistré.</strong><span>Les règlements ajoutés pour ce document apparaîtront ici.</span></div></td></tr>{% endfor %}</tbody></table></div>
   {% if invoice['status']=='ISSUED' and balance > 0 %}
     <form method="post" action="{{ url_for('add_payment',iid=invoice['id']) }}" class="form" data-draft-key="payment-{{ invoice['id'] }}" data-draft-server="{{ 'true' if payment_form else 'false' }}">
       <input type="hidden" name="_csrf" value="{{ csrf() }}">
