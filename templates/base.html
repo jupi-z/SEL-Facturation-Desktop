@@ -52,6 +52,7 @@
       <div class="auth-local"><span class="dot"></span>Données conservées sur cet ordinateur</div>
     </section>
     <main class="auth-content">
+      <div class="auth-stage">
       {% with notices=get_flashed_messages(with_categories=true) %}{% if notices %}{% for category,msg in notices %}<div class="alert {{ 'err' if category=='error' else 'ok' }}" role="{{ 'alert' if category=='error' else 'status' }}" aria-live="polite">{{ msg }}</div>{% endfor %}{% endif %}{% endwith %}
 {% endif %}
         {% block body %}{% endblock %}
@@ -62,6 +63,7 @@
   </div>
 {% else %}
       <footer class="auth-footer">SEL Facturation · Version {{ app_version }} · Application locale<br><span class="developer-attribution">Application développée et sécurisée par LTEX · <a data-external-link href="https://monarquegrp.com/" rel="noopener noreferrer external">MonarQue Group</a></span></footer>
+      </div>
     </main>
   </div>
 {% endif %}

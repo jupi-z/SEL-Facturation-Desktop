@@ -79,7 +79,8 @@ def test_auth_layout_keeps_brand_and_form_balanced_on_wide_windows():
     assert ".auth-brand { min-height: 100vh; overflow: hidden;" in css
     assert ".auth-identity { display: block; width: min(100%, 340px);" in css
     assert "padding: clamp(32px, 5vw, 72px) clamp(32px, 6vw, 96px);" in css
-    assert ".auth-form { width: 100%; max-width: 460px;" in css
+    assert ".auth-stage { width: min(100%, 460px);" in css
+    assert ".auth-form { width: 100%; max-width: none;" in css
     assert "@media (min-width: 761px) and (max-width: 1100px)" in css
     assert ".auth-shell { grid-template-columns: minmax(360px, 40%) minmax(0, 1fr);" in css
     assert "@media (max-width: 760px)" in css
@@ -92,6 +93,17 @@ def test_authentication_hint_remains_readable_on_the_blue_panel():
     assert ".auth-content .auth-hint" in css
     assert "color: #fff" in css
     assert "background: rgba(255, 255, 255, .12)" in css
+
+
+def test_auth_stage_centers_the_complete_login_group_and_keeps_footer_links_visible():
+    base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert '<div class="auth-stage">' in base
+    assert ".auth-stage { width: min(100%, 460px);" in css
+    assert ".auth-footer { width: 100%;" in css
+    assert "text-align: center;" in css
+    assert ".auth-content .auth-footer a { color: #fff;" in css
 
 
 def test_about_surface_keeps_sel_primary_and_developer_marks_secondary():
