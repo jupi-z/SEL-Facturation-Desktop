@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
 
 from pypdf import PdfReader
@@ -78,3 +78,33 @@ def test_current_month_invoice_still_works_after_mid_month_tariff_save(tmp_path,
 
     assert preview.status_code == 200
     assert "11,02" in preview.get_data(as_text=True)
+
+
+def test_invoice_accepts_a_past_due_date_for_late_billing(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    client = create_app().test_client()
+    client.post("/setup", data={"_csrf": _token(client, "/setup"), "password": "TestPassword2026!", "confirm": "TestPassword2026!"})
+    client.post("/login", data={"_csrf": _token(client, "/login"), "password": "TestPassword2026!"})
+    client.post("/settings", data={
+        "_csrf": _token(client, "/settings"), "section": "tariffs",
+        "residential_rate": "0.095", "commercial_rate": "0.12",
+        "exchange_rate_usd_cdf": "2360", "vat_rate": "16", "confirmed": "yes",
+    })
+    client.post("/clients", data={
+        "_csrf": _token(client, "/clients"), "name": "Client échéance passée",
+        "address": "Kolwezi", "customer_type": "RESIDENTIAL", "contract_number": "C-PAST",
+        "meter_number": "", "coefficient": "1",
+    })
+    past_due = (date.today() - timedelta(days=1)).isoformat()
+    preview = client.post("/invoices/new", data={
+        "_csrf": _token(client, "/invoices/new"), "client_id": "1",
+        "billing_period": date.today().strftime("%Y-%m"), "consumption_kwh": "100", "due_date": past_due,
+    })
+
+    assert preview.status_code == 200
+    assert f"Échéance : {past_due}" in preview.get_data(as_text=True)
+    confirm_token = re.search(r'name="_csrf" value="([^"]+)"', preview.get_data(as_text=True)).group(1)
+    created = client.post("/invoices/new/confirm", data={"_csrf": confirm_token})
+    assert created.status_code == 302
+    with db.connect() as connection:
+        assert connection.execute("SELECT due_date FROM invoices").fetchone()[0] == past_due

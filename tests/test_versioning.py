@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_application_and_inno_use_central_version():
-    assert APP_VERSION == "0.3.15"
+    assert APP_VERSION == "0.3.16"
     iss = (ROOT / "packaging" / "SEL-Facturation.iss").read_text(encoding="utf-8")
     assert f'#define AppVersion "{APP_VERSION}"' in iss
     assert f"SEL-Facturation-Setup-{APP_VERSION}" in iss
