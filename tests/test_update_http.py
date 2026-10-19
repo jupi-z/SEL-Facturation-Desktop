@@ -1,5 +1,6 @@
 import importlib.util
 import re
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -30,7 +31,7 @@ def authenticated_client(tmp_path, monkeypatch):
     return client
 
 
-def test_update_status_is_explicitly_not_configured_without_manifest(authenticated_client, monkeypatch):
+def test_update_status_returns_a_state_when_the_public_channel_is_reachable(authenticated_client, monkeypatch):
     monkeypatch.delenv("SEL_UPDATE_MANIFEST_URL", raising=False)
 
     response = authenticated_client.get("/updates/status")
@@ -49,7 +50,7 @@ def test_updates_page_is_reachable_and_linked_from_navigation(authenticated_clie
     assert 'href="/updates"' in html
 
 
-def test_update_status_uses_sel_default_manifest_endpoint(authenticated_client, monkeypatch):
+def test_update_status_uses_public_manifest_endpoint(authenticated_client, monkeypatch):
     monkeypatch.delenv("SEL_UPDATE_MANIFEST_URL", raising=False)
     calls = []
 
@@ -63,7 +64,44 @@ def test_update_status_uses_sel_default_manifest_endpoint(authenticated_client, 
 
     assert response.status_code == 200
     assert response.json["state"] == "current"
-    assert calls == [("https://sel.shuleops.com/updates/latest.json", APP_VERSION)]
+    assert calls == [("https://raw.githubusercontent.com/jupi-z/SEL-Facturation-Desktop/main/updates/latest.json", APP_VERSION)]
+
+
+def test_update_status_distinguishes_an_unreachable_server(authenticated_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.fetch_manifest",
+        lambda url, *, current_version: (_ for _ in ()).throw(URLError("offline")),
+    )
+
+    response = authenticated_client.get("/updates/status")
+
+    assert response.json["state"] == "offline"
+    assert "injoignable" in response.json["message"]
+
+
+def test_update_status_distinguishes_an_unpublished_channel(authenticated_client, monkeypatch):
+    error = HTTPError("https://updates.example.test/latest.json", 404, "Not Found", {}, None)
+    monkeypatch.setattr(
+        "app.fetch_manifest",
+        lambda url, *, current_version: (_ for _ in ()).throw(error),
+    )
+
+    response = authenticated_client.get("/updates/status")
+
+    assert response.json["state"] == "unavailable"
+    assert "canal" in response.json["message"]
+
+
+def test_update_status_distinguishes_an_invalid_manifest(authenticated_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.fetch_manifest",
+        lambda url, *, current_version: (_ for _ in ()).throw(ValueError("invalid_sha256")),
+    )
+
+    response = authenticated_client.get("/updates/status")
+
+    assert response.json["state"] == "invalid"
+    assert "manifeste" in response.json["message"]
 
 
 def test_update_check_renders_current_state(authenticated_client, monkeypatch):
@@ -79,3 +117,28 @@ def test_update_check_renders_current_state(authenticated_client, monkeypatch):
 
     assert response.status_code == 200
     assert "dernière version" in response.get_data(as_text=True)
+
+
+def test_update_check_explains_that_an_unsigned_preview_cannot_be_installed(authenticated_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.fetch_manifest",
+        lambda url, *, current_version: {
+            "state": "available",
+            "version": "0.4.0",
+            "url": "https://updates.example.test/SEL-Facturation-Setup-0.4.0.exe",
+            "sha256": "a" * 64,
+            "product": "SEL-Facturation",
+            "channel": "preview",
+            "signed": False,
+        },
+    )
+
+    response = authenticated_client.post(
+        "/updates/check",
+        data={"_csrf": csrf(authenticated_client, "/updates")},
+        follow_redirects=True,
+    )
+
+    html = response.get_data(as_text=True)
+    assert "installation automatique" in html
+    assert 'action="/updates/download"' not in html

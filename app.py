@@ -15,6 +15,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from functools import wraps
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    send_file, session, url_for)
@@ -35,7 +36,10 @@ from config_service import (
 )
 
 PAGE_SIZE = 50
-DEFAULT_UPDATE_MANIFEST_URL = 'https://sel.shuleops.com/updates/latest.json'
+# The repository-hosted manifest is the currently published channel. An
+# operator can point this to the SEL update server with SEL_UPDATE_MANIFEST_URL
+# once that server exposes the same signed-manifest contract.
+DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/jupi-z/SEL-Facturation-Desktop/main/updates/latest.json'
 
 DEVELOPER_LEGAL = {
     'name': 'MonarQue Group S.A.S.',
@@ -162,26 +166,21 @@ def create_app():
     @protected
     def update_status():
         """Check availability only; never downloads or executes an installer."""
-        manifest_url = os.environ.get('SEL_UPDATE_MANIFEST_URL', '').strip() or DEFAULT_UPDATE_MANIFEST_URL
-        try:
-            return fetch_manifest(manifest_url, current_version=APP_VERSION)
-        except ValueError as exc:
-            return {'state': 'unavailable', 'version': APP_VERSION,
-                    'message': f'Le manifeste de mise à jour a été refusé : {exc}.'}
-        except (OSError, TimeoutError):
-            return {'state': 'unavailable', 'version': APP_VERSION,
-                    'message': 'Le service de mise à jour est indisponible ou aucun canal n’est publié.'}
+        return check_update()
 
     def check_update():
         manifest_url = os.environ.get('SEL_UPDATE_MANIFEST_URL', '').strip() or DEFAULT_UPDATE_MANIFEST_URL
         try:
             return fetch_manifest(manifest_url, current_version=APP_VERSION)
         except ValueError as exc:
-            return {'state': 'unavailable', 'version': APP_VERSION,
+            return {'state': 'invalid', 'version': APP_VERSION,
                     'message': f'Le manifeste de mise à jour a été refusé : {exc}.'}
-        except (OSError, TimeoutError):
+        except HTTPError as exc:
             return {'state': 'unavailable', 'version': APP_VERSION,
-                    'message': 'Le service de mise à jour est indisponible ou aucun canal n’est publié.'}
+                    'message': f'Le serveur de mise à jour répond, mais le canal publié est indisponible (HTTP {exc.code}).'}
+        except (URLError, ConnectionError, OSError, TimeoutError):
+            return {'state': 'offline', 'version': APP_VERSION,
+                    'message': 'Le serveur de mise à jour est actuellement injoignable. Vérifiez la connexion puis réessayez.'}
 
     @app.get('/updates')
     @protected
@@ -201,6 +200,10 @@ def create_app():
         update = session.get('update_result') or {}
         if update.get('state') != 'available':
             flash('Aucune mise à jour prête à être téléchargée.','error')
+            return redirect(url_for('updates_view'))
+        if update.get('signed') is False:
+            session['update_result'] = {**update, 'state': 'unavailable',
+                                        'message': 'Cette préversion n’est pas signée et ne peut pas être installée automatiquement.'}
             return redirect(url_for('updates_view'))
         publisher = os.environ.get('SEL_UPDATE_EXPECTED_PUBLISHER', '').strip()
         if not publisher:
