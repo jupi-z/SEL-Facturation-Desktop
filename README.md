@@ -1,4 +1,4 @@
-# SEL Facturation Desktop — V0.3.16 locale native Windows
+# SEL Facturation Desktop — V0.3.17 locale native Windows
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
 

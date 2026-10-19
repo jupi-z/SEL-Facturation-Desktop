@@ -7,12 +7,14 @@ import logging
 import os
 import sqlite3
 import subprocess
+import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import re
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from werkzeug.serving import make_server
@@ -26,6 +28,7 @@ from version import APP_VERSION
 DOCUMENT_NAME = re.compile(r"SEL-\d{4}-\d{6}\.pdf\Z", re.IGNORECASE)
 MAX_PDF_BASE64 = 8 * 1024 * 1024
 TEMPORARY_PDF_RETENTION_SECONDS = 7 * 24 * 60 * 60
+EXTERNAL_URL_SCHEMES = frozenset(("http", "https", "mailto", "tel"))
 
 
 class DesktopDocuments:
@@ -121,6 +124,43 @@ class DesktopDocuments:
             return {"ok": True}
         except Exception as exc:
             logging.exception("Impossible d'imprimer le document")
+            return {"ok": False, "message": str(exc)}
+
+    @staticmethod
+    def _validate_external_url(url: str) -> str:
+        if not isinstance(url, str) or not url.strip() or len(url) > 2048:
+            raise ValueError("Adresse externe invalide.")
+        candidate = url.strip()
+        if any(char in candidate for char in "\r\n"):
+            raise ValueError("Adresse externe invalide.")
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError as exc:
+            raise ValueError("Adresse externe invalide.") from exc
+        scheme = parsed.scheme.lower()
+        if scheme not in EXTERNAL_URL_SCHEMES:
+            raise ValueError("Protocole externe non autorisé.")
+        if scheme in {"http", "https"}:
+            if not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError("Adresse web externe invalide.")
+        elif scheme == "mailto":
+            if parsed.netloc or not parsed.path:
+                raise ValueError("Adresse e-mail externe invalide.")
+        elif not parsed.path:
+            raise ValueError("Adresse externe invalide.")
+        return candidate
+
+    def open_external_url(self, url: str) -> dict:
+        """Ouvrir une URL autorisée dans le gestionnaire externe de Windows."""
+        try:
+            target = self._validate_external_url(url)
+            if os.name == "nt" and hasattr(os, "startfile"):
+                os.startfile(target)
+            elif not webbrowser.open(target, new=2, autoraise=True):
+                raise OSError("Aucun gestionnaire externe disponible.")
+            return {"ok": True}
+        except Exception as exc:
+            logging.exception("Impossible d'ouvrir le lien externe")
             return {"ok": False, "message": str(exc)}
 
     def install_update(self, filename: str, expected_sha256: str) -> dict:
