@@ -7,16 +7,16 @@
   </div>
   <form method="post" action="{{ url_for('updates_check') }}" class="form">
     <input type="hidden" name="_csrf" value="{{ csrf() }}">
-    <button class="primary" type="submit">Rechercher une mise à jour</button>
+    <div class="form-actions"><button class="primary" type="submit">Rechercher une mise à jour</button></div>
   </form>
   {% if update and update.state == 'ready' %}
     <div class="alert ok" role="status">Une sauvegarde vérifiée{% if update.backup_name %} ({{ update.backup_name }}){% endif %} est prête avant l’installation.</div>
-    <button class="primary" type="button" data-update-install data-update-file="{{ update.filename }}" data-update-sha256="{{ update.sha256 }}">Installer la mise à jour</button>
+    <div class="form-actions"><button class="primary" type="button" data-update-install data-update-file="{{ update.filename }}" data-update-sha256="{{ update.sha256 }}">Installer la mise à jour</button></div>
   {% elif update and update.state == 'available' %}
     <div class="notice-warning" role="status"><strong>Version {{ update.version }} disponible.</strong><p>Le package sera téléchargé uniquement après vérification de son hash et de sa signature Authenticode.</p></div>
     <form method="post" action="{{ url_for('updates_download') }}" class="form">
       <input type="hidden" name="_csrf" value="{{ csrf() }}">
-      <button class="secondary" type="submit">Télécharger et préparer l’installation</button>
+      <div class="form-actions"><button class="secondary" type="submit">Télécharger et préparer l’installation</button></div>
     </form>
   {% elif update and update.state == 'current' %}
     <div class="alert ok" role="status">Vous utilisez déjà la dernière version connue.</div>
