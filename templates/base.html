@@ -42,7 +42,6 @@
     <div class="main">
       <header class="top"><div><div class="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</div><h1>{{ title }}</h1></div><span class="local"><span class="dot"></span>Local · Hors ligne</span></header>
       <main>
-        <section class="statusbar" data-update-status data-update-poll="{{ url_for('update_status') }}" aria-live="polite"><div><strong data-update-title>Vérification des mises à jour…</strong><span data-update-message>La disponibilité du canal SEL est contrôlée.</span></div><a class="button secondary" data-update-link href="{{ url_for('updates_view') }}" hidden>Voir les mises à jour</a></section>
         {% with notices=get_flashed_messages(with_categories=true) %}{% if notices %}{% for category,msg in notices %}<div class="alert {{ 'err' if category=='error' else 'ok' }}" role="{{ 'alert' if category=='error' else 'status' }}" aria-live="polite">{{ msg }}</div>{% endfor %}{% endif %}{% endwith %}
 {% else %}
   <div class="auth-shell">
@@ -57,10 +56,11 @@
         {% block body %}{% endblock %}
 {% if is_logged %}
       </main>
+      <footer class="app-footer">Application développée et sécurisée par LTEX · <a href="https://monarquegrp.com/">MonarQue Group</a></footer>
     </div>
   </div>
 {% else %}
-      <footer class="auth-footer">SEL Facturation · Version {{ app_version }} · Application locale<br><span class="developer-attribution">Designed and secured by LTEX · MonarQue Group</span></footer>
+      <footer class="auth-footer">SEL Facturation · Version {{ app_version }} · Application locale<br><span class="developer-attribution">Application développée et sécurisée par LTEX · <a href="https://monarquegrp.com/">MonarQue Group</a></span></footer>
     </main>
   </div>
 {% endif %}

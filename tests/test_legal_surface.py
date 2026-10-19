@@ -72,7 +72,8 @@ def test_product_templates_do_not_contain_compliance_disclaimers():
 def test_base_footer_is_discreet_and_developer_logos_are_not_in_invoice_template():
     base = (Path(__file__).resolve().parents[1] / "templates" / "base.html").read_text(encoding="utf-8")
     invoice = (Path(__file__).resolve().parents[1] / "invoice_pdf.py").read_text(encoding="utf-8")
-    assert "Designed and secured by LTEX" in base
+    assert "Application développée et sécurisée par LTEX" in base
+    assert 'href="https://monarquegrp.com/">MonarQue Group</a>' in base
     assert "monarque-group-horizontal.png" not in invoice
     assert "ltex.png" not in invoice
 

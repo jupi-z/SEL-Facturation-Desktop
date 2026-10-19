@@ -157,41 +157,6 @@
   document.querySelectorAll('dialog[data-modal-autopen="true"]').forEach((modal) => openModal(modal, null));
 })();
 
-// Vérification légère au chargement de chaque écran authentifié.
-(() => {
-  const status = document.querySelector('[data-update-status]');
-  if (!status) return;
-  const title = status.querySelector('[data-update-title]');
-  const message = status.querySelector('[data-update-message]');
-  const link = status.querySelector('[data-update-link]');
-  fetch(status.dataset.updatePoll, {credentials: 'same-origin', redirect: 'error'})
-    .then((response) => response.ok ? response.json() : Promise.reject(new Error('status unavailable')))
-    .then((payload) => {
-      if (payload.state === 'current') {
-        title.textContent = 'Application à jour';
-        message.textContent = 'Aucune mise à jour disponible.';
-        status.classList.remove('status-warning');
-        link.hidden = true;
-      } else if (payload.state === 'available') {
-        title.textContent = `Version ${payload.version} disponible`;
-        message.textContent = 'Ouvrez Mises à jour pour contrôler et préparer l’installation.';
-        status.classList.add('status-warning');
-        link.hidden = false;
-      } else {
-        title.textContent = 'Vérification indisponible';
-        message.textContent = payload.message || 'Le service de mise à jour est indisponible ou aucun canal n’est publié.';
-        status.classList.add('status-warning');
-        link.hidden = false;
-      }
-    })
-    .catch(() => {
-      title.textContent = 'Vérification indisponible';
-      message.textContent = 'Le service de mise à jour n’a pas répondu. L’application reste utilisable.';
-      status.classList.add('status-warning');
-      link.hidden = false;
-    });
-})();
-
 // Conservation temporaire des saisies non envoyées.
 // sessionStorage couvre les actualisations dans la session courante sans
 // persister de données sensibles sur le disque. Les formulaires de connexion
