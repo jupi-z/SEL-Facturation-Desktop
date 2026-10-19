@@ -210,8 +210,12 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .app-footer a:hover{text-decoration:underline}
 .page-actions,.form-actions,.lifecycle-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin:0 0 18px}
 .form-actions{margin-top:4px}
-.lifecycle-actions{justify-content:flex-start;margin:18px 0 0}
-.danger-zone{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+.lifecycle-actions{justify-content:flex-start;align-items:flex-end;margin:18px 0 0}
+.lifecycle-form{display:flex;align-items:flex-end;gap:10px;flex:1 1 auto;min-width:0}
+.lifecycle-form>label{flex:1 1 260px;min-width:0}
+.lifecycle-form-actions{display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.lifecycle-form-actions .form-actions{margin:0}
+.lifecycle-actions .danger-zone{margin:0;padding:0;border-top:0;align-self:flex-end}
 .form>button:not(.password-toggle),.form-actions button,.lifecycle-actions button{justify-self:start}
 .inline-action{display:inline-flex;align-items:center;margin:0}
 .inline-action button{white-space:nowrap}
@@ -238,4 +242,6 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
   .page-actions,.form-actions,.lifecycle-actions{align-items:stretch;flex-direction:column}
   .page-actions .button,.form-actions .button,.form-actions button,.lifecycle-actions .button,.lifecycle-actions button{width:100%}
   .danger-zone{width:100%}
+  .lifecycle-form{flex-direction:column;align-items:stretch}
+  .lifecycle-form-actions{width:100%}
 }
