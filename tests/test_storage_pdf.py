@@ -12,15 +12,14 @@ from domain import calculate_from_settings
 from invoice_pdf import render_invoice
 
 
-def test_pdf_generator_points_to_full_official_logo():
+def test_pdf_generator_points_to_the_official_sel_icon():
     source = Path(__file__).resolve().parents[1] / 'invoice_pdf.py'
     code = source.read_text(encoding='utf-8')
-    assert "'sel-official-logo.png'" in code
+    assert "'sel-icon.png'" in code
     assert "'sel-logo.png'" not in code
-    assert "#003078" in code
-    logo = source.parent / 'static' / 'sel-official-logo.png'
-    assert logo.exists()
-    assert logo.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
+    icon = source.parent / 'static' / 'sel-icon.png'
+    assert icon.exists()
+    assert icon.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
 
 
 def test_initialize_backup_immutability_and_pdf(monkeypatch,tmp_path):
