@@ -115,3 +115,13 @@ def test_about_surface_keeps_sel_primary_and_developer_marks_secondary():
     assert "monarque-group-horizontal.png" in about_text
     assert "ltex.png" in about_text
     assert "SOCIÉTÉ D’ÉNERGIE DU LUALABA" in about_text
+
+
+def test_updates_surface_centers_a_compact_content_panel():
+    template = (ROOT / "templates" / "updates.html").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    assert '<section class="panel updates-panel">' in template
+    assert ".updates-main{display:flex;align-items:center;" in css
+    assert ".updates-panel{width:min(100%,760px);" in css
+    assert "margin:0 auto;" in css
