@@ -47,6 +47,16 @@ def test_windows_builds_use_sel_logo_icon():
     assert "--icon packaging\\sel-facturation.ico" in workflow
 
 
+def test_windows_build_embeds_reportlab_barcode_dynamic_dependencies():
+    build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    spec = (ROOT / "SEL-Facturation.spec").read_text(encoding="utf-8")
+
+    for source in (build_script, workflow):
+        assert "--hidden-import reportlab.graphics.barcode.code128" in source
+    assert "'reportlab.graphics.barcode.code128'" in spec
+
+
 def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview_publication():
     workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
 
