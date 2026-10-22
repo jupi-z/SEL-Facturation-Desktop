@@ -1,9 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = [('templates', 'templates'), ('static', 'static')]
 binaries = []
 hiddenimports = ['clr', 'reportlab.graphics.barcode.code128']
+hiddenimports += collect_submodules('reportlab.graphics.barcode')
 tmp_ret = collect_all('webview')
 datas += tmp_ret[0]
 binaries += tmp_ret[1]

@@ -22,10 +22,18 @@ def pdf_payload():
 def test_startup_error_identifies_database_failures_separately_from_webview2():
     database_message = startup_error_message(sqlite3.OperationalError("table currency_catalog has no column named label"))
     webview_message = startup_error_message(RuntimeError("WebView2 indisponible"))
+    dependency_message = startup_error_message(
+        ModuleNotFoundError(
+            "No module named 'reportlab.graphics.barcode.code93'",
+            name="reportlab.graphics.barcode.code93",
+        )
+    )
 
     assert "base de données locale" in database_message
     assert "WebView2" not in database_message
     assert "WebView2" in webview_message
+    assert "dépendance intégrée" in dependency_message
+    assert "reportlab.graphics.barcode.code93" in dependency_message
 
 
 def test_documents_validate_inputs_and_fiscal_neutrality():

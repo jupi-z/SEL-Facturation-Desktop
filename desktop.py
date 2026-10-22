@@ -217,6 +217,14 @@ def startup_error_message(error: Exception) -> str:
             "effectuée automatiquement. Consultez application.log dans le "
             "dossier de données SEL."
         )
+    if isinstance(error, ModuleNotFoundError):
+        missing = getattr(error, "name", None) or "module inconnu"
+        return (
+            "Le démarrage a échoué : une dépendance intégrée est introuvable "
+            f"({missing}). Le paquet Windows est incomplet. Consultez "
+            "application.log dans le dossier de données SEL et réinstallez "
+            "la dernière version."
+        )
     return (
         "Le démarrage a échoué. Consultez application.log dans le dossier de "
         "données SEL.\nVérifiez que Microsoft Edge WebView2 Runtime est installé."

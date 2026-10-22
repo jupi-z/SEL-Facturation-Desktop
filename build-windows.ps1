@@ -10,7 +10,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Dépendances Python non installées.' }
 if ($LASTEXITCODE -ne 0) { throw 'Generation de l icone Windows echouee.' }
 & .\.venv\Scripts\python.exe -m pytest -q
 if ($LASTEXITCODE -ne 0) { throw 'Tests en échec : compilation annulée.' }
-& .\.venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon 'packaging\sel-facturation.ico' --add-data 'templates;templates' --add-data 'static;static' --hidden-import clr --hidden-import reportlab.graphics.barcode.code128 --collect-all webview desktop.py
+& .\.venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon 'packaging\sel-facturation.ico' --add-data 'templates;templates' --add-data 'static;static' --hidden-import clr --hidden-import reportlab.graphics.barcode.code128 --collect-submodules reportlab.graphics.barcode --collect-all webview desktop.py
 if ($LASTEXITCODE -ne 0) { throw 'Compilation Windows échouée.' }
 Write-Host 'Application de bureau creee dans dist\SEL-Facturation.exe' -ForegroundColor Green
 & .\.venv\Scripts\pyinstaller.exe --clean --noconfirm --onefile --noconsole --paths '.' --name SEL-LegacyCleanup packaging\legacy_cleanup.py

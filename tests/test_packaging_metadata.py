@@ -57,6 +57,16 @@ def test_windows_build_embeds_reportlab_barcode_dynamic_dependencies():
     assert "'reportlab.graphics.barcode.code128'" in spec
 
 
+def test_windows_build_collects_the_complete_reportlab_barcode_package():
+    build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    spec = (ROOT / "SEL-Facturation.spec").read_text(encoding="utf-8")
+
+    for source in (build_script, workflow):
+        assert "--collect-submodules reportlab.graphics.barcode" in source
+    assert "collect_submodules('reportlab.graphics.barcode')" in spec
+
+
 def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview_publication():
     workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
 
