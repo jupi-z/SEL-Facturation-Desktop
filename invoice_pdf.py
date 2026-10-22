@@ -8,10 +8,12 @@ from xml.sax.saxutils import escape
 import sys
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
+from reportlab.graphics.barcode.qr import QrCodeWidget
+from reportlab.graphics.shapes import Drawing
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from domain import fmt
 
@@ -40,9 +42,175 @@ def period_fr(period):
     except (ValueError,IndexError):return period
 
 
+def internal_reference_payload(invoice) -> str:
+    """Return the stable, local-only QR payload for a combined invoice."""
+    inv = dict(invoice)
+    snapshot = json.loads(inv['calc_snapshot'])
+    if snapshot.get('document_kind') != 'COMBINED_WATER_ELECTRICITY':
+        raise ValueError('Le QR interne est réservé aux documents combinés.')
+    payload = {
+        'kind': 'SEL_INTERNAL_REFERENCE',
+        'v': 1,
+        'issuer': 'SEL',
+        'number': str(inv['number']),
+        'issued': str(inv['issue_date']),
+        'currency': str(snapshot.get('currency') or inv.get('currency') or ''),
+        'total': str(snapshot['total']),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def _qr_drawing(payload: str):
+    widget = QrCodeWidget(payload)
+    size = 32 * mm
+    drawing = Drawing(size, size)
+    drawing.add(widget)
+    return drawing
+
+
+def _render_combined_invoice(inv, payments, client, company, snapshot) -> bytes:
+    paid = sum((Decimal(str(x['amount'])) for x in payments), Decimal('0'))
+    balance = Decimal(snapshot['total']) - paid
+    out = BytesIO()
+    doc = SimpleDocTemplate(
+        out, pagesize=A4, rightMargin=15 * mm, leftMargin=15 * mm,
+        topMargin=15 * mm, bottomMargin=17 * mm,
+        title=f"Décompte combiné {inv['number']} - SEL", author='SEL Facturation',
+    )
+    normal = ParagraphStyle('combined_normal', fontName='Helvetica', fontSize=8.4, leading=11.5, textColor=INK)
+    small = ParagraphStyle('combined_small', parent=normal, fontSize=7.3, leading=9.5, textColor=GREY)
+    section = ParagraphStyle('combined_section', fontName='Helvetica-Bold', fontSize=10, leading=13, textColor=BLUE, spaceBefore=7, spaceAfter=4)
+    title = ParagraphStyle('combined_title', fontName='Helvetica-Bold', fontSize=14, leading=17, textColor=BLUE, alignment=TA_RIGHT)
+    head = ParagraphStyle('combined_head', fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.white)
+    right = ParagraphStyle('combined_right', parent=normal, alignment=TA_RIGHT)
+    total_label = ParagraphStyle('combined_total_label', parent=normal, fontName='Helvetica-Bold', textColor=BLUE)
+    total_value = ParagraphStyle('combined_total_value', parent=right, fontName='Helvetica-Bold', fontSize=11, textColor=BLUE)
+    story = []
+
+    logo = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)) / 'static' / 'sel-icon.png'
+    mark = Image(str(logo), width=18 * mm, height=18 * mm, hAlign='LEFT') if logo.exists() else Paragraph('<b>SEL</b>', title)
+    company_cells = [
+        mark,
+        [Paragraph('<b>' + p(company.get('company_name', 'SOCIÉTÉ D’ÉNERGIE DU LUALABA')) + '</b>', ParagraphStyle('combined_company', parent=normal, fontName='Helvetica-Bold', fontSize=9.5, textColor=BLUE)),
+         Paragraph(p(company.get('address')), small),
+         Paragraph(' · '.join([p(v) for v in (company.get('phone'), company.get('email'), company.get('website')) if v]), small)],
+        [Paragraph('DÉCOMPTE DE CONSOMMATION — EAU &amp; ÉLECTRICITÉ', title),
+         Paragraph('N° ' + p(inv['number']), ParagraphStyle('combined_ref', parent=normal, fontName='Helvetica-Bold', alignment=TA_RIGHT, textColor=BLUE)),
+         Paragraph('Émis le ' + p(inv['issue_date']), right)],
+    ]
+    header = Table([company_cells], colWidths=[23 * mm, 96 * mm, 59 * mm])
+    header.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 3), ('TOPPADDING', (0, 0), (-1, -1), 1),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6), ('LINEBELOW', (0, 0), (-1, -1), 1.6, BLUE),
+    ]))
+    story.extend([header, Spacer(1, 5)])
+
+    info = Table([[
+        Paragraph(
+            '<b>CLIENT / CONTRAT</b><br/>' + '<br/>'.join([
+                f"<b>Nom :</b> {p(client.get('name'))}", f"<b>Code :</b> {p(client.get('code'))}",
+                f"<b>Contrat :</b> {p(client.get('contract_number'))}", f"<b>Adresse :</b> {p(client.get('address'))}",
+                f"<b>Type :</b> {p(client.get('category'))}", f"<b>NIF client :</b> {p(client.get('nif'))}",
+            ])
+        ),
+        Paragraph(
+            '<b>PÉRIODE ET SERVICE</b><br/>' + '<br/>'.join([
+                f"<b>Centre :</b> {p(client.get('center'))}", f"<b>Point de service :</b> {p(client.get('service_point'))}",
+                f"<b>Période :</b> {p(period_fr(inv['billing_period']))}", f"<b>Échéance :</b> {p(inv.get('due_date'))}",
+                '<b>Document :</b> Eau + électricité',
+            ])
+        ),
+    ]], colWidths=[89 * mm, 89 * mm])
+    info.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F5F9FB')), ('BOX', (0, 0), (-1, -1), .6, BORDER),
+        ('INNERGRID', (0, 0), (-1, -1), .4, BORDER), ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 8), ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    story.extend([info, Paragraph('SERVICES FACTURÉS', section)])
+
+    service_summaries = []
+    for service in snapshot['services']:
+        code = service['code']
+        label = 'ÉLECTRICITÉ' if code == 'ELECTRICITY' else 'EAU'
+        unit = p(service['unit'])
+        rows = [[Paragraph('Description', head), Paragraph('Quantité', head), Paragraph('Prix unitaire HT', head), Paragraph('Montant HT', head)]]
+        for line in service['lines']:
+            rows.append([Paragraph(p(line['label']), normal), Paragraph(p(line['quantity']) + ' ' + unit, right), Paragraph(rate_fmt(line['unit_price']) + ' ' + p(snapshot['currency']), right), Paragraph(fmt(line['amount']), right)])
+        table = Table(rows, colWidths=[72 * mm, 31 * mm, 38 * mm, 37 * mm], repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), BLUE), ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F7FAFC')]),
+            ('INNERGRID', (0, 0), (-1, -1), .4, BORDER), ('BOX', (0, 0), (-1, -1), .6, BORDER),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6), ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ]))
+        taxes = sum((Decimal(tax['amount']) for tax in service.get('taxes', [])), Decimal('0'))
+        service_summaries.append((label, service['subtotal_excl_tax'], taxes, service['total_incl_tax']))
+        story.extend([Paragraph(label, section), table])
+
+    recap_rows = []
+    for label, subtotal, taxes, total in service_summaries:
+        recap_rows.extend([
+            (f'Sous-total {label.lower()}', fmt(subtotal) + ' ' + p(snapshot['currency'])),
+            (f'Taxes {label.lower()}', fmt(taxes) + ' ' + p(snapshot['currency'])),
+            (f'Total {label.lower()}', fmt(total) + ' ' + p(snapshot['currency'])),
+        ])
+    if snapshot.get('conversion_rate'):
+        recap_rows.append(('Conversion de présentation', f"1 {p(snapshot.get('conversion_source_currency'))} = {rate_fmt(snapshot['conversion_rate'])} {p(snapshot['currency'])}"))
+    recap_rows.extend([
+        ('SOUS-TOTAL GÉNÉRAL', fmt(snapshot['subtotal_excl_tax']) + ' ' + p(snapshot['currency'])),
+        ('TAXES TOTALES', fmt(snapshot['tax_total']) + ' ' + p(snapshot['currency'])),
+        ('MONTANT TOTAL (' + p(snapshot['currency']) + ')', fmt(snapshot['total'])),
+    ])
+    recap = Table([[Paragraph(label, total_label if label.startswith('MONTANT') else normal), Paragraph(value, total_value if label.startswith('MONTANT') else right)] for label, value in recap_rows], colWidths=[130 * mm, 48 * mm])
+    recap.setStyle(TableStyle([
+        ('LINEABOVE', (0, -1), (-1, -1), 1.2, BLUE), ('BACKGROUND', (0, -1), (-1, -1), PALE),
+        ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (0, -1), 7), ('RIGHTPADDING', (1, 0), (1, -1), 7),
+    ]))
+    story.extend([Spacer(1, 6), recap, Spacer(1, 7)])
+
+    qr = _qr_drawing(internal_reference_payload(inv))
+    payment = Table([
+        [Paragraph('CONDITIONS DE RÈGLEMENT', head), Paragraph('RÉFÉRENCE INTERNE SEL', head)],
+        [Paragraph(f"Échéance : <b>{p(inv.get('due_date'))}</b><br/>Paiement accepté selon les modalités de SEL.<br/><br/>Déjà réglé : <b>{fmt(paid)} {p(snapshot['currency'])}</b><br/>MONTANT À RÉGLER : <b>{fmt(balance)} {p(snapshot['currency'])}</b>", normal),
+         [qr, Paragraph('Référence interne SEL', ParagraphStyle('combined_qr_label', parent=small, alignment=TA_CENTER, textColor=BLUE))]],
+    ], colWidths=[118 * mm, 60 * mm])
+    payment.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), BLUE), ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#F5F9FB')),
+        ('BOX', (0, 0), (-1, -1), .65, BORDER), ('INNERGRID', (0, 0), (-1, -1), .45, BORDER),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('ALIGN', (1, 1), (1, 1), 'CENTER'),
+        ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    story.append(payment)
+    if inv.get('status') == 'VOID':
+        story.append(Paragraph('<font color="red"><b>DOCUMENT ANNULÉ - NE PAS UTILISER</b></font>', section))
+    if inv.get('note'):
+        story.extend([Spacer(1, 5), Paragraph('<b>Note :</b> ' + p(inv['note']), small)])
+
+    def footer(canvas, document):
+        canvas.saveState()
+        width, _ = A4
+        canvas.setStrokeColor(BORDER)
+        canvas.line(15 * mm, 14 * mm, width - 15 * mm, 14 * mm)
+        canvas.setFont('Helvetica', 7)
+        canvas.setFillColor(GREY)
+        canvas.drawString(15 * mm, 10 * mm, 'SEL - Service clientèle  |  ' + str(inv['number']))
+        canvas.drawRightString(width - 15 * mm, 10 * mm, f'Page {document.page}')
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    return out.getvalue()
+
+
 def render_invoice(invoice, payments) -> bytes:
     inv=dict(invoice)
     client=json.loads(inv['client_snapshot']);co=json.loads(inv['company_snapshot']);d=json.loads(inv['calc_snapshot'])
+    if d.get('document_kind') == 'COMBINED_WATER_ELECTRICITY':
+        return _render_combined_invoice(inv, payments, client, co, d)
     paid=sum((Decimal(str(x['amount'])) for x in payments),Decimal('0'))
     balance=Decimal(d['total'])-paid
     out=BytesIO()
