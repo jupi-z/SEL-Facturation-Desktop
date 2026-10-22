@@ -27,7 +27,7 @@ Les fichiers `samples/*.pdf` sont entièrement synthétiques. Les valeurs eau ut
 
 ## Résultats automatisés
 
-- `python -m pytest -q` → **240 passed** en 3 min 12 s.
+- `python -m pytest -q` → **241 passed** en 3 min 05 s.
 - `python -m compileall -q .` → **OK**.
 - `git diff --check` → **OK**.
 - Vérification A4 via `pypdf` et extraction de texte.
@@ -38,6 +38,7 @@ Les fichiers `samples/*.pdf` sont entièrement synthétiques. Les valeurs eau ut
 - Les snapshots électriques historiques sans `document_kind` restent rendus par le chemin PDF historique.
 - Le format portable `sel-facturation-portable` reste en `schema_version: 1`; les clés combinées sont conservées dans le snapshot sans migration destructive.
 - Le QR interne n’est pas une authentification, une signature, un reçu de paiement ou un QR fiscal DGI.
+- Une variante CDF de présentation conserve dans le QR la devise et le total source du document USD.
 - Aucun tarif, taux ou régime eau réel n’a été inventé ; aucune émission combinée réelle ne doit être activée avant confirmation écrite de SEL.
 - La recette d’installation, d’impression et de scan sur le poste Windows cible n’a pas été exécutée dans cet environnement : **pilote non validé sur poste cible**.
 
