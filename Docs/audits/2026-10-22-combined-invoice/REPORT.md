@@ -27,11 +27,9 @@ Les fichiers `samples/*.pdf` sont entièrement synthétiques. Les valeurs eau ut
 
 ## Résultats automatisés
 
-À compléter avec les résultats finaux de la PR :
-
-- `python -m pytest -q`
-- `python -m compileall -q .`
-- `git diff --check`
+- `python -m pytest -q` → **240 passed** en 3 min 12 s.
+- `python -m compileall -q .` → **OK**.
+- `git diff --check` → **OK**.
 - Vérification A4 via `pypdf` et extraction de texte.
 - Vérification du payload QR : clés strictement limitées au contrat `SEL_INTERNAL_REFERENCE v1` ; aucun nom, adresse, NIF, compteur, secret, URL ou mention DGI.
 
