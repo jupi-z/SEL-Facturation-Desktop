@@ -22,7 +22,8 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
 
 import db
 from domain import (BillingError, calculate_flat_rate, calculate_from_readings,
-                    calculate_from_settings, convert_amount, decimal, fmt, money,
+                    calculate_from_settings, convert_amount, convert_combined_snapshot,
+                    decimal, fmt, money,
                     validate_due_date)
 from invoice_pdf import render_invoice
 from update_client import download_package, fetch_manifest, staging_dir
@@ -744,10 +745,12 @@ def create_app():
             # Une nouvelle tentative invalide ne doit jamais pouvoir confirmer
             # un aperçu plus ancien resté en session.
             session.pop('invoice_draft',None)
-            submitted_form={key:request.form.get(key,'').strip() for key in ('client_id','billing_period','consumption_kwh','due_date','note','previous','current','fee')}
+            submitted_form={key:request.form.get(key,'').strip() for key in ('billing_mode','client_id','billing_period','consumption_kwh','due_date','note','previous','current','fee')}
             session['invoice_form']=submitted_form
             try:
                 if conf.get('configured')!='1': raise BillingError('Validez d’abord le barème et les taxes dans Paramètres.')
+                if request.form.get('billing_mode','ELECTRICITY').strip().upper() == 'COMBINED':
+                    raise BillingError('Le mode eau + électricité attend la validation des règles eau par SEL avant toute émission réelle.')
                 cid=int(request.form.get('client_id','0'))
                 period=request.form.get('billing_period','')
                 if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',period): raise BillingError('Période invalide (AAAA-MM).')
@@ -768,7 +771,7 @@ def create_app():
                 else:
                     calc=calculate_from_settings(request.form.get('previous',''),request.form.get('current',''),client['coefficient'],conf,request.form.get('fee','0') or '0')
                 if db.active_invoice(g.db,cid,period): raise BillingError('Une facture active existe déjà pour ce client et cette période.')
-                session['invoice_draft']={'client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'consumption_kwh':direct_kwh,'fee':request.form.get('fee','').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500], 'tariff_code':calc.get('tariff_code',''), 'tariff_effective_from':calc.get('tariff_effective_from',''), 'unit_price':calc.get('unit_price',''), 'vat_rate':calc.get('vat_rate',''), 'currency':calc.get('currency','USD')}
+                session['invoice_draft']={'billing_mode':'ELECTRICITY','client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'consumption_kwh':direct_kwh,'fee':request.form.get('fee','').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500], 'tariff_code':calc.get('tariff_code',''), 'tariff_effective_from':calc.get('tariff_effective_from',''), 'unit_price':calc.get('unit_price',''), 'vat_rate':calc.get('vat_rate',''), 'currency':calc.get('currency','USD')}
                 session.pop('invoice_form',None)
                 return render_template('invoice_preview.html',title='Vérifier le décompte',draft=session['invoice_draft'],client=client,calc=calc,configured=True)
             except (BillingError,ValueError,sqlite3.IntegrityError) as e:
@@ -787,6 +790,8 @@ def create_app():
         conf=db.settings(g.db)
         try:
             if conf.get('configured')!='1': raise BillingError('Validez d’abord le barème et les taxes dans Paramètres.')
+            if draft.get('billing_mode','ELECTRICITY') == 'COMBINED':
+                raise BillingError('Le mode eau + électricité attend la validation des règles eau par SEL avant toute émission réelle.')
             cid=int(draft['client_id']); period=draft['billing_period']; issue_date=date.today().isoformat()
             validate_due_date(issue_date,draft['due_date'])
             client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
@@ -908,10 +913,13 @@ def create_app():
             rate=decimal(rate_value,'Taux USD/CDF',allow_zero=False)
             inv=dict(inv); inv['currency']='CDF'
             calc=json.loads(inv['calc_snapshot'])
-            for key in ('energy','local_tax','vat_basis','vat','fee','total'):
-                calc[key]=str(money(Decimal(calc[key])*rate))
-            calc['currency']='CDF'; calc['conversion_source_currency']='USD'; calc['conversion_rate']=str(rate)
-            calc['lines']=[dict(row,amount=str(money(Decimal(row['amount'])*rate))) for row in calc.get('lines',[])]
+            if calc.get('document_kind') == 'COMBINED_WATER_ELECTRICITY':
+                calc = convert_combined_snapshot(calc, str(rate), 'CDF')
+            else:
+                for key in ('energy','local_tax','vat_basis','vat','fee','total'):
+                    calc[key]=str(money(Decimal(calc[key])*rate))
+                calc['currency']='CDF'; calc['conversion_source_currency']='USD'; calc['conversion_rate']=str(rate)
+                calc['lines']=[dict(row,amount=str(money(Decimal(row['amount'])*rate))) for row in calc.get('lines',[])]
             inv['calc_snapshot']=json.dumps(calc,ensure_ascii=False)
             payments=[dict(item,amount=str(money(Decimal(item['amount'])*rate))) for item in payments]
         pdf=render_invoice(inv, payments)
@@ -931,12 +939,15 @@ def create_app():
             client=json.loads(inv['client_snapshot']);calc=json.loads(inv['calc_snapshot'])
             paid=g.db.execute('SELECT amount FROM payments WHERE invoice_id=?',(inv['id'],)).fetchall()
             paid_sum=sum((Decimal(r['amount']) for r in paid),Decimal('0'))
-            rows.append({'id':inv['id'],'number':inv['number'],'client_code':client['code'],
-                         'client_name':client['name'],'period':inv['billing_period'],
-                         'issued':inv['issue_date'],'status':inv['status'],'meter_number':client['meter_number'],
-                         'previous':calc['previous'],'current':calc['current'],'coefficient':calc['coefficient'],
-                         'kwh':calc['kwh'],'energy':calc['energy'],'local_tax':calc['local_tax'],
-                         'vat':calc['vat'],'total':calc['total'],'currency':inv['currency'],
+            electric = next((service for service in calc.get('services', []) if service.get('code') == 'ELECTRICITY'), {})
+            water = next((service for service in calc.get('services', []) if service.get('code') == 'WATER'), {})
+            rows.append({'id':inv['id'],'number':inv['number'],'document_kind':calc.get('document_kind','ELECTRICITY'),
+                         'client_code':client.get('code',''),'client_name':client.get('name',''),'period':inv['billing_period'],
+                         'issued':inv['issue_date'],'status':inv['status'],'meter_number':client.get('meter_number',''),
+                         'previous':calc.get('previous',''),'current':calc.get('current',''),'coefficient':calc.get('coefficient',''),
+                         'kwh':calc.get('kwh',''),'energy':calc.get('energy',electric.get('subtotal_excl_tax','')),
+                         'water_total':water.get('total_incl_tax',''),'local_tax':calc.get('local_tax',''),
+                         'vat':calc.get('vat',calc.get('tax_total','')),'total':calc['total'],'currency':inv['currency'],
                          'paid':str(money(paid_sum)),'balance':str(money(Decimal(calc['total'])-paid_sum))})
         return send_csv('sel-factures.csv',rows)
 
