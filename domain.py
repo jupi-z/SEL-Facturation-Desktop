@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
+from copy import deepcopy
 import json
 import re
 from datetime import date
@@ -184,6 +185,124 @@ def calculate_from_readings(*, previous: str, current: str, coefficient: str = "
     result["previous"] = str(prev)
     result["current"] = str(curr)
     result["coefficient"] = str(coef)
+    return result
+
+
+def _combined_service(service: dict, expected_code: str) -> dict:
+    if not isinstance(service, dict) or service.get("code") != expected_code:
+        raise BillingError(f"Le service {expected_code} est obligatoire.")
+    mode = str(service.get("mode", "")).strip()
+    unit = str(service.get("unit", "")).strip()
+    if not mode or not unit:
+        raise BillingError(f"Le mode et l’unité du service {expected_code} sont obligatoires.")
+    quantity = decimal(service.get("quantity"), f"Quantité {expected_code}")
+    unit_price = decimal(service.get("unit_price_excl_tax"), f"Tarif {expected_code}", allow_zero=False)
+    raw_lines = service.get("lines")
+    if not isinstance(raw_lines, list) or not raw_lines:
+        raise BillingError(f"Le détail tarifaire du service {expected_code} est obligatoire.")
+
+    lines = []
+    subtotal = Decimal("0")
+    for raw_line in raw_lines:
+        if not isinstance(raw_line, dict):
+            raise BillingError(f"Ligne tarifaire invalide pour le service {expected_code}.")
+        line_quantity = decimal(raw_line.get("quantity"), f"Quantité {expected_code}")
+        line_price = decimal(raw_line.get("unit_price"), f"Tarif {expected_code}", allow_zero=False)
+        amount = money(line_quantity * line_price)
+        if raw_line.get("amount") not in (None, ""):
+            supplied_amount = money(decimal(raw_line["amount"], f"Montant {expected_code}"))
+            if supplied_amount != amount:
+                raise BillingError(f"Le montant d’une ligne {expected_code} est incohérent.")
+        lines.append({
+            "label": str(raw_line.get("label") or "Consommation"),
+            "quantity": str(line_quantity),
+            "unit_price": str(line_price),
+            "amount": str(amount),
+        })
+        subtotal += amount
+
+    if "taxes" not in service or not isinstance(service["taxes"], list):
+        raise BillingError(f"Les taxes du service {expected_code} doivent être explicites.")
+    taxes = []
+    tax_total = Decimal("0")
+    for raw_tax in service["taxes"]:
+        if not isinstance(raw_tax, dict) or not str(raw_tax.get("code", "")).strip():
+            raise BillingError(f"Taxe invalide pour le service {expected_code}.")
+        rate = decimal(raw_tax.get("rate"), f"Taux de taxe {expected_code}")
+        basis = money(decimal(raw_tax.get("basis"), f"Base taxable {expected_code}"))
+        amount = money(basis * rate / Decimal("100"))
+        if raw_tax.get("amount") not in (None, ""):
+            supplied_amount = money(decimal(raw_tax["amount"], f"Montant de taxe {expected_code}"))
+            if supplied_amount != amount:
+                raise BillingError(f"Le montant de taxe {expected_code} est incohérent.")
+        taxes.append({"code": str(raw_tax["code"]), "rate": str(rate),
+                      "basis": str(basis), "amount": str(amount)})
+        tax_total += amount
+
+    return {
+        "code": expected_code,
+        "mode": mode,
+        "quantity": str(quantity),
+        "unit": unit,
+        "unit_price_excl_tax": str(unit_price),
+        "lines": lines,
+        "subtotal_excl_tax": str(money(subtotal)),
+        "taxes": taxes,
+        "total_incl_tax": str(money(subtotal + tax_total)),
+    }
+
+
+def build_combined_snapshot(electricity: dict, water: dict, currency: str) -> dict:
+    """Build an additive combined snapshot from two explicit service inputs.
+
+    No water rule or tax is inferred here: the caller must provide the water
+    mode, unit, price, lines and an explicit taxes list (which may be empty
+    only when that choice is deliberate in a controlled fixture/configuration).
+    """
+    currency = str(currency or "").strip().upper()
+    if not currency:
+        raise BillingError("La devise de la facture combinée est obligatoire.")
+    services = [_combined_service(electricity, "ELECTRICITY"), _combined_service(water, "WATER")]
+    subtotal = sum((Decimal(item["subtotal_excl_tax"]) for item in services), Decimal("0"))
+    tax_total = sum((sum((Decimal(tax["amount"]) for tax in item["taxes"]), Decimal("0")) for item in services), Decimal("0"))
+    total = sum((Decimal(item["total_incl_tax"]) for item in services), Decimal("0"))
+    return {
+        "document_kind": "COMBINED_WATER_ELECTRICITY",
+        "schema_version": 2,
+        "currency": currency,
+        "services": services,
+        "subtotal_excl_tax": str(money(subtotal)),
+        "tax_total": str(money(tax_total)),
+        "total": str(money(total)),
+    }
+
+
+def convert_combined_snapshot(snapshot: dict, exchange_rate: str, quote_currency: str = "CDF") -> dict:
+    """Return a presentation conversion without changing the source snapshot."""
+    if not isinstance(snapshot, dict) or snapshot.get("document_kind") != "COMBINED_WATER_ELECTRICITY":
+        raise BillingError("Snapshot combiné invalide.")
+    source_currency = str(snapshot.get("currency") or "").strip().upper()
+    quote_currency = str(quote_currency or "").strip().upper()
+    if not source_currency or not quote_currency:
+        raise BillingError("Les devises de conversion sont obligatoires.")
+    rate = decimal(exchange_rate, "Taux de change", allow_zero=False)
+    result = deepcopy(snapshot)
+    for service in result["services"]:
+        service["unit_price_excl_tax"] = str(money(Decimal(service["unit_price_excl_tax"]) * rate))
+        for line in service.get("lines", []):
+            line["unit_price"] = str(money(Decimal(line["unit_price"]) * rate))
+            line["amount"] = str(money(Decimal(line["amount"]) * rate))
+        service["subtotal_excl_tax"] = str(money(Decimal(service["subtotal_excl_tax"]) * rate))
+        for tax in service.get("taxes", []):
+            tax["basis"] = str(money(Decimal(tax["basis"]) * rate))
+            tax["amount"] = str(money(Decimal(tax["amount"]) * rate))
+        service["total_incl_tax"] = str(money(Decimal(service["total_incl_tax"]) * rate))
+    result["currency"] = quote_currency
+    result["conversion_source_currency"] = source_currency
+    result["conversion_rate"] = str(rate)
+    result["subtotal_excl_tax"] = str(money(sum((Decimal(s["subtotal_excl_tax"]) for s in result["services"]), Decimal("0"))))
+    result["tax_total"] = str(money(sum((sum((Decimal(t["amount"]) for t in s.get("taxes", [])), Decimal("0")) for s in result["services"]), Decimal("0"))))
+    result["total"] = str(money(sum((Decimal(s["total_incl_tax"]) for s in result["services"]), Decimal("0"))))
     return result
 
 
