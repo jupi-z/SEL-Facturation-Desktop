@@ -61,7 +61,14 @@ def verify_sha256(path: str | Path, expected: str) -> bool:
 
 
 def evaluate_manifest(manifest: dict, *, current_version: str) -> dict:
-    """Return ``available``, ``current`` or ``rejected`` without side effects."""
+    """Apply post-authentication policy without creating trust.
+
+    This compatibility helper deliberately rejects raw dictionaries. Callers
+    must first use ``safeupdate_crypto.verify_signed_manifest``; HTTPS and a
+    hash alone are never sufficient.
+    """
+    if not isinstance(manifest, dict) or manifest.get("manifest_trusted") is not True:
+        return {"state": "rejected", "reason": "manifest_untrusted"}
     try:
         version = str(manifest["version"])
         _version(version)
