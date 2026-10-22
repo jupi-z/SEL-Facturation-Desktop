@@ -4,7 +4,7 @@ from io import BytesIO
 import pytest
 from pypdf import PdfReader
 
-from domain import build_combined_snapshot
+from domain import build_combined_snapshot, convert_combined_snapshot
 from invoice_pdf import internal_reference_payload, render_invoice
 
 
@@ -73,6 +73,19 @@ def test_internal_qr_payload_is_minimal_and_stable_after_payment():
     }
     assert "Abonné" not in internal_reference_payload(invoice)
     assert "NIF" not in internal_reference_payload(invoice)
+
+
+def test_internal_qr_payload_stays_on_source_currency_for_presentation_variant():
+    invoice = _invoice()
+    invoice["currency"] = "CDF"
+    invoice["calc_snapshot"] = json.dumps(convert_combined_snapshot(_snapshot(), "2360", "CDF"))
+    invoice["_qr_currency"] = "USD"
+    invoice["_qr_total"] = "15.02"
+
+    payload = json.loads(internal_reference_payload(invoice))
+
+    assert payload["currency"] == "USD"
+    assert payload["total"] == "15.02"
 
 
 def test_combined_pdf_escapes_user_text_and_keeps_qr_reference():

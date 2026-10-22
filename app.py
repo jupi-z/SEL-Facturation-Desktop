@@ -911,8 +911,12 @@ def create_app():
                 raise BillingError('La variante CDF est disponible pour les factures USD.')
             rate_value=request.args.get('rate') or db.exchange_rate_for(g.db,'USD','CDF',date.today().isoformat())['rate']
             rate=decimal(rate_value,'Taux USD/CDF',allow_zero=False)
-            inv=dict(inv); inv['currency']='CDF'
             calc=json.loads(inv['calc_snapshot'])
+            inv=dict(inv)
+            if calc.get('document_kind') == 'COMBINED_WATER_ELECTRICITY':
+                inv['_qr_currency'] = calc.get('currency', inv.get('currency'))
+                inv['_qr_total'] = calc.get('total')
+            inv['currency']='CDF'
             if calc.get('document_kind') == 'COMBINED_WATER_ELECTRICITY':
                 calc = convert_combined_snapshot(calc, str(rate), 'CDF')
             else:

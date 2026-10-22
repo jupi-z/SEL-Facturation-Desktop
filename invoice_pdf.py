@@ -54,8 +54,8 @@ def internal_reference_payload(invoice) -> str:
         'issuer': 'SEL',
         'number': str(inv['number']),
         'issued': str(inv['issue_date']),
-        'currency': str(snapshot.get('currency') or inv.get('currency') or ''),
-        'total': str(snapshot['total']),
+        'currency': str(inv.get('_qr_currency') or snapshot.get('currency') or inv.get('currency') or ''),
+        'total': str(inv.get('_qr_total') or snapshot['total']),
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
