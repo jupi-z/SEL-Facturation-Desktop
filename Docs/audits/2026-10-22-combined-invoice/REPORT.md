@@ -32,6 +32,7 @@ Les fichiers `samples/*.pdf` sont entièrement synthétiques. Les valeurs eau ut
 - `git diff --check` → **OK**.
 - Vérification A4 via `pypdf` et extraction de texte.
 - Vérification du payload QR : clés strictement limitées au contrat `SEL_INTERNAL_REFERENCE v1` ; aucun nom, adresse, NIF, compteur, secret, URL ou mention DGI.
+- GitHub Actions Windows, run 136 : **succès**. Tests/HTTP, EXE, migrateur legacy, MSI, bootstrapper Burn et lanceur de pré-vérification validés ; signature et publication volontairement ignorées.
 
 ## Compatibilité et limites
 
