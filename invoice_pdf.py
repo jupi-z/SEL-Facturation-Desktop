@@ -13,6 +13,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.graphics.barcode.qr import QrCodeWidget
+from reportlab.graphics.shapes import Drawing
 from domain import fmt
 
 # Palette officielle SEL : bleu institutionnel dominant, bleu d'accent et jaune du logo.
@@ -40,9 +42,30 @@ def period_fr(period):
     except (ValueError,IndexError):return period
 
 
-def render_invoice(invoice, payments) -> bytes:
+def internal_qr_payload(invoice, calc) -> str:
+    """Référence locale minimale : aucun renseignement personnel ni URL."""
+    return json.dumps({
+        'kind': 'SEL_INTERNAL_REFERENCE', 'v': 1, 'issuer': 'SEL',
+        'number': invoice['number'], 'issued': invoice['issue_date'],
+        'currency': invoice['currency'], 'total': str(calc['total']),
+    }, ensure_ascii=False, separators=(',', ':'))
+
+
+def _internal_qr(payload):
+    size = 25 * mm
+    drawing = Drawing(size, size)
+    widget = QrCodeWidget(payload, barWidth=size, barHeight=size)
+    drawing.add(widget)
+    return drawing
+
+
+def render_invoice(invoice, payments, qr_reference=None) -> bytes:
     inv=dict(invoice)
     client=json.loads(inv['client_snapshot']);co=json.loads(inv['company_snapshot']);d=json.loads(inv['calc_snapshot'])
+    # Les anciens instantanés sans marqueur adoptent le rendu courant ; un rendu
+    # historique explicite reste possible pour les documents déjà versionnés.
+    template_version = int(d.get('document_template_version', 2))
+    qr_invoice, qr_calc = qr_reference or (inv, d)
     paid=sum((Decimal(str(x['amount'])) for x in payments),Decimal('0'))
     balance=Decimal(d['total'])-paid
     out=BytesIO()
@@ -70,10 +93,10 @@ def render_invoice(invoice, payments) -> bytes:
          Paragraph(p(co.get('tagline','')),muted),
          Paragraph(p(co.get('address','')),small),
          Paragraph(' · '.join([p(v) for v in (co.get('phone'),co.get('email'),co.get('website')) if v]),small)],
-        [Paragraph('DÉCOMPTE D’ÉLECTRICITÉ',document_title),
+        [Paragraph('FACTURE D’EAU ET<br/>D’ÉLECTRICITÉ' if template_version >= 2 else 'DÉCOMPTE D’ÉLECTRICITÉ',document_title),
          Paragraph('N° '+p(inv['number']),ParagraphStyle('ref',parent=normal,fontName='Helvetica-Bold',fontSize=9,alignment=TA_RIGHT,textColor=BLUE)),
          Paragraph('Émis le '+p(inv['issue_date']),right)]]
-    table=Table([company_cells],colWidths=[26*mm,94*mm,58*mm])
+    table=Table([company_cells],colWidths=[26*mm,86*mm,66*mm])
     table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),4),('TOPPADDING',(0,0),(-1,-1),1),('BOTTOMPADDING',(0,0),(-1,-1),8),('LINEBELOW',(0,0),(-1,-1),2,BLUE)]))
     story.extend([table,Spacer(1,7)])
     # Les mentions de conformité internes n'appartiennent pas au document client.
@@ -88,7 +111,7 @@ def render_invoice(invoice, payments) -> bytes:
         info_right='<b>PÉRIODE ET FACTURATION</b><br/>'+'<br/>'.join([
              f"<b>Centre :</b> {p(client.get('center'))}",
              f"<b>Point de service :</b> {p(client.get('service_point'))}",
-             f"<b>Type d’abonné :</b> {p({'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category')))}",
+             *([f"<b>Type d’abonné :</b> {p(d.get('customer_type_label') or {'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category')))}"] if template_version < 2 else []),
              f"<b>Période :</b> {p(period_fr(inv['billing_period']))}",
              f"<b>Échéance :</b> {p(inv['due_date'])}",
              '<b>Mode :</b> Consommation directe'])
@@ -101,8 +124,8 @@ def render_invoice(invoice, payments) -> bytes:
     details.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.6,BORDER),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),11),('BOTTOMPADDING',(0,0),(-1,-1),11),('LEFTPADDING',(0,0),(-1,-1),11)]))
     story.extend([details,Paragraph('RELEVÉ ET CONSOMMATION',section)])
     if direct_billing:
-        usage=Table([[Paragraph('Type d’abonné',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite),Paragraph('Échéance',twhite)],
-                     [p({'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category'))),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period'])),p(inv['due_date'])]],
+        usage=Table([[Paragraph('Service',twhite) if template_version >= 2 else Paragraph('Type d’abonné',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite),Paragraph('Échéance',twhite)],
+                     [p('Électricité' if template_version >= 2 else {'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category'))),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period'])),p(inv['due_date'])]],
                     colWidths=[43*mm,43*mm,43*mm,49*mm])
     else:
         usage=Table([[Paragraph('Index précédent',twhite),Paragraph('Index actuel',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite)],
@@ -121,7 +144,7 @@ def render_invoice(invoice, payments) -> bytes:
         recap.append((f"Taxe locale ({p(d['local_rate'])} %)",fmt(d['local_tax'])))
     if Decimal(str(d.get('fee','0'))) != 0:
         recap.append(('Frais supplémentaires',fmt(d['fee'])))
-    if d.get('unit_price'):
+    if d.get('unit_price') and template_version < 2:
         recap.append(('Tarif unitaire HT',f"{rate_fmt(d['unit_price'])} {p(inv['currency'])}/kWh"))
     if d.get('conversion_rate'):
         recap.append(('Conversion indicative',f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"))
@@ -136,6 +159,11 @@ def render_invoice(invoice, payments) -> bytes:
                       colWidths=[89*mm,89*mm])
     payment_box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('BACKGROUND',(0,1),(-1,1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.65,BORDER),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),9),('RIGHTPADDING',(0,0),(-1,-1),9)]))
     story.append(payment_box)
+    if template_version >= 2:
+        qr_label = Paragraph('<b>Référence interne</b><br/>Lecture locale du document', small)
+        qr_block = Table([[_internal_qr(internal_qr_payload(qr_invoice, qr_calc)), qr_label]], colWidths=[30*mm, 148*mm])
+        qr_block.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),4),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),0)]))
+        story.extend([Spacer(1,5), qr_block])
     if inv['status']=='VOID':story.append(Paragraph('<font color="red"><b>DOCUMENT ANNULÉ - NE PAS UTILISER</b></font>',section))
     if inv['note']:story.extend([Spacer(1,6),Paragraph('<b>Note :</b> '+p(inv['note']),small)])
     story.extend([Spacer(1,10),Paragraph('<b>MENTIONS ENTREPRISE :</b> RCCM : '+p(co.get('rccm'))+' &nbsp;&nbsp; NIF : '+p(co.get('nif'))+' &nbsp;&nbsp; ID NAT : '+p(co.get('id_nat')),small),

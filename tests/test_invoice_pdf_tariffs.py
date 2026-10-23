@@ -4,7 +4,7 @@ from io import BytesIO
 
 from pypdf import PdfReader
 
-from invoice_pdf import render_invoice
+from invoice_pdf import internal_qr_payload, render_invoice
 
 
 def test_pdf_uses_full_official_logo_and_direct_billing_layout():
@@ -62,3 +62,39 @@ def test_pdf_uses_the_snapshot_label_for_a_future_customer_type():
     }
     text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_invoice(invoice, []))).pages)
     assert "Industriel" in text
+
+
+def test_v2_invoice_mentions_both_services_without_adding_water_charges():
+    invoice = {
+        "number": "SEL-2026-000104", "issue_date": "2026-10-20", "due_date": "2026-10-31",
+        "billing_period": "2026-09", "currency": "USD", "status": "ISSUED", "note": "",
+        "client_snapshot": json.dumps({"name": "Ameno Kizele", "address": "Kolwezi", "contract_number": "C1"}),
+        "company_snapshot": json.dumps({"company_name": "SEL", "address": "Kolwezi"}),
+        "calc_snapshot": json.dumps({"document_template_version": 2, "pricing_model": "FLAT_KWH", "customer_type": "RESIDENTIAL", "customer_type_label": "Résidentiel", "unit_price": "0.095", "kwh": "100", "lines": [{"range": "Consommation", "quantity": "100", "unit_price": "0.095", "amount": "9.50"}], "energy": "9.50", "local_rate": "0", "local_tax": "0.00", "vat_rate": "16", "vat_basis": "9.50", "vat": "1.52", "fee": "0.00", "total": "11.02"}),
+    }
+
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_invoice(invoice, []))).pages)
+
+    normalized = " ".join(text.split())
+    assert "FACTURE D’EAU ET D’ÉLECTRICITÉ" in normalized
+    assert "Électricité" in text
+    assert text.count("Résidentiel") == 1
+    assert "Tarif unitaire HT" not in text
+    assert "Prix unitaire" in text and "0,095" in text
+    assert "MONTANT TOTAL (USD)" in text
+    assert "Référence interne" in text
+    assert "DGI" not in text
+    assert "Montant eau" not in text
+
+
+def test_internal_qr_payload_is_compact_and_contains_no_customer_data():
+    invoice = {"number": "SEL-2026-000104", "issue_date": "2026-10-20", "currency": "USD"}
+    calc = {"total": "11.02"}
+
+    payload = json.loads(internal_qr_payload(invoice, calc))
+
+    assert payload == {
+        "kind": "SEL_INTERNAL_REFERENCE", "v": 1, "issuer": "SEL",
+        "number": "SEL-2026-000104", "issued": "2026-10-20", "currency": "USD", "total": "11.02",
+    }
+    assert "customer" not in payload and "client" not in payload and "Kolwezi" not in json.dumps(payload)

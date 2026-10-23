@@ -4,8 +4,10 @@ from io import BytesIO
 
 from pypdf import PdfReader
 
+import app as app_module
 from app import create_app
 import db
+from invoice_pdf import internal_qr_payload
 
 
 def _token(client, path):
@@ -49,6 +51,19 @@ def test_monthly_direct_consumption_invoice_without_meter(tmp_path, monkeypatch)
     assert variant.status_code == 200 and variant.data.startswith(b"%PDF-")
     text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(variant.data)).pages)
     assert "2500" in text
+
+    captured = {}
+    def capture_render(invoice, payments, qr_reference=None):
+        captured["currency"] = invoice["currency"]
+        captured["qr_reference"] = qr_reference
+        return b"%PDF-test"
+    monkeypatch.setattr(app_module, "render_invoice", capture_render)
+    converted = client.get(f"/invoices/{invoice_id}/pdf?currency=CDF&rate=2600")
+    assert converted.status_code == 200
+    assert captured["currency"] == "CDF"
+    qr_invoice, qr_calc = captured["qr_reference"]
+    assert qr_invoice["currency"] == "USD"
+    assert '"currency":"USD"' in internal_qr_payload(qr_invoice, qr_calc)
 
 
 def test_current_month_invoice_still_works_after_mid_month_tariff_save(tmp_path, monkeypatch):
