@@ -152,13 +152,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Signature du lanceur de pré-vérification échouée.' }
           Remove-Item -LiteralPath $pfx -Force
       - name: Publish GitHub prerelease without overwriting
-        if: ${{ false }}
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_SIGNED: ${{ inputs.sign_release }}
           PUBLISH_UNSIGNED_PREVIEW: ${{ inputs.publish_unsigned_preview }}
         run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'La publication doit partir de main après fusion et CI réussie.'
+          }
           if ($env:PUBLISH_SIGNED -ne 'true' -and $env:PUBLISH_UNSIGNED_PREVIEW -ne 'true') {
             throw 'Publication bloquée: activez sign_release ou demandez explicitement une préversion non signée.'
           }
@@ -174,7 +177,7 @@ jobs:
             $notes = 'Release préversion signée pour SEL : bootstrapper WebView2 autonome, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4. Essai réel sur le PC cible indispensable.'
           } else {
             $title = "SEL Facturation Desktop v$version - aperçu non signé"
-            $notes = 'Preversion GitHub non signee destinee uniquement a une acceptation manuelle. Elle ne doit pas etre distribuee comme version de production et ne peut pas etre installee automatiquement par le programme tant que la signature Authenticode SEL reste indisponible.'
+            $notes = "Preversion non signee Authenticode, reservee a l'installation et a l'acceptation manuelles. Le canal integre ne proposera pas le paquet tant qu'une cle publique Ed25519 SEL n'est pas epinglee et qu'un manifeste signe n'est pas publie. Ce paquet n'est pas une version de production; SmartScreen ou les regles Windows du poste peuvent intervenir."
             Write-Host 'Signature Authenticode absente : publication limitee a une preversion d acceptation manuelle.'
           }
           $tag = "v$version"
