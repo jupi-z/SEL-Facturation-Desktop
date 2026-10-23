@@ -41,7 +41,7 @@
       <div class="legal">SEL Facturation · Application locale<br>Données enregistrées sur cet ordinateur<br><a href="{{ url_for('about') }}">Mentions légales</a></div>
     </aside>
     <div class="main">
-      <header class="top"><div><div class="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</div><h1>{{ title }}</h1></div><span class="local"><span class="dot"></span>Local · Hors ligne</span></header>
+      <header class="top{{ ' updates-top' if request.endpoint in ('updates_view', 'updates_check', 'updates_download') else '' }}"><div><div class="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</div><h1{% if request.endpoint in ('updates_view', 'updates_check', 'updates_download') %} id="updates-page-title"{% endif %}>{{ title }}</h1></div><span class="local"><span class="dot"></span>Local · Hors ligne</span></header>
       <main{% if request.endpoint in ('updates_view', 'updates_check', 'updates_download') %} class="updates-main"{% endif %}>
         {% with notices=get_flashed_messages(with_categories=true) %}{% if notices %}{% for category,msg in notices %}<div class="alert {{ 'err' if category=='error' else 'ok' }}" role="{{ 'alert' if category=='error' else 'status' }}" aria-live="polite">{{ msg }}</div>{% endfor %}{% endif %}{% endwith %}
 {% else %}
@@ -58,7 +58,7 @@
         {% block body %}{% endblock %}
 {% if is_logged %}
       </main>
-      <footer class="app-footer">Application développée et sécurisée par LTEX · <a data-external-link href="https://monarquegrp.com/" rel="noopener noreferrer external">MonarQue Group</a></footer>
+      <footer class="app-footer{{ ' updates-footer' if request.endpoint in ('updates_view', 'updates_check', 'updates_download') else '' }}">Application développée et sécurisée par LTEX · <a data-external-link href="https://monarquegrp.com/" rel="noopener noreferrer external">MonarQue Group</a></footer>
     </div>
   </div>
 {% else %}

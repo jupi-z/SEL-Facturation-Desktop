@@ -28,7 +28,8 @@ def authenticated_client(tmp_path, monkeypatch):
 
 
 def wait_state(client, expected):
-    for _ in range(30):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
         result = client.get("/updates/status").json
         if result["state"] == expected:
             return result
@@ -66,12 +67,13 @@ def test_invalid_channel_is_not_presented_as_a_download(authenticated_client):
 
 def test_update_check_only_starts_work_and_never_downloads(authenticated_client):
     updater = authenticated_client.application.extensions["safeupdate"]
+    calls = []
+    updater.fetcher = lambda *args, **kwargs: calls.append(True) or {"state": "current", "version": APP_VERSION}
     token = csrf(authenticated_client, "/updates")
     if updater._worker:
         updater._worker.join(1)
+    calls.clear()
     updater._set(state="idle", phase="idle")
-    calls = []
-    updater.fetcher = lambda *args, **kwargs: calls.append(True) or {"state": "current", "version": APP_VERSION}
     response = authenticated_client.post("/updates/check", data={"_csrf": token}, follow_redirects=True)
     assert response.status_code == 200
     assert wait_state(authenticated_client, "current")["state"] == "current"

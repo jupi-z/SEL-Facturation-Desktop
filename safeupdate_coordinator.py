@@ -55,10 +55,12 @@ class SafeUpdateCoordinator:
         with self._lock:
             self._state.update(changes, updated_at=self._now())
 
-    def _start(self, target):
+    def _start(self, target, *, initial_state=None):
         with self._lock:
             if self._worker and self._worker.is_alive():
                 return False
+            if initial_state:
+                self._state.update(initial_state, updated_at=self._now())
             self._cancel = Event()
             self._worker = Thread(target=target, name="sel-safeupdate", daemon=True)
             self._worker.start()
@@ -68,7 +70,6 @@ class SafeUpdateCoordinator:
         return self.start_check(background=True)
 
     def start_check(self, *, background=False) -> bool:
-        self._set(state="checking", phase="checking", message="Recherche d’une mise à jour…")
         def work():
             try:
                 update = self.fetcher(
@@ -81,13 +82,20 @@ class SafeUpdateCoordinator:
                 safe.update(state=update["state"], phase=update["state"], version=update.get("version", self.current_version))
                 if update["state"] == "available":
                     safe["message"] = f"La version {update['version']} est disponible."
+                elif update["state"] == "current":
+                    safe["message"] = f"Vous utilisez déjà la dernière version disponible ({safe['version']})."
                 else:
-                    safe["message"] = "Vous utilisez déjà la dernière version connue."
+                    safe["message"] = "La recherche de mise à jour est terminée."
                 self._set(**safe)
             except HTTPError as exc:
                 with self._lock:
                     self._authenticated_update = None
-                self._set(state="unavailable", phase="failed", message=f"Le canal de mise à jour est indisponible (HTTP {exc.code}).")
+                LOGGER.warning("SafeUpdate endpoint returned HTTP %s", exc.code)
+                if exc.code == 404:
+                    message = "Le canal de mise à jour n’est pas encore configuré. SEL Facturation reste disponible."
+                else:
+                    message = f"Le serveur de mise à jour est momentanément indisponible (HTTP {exc.code})."
+                self._set(state="unavailable", phase="failed", message=message)
             except (URLError, ConnectionError, TimeoutError, OSError) as exc:
                 with self._lock:
                     self._authenticated_update = None
@@ -98,7 +106,9 @@ class SafeUpdateCoordinator:
                     self._authenticated_update = None
                 LOGGER.warning("SafeUpdate manifest refused", exc_info=True)
                 self._set(state="invalid", phase="failed", message="Le canal de mise à jour a été refusé après vérification cryptographique.")
-        return self._start(work)
+        return self._start(work, initial_state={
+            "state": "checking", "phase": "checking", "message": "Recherche d’une mise à jour…",
+        })
 
     def start_download(self) -> bool:
         with self._lock:

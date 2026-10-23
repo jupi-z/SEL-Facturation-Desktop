@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_legacy_public_manifest_is_not_trusted_by_safeupdate_v1():
     manifest = json.loads((ROOT / "updates" / "latest.json").read_text(encoding="utf-8"))
 
-    assert manifest["version"] == APP_VERSION
+    # Keep this public manifest as historical 0.3.24 metadata until a release is authorized.
+    assert manifest["version"] == "0.3.24"
     assert manifest["channel"] == "preview"
     assert manifest["signed"] is False
     with pytest.raises(ManifestVerificationError):

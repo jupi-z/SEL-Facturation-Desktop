@@ -1,6 +1,7 @@
 import time
 from pathlib import Path
 from threading import Event
+from urllib.error import HTTPError
 
 from safeupdate_coordinator import SafeUpdateCoordinator
 
@@ -25,10 +26,37 @@ def test_check_is_nonblocking_and_serialized():
         fetcher=fetch,
     )
     assert coordinator.start_check()
+    coordinator._set(state="downloading", phase="downloading", message="Téléchargement en cours.")
     assert not coordinator.start_check()
+    assert coordinator.snapshot()["state"] == "downloading"
     release.set()
     assert wait_for(coordinator, "current")["state"] == "current"
     assert calls == [True]
+
+
+def test_current_state_confirms_installed_version_is_latest_available():
+    coordinator = SafeUpdateCoordinator(
+        manifest_url="https://updates.example.test/latest.json", current_version="0.3.27",
+        fetcher=lambda *args, **kwargs: {"state": "current", "version": "0.3.27"},
+    )
+
+    assert coordinator.start_check()
+    current = wait_for(coordinator, "current")
+    assert current["message"] == "Vous utilisez déjà la dernière version disponible (0.3.27)."
+
+
+def test_missing_update_channel_is_reported_without_claiming_current():
+    def missing_channel(*args, **kwargs):
+        raise HTTPError("https://updates.example.test/latest.sig.json", 404, "Not Found", None, None)
+
+    coordinator = SafeUpdateCoordinator(
+        manifest_url="https://updates.example.test/latest.json", current_version="0.3.27",
+        fetcher=missing_channel,
+    )
+
+    assert coordinator.start_check()
+    result = wait_for(coordinator, "unavailable")
+    assert result["message"] == "Le canal de mise à jour n’est pas encore configuré. SEL Facturation reste disponible."
 
 
 def test_download_reports_real_progress_and_requires_backup(monkeypatch, tmp_path):
