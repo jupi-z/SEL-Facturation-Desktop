@@ -1,25 +1,28 @@
-# SEL Facturation Desktop — V0.3.29 (préversion) locale native Windows
+# SEL Facturation Desktop — V0.3.30 (préversion) locale native Windows
 
-Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
+Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés, facturation de l’électricité et de l’eau sur un document A4 commun lorsque les deux services sont raccordés, historique, paiements, sauvegardes et exports.
 
-**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF clients sont intitulés « décomptes d'électricité », sans encadré de statut fiscal anxiogène et sans fausse référence, signature ou QR DGI. L'identité officielle SEL et les règles tarifaires confirmées sont préchargées ; la fiscalisation officielle reste une procédure distincte. Ne jamais présenter ces PDF comme des factures normalisées ou homologuées sans authentification par le dispositif autorisé.
+**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF présentent les services réellement facturés et n’inventent aucun montant, référence fiscale, signature ou QR DGI. L'identité SEL et les références électriques configurées sont conservées ; une facture combinée eau/électricité ne peut être émise qu’après configuration et confirmation des références d’eau par SEL.
 
 ### Règles de facturation actuellement implémentées
 
-- Facturation mensuelle selon la consommation en kWh, saisie directement tant que les compteurs ne sont pas disponibles.
+- Facturation mensuelle de l’électricité selon la consommation en kWh, saisie directement tant que les compteurs ne sont pas disponibles.
 - Abonné résidentiel : 0,095 USD/kWh hors TVA.
 - Abonné commercial : 0,12 USD/kWh hors TVA.
 - TVA : 16 %. Aucune taxe locale n'est appliquée aux nouvelles factures.
 - Devise principale : USD. Une variante CDF peut être produite avec un taux configurable, initialement 1 USD = 2 360 CDF.
 - Les compteurs et relevés restent facultatifs et pourront être activés ultérieurement.
 - Les anciens barèmes progressifs et anciennes taxes restent lisibles dans les factures historiques mais ne contrôlent pas le nouveau parcours.
+- L’eau se facture en quantité de m³, uniquement pour les abonnés explicitement raccordés. Une valeur de 0 m³ reste visible sur la facture.
+- Aucun tarif, aucune taxe ni assiette d’eau n’est prérempli : les références datées doivent être saisies et confirmées par SEL avant qu’une facture d’eau puisse être émise. Les factures électriques seules restent utilisables.
 
 ### Configuration administrable
 
 Les paramètres métier se gèrent depuis **Paramètres de facturation**, sans modifier le code :
 
 - types d’abonnés actifs et tarif initial par kWh ;
-- tarifs datés par type, conservés avec leur période d’application ;
+- tarifs datés par type et par service (kWh ou m³), conservés avec leur période d’application ;
+- profils fiscaux datés et propres à chaque service, avec source et confirmation explicite ;
 - taux USD/CDF datés, utilisés par la variante CDF ;
 - préfixe et largeur des numéros de décompte ;
 - méthodes de paiement actives et exigences de référence ;
@@ -65,12 +68,12 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 
 1. Créer le mot de passe au premier lancement.
 2. Dans **Paramètres**, vérifier les références SEL préchargées et **confirmer** les tarifs, le taux de change et l'assiette de TVA avant la première émission.
-3. Dans **Abonnés**, enregistrer nom, adresse, contrat, numéro de compteur, coefficient et NIF le cas échéant.
-4. Dans **Nouvelle facture**, choisir l'abonné, mois, deux index et date d'échéance.
-5. Le serveur calcule les tranches, les taxes configurées, le total et attribue un numéro unique.
+3. Dans **Abonnés**, enregistrer l’identité, le contrat et les coordonnées, puis activer le raccordement eau uniquement si le client en bénéficie.
+4. Dans **Nouveau décompte**, choisir l’abonné, le mois, la consommation électrique en kWh, et si l’eau est activée saisir sa consommation en m³ (y compris `0`).
+5. Le serveur vérifie que les tarifs et profils applicables sont configurés et confirmés, calcule chaque service séparément, puis compose le total commun et attribue un numéro unique.
 6. Utiliser les boutons **Voir le PDF**, **Enregistrer PDF** ou **Imprimer** : ouverture et impression avec le lecteur PDF associé à Windows, enregistrement par boîte de dialogue native ; le navigateur intégré reste réservé à l'interface du programme.
-7. Dans **Factures**, retrouver/re-imprimer, enregistrer un paiement ou annuler un document **non réglé** avec motif.
-8. Exporter périodiquement une sauvegarde et le JSON portable.
+7. Dans **Factures**, retrouver/réimprimer, enregistrer un paiement ou corriger un paiement avec une contre-écriture motivée. Un document peut être annulé lorsque son solde net encaissé est nul.
+8. Exporter périodiquement une sauvegarde et le JSON portable v1 (qui inclut désormais les services et les contre-écritures).
 
 ### Fonctionnement et limites assumées
 
@@ -80,6 +83,7 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 - Les taux de TVA et taxe locale et le barème sont configurables, mais leur légalité n'est **pas validée automatiquement**.
 - Le montant de TVA de la facture source fournie par SEL ne correspond pas aux assiettes visibles : ne pas tenter de reproduire cet écart.
 - Les paiements sont des **constats saisis**, pas des transactions bancaires/Mobile Money exécutées.
+- Les paiements et les factures émises sont immuables : une erreur de paiement est neutralisée par une contre-écriture datée et motivée; un document erroné est annulé, jamais effacé. Un abonné sans document peut être supprimé; avec historique, il reste archivable.
 - Il n'existe qu'un compte administrateur par installation dans cette première version ; pas de journal d'audit nominatif multi-agents.
 - Pas d'envoi SMS, pas de connexion DGI, pas de facturation de masse, pas de multi-postes, pas de comptabilité SYSCOHADA.
 - Pour la **fenêtre native Windows**, le bootstrapper de livraison installe Microsoft Edge WebView2 Runtime si nécessaire. Le programme ne fonctionne pas comme application Windows si ce composant manque ; si la stratégie informatique bloque l'installation silencieuse, un administrateur doit l'autoriser.

@@ -1,7 +1,7 @@
 import db
 import sqlite3
 
-from config_service import active_customer_types, active_payment_methods, billing_configuration
+from config_service import active_customer_types, active_payment_methods, billing_configuration, current_tariffs
 
 
 def test_initialize_migrates_currency_catalog_from_previous_schema(tmp_path, monkeypatch):
@@ -106,3 +106,20 @@ def test_payment_methods_are_read_from_configuration(tmp_path, monkeypatch):
 
     assert "OTHER" not in {item["code"] for item in methods}
     assert "CASH" in {item["code"] for item in methods}
+
+
+def test_water_tariff_does_not_replace_electricity_tariff_in_legacy_settings_view(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    db.initialize()
+    with db.connect() as connection:
+        connection.execute(
+            "INSERT INTO tariff_plans "
+            "(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active,service_code,source,confirmed) "
+            "VALUES('WATER-R-2026','RESIDENTIAL','M3','9.99','USD','0','2026-01-01',1,'WATER','SEL',1)"
+        )
+        connection.commit()
+        tariffs = current_tariffs(connection, "2026-10-01")
+
+    residential = next(item for item in tariffs if item["code"] == "RESIDENTIAL")
+    assert residential["unit_price"] == "0.095"
+    assert residential["tariff_code"] == "RESIDENTIAL-2026"

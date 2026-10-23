@@ -39,11 +39,11 @@
 
 **Interfaces :** `db.tariff_plan_for(c, customer_type, on_date, service_code="ELECTRICITY")`; utilitaires de configuration qui retournent uniquement les plans et taxes actifs à la date donnée.
 
-- [ ] Écrire des tests de migration depuis la base actuelle : ancienne grille électrique intacte; pas de plan/taxe eau créé; nouvelle colonne/service et métadonnées de validation disponibles.
-- [ ] Exécuter ces tests et vérifier les échecs attendus avant migration.
-- [ ] Ajouter `service_code` aux plans/profils fiscaux avec valeur électrique pour les anciennes lignes; ajouter les champs de validation/source nécessaires et les indexes.
-- [ ] Étendre la recherche de tarif avec filtrage strict service/type/date; créer les helpers de règles fiscales datées.
-- [ ] Vérifier migration répétée, ancienne base, tarification électrique et tests de configuration.
+- [x] Écrire des tests de migration depuis la base actuelle : ancienne grille électrique intacte; pas de plan/taxe eau créé; nouvelle colonne/service et métadonnées de validation disponibles.
+- [x] Exécuter ces tests et vérifier les échecs attendus avant migration.
+- [x] Ajouter `service_code` aux plans/profils fiscaux avec valeur électrique pour les anciennes lignes; ajouter les champs de validation/source nécessaires et les indexes.
+- [x] Étendre la recherche de tarif avec filtrage strict service/type/date; créer les helpers de règles fiscales datées.
+- [x] Vérifier migration répétée, ancienne base, tarification électrique et tests de configuration.
 
 ### Task 2 — Calculs unitaires et composition de services
 
@@ -51,11 +51,11 @@
 
 **Interfaces :** `calculate_service(*, service_code, quantity, unit, unit_price, taxes, currency) -> dict`; `combine_services(service_calculations, currency) -> dict`.
 
-- [ ] Tester kWh et m³, arrondis, zéro, valeurs négatives/NaN, service/unité incohérents, taxe explicite à 0 et absence de règle de taxe.
-- [ ] Constater les échecs de ces nouveaux tests avant implémentation.
-- [ ] Implémenter calcul unitaire `Decimal`, taxes indépendantes (assiette par service), sous-total et total; ajouter un adaptateur qui conserve les champs électriques historiques.
-- [ ] Tester les valeurs électriques de référence et l’exemple eau synthétique réservé aux tests (`10 m³ × 0,40 USD = 4,00 USD`, aucune fixture copiée en base réelle).
-- [ ] Exécuter tous les tests du moteur.
+- [x] Tester kWh et m³, arrondis, zéro, valeurs négatives/NaN, service/unité incohérents, taxe explicite à 0 et absence de règle de taxe.
+- [x] Constater les échecs de ces nouveaux tests avant implémentation.
+- [x] Implémenter calcul unitaire `Decimal`, taxes indépendantes (assiette par service), sous-total et total; ajouter un adaptateur qui conserve les champs électriques historiques.
+- [x] Tester les valeurs électriques de référence et l’exemple eau synthétique réservé aux tests (`10 m³ × 0,40 USD = 4,00 USD`, aucune fixture copiée en base réelle).
+- [x] Exécuter tous les tests du moteur.
 
 ### Task 3 — Fiche abonné et configuration eau avec CRUD sûr
 
@@ -63,12 +63,12 @@
 
 **Interfaces :** données client eau `water_enabled`; plans et profils fiscaux édités via les endpoints existants de Paramètres, avec type de service explicite et référence/source de validation SEL.
 
-- [ ] Tester activation/désactivation eau client, persistance après modification, validation des paramètres eau et blocage sans validation.
-- [ ] Ajouter champs de service eau à la création/édition client et vérifier les brouillons/formulaires.
-- [ ] Ajouter création/modification/désactivation/suppression de plans, règles fiscales, types, devises et moyens de paiement; suppression physique refusée si référencée, historique de configuration préservé.
-- [ ] Ajouter la configuration de l’eau sans valeurs par défaut et une confirmation explicite documentée/source SEL.
-- [ ] Ajouter/compléter les actions CRUD d’archivage, restauration et suppression dans les vues de gestion; garder les abonnés facturés archivables mais non supprimables.
-- [ ] Exécuter tests CRUD/config/UI ciblés.
+- [x] Tester activation/désactivation eau client, persistance après modification, validation des paramètres eau et blocage sans validation.
+- [x] Ajouter champs de service eau à la création/édition client et vérifier les brouillons/formulaires.
+- [x] Ajouter création/modification/désactivation/suppression de plans, règles fiscales, types, devises et moyens de paiement; suppression physique refusée si référencée, historique de configuration préservé.
+- [x] Ajouter la configuration de l’eau sans valeurs par défaut et une confirmation explicite documentée/source SEL.
+- [x] Ajouter/compléter les actions CRUD d’archivage, restauration et suppression dans les vues de gestion; garder les abonnés facturés archivables mais non supprimables.
+- [x] Exécuter tests CRUD/config/UI ciblés.
 
 ### Task 4 — Prévisualisation, confirmation et snapshots combinés
 
@@ -76,11 +76,11 @@
 
 **Interfaces :** nouveau snapshot `document_schema_version=2`, `services=[{code,mode,quantity,unit,unit_price,taxes,subtotal,total}]`; champs électriques historiques restent au niveau racine pour consommateurs existants.
 
-- [ ] Tester facture électricité seule (client sans eau), eau active à 0, eau positive, absence de tarif/taxes, double émission, correction de brouillon et stabilité du tarif aperçu.
-- [ ] Observer les échecs attendus.
-- [ ] Ajouter saisie m³, sélection claire d’abonné/service, aperçu des deux détails et totaux réconciliés; garder le parcours électrique historique.
-- [ ] Revalider au POST de confirmation, recalculer à partir des valeurs de snapshot du brouillon, numéro unique, transaction atomique et contrôle du doublon.
-- [ ] Enregistrer snapshots combinés immuables et tester les anciennes factures inchangées.
+- [x] Tester facture électricité seule (client sans eau), eau active à 0, eau positive, absence de tarif/taxes, double émission, correction de brouillon et stabilité du tarif aperçu.
+- [x] Observer les échecs attendus.
+- [x] Ajouter saisie m³, sélection claire d’abonné/service, aperçu des deux détails et totaux réconciliés; garder le parcours électrique historique.
+- [x] Revalider au POST de confirmation, recalculer à partir des valeurs de snapshot du brouillon, numéro unique, transaction atomique et contrôle du doublon.
+- [x] Enregistrer snapshots combinés immuables et tester les anciennes factures inchangées.
 
 ### Task 5 — Cycle de vie CRUD des factures et paiements
 
@@ -88,30 +88,30 @@
 
 **Interfaces :** action de correction de paiement append-only; facture émise corrigée par annulation et nouvelle émission, sans UPDATE/DELETE des snapshots.
 
-- [ ] Tester annulation/correction d’un paiement, raison obligatoire, solde net, annulation de facture payée après correction, et maintien des lignes initiales.
-- [ ] Ajouter table append-only de contre-écritures, agrégation net-payé et UI de correction accessible dans le détail facture.
-- [ ] Ajouter un flux « corriger/réémettre » pour les factures non réglées; pour une facture réglée, exiger correction complète des paiements d’abord.
-- [ ] Ajouter boutons d’actions destructive avec confirmation/raison; préserver les triggers d’immutabilité et les historiques.
-- [ ] Exécuter tests facture/paiements/CRUD.
+- [x] Tester annulation/correction d’un paiement, raison obligatoire, solde net, annulation de facture payée après correction, et maintien des lignes initiales.
+- [x] Ajouter table append-only de contre-écritures, agrégation net-payé et UI de correction accessible dans le détail facture.
+- [x] Ajouter un flux « corriger/réémettre » pour les factures non réglées; pour une facture réglée, exiger correction complète des paiements d’abord.
+- [x] Ajouter boutons d’actions destructive avec confirmation/raison; préserver les triggers d’immutabilité et les historiques.
+- [x] Exécuter tests facture/paiements/CRUD.
 
 ### Task 6 — PDF A4, historiques, tableaux de bord et exports
 
 **Fichiers :** `invoice_pdf.py`, `app.py`, templates factures/dashboard, tests PDF/export/reporting.
 
-- [ ] Tester extraction PDF des sections distinctes, ligne eau à zéro, détail prix et taxe par service, total/paiements, compatibilité snapshots v1, devise et annulation.
-- [ ] Implémenter deux tableaux vectoriels séparés, total commun et QR interne non fiscal, multipage et texte utilisateur échappé.
-- [ ] Adapter recherche/détails/dashboard/CSV/portable JSON pour consulter les montants de chaque service; maintenir schéma d’export v1 et anciens champs.
-- [ ] Produire des PDF de test uniquement avec données synthétiques et vérifier pages/rendu visuel.
-- [ ] Exécuter tests PDF, export et reporting.
+- [x] Tester extraction PDF des sections distinctes, ligne eau à zéro, détail prix et taxe par service, total/paiements, compatibilité snapshots v1, devise et annulation.
+- [x] Implémenter deux tableaux vectoriels séparés, total commun et QR interne non fiscal, multipage et texte utilisateur échappé.
+- [x] Adapter recherche/détails/dashboard/CSV/portable JSON pour consulter les montants de chaque service; maintenir schéma d’export v1 et anciens champs.
+- [x] Produire des PDF de test uniquement avec données synthétiques et vérifier pages/rendu visuel.
+- [x] Exécuter tests PDF, export et reporting.
 
 ### Task 7 — Audit CRUD final, version, vérification et PR
 
 **Fichiers :** tests métier/UI, `README.md`, `Docs/REVIEW_REPORT.md`, version/changelog si requis.
 
-- [ ] Vérifier matrice CRUD pour chaque objet métier : créer, consulter, modifier, supprimer/désactiver/archiver selon dépendances, rétablir lorsque applicable.
-- [ ] Exécuter `py -3.12 -m pytest -q`, `python -m compileall -q .`, `git diff --check` et build local Windows si les dépendances/outils sont disponibles.
-- [ ] Vérifier migrations sur base ancienne et nouvelle, sauvegarde/intégrité SQLite, exports, PDF synthétiques et smoke test EXE.
-- [ ] Documenter le tarif/taxe eau toujours à fournir, la recette matérielle non exécutée et les limites.
+- [x] Vérifier matrice CRUD pour chaque objet métier : créer, consulter, modifier, supprimer/désactiver/archiver selon dépendances, rétablir lorsque applicable.
+- [x] Exécuter `py -3.12 -m pytest -q`, `python -m compileall -q .`, `git diff --check` et build local Windows si les dépendances/outils sont disponibles.
+- [x] Vérifier migrations sur base ancienne et nouvelle, sauvegarde/intégrité SQLite, exports, PDF synthétiques et smoke test EXE.
+- [x] Documenter le tarif/taxe eau toujours à fournir, la recette matérielle non exécutée et les limites.
 - [ ] Bumper la version seulement après que les fonctionnalités et les tests de cette branche sont stabilisés; créer PR avec rapport et preuves. Pas de fusion/release.
 
 ## Interfaces entre tâches

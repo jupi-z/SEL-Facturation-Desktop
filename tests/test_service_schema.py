@@ -7,6 +7,7 @@ def test_service_migration_scopes_existing_electricity_and_does_not_seed_water(
 ):
     monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
     db.initialize()
+    db.initialize()
 
     with db.connect() as connection:
         tariff_columns = {
@@ -30,6 +31,25 @@ def test_service_migration_scopes_existing_electricity_and_does_not_seed_water(
     assert {(row["service_code"], row["confirmed"]) for row in taxes} == {("ELECTRICITY", 1)}
     assert not any(row["source"] == "" for row in taxes)
     assert water_tariffs == water_taxes == 0
+
+
+def test_existing_client_schema_adds_water_opt_in_without_enabling_anyone(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    db.initialize()
+    with db.connect() as connection:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(clients)")}
+        connection.execute(
+            "INSERT INTO clients(code,name,address,meter_number) VALUES('SEL-C-OLD','Client ancien','Kolwezi','')"
+        )
+        connection.commit()
+        water_enabled = connection.execute(
+            "SELECT water_enabled FROM clients WHERE code='SEL-C-OLD'"
+        ).fetchone()[0]
+
+    assert "water_enabled" in columns
+    assert water_enabled == 0
 
 
 def test_tariff_and_tax_lookup_are_service_scoped(tmp_path, monkeypatch):

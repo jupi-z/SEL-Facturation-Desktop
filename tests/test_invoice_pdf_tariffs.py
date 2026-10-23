@@ -77,6 +77,29 @@ def test_v2_invoice_mentions_both_services_without_adding_water_charges():
 
     normalized = " ".join(text.split())
     assert "FACTURE D’EAU ET D’ÉLECTRICITÉ" in normalized
+
+
+def test_combined_pdf_shows_water_zero_line_and_service_totals():
+    invoice = {
+        "number": "SEL-2026-000105", "issue_date": "2026-10-20", "due_date": "2026-10-31",
+        "billing_period": "2026-09", "currency": "USD", "status": "ISSUED", "note": "",
+        "client_snapshot": json.dumps({"name": "Client Eau", "address": "Kolwezi", "contract_number": "C1"}),
+        "company_snapshot": json.dumps({"company_name": "SEL", "address": "Kolwezi"}),
+        "calc_snapshot": json.dumps({
+            "document_template_version": 3, "currency": "USD", "total": "11.02", "customer_type_label": "Résidentiel",
+            "services": [
+                {"service_code": "ELECTRICITY", "currency": "USD", "quantity": "100", "unit": "KWH", "unit_price": "0.095", "subtotal": "9.50", "local_tax": "0.00", "local_rate": "0", "vat": "1.52", "vat_rate": "16", "total": "11.02", "lines": [{"label": "Consommation d’électricité", "quantity": "100", "unit": "KWH", "unit_price": "0.095", "amount": "9.50"}]},
+                {"service_code": "WATER", "currency": "USD", "quantity": "0", "unit": "M3", "unit_price": "0.40", "subtotal": "0.00", "local_tax": "0.00", "local_rate": "0", "vat": "0.00", "vat_rate": "0", "total": "0.00", "lines": [{"label": "Consommation d’eau", "quantity": "0", "unit": "M3", "unit_price": "0.40", "amount": "0.00"}]},
+            ],
+        }),
+    }
+
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_invoice(invoice, []))).pages)
+
+    assert "Consommation d’eau" in text
+    assert "0 M3" in text or "0 m³" in text
+    assert "0,40" in text or "0.40" in text
+    assert "11,02" in text
     assert "Électricité" in text
     assert text.count("Résidentiel") == 1
     assert "Tarif unitaire HT" not in text

@@ -93,18 +93,23 @@ def configuration_history(connection, limit: int = 200) -> list[dict]:
 def tax_profile_for(
     connection,
     on_date: str,
-    code: str = "SEL_STANDARD",
+    code: str | None = "SEL_STANDARD",
     service_code: str = "ELECTRICITY",
     require_confirmed: bool = False,
 ) -> dict:
     if service_code not in {"ELECTRICITY", "WATER"}:
         raise ValueError(f"Service inconnu : {service_code}.")
-    confirmation = " AND confirmed=1" if require_confirmed else ""
+    clauses = ["service_code=?", "active=1", "effective_from<=?"]
+    params = [service_code, on_date]
+    if code:
+        clauses.insert(0, "code=?")
+        params.insert(0, code)
+    if require_confirmed:
+        clauses.append("confirmed=1")
     row = connection.execute(
-        "SELECT * FROM tax_profiles WHERE code=? AND service_code=? AND active=1 AND effective_from<=? "
-        + confirmation
-        + " ORDER BY effective_from DESC LIMIT 1",
-        (code, service_code, on_date),
+        "SELECT * FROM tax_profiles WHERE " + " AND ".join(clauses)
+        + " ORDER BY effective_from DESC, code LIMIT 1",
+        params,
     ).fetchone()
     if not row:
         qualification = "confirmé " if require_confirmed else ""
@@ -149,7 +154,8 @@ def current_tariffs(connection, on_date: str | None = None) -> list[dict]:
     rows = []
     for customer_type in active_customer_types(connection):
         plan = connection.execute(
-            "SELECT * FROM tariff_plans WHERE customer_type=? AND effective_from<=? "
+            "SELECT * FROM tariff_plans WHERE service_code='ELECTRICITY' "
+            "AND customer_type=? AND effective_from<=? "
             "ORDER BY effective_from DESC, id DESC LIMIT 1",
             (customer_type["code"], effective),
         ).fetchone()

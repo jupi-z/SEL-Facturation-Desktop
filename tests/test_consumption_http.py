@@ -1,4 +1,7 @@
+import json
 import re
+import csv
+from io import StringIO
 from datetime import date, timedelta
 from io import BytesIO
 
@@ -123,3 +126,66 @@ def test_invoice_accepts_a_past_due_date_for_late_billing(tmp_path, monkeypatch)
     assert created.status_code == 302
     with db.connect() as connection:
         assert connection.execute("SELECT due_date FROM invoices").fetchone()[0] == past_due
+
+
+def test_water_zero_is_included_in_combined_invoice_when_customer_is_connected(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    client = create_app().test_client()
+    client.post("/setup", data={"_csrf": _token(client, "/setup"), "password": "TestPassword2026!", "confirm": "TestPassword2026!"})
+    client.post("/login", data={"_csrf": _token(client, "/login"), "password": "TestPassword2026!"})
+    with db.connect() as connection:
+        connection.execute("UPDATE settings SET value='1' WHERE key='configured'")
+        connection.execute("INSERT INTO clients(code,name,address,meter_number,customer_type,water_enabled) VALUES('SEL-C-WATER','Client eau','Kolwezi','','RESIDENTIAL',1)")
+        connection.execute(
+            "INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active,service_code,source,confirmed) "
+            "VALUES('WATER_TEST','RESIDENTIAL','M3','0.40','USD','0','2026-01-01',1,'WATER','Fixture de test synthétique',1)"
+        )
+        connection.execute(
+            "INSERT INTO tax_profiles(code,label,vat_rate,vat_base,local_rate,effective_from,active,service_code,source,confirmed) "
+            "VALUES('WATER_TAX_TEST','Règle eau test','0','NONE','0','2026-01-01',1,'WATER','Fixture de test synthétique',1)"
+        )
+        connection.commit()
+
+    response = client.post("/invoices/new", data={
+        "_csrf": _token(client, "/invoices/new"), "client_id": "1",
+        "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "0",
+        "due_date": "2026-10-31",
+    })
+    assert response.status_code == 200
+    assert "Consommation d’eau" in response.get_data(as_text=True)
+    assert "0,00" in response.get_data(as_text=True)
+    confirm_token = re.search(r'name="_csrf" value="([^"]+)"', response.get_data(as_text=True)).group(1)
+    created = client.post("/invoices/new/confirm", data={"_csrf": confirm_token})
+    assert created.status_code == 302
+    detail = client.get(created.location).get_data(as_text=True)
+    assert "Consommation d’eau" in detail
+    assert "0 M3" in detail
+    with db.connect() as connection:
+        snapshot = json.loads(connection.execute("SELECT calc_snapshot FROM invoices").fetchone()[0])
+    assert snapshot["total"] == "11.02"
+    assert [service["service_code"] for service in snapshot["services"]] == ["ELECTRICITY", "WATER"]
+    assert snapshot["services"][1]["quantity"] == "0"
+    assert snapshot["services"][1]["lines"][0]["amount"] == "0.00"
+    exported = list(csv.DictReader(StringIO(client.get("/export/invoices.csv").get_data(as_text=True).lstrip("\ufeff")), delimiter=";"))
+    assert exported[0]["water_m3"] == "0"
+    assert exported[0]["water_total"] == "0.00"
+
+
+def test_water_invoice_is_blocked_when_water_tariff_or_tax_is_not_confirmed(tmp_path, monkeypatch):
+    monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    client = create_app().test_client()
+    client.post("/setup", data={"_csrf": _token(client, "/setup"), "password": "TestPassword2026!", "confirm": "TestPassword2026!"})
+    client.post("/login", data={"_csrf": _token(client, "/login"), "password": "TestPassword2026!"})
+    with db.connect() as connection:
+        connection.execute("UPDATE settings SET value='1' WHERE key='configured'")
+        connection.execute("INSERT INTO clients(code,name,address,meter_number,customer_type,water_enabled) VALUES('SEL-C-WATER','Client eau','Kolwezi','','RESIDENTIAL',1)")
+        connection.commit()
+    response = client.post("/invoices/new", data={
+        "_csrf": _token(client, "/invoices/new"), "client_id": "1",
+        "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "5",
+    })
+
+    assert response.status_code == 200
+    assert "tarif confirmé" in response.get_data(as_text=True)
+    with db.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0

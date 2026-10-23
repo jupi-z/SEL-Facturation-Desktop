@@ -59,6 +59,7 @@ def initialize():
           billing_frequency TEXT NOT NULL DEFAULT 'MONTHLY',
           status TEXT NOT NULL DEFAULT 'ACTIVE', archived_at TEXT NOT NULL DEFAULT '',
           archive_reason TEXT NOT NULL DEFAULT '',
+          water_enabled INTEGER NOT NULL DEFAULT 0 CHECK(water_enabled IN (0,1)),
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS invoices (
@@ -87,6 +88,15 @@ def initialize():
           paid_on TEXT NOT NULL,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS payment_reversals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          payment_id INTEGER NOT NULL REFERENCES payments(id),
+          amount TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          reversed_on TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS payment_reversals_payment ON payment_reversals(payment_id, id);
         CREATE TABLE IF NOT EXISTS sequences (
           year INTEGER PRIMARY KEY, last_number INTEGER NOT NULL
         );
@@ -176,6 +186,12 @@ def initialize():
         CREATE TRIGGER IF NOT EXISTS immutable_payment_delete
           BEFORE DELETE ON payments
           BEGIN SELECT RAISE(ABORT, 'Paiement enregistré immuable'); END;
+        CREATE TRIGGER IF NOT EXISTS immutable_payment_reversal_update
+          BEFORE UPDATE ON payment_reversals
+          BEGIN SELECT RAISE(ABORT, 'Contre-écriture de paiement immuable'); END;
+        CREATE TRIGGER IF NOT EXISTS immutable_payment_reversal_delete
+          BEFORE DELETE ON payment_reversals
+          BEGIN SELECT RAISE(ABORT, 'Contre-écriture de paiement immuable'); END;
         ''')
         columns = {row['name'] for row in c.execute('PRAGMA table_info(clients)')}
         if 'customer_type' not in columns:
@@ -188,6 +204,8 @@ def initialize():
             c.execute("ALTER TABLE clients ADD COLUMN archived_at TEXT NOT NULL DEFAULT ''")
         if 'archive_reason' not in columns:
             c.execute("ALTER TABLE clients ADD COLUMN archive_reason TEXT NOT NULL DEFAULT ''")
+        if 'water_enabled' not in columns:
+            c.execute('ALTER TABLE clients ADD COLUMN water_enabled INTEGER NOT NULL DEFAULT 0 CHECK(water_enabled IN (0,1))')
         c.execute("CREATE INDEX IF NOT EXISTS clients_status_lookup ON clients(status, name, code)")
         # Service-scoped configuration is additive: pre-existing catalogs are
         # explicitly classified as electricity, never inferred as water.
@@ -312,7 +330,18 @@ def active_invoice(c, client_id, period):
 def invoice_full(c, invoice_id):
     inv=c.execute('SELECT * FROM invoices WHERE id=?',(invoice_id,)).fetchone()
     if not inv: return None
-    payments=list(c.execute('SELECT * FROM payments WHERE invoice_id=? ORDER BY paid_on,id',(invoice_id,)))
+    payments=[]
+    for row in c.execute('SELECT * FROM payments WHERE invoice_id=? ORDER BY paid_on,id',(invoice_id,)):
+        payment=dict(row)
+        reversals=[dict(item) for item in c.execute(
+            'SELECT * FROM payment_reversals WHERE payment_id=? ORDER BY reversed_on,id',(row['id'],))]
+        from decimal import Decimal
+        reversed_amount=sum((Decimal(item['amount']) for item in reversals),Decimal('0'))
+        payment['reversed_amount']=str(reversed_amount)
+        payment['net_amount']=str(Decimal(row['amount'])-reversed_amount)
+        payment['has_net_amount']=Decimal(row['amount'])>reversed_amount
+        payment['reversals']=reversals
+        payments.append(payment)
     return inv,payments
 
 

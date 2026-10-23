@@ -65,8 +65,10 @@ def render_invoice(invoice, payments, qr_reference=None) -> bytes:
     # Les anciens instantanés sans marqueur adoptent le rendu courant ; un rendu
     # historique explicite reste possible pour les documents déjà versionnés.
     template_version = int(d.get('document_template_version', 2))
+    service_codes={item.get('service_code') for item in d.get('services',[]) if isinstance(item,dict)}
+    has_water='WATER' in service_codes
     qr_invoice, qr_calc = qr_reference or (inv, d)
-    paid=sum((Decimal(str(x['amount'])) for x in payments),Decimal('0'))
+    paid=sum((Decimal(str(x.get('net_amount',x['amount']))) for x in payments),Decimal('0'))
     balance=Decimal(d['total'])-paid
     out=BytesIO()
     doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=15*mm,leftMargin=15*mm,topMargin=16*mm,bottomMargin=17*mm,
@@ -93,7 +95,7 @@ def render_invoice(invoice, payments, qr_reference=None) -> bytes:
          Paragraph(p(co.get('tagline','')),muted),
          Paragraph(p(co.get('address','')),small),
          Paragraph(' · '.join([p(v) for v in (co.get('phone'),co.get('email'),co.get('website')) if v]),small)],
-        [Paragraph('FACTURE D’EAU ET<br/>D’ÉLECTRICITÉ' if template_version >= 2 else 'DÉCOMPTE D’ÉLECTRICITÉ',document_title),
+        [Paragraph(('FACTURE D’EAU ET<br/>D’ÉLECTRICITÉ' if has_water else 'FACTURE D’ÉLECTRICITÉ') if template_version >= 3 else ('FACTURE D’EAU ET<br/>D’ÉLECTRICITÉ' if template_version >= 2 else 'DÉCOMPTE D’ÉLECTRICITÉ'),document_title),
          Paragraph('N° '+p(inv['number']),ParagraphStyle('ref',parent=normal,fontName='Helvetica-Bold',fontSize=9,alignment=TA_RIGHT,textColor=BLUE)),
          Paragraph('Émis le '+p(inv['issue_date']),right)]]
     table=Table([company_cells],colWidths=[26*mm,86*mm,66*mm])
@@ -106,7 +108,7 @@ def render_invoice(invoice, payments, qr_reference=None) -> bytes:
          f"<b>Nom :</b> {p(client.get('name'))}",f"<b>Code :</b> {p(client.get('code'))}",
          f"<b>Contrat :</b> {p(client.get('contract_number'))}",f"<b>Adresse :</b> {p(client.get('address'))}",
              f"<b>Type d’abonné :</b> {p(d.get('customer_type_label') or {'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category')))}",f"<b>NIF client :</b> {p(client.get('nif'))}"])
-    direct_billing = d.get('pricing_model', 'METER') == 'FLAT_KWH'
+    direct_billing = d.get('pricing_model', 'METER') == 'FLAT_KWH' or template_version >= 3
     if direct_billing:
         info_right='<b>PÉRIODE ET FACTURATION</b><br/>'+'<br/>'.join([
              f"<b>Centre :</b> {p(client.get('center'))}",
@@ -122,37 +124,76 @@ def render_invoice(invoice, payments, qr_reference=None) -> bytes:
              f"<b>Période :</b> {p(period_fr(inv['billing_period']))}",f"<b>Échéance :</b> {p(inv['due_date'])}"])
     details=Table([[Paragraph(info_left,normal),Paragraph(info_right,normal)]],colWidths=[89*mm,89*mm])
     details.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.6,BORDER),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),11),('BOTTOMPADDING',(0,0),(-1,-1),11),('LEFTPADDING',(0,0),(-1,-1),11)]))
-    story.extend([details,Paragraph('RELEVÉ ET CONSOMMATION',section)])
-    if direct_billing:
-        usage=Table([[Paragraph('Service',twhite) if template_version >= 2 else Paragraph('Type d’abonné',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite),Paragraph('Échéance',twhite)],
-                     [p('Électricité' if template_version >= 2 else {'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category'))),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period'])),p(inv['due_date'])]],
-                    colWidths=[43*mm,43*mm,43*mm,49*mm])
+    if template_version >= 3 and d.get('services'):
+        story.extend([details,Paragraph('RELEVÉ ET CONSOMMATION',section)])
+        usage_rows=[[Paragraph('Service',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite),Paragraph('Échéance',twhite)]]
+        for service in d['services']:
+            service_name='Électricité' if service.get('service_code')=='ELECTRICITY' else 'Eau'
+            usage_rows.append([p(service_name),p(service.get('quantity','0'))+' '+p(service.get('unit','')),
+                               p(period_fr(inv['billing_period'])),p(inv['due_date'])])
+        usage=Table(usage_rows,colWidths=[43*mm,43*mm,43*mm,49*mm],repeatRows=1)
+        usage.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('LINEBELOW',(0,0),(-1,0),.8,BLUE),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F7FAFC')]),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('BOX',(0,0),(-1,-1),.65,BORDER),('ALIGN',(0,0),(-1,-1),'CENTER'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
+        story.extend([usage,Paragraph('DÉTAIL DES SERVICES FACTURÉS',section)])
+        lines=[[Paragraph('Service / poste',twhite),Paragraph('Quantité',twhite),Paragraph('Prix unitaire',twhite),Paragraph('Montant HT',twhite)]]
+        for service in d['services']:
+            service_name='Électricité' if service.get('service_code')=='ELECTRICITY' else 'Eau'
+            for row in service.get('lines',[]):
+                lines.append([p(service_name+' — '+row.get('label',service_name)),
+                              p(row.get('quantity','0'))+' '+p(row.get('unit',service.get('unit',''))),
+                              rate_fmt(row.get('unit_price'))+' '+p(service.get('currency',inv['currency']))+'/'+p(row.get('unit','')),
+                              fmt(row.get('amount','0'))+' '+p(service.get('currency',inv['currency']))])
+        if len(lines)==1:
+            lines.append([p('Aucune consommation'),p('0'),p('—'),p('0,00')])
+        table=Table(lines,colWidths=[69*mm,34*mm,38*mm,37*mm],repeatRows=1)
+        table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F7FAFC')]),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('BOX',(0,0),(-1,-1),.6,BORDER),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'RIGHT'),('LEFTPADDING',(0,0),(-1,-1),7),('RIGHTPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+        story.append(table)
+        recap=[]
+        for service in d['services']:
+            service_name='Électricité' if service.get('service_code')=='ELECTRICITY' else 'Eau'
+            recap.append((f"Sous-total {service_name.lower()} HT",fmt(service.get('subtotal','0'))+' '+p(service.get('currency',inv['currency']))))
+            if Decimal(str(service.get('local_tax','0'))) != 0:
+                recap.append((f"Taxe locale {service_name.lower()} ({p(service.get('local_rate','0'))} %)",fmt(service['local_tax'])+' '+p(service.get('currency',inv['currency']))))
+            if Decimal(str(service.get('vat','0'))) != 0 or Decimal(str(service.get('vat_rate','0'))) == 0:
+                recap.append((f"TVA {service_name.lower()} ({p(service.get('vat_rate','0'))} %)",fmt(service.get('vat','0'))+' '+p(service.get('currency',inv['currency']))))
+            recap.append((f"Total {service_name.lower()}",fmt(service.get('total','0'))+' '+p(service.get('currency',inv['currency']))))
+        if d.get('conversion_rate'):
+            recap.append(('Conversion indicative',f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"))
+        recap.append(('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total'])+' '+p(inv['currency'])))
+        rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
+        rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
+        story.extend([Spacer(1,7),rec,Spacer(1,10)])
     else:
-        usage=Table([[Paragraph('Index précédent',twhite),Paragraph('Index actuel',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite)],
-                     [p(d.get('previous') or '—'),p(d.get('current') or '—'),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period']))]],colWidths=[43*mm,43*mm,43*mm,49*mm])
-    usage.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('LINEBELOW',(0,0),(-1,0),.8,BLUE),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('BOX',(0,0),(-1,-1),.65,BORDER),('ALIGN',(0,0),(-1,-1),'CENTER'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
-    story.extend([usage,Paragraph('DÉTAIL DE LA CONSOMMATION FACTURÉE',section)])
-    lines=[[Paragraph('Tranche tarifaire',twhite),Paragraph('Quantité (kWh)',twhite),Paragraph('Prix unitaire',twhite),Paragraph('Montant',twhite)]]
-    for row in d['lines']:
-        lines.append([p(row['range']),p(row['quantity']),rate_fmt(row['unit_price']),fmt(row['amount'])])
-    if not d['lines']:lines.append(['Aucune consommation','0','—','0,00'])
-    table=Table(lines,colWidths=[49*mm,44*mm,43*mm,42*mm],repeatRows=1)
-    table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F7FAFC')]),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('BOX',(0,0),(-1,-1),.6,BORDER),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'RIGHT'),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
-    story.append(table)
-    recap=[('Sous-total énergie',fmt(d['energy']))]
-    if Decimal(str(d.get('local_tax','0'))) != 0:
-        recap.append((f"Taxe locale ({p(d['local_rate'])} %)",fmt(d['local_tax'])))
-    if Decimal(str(d.get('fee','0'))) != 0:
-        recap.append(('Frais supplémentaires',fmt(d['fee'])))
-    if d.get('unit_price') and template_version < 2:
-        recap.append(('Tarif unitaire HT',f"{rate_fmt(d['unit_price'])} {p(inv['currency'])}/kWh"))
-    if d.get('conversion_rate'):
-        recap.append(('Conversion indicative',f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"))
-    recap.extend([(f"TVA ({p(d['vat_rate'])} %) — base {fmt(d['vat_basis'])}",fmt(d['vat'])),
-           ('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total']))])
-    rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
-    rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
-    story.extend([Spacer(1,7),rec,Spacer(1,10)])
+        story.extend([details,Paragraph('RELEVÉ ET CONSOMMATION',section)])
+        if direct_billing:
+            usage=Table([[Paragraph('Service',twhite) if template_version >= 2 else Paragraph('Type d’abonné',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite),Paragraph('Échéance',twhite)],
+                         [p('Électricité' if template_version >= 2 else {'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(d.get('customer_type'),client.get('category'))),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period'])),p(inv['due_date'])]],
+                        colWidths=[43*mm,43*mm,43*mm,49*mm])
+        else:
+            usage=Table([[Paragraph('Index précédent',twhite),Paragraph('Index actuel',twhite),Paragraph('Consommation',twhite),Paragraph('Période facturée',twhite)],
+                         [p(d.get('previous') or '—'),p(d.get('current') or '—'),p(d['kwh'])+' kWh',p(period_fr(inv['billing_period']))]],colWidths=[43*mm,43*mm,43*mm,49*mm])
+        usage.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('LINEBELOW',(0,0),(-1,0),.8,BLUE),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('BOX',(0,0),(-1,-1),.65,BORDER),('ALIGN',(0,0),(-1,-1),'CENTER'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
+        story.extend([usage,Paragraph('DÉTAIL DE LA CONSOMMATION FACTURÉE',section)])
+        lines=[[Paragraph('Tranche tarifaire',twhite),Paragraph('Quantité (kWh)',twhite),Paragraph('Prix unitaire',twhite),Paragraph('Montant',twhite)]]
+        for row in d['lines']:
+            lines.append([p(row['range']),p(row['quantity']),rate_fmt(row['unit_price']),fmt(row['amount'])])
+        if not d['lines']:lines.append(['Aucune consommation','0','—','0,00'])
+        table=Table(lines,colWidths=[49*mm,44*mm,43*mm,42*mm],repeatRows=1)
+        table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F7FAFC')]),('INNERGRID',(0,0),(-1,-1),.4,BORDER),('BOX',(0,0),(-1,-1),.6,BORDER),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(1,1),(-1,-1),'RIGHT'),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+        story.append(table)
+        recap=[('Sous-total énergie',fmt(d['energy']))]
+        if Decimal(str(d.get('local_tax','0'))) != 0:
+            recap.append((f"Taxe locale ({p(d['local_rate'])} %)",fmt(d['local_tax'])))
+        if Decimal(str(d.get('fee','0'))) != 0:
+            recap.append(('Frais supplémentaires',fmt(d['fee'])))
+        if d.get('unit_price') and template_version < 2:
+            recap.append(('Tarif unitaire HT',f"{rate_fmt(d['unit_price'])} {p(inv['currency'])}/kWh"))
+        if d.get('conversion_rate'):
+            recap.append(('Conversion indicative',f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"))
+        recap.extend([(f"TVA ({p(d['vat_rate'])} %) — base {fmt(d['vat_basis'])}",fmt(d['vat'])),
+               ('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total']))])
+        rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
+        rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
+        story.extend([Spacer(1,7),rec,Spacer(1,10)])
     payment_box=Table([[Paragraph('CONDITIONS DE RÈGLEMENT',twhite),Paragraph('SITUATION DU COMPTE',twhite)],
                        [Paragraph(f"Échéance : <b>{p(inv['due_date'])}</b><br/>Paiement accepté selon les modalités de SEL.",normal),
                         Paragraph(f"Déjà réglé : <b>{fmt(paid)} {p(inv['currency'])}</b><br/>MONTANT À RÉGLER : <b>{fmt(balance)} {p(inv['currency'])}</b>",normal)]],

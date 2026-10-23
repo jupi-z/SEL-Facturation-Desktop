@@ -62,7 +62,9 @@ def test_invoice_confirmation_creates_one_document_after_preview(prepared_client
     with connect() as db:
         row = db.execute("SELECT calc_snapshot FROM invoices").fetchone()
         assert db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 1
-        assert json.loads(row[0])["document_template_version"] == 2
+        snapshot = json.loads(row[0])
+        assert snapshot["document_template_version"] == 3
+        assert [service["service_code"] for service in snapshot["services"]] == ["ELECTRICITY"]
 
 
 def test_invoice_confirmation_keeps_the_tariff_used_by_preview(prepared_client):

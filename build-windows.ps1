@@ -24,8 +24,12 @@ $version = (Select-String -Path version.py -Pattern 'APP_VERSION\s*=\s*["'']([^"
 if ([string]::IsNullOrWhiteSpace($version)) { throw 'APP_VERSION introuvable.' }
 New-Item -ItemType Directory -Force -Path 'build\webview2','dist\installer' | Out-Null
 $webview = (Resolve-Path 'build\webview2').Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-if (-not (Test-Path $webview)) {
-  Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webview
+Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?LinkId=2124701' -OutFile $webview
+$webviewPayload = Get-Item -LiteralPath $webview
+if ($webviewPayload.Length -lt 100MB) { throw 'WebView2 reçu trop petit : ce n’est pas le programme autonome complet hors ligne.' }
+$webviewSignature = Get-AuthenticodeSignature -LiteralPath $webview
+if ($webviewSignature.Status -ne 'Valid' -or $webviewSignature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+  throw 'La signature Microsoft de l’installateur WebView2 autonome est invalide.'
 }
 $exePath = (Resolve-Path 'dist\SEL-Facturation.exe').Path
 $legacyCleanupPath = (Resolve-Path 'dist\SEL-LegacyCleanup.exe').Path

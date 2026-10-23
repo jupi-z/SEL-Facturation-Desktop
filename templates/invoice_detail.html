@@ -14,17 +14,31 @@
   </div>
   <div class="facts">
     <div><span class="sub">Abonné</span><b>{{ client['name'] }}</b><small>{{ calc.get('customer_type_label') or {'RESIDENTIAL':'Résidentiel','COMMERCIAL':'Commercial'}.get(calc.get('customer_type'), client.get('category','')) }}</small></div>
-    <div><span class="sub">Consommation</span><b>{{ calc['kwh'] }} kWh</b><small>{{ calc.get('previous') or '—' }} → {{ calc.get('current') or '—' }}</small></div>
-    <div><span class="sub">Tarif</span><b>{{ calc.get('unit_price','—') }} {{ invoice['currency'] }}/kWh</b><small>TVA {{ calc['vat_rate'] }} %</small></div>
+    {% if calc.get('services') %}
+      <div><span class="sub">Services facturés</span><b>{{ 'Eau + électricité' if calc['services']|length > 1 else 'Électricité' }}</b><small>Facture unique</small></div>
+      <div><span class="sub">Montant</span><b>{{ fmt(calc['total']) }} {{ invoice['currency'] }}</b><small>Total figé à l’émission</small></div>
+    {% else %}
+      <div><span class="sub">Consommation</span><b>{{ calc['kwh'] }} kWh</b><small>{{ calc.get('previous') or '—' }} → {{ calc.get('current') or '—' }}</small></div>
+      <div><span class="sub">Tarif</span><b>{{ calc.get('unit_price','—') }} {{ invoice['currency'] }}/kWh</b><small>TVA {{ calc['vat_rate'] }} %</small></div>
+    {% endif %}
     <div><span class="sub">Période</span><b>{{ invoice['billing_period'] }}</b><small>{{ invoice['issue_date'] }}</small></div>
   </div>
-  <div class="tablewrap"><table><caption class="sr-only">Détail du calcul</caption><thead><tr><th scope="col">Type</th><th scope="col">kWh</th><th scope="col">Prix unitaire</th><th scope="col">Montant</th></tr></thead><tbody>{% for row in calc['lines'] %}<tr><td>{{ row['range'] }}</td><td>{{ row['quantity'] }}</td><td>{{ row['unit_price'] }}</td><td>{{ fmt(row['amount']) }}</td></tr>{% endfor %}</tbody></table></div>
-  <div class="sum"><div>Énergie HT <strong>{{ fmt(calc['energy']) }} {{ invoice['currency'] }}</strong></div>{% if calc['local_tax'] != '0' and calc['local_tax'] != '0.00' %}<div>Taxe locale <strong>{{ fmt(calc['local_tax']) }}</strong></div>{% endif %}<div>TVA ({{ calc['vat_rate'] }} %) <strong>{{ fmt(calc['vat']) }} {{ invoice['currency'] }}</strong></div><div class="total">Total {{ invoice['currency'] }} <strong>{{ fmt(calc['total']) }}</strong></div><div>Déjà réglé <strong>{{ fmt(paid) }}</strong></div><div>Solde <strong>{{ fmt(balance) }}</strong></div></div>
+  {% if calc.get('services') %}
+    {% for service in calc['services'] %}
+      <h3>{{ 'Électricité' if service['service_code']=='ELECTRICITY' else 'Eau' }}</h3>
+      <div class="tablewrap"><table><caption class="sr-only">Détail {{ 'de l’électricité' if service['service_code']=='ELECTRICITY' else 'de l’eau' }}</caption><thead><tr><th scope="col">Poste</th><th scope="col">Quantité</th><th scope="col">Prix unitaire</th><th scope="col">Montant HT</th></tr></thead><tbody>{% for row in service['lines'] %}<tr><td>{{ row['label'] }}</td><td>{{ row['quantity'] }} {{ row['unit'] }}</td><td>{{ row['unit_price'] }} {{ service['currency'] }}/{{ row['unit'] }}</td><td>{{ fmt(row['amount']) }} {{ service['currency'] }}</td></tr>{% endfor %}</tbody></table></div>
+      <div class="sum"><div>Sous-total HT <strong>{{ fmt(service['subtotal']) }} {{ service['currency'] }}</strong></div>{% if service['local_tax'] != '0' and service['local_tax'] != '0.00' %}<div>Taxe locale ({{ service['local_rate'] }} %) <strong>{{ fmt(service['local_tax']) }} {{ service['currency'] }}</strong></div>{% endif %}<div>TVA ({{ service['vat_rate'] }} %) <strong>{{ fmt(service['vat']) }} {{ service['currency'] }}</strong></div><div>Total du service <strong>{{ fmt(service['total']) }} {{ service['currency'] }}</strong></div></div>
+    {% endfor %}
+    <div class="sum"><div class="total">Total facture {{ invoice['currency'] }} <strong>{{ fmt(calc['total']) }}</strong></div><div>Déjà réglé <strong>{{ fmt(paid) }} {{ invoice['currency'] }}</strong></div><div>Solde <strong>{{ fmt(balance) }} {{ invoice['currency'] }}</strong></div></div>
+  {% else %}
+    <div class="tablewrap"><table><caption class="sr-only">Détail du calcul</caption><thead><tr><th scope="col">Type</th><th scope="col">kWh</th><th scope="col">Prix unitaire</th><th scope="col">Montant</th></tr></thead><tbody>{% for row in calc['lines'] %}<tr><td>{{ row['range'] }}</td><td>{{ row['quantity'] }}</td><td>{{ row['unit_price'] }}</td><td>{{ fmt(row['amount']) }}</td></tr>{% endfor %}</tbody></table></div>
+    <div class="sum"><div>Énergie HT <strong>{{ fmt(calc['energy']) }} {{ invoice['currency'] }}</strong></div>{% if calc['local_tax'] != '0' and calc['local_tax'] != '0.00' %}<div>Taxe locale <strong>{{ fmt(calc['local_tax']) }}</strong></div>{% endif %}<div>TVA ({{ calc['vat_rate'] }} %) <strong>{{ fmt(calc['vat']) }} {{ invoice['currency'] }}</strong></div><div class="total">Total {{ invoice['currency'] }} <strong>{{ fmt(calc['total']) }}</strong></div><div>Déjà réglé <strong>{{ fmt(paid) }}</strong></div><div>Solde <strong>{{ fmt(balance) }}</strong></div></div>
+  {% endif %}
 </section>
 
 <section class="panel">
   <h2>Encaissements constatés</h2>
-  <div class="tablewrap"><table><caption class="sr-only">Paiements enregistrés</caption><thead><tr><th scope="col">Date</th><th scope="col">Montant</th><th scope="col">Mode</th><th scope="col">Référence</th></tr></thead><tbody>{% for item in payments %}<tr><td>{{ item['paid_on'] }}</td><td>{{ fmt(item['amount']) }}</td><td>{{ item['method'] }}</td><td>{{ item['reference'] or '—' }}</td></tr>{% else %}<tr><td colspan="4"><div class="empty-state compact"><strong>Aucun paiement enregistré.</strong><span>Les règlements ajoutés pour ce document apparaîtront ici.</span></div></td></tr>{% endfor %}</tbody></table></div>
+  <div class="tablewrap"><table><caption class="sr-only">Paiements enregistrés et corrections</caption><thead><tr><th scope="col">Date</th><th scope="col">Enregistré</th><th scope="col">Corrigé</th><th scope="col">Net imputé</th><th scope="col">Mode / référence</th><th scope="col">Correction</th></tr></thead><tbody>{% for item in payments %}<tr><td>{{ item['paid_on'] }}</td><td>{{ fmt(item['amount']) }} {{ invoice['currency'] }}</td><td>{{ fmt(item['reversed_amount']) }} {{ invoice['currency'] }}</td><td>{{ fmt(item['net_amount']) }} {{ invoice['currency'] }}</td><td>{{ item['method'] }}<br>{{ item['reference'] or '—' }}{% for reversal in item['reversals'] %}<small class="sub" style="display:block">{{ reversal['reversed_on'] }} · {{ fmt(reversal['amount']) }} · {{ reversal['reason'] }}</small>{% endfor %}</td><td>{% if invoice['status']=='ISSUED' and item['has_net_amount'] %}<form method="post" action="{{ url_for('reverse_payment',iid=invoice['id'],payment_id=item['id']) }}" class="form"><input type="hidden" name="_csrf" value="{{ csrf() }}"><label>Montant<input name="amount" inputmode="decimal" placeholder="{{ item['net_amount'] }}" required></label><label>Motif<input name="reason" minlength="6" maxlength="500" required></label><label>Date<input name="reversed_on" type="date" value="{{ today }}" required></label><button class="secondary" type="submit">Corriger</button></form>{% else %}—{% endif %}</td></tr>{% else %}<tr><td colspan="6"><div class="empty-state compact"><strong>Aucun paiement enregistré.</strong><span>Les règlements ajoutés pour ce document apparaîtront ici.</span></div></td></tr>{% endfor %}</tbody></table></div>
   {% if invoice['status']=='ISSUED' and balance > 0 %}
     <form method="post" action="{{ url_for('add_payment',iid=invoice['id']) }}" class="form" data-draft-key="payment-{{ invoice['id'] }}" data-draft-server="{{ 'true' if payment_form else 'false' }}">
       <input type="hidden" name="_csrf" value="{{ csrf() }}">
@@ -39,10 +53,10 @@
   {% endif %}
 </section>
 
-{% if invoice['status']=='ISSUED' and not payments %}
+{% if invoice['status']=='ISSUED' and paid <= 0 %}
   <section class="panel">
     <h2>Annuler ce document</h2>
-    <p class="note">Annulation tracée, impossible si un paiement existe.</p>
+    <p class="note">Annulation tracée. Si un paiement a été enregistré, il doit d’abord être intégralement corrigé avec un motif.</p>
     <form method="post" action="{{ url_for('void_invoice',iid=invoice['id']) }}" class="search" data-confirm="Confirmer l’annulation de ce décompte ?" data-draft-key="void-{{ invoice['id'] }}" data-draft-server="{{ 'true' if void_form else 'false' }}">
       <input type="hidden" name="_csrf" value="{{ csrf() }}">
       <label class="sr-only" for="void-reason">Motif de l’annulation</label>
