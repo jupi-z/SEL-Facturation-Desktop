@@ -1,4 +1,4 @@
-# SEL Facturation Desktop — V0.3.30 (préversion) locale native Windows
+# SEL Facturation Desktop — V0.3.31 (préversion) locale native Windows
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés, facturation de l’électricité et de l’eau sur un document A4 commun lorsque les deux services sont raccordés, historique, paiements, sauvegardes et exports.
 
@@ -15,6 +15,7 @@ Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** :
 - Les anciens barèmes progressifs et anciennes taxes restent lisibles dans les factures historiques mais ne contrôlent pas le nouveau parcours.
 - L’eau se facture en quantité de m³, uniquement pour les abonnés explicitement raccordés. Une valeur de 0 m³ reste visible sur la facture.
 - Aucun tarif, aucune taxe ni assiette d’eau n’est prérempli : les références datées doivent être saisies et confirmées par SEL avant qu’une facture d’eau puisse être émise. Les factures électriques seules restent utilisables.
+- Dans le formulaire de facture, la saisie d’eau n’apparaît que pour un abonné raccordé. Si un ancien brouillon transmet encore `0` pour un abonné non raccordé, cette valeur neutre est ignorée; toute quantité d’eau positive reste refusée.
 
 ### Configuration administrable
 

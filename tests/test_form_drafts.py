@@ -83,7 +83,7 @@ def test_new_invoice_preserves_invalid_submission_after_refresh(tmp_path, monkey
     assert 'value="pas-un-nombre"' in refreshed
     assert 'value="2026-11-30"' in refreshed
     assert 'value="Brouillon conservé"' in refreshed
-    assert 'option value="1" selected' in refreshed
+    assert 'value="1" data-water-enabled="false" selected' in refreshed
 
 
 def test_settings_preserves_invalid_identity_after_refresh_and_keeps_tab(tmp_path, monkeypatch):

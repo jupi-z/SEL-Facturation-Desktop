@@ -1,5 +1,14 @@
 # Rapport — facturation combinée et CRUD sûr
 
+## Correctif de parcours eau — version 0.3.31
+
+- Cause reproductible : le formulaire affichait la consommation d’eau pour tous les abonnés. Un `0` conservé par le brouillon après changement de client était envoyé au serveur, qui le rejetait quand l’abonné n’était pas raccordé.
+- Le champ eau est désormais masqué et désactivé pour l’abonné courant sans raccordement, puis réinitialisé au changement d’abonné. La fiche indique comment activer le service et où vérifier les paramètres eau.
+- Défense serveur : un `0` résiduel est sans effet pour un abonné non raccordé; une quantité positive ou invalide est toujours refusée. Pour un abonné raccordé, `0 m³` reste obligatoire à saisir et apparaît sur la facture combinée.
+- Aucun tarif, taux ou profil fiscal d’eau n’est ajouté. Le tarif et le profil fiscal doivent toujours être explicitement saisis et confirmés par SEL.
+- Migration SQLite : aucune. Les snapshots des factures historiques et les exports restent inchangés.
+- Version de test : `0.3.31`; l’installateur demeure à construire/valider pour cette version. Aucune release ni déploiement n’est effectué.
+
 Version de travail : **0.3.30**, branche `monarque/water-electricity-crud`.
 
 ## Portée livrée dans cette branche

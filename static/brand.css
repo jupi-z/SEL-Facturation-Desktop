@@ -274,6 +274,7 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .modal{overflow:hidden}
 .modal>form{overscroll-behavior:contain}
 .modal-actions{position:sticky;bottom:0;z-index:1;padding-top:12px;background:var(--white);border-top:1px solid var(--border)}
+.water-field[hidden]{display:none!important}
 
 @media(max-width:980px){
   .side{position:static;height:auto;max-height:none;overflow:visible}

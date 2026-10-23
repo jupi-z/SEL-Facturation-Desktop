@@ -285,6 +285,31 @@
   });
 })();
 
+// La saisie d'eau ne concerne que l'abonné sélectionné et ne doit pas fuiter
+// vers le suivant lorsqu'on change de dossier en cours de facturation.
+(() => {
+  const clientSelect = document.getElementById('client_id');
+  const waterField = document.getElementById('water-consumption-field');
+  const waterInput = document.getElementById('water_m3');
+  const waterNotice = document.getElementById('water-service-unavailable');
+  const clientEditLink = document.getElementById('water-client-edit-link');
+  if (!clientSelect || !waterField || !waterInput) return;
+
+  const applyClient = (clearValue) => {
+    const selected = clientSelect.selectedOptions[0];
+    const connected = selected?.dataset.waterEnabled === 'true';
+    if (clearValue) waterInput.value = '';
+    waterField.hidden = !connected;
+    waterInput.disabled = !connected;
+    waterInput.required = connected;
+    if (waterNotice) waterNotice.hidden = !selected || !selected.value || connected;
+    if (clientEditLink) clientEditLink.href = selected?.value ? `/clients/${encodeURIComponent(selected.value)}/edit` : '/clients';
+  };
+
+  applyClient(false);
+  clientSelect.addEventListener('change', () => applyClient(true));
+})();
+
 // Navigation clavier et persistance légère de l'onglet Paramètres.
 (() => {
   const root = document.querySelector('[data-settings-root]');

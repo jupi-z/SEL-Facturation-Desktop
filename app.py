@@ -115,7 +115,15 @@ def combine_invoice_calculation(connection, client, electricity, billing_period,
                       'tax_source':profile['source']})
         services.append(water)
     elif water_value:
-        raise BillingError('Le service d’eau n’est pas activé pour cet abonné.')
+        # A stale browser/session draft can submit a zero that was entered for
+        # another subscriber. Zero has no business meaning when water is not
+        # connected, so ignore it; never silently accept a positive quantity.
+        try:
+            stale_quantity = decimal(water_value, 'Consommation d’eau')
+        except BillingError:
+            raise BillingError('Le service d’eau n’est pas activé pour cet abonné.') from None
+        if stale_quantity != 0:
+            raise BillingError('Le service d’eau n’est pas activé pour cet abonné.')
 
     combined=combine_services(services,currency)
     result=dict(electricity)
