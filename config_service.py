@@ -90,14 +90,28 @@ def configuration_history(connection, limit: int = 200) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def tax_profile_for(connection, on_date: str, code: str = "SEL_STANDARD") -> dict:
+def tax_profile_for(
+    connection,
+    on_date: str,
+    code: str = "SEL_STANDARD",
+    service_code: str = "ELECTRICITY",
+    require_confirmed: bool = False,
+) -> dict:
+    if service_code not in {"ELECTRICITY", "WATER"}:
+        raise ValueError(f"Service inconnu : {service_code}.")
+    confirmation = " AND confirmed=1" if require_confirmed else ""
     row = connection.execute(
-        "SELECT * FROM tax_profiles WHERE code=? AND active=1 AND effective_from<=? "
-        "ORDER BY effective_from DESC LIMIT 1",
-        (code, on_date),
+        "SELECT * FROM tax_profiles WHERE code=? AND service_code=? AND active=1 AND effective_from<=? "
+        + confirmation
+        + " ORDER BY effective_from DESC LIMIT 1",
+        (code, service_code, on_date),
     ).fetchone()
     if not row:
-        raise ValueError(f"Aucun profil fiscal applicable à la date {on_date}.")
+        qualification = "confirmé " if require_confirmed else ""
+        raise ValueError(
+            f"Aucun profil fiscal {qualification}applicable au service {service_code} "
+            f"à la date {on_date}."
+        )
     return dict(row)
 
 

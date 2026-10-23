@@ -99,7 +99,10 @@ def initialize():
           currency TEXT NOT NULL DEFAULT 'USD',
           vat_rate TEXT NOT NULL DEFAULT '16',
           effective_from TEXT NOT NULL,
-          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          service_code TEXT NOT NULL DEFAULT 'ELECTRICITY',
+          source TEXT NOT NULL DEFAULT '',
+          confirmed INTEGER NOT NULL DEFAULT 0 CHECK(confirmed IN (0,1))
         );
         CREATE INDEX IF NOT EXISTS tariff_plans_lookup
           ON tariff_plans(customer_type, effective_from, active);
@@ -132,7 +135,10 @@ def initialize():
           vat_base TEXT NOT NULL,
           local_rate TEXT NOT NULL DEFAULT '0',
           effective_from TEXT NOT NULL,
-          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          service_code TEXT NOT NULL DEFAULT 'ELECTRICITY',
+          source TEXT NOT NULL DEFAULT '',
+          confirmed INTEGER NOT NULL DEFAULT 0 CHECK(confirmed IN (0,1))
         );
         CREATE INDEX IF NOT EXISTS tax_profiles_lookup
           ON tax_profiles(effective_from, active);
@@ -183,6 +189,20 @@ def initialize():
         if 'archive_reason' not in columns:
             c.execute("ALTER TABLE clients ADD COLUMN archive_reason TEXT NOT NULL DEFAULT ''")
         c.execute("CREATE INDEX IF NOT EXISTS clients_status_lookup ON clients(status, name, code)")
+        # Service-scoped configuration is additive: pre-existing catalogs are
+        # explicitly classified as electricity, never inferred as water.
+        for table in ('tariff_plans', 'tax_profiles'):
+            service_columns = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
+            if 'service_code' not in service_columns:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN service_code TEXT NOT NULL DEFAULT 'ELECTRICITY'")
+            if 'source' not in service_columns:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+            if 'confirmed' not in service_columns:
+                c.execute(f'ALTER TABLE {table} ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0 CHECK(confirmed IN (0,1))')
+        c.execute("UPDATE tariff_plans SET source='Configuration électrique existante', confirmed=1 WHERE service_code='ELECTRICITY' AND source=''")
+        c.execute("UPDATE tax_profiles SET source='Configuration fiscale SEL existante', confirmed=1 WHERE service_code='ELECTRICITY' AND source=''")
+        c.execute("CREATE INDEX IF NOT EXISTS tariff_service_lookup ON tariff_plans(service_code, customer_type, effective_from, active)")
+        c.execute("CREATE INDEX IF NOT EXISTS tax_service_lookup ON tax_profiles(service_code, effective_from, active, confirmed)")
         # Migrate the currency catalog introduced by the previous release.
         # CREATE TABLE IF NOT EXISTS does not change an existing table shape.
         currency_columns = {row['name'] for row in c.execute('PRAGMA table_info(currency_catalog)')}
@@ -229,8 +249,8 @@ def initialize():
                      VALUES ('USD','Dollar américain',2,1,10),
                             ('CDF','Franc congolais',2,1,20)''')
         c.execute('''INSERT OR IGNORE INTO tax_profiles
-                     (code,label,vat_rate,vat_base,local_rate,effective_from,active)
-                     VALUES ('SEL_STANDARD','TVA SEL standard','16','ENERGY','0','2026-01-01',1)''')
+                     (code,label,vat_rate,vat_base,local_rate,effective_from,active,service_code,source,confirmed)
+                     VALUES ('SEL_STANDARD','TVA SEL standard','16','ENERGY','0','2026-01-01',1,'ELECTRICITY','Configuration fiscale SEL existante',1)''')
         c.execute('''INSERT OR IGNORE INTO billing_policy(key,value)
                      VALUES ('billing_frequency','MONTHLY'),
                             ('primary_currency','USD'),
@@ -260,15 +280,18 @@ def settings(c) -> dict:
     return {r['key']: r['value'] for r in c.execute('SELECT key,value FROM settings')}
 
 
-def tariff_plan_for(c, customer_type: str, on_date: str):
+def tariff_plan_for(c, customer_type: str, on_date: str, service_code: str = 'ELECTRICITY', require_confirmed: bool = False):
+    if service_code not in {'ELECTRICITY', 'WATER'}:
+        raise ValueError(f'Service inconnu : {service_code}.')
     known = c.execute('SELECT code FROM customer_types WHERE code=? AND active=1', (customer_type,)).fetchone()
     if not known:
         raise ValueError('Type d’abonné invalide.')
-    row = c.execute('''SELECT * FROM tariff_plans
-        WHERE customer_type=? AND effective_from<=?
-        ORDER BY effective_from DESC, id DESC LIMIT 1''', (customer_type, on_date)).fetchone()
+    confirmation = ' AND confirmed=1' if require_confirmed else ''
+    row = c.execute(f'''SELECT * FROM tariff_plans
+        WHERE customer_type=? AND service_code=? AND effective_from<=?{confirmation}
+        ORDER BY effective_from DESC, id DESC LIMIT 1''', (customer_type, service_code, on_date)).fetchone()
     if not row:
-        raise ValueError(f'Aucun tarif applicable pour le type {customer_type} à la date {on_date}.')
+        raise ValueError(f'Aucun tarif confirmé applicable au service {service_code}, type {customer_type}, à la date {on_date}.')
     return row
 
 
