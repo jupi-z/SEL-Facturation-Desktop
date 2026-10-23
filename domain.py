@@ -169,6 +169,99 @@ def calculate_flat_rate(*, consumption_kwh: str, unit_price: str,
     }
 
 
+SERVICE_UNITS = {"ELECTRICITY": "KWH", "WATER": "M3"}
+SERVICE_LABELS = {"ELECTRICITY": "Consommation d’électricité", "WATER": "Consommation d’eau"}
+
+
+def calculate_service(*, service_code: str, quantity: str, unit: str,
+                      unit_price: str, taxes: dict | None, currency: str) -> dict:
+    """Calculate one dated/configured service line with independent taxes.
+
+    The tax profile is intentionally mandatory. This function does not infer
+    an exemption or copy another service's rules.
+    """
+    expected_unit = SERVICE_UNITS.get(service_code)
+    if expected_unit is None:
+        raise BillingError("Service de facturation inconnu.")
+    if unit != expected_unit:
+        raise BillingError(f"L’unité {unit} est invalide pour le service {service_code} (attendu : {expected_unit}).")
+    if not isinstance(taxes, dict) or not {"vat_rate", "vat_base", "local_rate"}.issubset(taxes):
+        raise BillingError("La configuration fiscale du service est incomplète.")
+    if not isinstance(currency, str) or len(currency.strip()) != 3 or not currency.strip().isalpha():
+        raise BillingError("La devise de facturation est invalide.")
+
+    amount_quantity = decimal(quantity, "Consommation")
+    price = decimal(unit_price, "Prix unitaire")
+    vat_percent = decimal(taxes["vat_rate"], "Taux de TVA")
+    local_percent = decimal(taxes["local_rate"], "Taux de taxe locale")
+    vat_base = str(taxes["vat_base"])
+    if vat_percent > 100 or local_percent > 100:
+        raise BillingError("Un taux supérieur à 100 % doit être contrôlé.")
+    if vat_base not in {"NONE", "SUBTOTAL", "SUBTOTAL_LOCAL"}:
+        raise BillingError("L’assiette fiscale du service est invalide.")
+
+    subtotal = money(amount_quantity * price)
+    local_tax = money(subtotal * local_percent / Decimal("100"))
+    if vat_base == "NONE":
+        vat_basis = Decimal("0")
+    elif vat_base == "SUBTOTAL":
+        vat_basis = subtotal
+    else:
+        vat_basis = subtotal + local_tax
+    vat = money(vat_basis * vat_percent / Decimal("100"))
+    total = money(subtotal + local_tax + vat)
+    line = {
+        "label": SERVICE_LABELS[service_code],
+        "quantity": str(amount_quantity),
+        "unit": expected_unit,
+        "unit_price": str(price),
+        "amount": str(subtotal),
+    }
+    return {
+        "service_code": service_code,
+        "quantity": str(amount_quantity),
+        "unit": expected_unit,
+        "unit_price": str(price),
+        "currency": currency.strip().upper(),
+        "lines": [line],
+        "subtotal": str(subtotal),
+        "local_rate": str(local_percent),
+        "local_tax": str(local_tax),
+        "vat_rate": str(vat_percent),
+        "vat_base": vat_base,
+        "vat_basis": str(vat_basis),
+        "vat": str(vat),
+        "total": str(total),
+    }
+
+
+def combine_services(service_calculations: list[dict], currency: str) -> dict:
+    """Compose service results into a single invoice total without FX mixing."""
+    if not service_calculations:
+        raise BillingError("Au moins un service est nécessaire pour établir une facture.")
+    normalized_currency = currency.strip().upper() if isinstance(currency, str) else ""
+    if not normalized_currency or any(item.get("currency", "").upper() != normalized_currency
+                                      for item in service_calculations):
+        raise BillingError("Tous les services d’une facture doivent utiliser la même devise.")
+    codes = [item.get("service_code") for item in service_calculations]
+    if len(codes) != len(set(codes)):
+        raise BillingError("Un même service ne peut apparaître qu’une fois sur la facture.")
+
+    subtotal = money(sum((Decimal(item["subtotal"]) for item in service_calculations), Decimal("0")))
+    local_tax = money(sum((Decimal(item["local_tax"]) for item in service_calculations), Decimal("0")))
+    vat = money(sum((Decimal(item["vat"]) for item in service_calculations), Decimal("0")))
+    total = money(sum((Decimal(item["total"]) for item in service_calculations), Decimal("0")))
+    return {
+        "document_schema_version": 2,
+        "currency": normalized_currency,
+        "services": service_calculations,
+        "subtotal": str(subtotal),
+        "local_tax": str(local_tax),
+        "vat": str(vat),
+        "total": str(total),
+    }
+
+
 def calculate_from_readings(*, previous: str, current: str, coefficient: str = "1",
                             unit_price: str, vat_rate: str = "16",
                             currency: str = "USD") -> dict:
