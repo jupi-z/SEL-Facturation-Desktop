@@ -220,14 +220,41 @@ def startup_error_message(error: Exception) -> str:
             "effectuée automatiquement. Consultez application.log dans le "
             "dossier de données SEL."
         )
+    if isinstance(error, ModuleNotFoundError):
+        missing_module = error.name or str(error).strip()
+        return (
+            "L'installation de SEL Facturation est incomplète : un composant "
+            f"({missing_module}) est absent. Réinstallez la dernière version "
+            "depuis l'installateur officiel. Consultez application.log dans "
+            "le dossier de données SEL."
+        )
+    detail = str(error).strip().splitlines()[0][:220] if str(error).strip() else type(error).__name__
+    if "webview2" in detail.casefold() or "edgechromium" in detail.casefold():
+        return (
+            "Le démarrage de la fenêtre Windows a échoué avec WebView2. "
+            "Réparez SEL depuis son installateur officiel et vérifiez que "
+            "Microsoft Edge WebView2 Runtime peut être installé sur ce poste. "
+            "Consultez application.log dans le dossier de données SEL."
+        )
     return (
-        "Le démarrage a échoué. Consultez application.log dans le dossier de "
-        "données SEL.\nVérifiez que Microsoft Edge WebView2 Runtime est installé."
+        f"Le démarrage de SEL Facturation a échoué ({detail}). Consultez "
+        "application.log dans le dossier de données SEL."
     )
 
 
 def main(argv=None):
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments == ["--sel-packaging-smoke"]:
+        # CI executes the actual frozen one-file EXE in a data-free mode. This
+        # imports the complete app/PDF stack, including ReportLab's dynamic
+        # barcode modules, without opening a window or touching SEL data.
+        try:
+            import app  # noqa: F401
+            from reportlab.graphics.barcode import code128  # noqa: F401
+        except Exception:
+            logging.exception("Échec du contrôle d'import du paquet SEL Facturation")
+            return 1
+        return 0
     if arguments and arguments[0] == "--sel-update-supervisor":
         from safeupdate_supervisor import main as supervisor_main
         return supervisor_main(arguments)

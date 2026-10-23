@@ -27,6 +27,19 @@ def test_startup_error_identifies_database_failures_separately_from_webview2():
     assert "WebView2" in webview_message
 
 
+def test_startup_error_does_not_blame_webview_for_missing_reportlab_dependency():
+    error = ModuleNotFoundError(
+        "No module named 'reportlab.graphics.barcode.code128'",
+        name="reportlab.graphics.barcode.code128",
+    )
+
+    message = startup_error_message(error)
+
+    assert "reportlab.graphics.barcode.code128" in message
+    assert "WebView2" not in message
+    assert "installation" in message.lower() or "composant" in message.lower()
+
+
 def test_documents_validate_inputs_and_fiscal_neutrality():
     api = DesktopDocuments()
     assert not hasattr(api, "window")
