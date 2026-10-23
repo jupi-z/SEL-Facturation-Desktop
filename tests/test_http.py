@@ -42,7 +42,7 @@ def test_complete_flow(client):
     token=csrf(client,'/clients')
     assert client.post('/clients',data={'_csrf':token,'name':'Abonné A','address':'Kolwezi','customer_type':'RESIDENTIAL','meter_number':'','coefficient':'1','contract_number':'C1'}).status_code==302
     token=csrf(client,'/invoices/new')
-    data={'_csrf':token,'client_id':'1','billing_period':'2026-08','consumption_kwh':'200','due_date':'2026-10-31'}
+    data={'_csrf':token,'client_id':'1','billing_period':'2026-08','consumption_kwh':'200','water_m3':'0','due_date':'2026-10-31'}
     preview=client.post('/invoices/new',data=data)
     assert preview.status_code==200
     preview_token=re.search(r'name="_csrf" value="([^"]+)"',preview.get_data(as_text=True)).group(1)

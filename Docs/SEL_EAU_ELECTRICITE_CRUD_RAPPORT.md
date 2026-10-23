@@ -1,5 +1,15 @@
 # Rapport — facturation combinée et CRUD sûr
 
+## Correction du parcours universel eau + électricité — version 0.3.32 (en cours)
+
+- La demande SEL a précisé que l’eau doit être incluse pour **tous** les abonnés, anciens comme nouveaux. L’option de raccordement individuelle ne doit donc plus masquer le relevé ni permettre une facture électricité seule.
+- La migration additive active le service eau pour les dossiers déjà présents; des triggers SQLite imposent cette règle pour les créations/modifications ultérieures. Aucun snapshot de facture historique n’est réécrit.
+- Le parcours **Nouveau décompte** présente simultanément les deux consommations dans un seul formulaire et préremplit l’eau à `0 m³`. Toute nouvelle facture doit contenir les deux services, confirmé aussi au moment de l’émission.
+- Une consommation eau nulle est portée sur la facture en quantité et montant nuls, même si la grille eau n’est pas encore configurée. Le PDF ne suggère ni prix nul, ni exemption fiscale, ni taux inventé.
+- Une consommation positive reste bloquée jusqu’à la saisie par SEL d’un tarif réel et d’un profil fiscal, datés et confirmés. Aucun tarif ou taux ne peut être déduit des paramètres électriques.
+- Validation ciblée après correction : 5 tests ciblés réussis. Une suite complète a ensuite donné 285 réussites et 1 échec de test (cas d’abonné industriel qui n’envoyait pas le champ eau); ce cas a été corrigé dans les données de test, la suite doit être rejouée après cette mise à jour.
+- Branche dédiée : `monarque/universal-water-billing`. La release 0.3.31 n’a pas été publiée; son téléversement GitHub a été interrompu à la demande de prudence après découverte de ce défaut. Build Windows 0.3.32, CI Windows et recette poste SEL restent à confirmer.
+
 ## Correctif de parcours eau — version 0.3.31
 
 - Cause reproductible : le formulaire affichait la consommation d’eau pour tous les abonnés. Un `0` conservé par le brouillon après changement de client était envoyé au serveur, qui le rejetait quand l’abonné n’était pas raccordé.

@@ -59,7 +59,7 @@ def initialize():
           billing_frequency TEXT NOT NULL DEFAULT 'MONTHLY',
           status TEXT NOT NULL DEFAULT 'ACTIVE', archived_at TEXT NOT NULL DEFAULT '',
           archive_reason TEXT NOT NULL DEFAULT '',
-          water_enabled INTEGER NOT NULL DEFAULT 0 CHECK(water_enabled IN (0,1)),
+          water_enabled INTEGER NOT NULL DEFAULT 1 CHECK(water_enabled IN (0,1)),
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS invoices (
@@ -205,7 +205,19 @@ def initialize():
         if 'archive_reason' not in columns:
             c.execute("ALTER TABLE clients ADD COLUMN archive_reason TEXT NOT NULL DEFAULT ''")
         if 'water_enabled' not in columns:
-            c.execute('ALTER TABLE clients ADD COLUMN water_enabled INTEGER NOT NULL DEFAULT 0 CHECK(water_enabled IN (0,1))')
+            c.execute('ALTER TABLE clients ADD COLUMN water_enabled INTEGER NOT NULL DEFAULT 1 CHECK(water_enabled IN (0,1))')
+        # Water is now a universal service. Backfill every existing subscriber
+        # and enforce the invariant for future inserts/edits without touching
+        # immutable invoice snapshots.
+        c.execute('UPDATE clients SET water_enabled=1 WHERE water_enabled<>1')
+        c.executescript('''
+        CREATE TRIGGER IF NOT EXISTS clients_water_required_insert
+          AFTER INSERT ON clients WHEN NEW.water_enabled<>1
+          BEGIN UPDATE clients SET water_enabled=1 WHERE id=NEW.id; END;
+        CREATE TRIGGER IF NOT EXISTS clients_water_required_update
+          AFTER UPDATE OF water_enabled ON clients WHEN NEW.water_enabled<>1
+          BEGIN UPDATE clients SET water_enabled=1 WHERE id=NEW.id; END;
+        ''')
         c.execute("CREATE INDEX IF NOT EXISTS clients_status_lookup ON clients(status, name, code)")
         # Service-scoped configuration is additive: pre-existing catalogs are
         # explicitly classified as electricity, never inferred as water.

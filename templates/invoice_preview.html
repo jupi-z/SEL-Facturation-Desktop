@@ -16,12 +16,12 @@
     <h3 class="section-title">{{ 'Électricité' if service['service_code']=='ELECTRICITY' else 'Eau' }}</h3>
     <div class="tablewrap"><table>
       <thead><tr><th>Poste</th><th>Quantité</th><th>Prix unitaire</th><th>Montant HT</th></tr></thead>
-      <tbody>{% for line in service['lines'] %}<tr><td>{{ line['label'] }}</td><td>{{ line['quantity'] }} {{ line['unit'] }}</td><td>{{ line['unit_price'] }} {{ service['currency'] }}/{{ line['unit'] }}</td><td>{{ fmt(line['amount']) }} {{ service['currency'] }}</td></tr>{% endfor %}</tbody>
+      <tbody>{% for line in service['lines'] %}<tr><td>{{ line['label'] }}</td><td>{{ line['quantity'] }} {{ line['unit'] }}</td><td>{{ line['unit_price'] or '—' }}{% if line['unit_price'] %} {{ service['currency'] }}/{{ line['unit'] }}{% endif %}</td><td>{{ fmt(line['amount']) }} {{ service['currency'] }}</td></tr>{% endfor %}</tbody>
     </table></div>
     <div class="sum">
       <div>Sous-total {{ 'électricité' if service['service_code']=='ELECTRICITY' else 'eau' }} <strong>{{ fmt(service['subtotal']) }} {{ service['currency'] }}</strong></div>
       {% if service['local_tax'] != '0' and service['local_tax'] != '0.00' %}<div>Taxe locale ({{ service['local_rate'] }} %) <strong>{{ fmt(service['local_tax']) }} {{ service['currency'] }}</strong></div>{% endif %}
-      <div>TVA ({{ service['vat_rate'] }} %) <strong>{{ fmt(service['vat']) }} {{ service['currency'] }}</strong></div>
+      {% if service.get('tax_profile_code') %}<div>TVA ({{ service['vat_rate'] }} %) <strong>{{ fmt(service['vat']) }} {{ service['currency'] }}</strong></div>{% endif %}
       <div>Total du service <strong>{{ fmt(service['total']) }} {{ service['currency'] }}</strong></div>
     </div>
     {% endfor %}

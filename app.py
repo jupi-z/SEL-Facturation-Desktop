@@ -94,16 +94,21 @@ def combine_invoice_calculation(connection, client, electricity, billing_period,
     }
     services=[electric_service]
     water_value=(water_m3 or '').strip()
-    if int(client.get('water_enabled') or 0):
-        if not water_value:
-            raise BillingError('Saisissez la consommation d’eau en m³, y compris 0 si elle est nulle.')
-        customer_type=client.get('customer_type') or ''
+    if not water_value:
+        raise BillingError('Saisissez la consommation d’eau en m³, y compris 0 si elle est nulle.')
+    water_quantity=decimal(water_value, 'Consommation d’eau')
+    customer_type=client.get('customer_type') or ''
+    try:
         plan=db.tariff_plan_for(connection,customer_type,billing_period+'-01',
                                 service_code='WATER',require_confirmed=True)
-        if plan['currency'] != currency:
-            raise BillingError('Les tarifs d’eau et d’électricité doivent utiliser la même devise pour une facture combinée.')
         profile=tax_profile_for(connection,billing_period+'-01',code=None,
                                  service_code='WATER',require_confirmed=True)
+    except ValueError:
+        if water_quantity != 0:
+            raise
+        plan=profile=None
+
+    if plan and profile and plan['currency'] == currency:
         water=calculate_service(
             service_code='WATER',quantity=water_value,unit=plan['unit'],
             unit_price=plan['unit_price'],currency=currency,
@@ -113,17 +118,23 @@ def combine_invoice_calculation(connection, client, electricity, billing_period,
         water.update({'tariff_code':plan['code'],'tariff_effective_from':plan['effective_from'],
                       'tariff_source':plan['source'],'tax_profile_code':profile['code'],
                       'tax_source':profile['source']})
-        services.append(water)
-    elif water_value:
-        # A stale browser/session draft can submit a zero that was entered for
-        # another subscriber. Zero has no business meaning when water is not
-        # connected, so ignore it; never silently accept a positive quantity.
-        try:
-            stale_quantity = decimal(water_value, 'Consommation d’eau')
-        except BillingError:
-            raise BillingError('Le service d’eau n’est pas activé pour cet abonné.') from None
-        if stale_quantity != 0:
-            raise BillingError('Le service d’eau n’est pas activé pour cet abonné.')
+    elif water_quantity == 0:
+        # A zero reading is still recorded on every invoice. With no approved
+        # water price/tax profile, record zero volume and zero amount without
+        # fabricating a unit price, tax rate, exemption, or source.
+        zero='0.00'
+        water={
+            'service_code':'WATER','quantity':'0','unit':'M3','unit_price':'',
+            'currency':currency,'lines':[{'label':'Consommation d’eau','quantity':'0',
+                'unit':'M3','unit_price':'','amount':zero}],
+            'subtotal':zero,'local_rate':'0','local_tax':zero,'vat_basis':zero,
+            'vat':'0.00','total':zero,
+        }
+    else:
+        if plan and plan['currency'] != currency:
+            raise BillingError('Les tarifs d’eau et d’électricité doivent utiliser la même devise pour une facture combinée.')
+        raise BillingError('Configurez un tarif et un profil fiscal d’eau confirmés par SEL avant de facturer une consommation positive.')
+    services.append(water)
 
     combined=combine_services(services,currency)
     result=dict(electricity)
@@ -355,7 +366,7 @@ def create_app():
         client_form=session.get('client_form',{})
         if request.method=='POST':
             values={k:request.form.get(k,'').strip() for k in ('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient')}
-            values['water_enabled']='1' if request.form.get('water_enabled')=='yes' else '0'
+            values['water_enabled']='1'
             try:
                 if not values['name'] or not values['address']:
                     raise BillingError('Nom et adresse sont obligatoires.')
@@ -409,7 +420,7 @@ def create_app():
         if request.method=='POST':
             editable=('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient')
             values={k:request.form.get(k, current[k] or '').strip() for k in editable}
-            values['water_enabled']='1' if request.form.get('water_enabled')=='yes' else '0'
+            values['water_enabled']='1'
             try:
                 if not values['name'] or not values['address']: raise BillingError('Nom et adresse obligatoires.')
                 if values['customer_type'] and values['customer_type'] not in customer_type_codes: raise BillingError('Type d’abonné invalide.')
@@ -935,11 +946,6 @@ def create_app():
             client=dict(client)
             if draft.get('calculation'):
                 calc=draft['calculation']
-                service_codes=[item.get('service_code') for item in calc.get('services',[])]
-                if service_codes.count('ELECTRICITY')!=1 or len(service_codes)!=len(set(service_codes)):
-                    raise BillingError('Aperçu invalide. Recommencez la prévisualisation.')
-                if ('WATER' in service_codes) != bool(int(client.get('water_enabled') or 0)):
-                    raise BillingError('La fiche de service a changé. Recommencez la prévisualisation de la facture.')
             elif draft.get('consumption_kwh'):
                 customer_type=client['customer_type']
                 if not customer_type:
@@ -952,9 +958,14 @@ def create_app():
                 calc.update({'customer_type':customer_type,'customer_type_label':customer_type_label(g.db, customer_type),'tariff_code':draft.get('tariff_code') or plan['code'],'tariff_effective_from':draft.get('tariff_effective_from') or plan['effective_from'],'unit_price':unit_price})
             else:
                 calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft['fee'])
-            # Version du rendu figée à l’émission pour préserver les PDF historiques.
             if 'services' not in calc:
-                calc['document_template_version']=2
+                # Sessions d’une ancienne version peuvent encore contenir un
+                # aperçu électrique seul. Recompose-le avec l’eau demandée;
+                # l’émission échoue si aucun volume n’a été saisi.
+                calc=combine_invoice_calculation(g.db,client,calc,period,draft.get('water_m3',''))
+            service_codes=[item.get('service_code') for item in calc.get('services',[])]
+            if sorted(service_codes)!=['ELECTRICITY','WATER']:
+                raise BillingError('Une facture doit contenir l’électricité et l’eau. Recommencez la prévisualisation.')
             g.db.execute('BEGIN IMMEDIATE')
             if db.active_invoice(g.db,cid,period): raise BillingError('Cette période est déjà facturée pour ce client.')
             year=date.today().year

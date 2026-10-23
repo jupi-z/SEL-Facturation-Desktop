@@ -54,6 +54,7 @@ def _create_invoice(client):
         "client_id": "1",
         "billing_period": "2026-10",
         "consumption_kwh": "100",
+        "water_m3": "0",
         "due_date": "2026-10-31",
         "note": "Essai",
     })
@@ -73,6 +74,7 @@ def test_new_invoice_preserves_invalid_submission_after_refresh(tmp_path, monkey
         "client_id": "1",
         "billing_period": "2026-11",
         "consumption_kwh": "pas-un-nombre",
+        "water_m3": "0",
         "due_date": "2026-11-30",
         "note": "Brouillon conservé",
     })
@@ -83,7 +85,7 @@ def test_new_invoice_preserves_invalid_submission_after_refresh(tmp_path, monkey
     assert 'value="pas-un-nombre"' in refreshed
     assert 'value="2026-11-30"' in refreshed
     assert 'value="Brouillon conservé"' in refreshed
-    assert 'value="1" data-water-enabled="false" selected' in refreshed
+    assert 'value="1" data-water-enabled="true" selected' in refreshed
 
 
 def test_settings_preserves_invalid_identity_after_refresh_and_keeps_tab(tmp_path, monkeypatch):

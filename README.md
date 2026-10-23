@@ -1,8 +1,8 @@
-# SEL Facturation Desktop — V0.3.31 (préversion) locale native Windows
+# SEL Facturation Desktop — V0.3.32 (préversion) locale native Windows
 
-Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés, facturation de l’électricité et de l’eau sur un document A4 commun lorsque les deux services sont raccordés, historique, paiements, sauvegardes et exports.
+Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés, facturation de l’électricité et de l’eau ensemble sur un document A4 unique, historique, paiements, sauvegardes et exports.
 
-**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF présentent les services réellement facturés et n’inventent aucun montant, référence fiscale, signature ou QR DGI. L'identité SEL et les références électriques configurées sont conservées ; une facture combinée eau/électricité ne peut être émise qu’après configuration et confirmation des références d’eau par SEL.
+**Statut : version pilote locale, à tester et valider sur un PC Windows de SEL avant toute utilisation commerciale.** Les PDF présentent les services réellement facturés et n’inventent aucun montant, référence fiscale, signature ou QR DGI. L'identité SEL et les références électriques configurées sont conservées; le relevé d’eau figure désormais sur chaque nouvelle facture.
 
 ### Règles de facturation actuellement implémentées
 
@@ -13,9 +13,9 @@ Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** :
 - Devise principale : USD. Une variante CDF peut être produite avec un taux configurable, initialement 1 USD = 2 360 CDF.
 - Les compteurs et relevés restent facultatifs et pourront être activés ultérieurement.
 - Les anciens barèmes progressifs et anciennes taxes restent lisibles dans les factures historiques mais ne contrôlent pas le nouveau parcours.
-- L’eau se facture en quantité de m³, uniquement pour les abonnés explicitement raccordés. Une valeur de 0 m³ reste visible sur la facture.
-- Aucun tarif, aucune taxe ni assiette d’eau n’est prérempli : les références datées doivent être saisies et confirmées par SEL avant qu’une facture d’eau puisse être émise. Les factures électriques seules restent utilisables.
-- Dans le formulaire de facture, la saisie d’eau n’apparaît que pour un abonné raccordé. Si un ancien brouillon transmet encore `0` pour un abonné non raccordé, cette valeur neutre est ignorée; toute quantité d’eau positive reste refusée.
+- Tous les abonnés, y compris ceux présents avant la mise à jour, sont traités comme abonnés eau + électricité. Chaque nouvelle facture comporte un relevé eau en m³, y compris lorsque la quantité est de 0.
+- Aucun tarif, aucune taxe ni assiette d’eau n’est prérempli : les paramètres datés doivent être saisis et confirmés par SEL avant de facturer un volume positif. Une quantité de 0 m³ peut être documentée sans montant, sans tarif et sans régime fiscal inventés.
+- Le formulaire unique recueille l’électricité et l’eau au même endroit. Une consommation d’eau positive exige un tarif et un profil fiscal datés, actifs et confirmés par SEL. Pour une saisie à 0 m³, une ligne à montant nul est inscrite sans inventer de tarif ou de règle fiscale.
 
 ### Configuration administrable
 
@@ -69,9 +69,9 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 
 1. Créer le mot de passe au premier lancement.
 2. Dans **Paramètres**, vérifier les références SEL préchargées et **confirmer** les tarifs, le taux de change et l'assiette de TVA avant la première émission.
-3. Dans **Abonnés**, enregistrer l’identité, le contrat et les coordonnées, puis activer le raccordement eau uniquement si le client en bénéficie.
-4. Dans **Nouveau décompte**, choisir l’abonné, le mois, la consommation électrique en kWh, et si l’eau est activée saisir sa consommation en m³ (y compris `0`).
-5. Le serveur vérifie que les tarifs et profils applicables sont configurés et confirmés, calcule chaque service séparément, puis compose le total commun et attribue un numéro unique.
+3. Dans **Abonnés**, enregistrer l’identité, le contrat et les coordonnées. L’eau et l’électricité sont incluses pour chaque abonné.
+4. Dans **Nouveau décompte**, choisir l’abonné et la période, puis saisir ensemble les consommations électriques en kWh et d’eau en m³ (saisir `0` si le relevé d’eau est nul).
+5. Le serveur calcule chaque service séparément. Une consommation positive d’eau requiert un tarif et des règles fiscales configurés et confirmés; les deux services sont ensuite composés sur la même facture.
 6. Utiliser les boutons **Voir le PDF**, **Enregistrer PDF** ou **Imprimer** : ouverture et impression avec le lecteur PDF associé à Windows, enregistrement par boîte de dialogue native ; le navigateur intégré reste réservé à l'interface du programme.
 7. Dans **Factures**, retrouver/réimprimer, enregistrer un paiement ou corriger un paiement avec une contre-écriture motivée. Un document peut être annulé lorsque son solde net encaissé est nul.
 8. Exporter périodiquement une sauvegarde et le JSON portable v1 (qui inclut désormais les services et les contre-écritures).

@@ -153,7 +153,7 @@ def render_invoice(invoice, payments, qr_reference=None) -> bytes:
             recap.append((f"Sous-total {service_name.lower()} HT",fmt(service.get('subtotal','0'))+' '+p(service.get('currency',inv['currency']))))
             if Decimal(str(service.get('local_tax','0'))) != 0:
                 recap.append((f"Taxe locale {service_name.lower()} ({p(service.get('local_rate','0'))} %)",fmt(service['local_tax'])+' '+p(service.get('currency',inv['currency']))))
-            if Decimal(str(service.get('vat','0'))) != 0 or Decimal(str(service.get('vat_rate','0'))) == 0:
+            if service.get('tax_profile_code') and (Decimal(str(service.get('vat','0'))) != 0 or Decimal(str(service.get('vat_rate','0'))) == 0):
                 recap.append((f"TVA {service_name.lower()} ({p(service.get('vat_rate','0'))} %)",fmt(service.get('vat','0'))+' '+p(service.get('currency',inv['currency']))))
             recap.append((f"Total {service_name.lower()}",fmt(service.get('total','0'))+' '+p(service.get('currency',inv['currency']))))
         if d.get('conversion_rate'):

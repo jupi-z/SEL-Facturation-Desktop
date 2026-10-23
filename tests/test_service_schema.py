@@ -33,7 +33,7 @@ def test_service_migration_scopes_existing_electricity_and_does_not_seed_water(
     assert water_tariffs == water_taxes == 0
 
 
-def test_existing_client_schema_adds_water_opt_in_without_enabling_anyone(
+def test_migration_enables_water_for_existing_clients_and_future_inserts(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
@@ -41,15 +41,24 @@ def test_existing_client_schema_adds_water_opt_in_without_enabling_anyone(
     with db.connect() as connection:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(clients)")}
         connection.execute(
-            "INSERT INTO clients(code,name,address,meter_number) VALUES('SEL-C-OLD','Client ancien','Kolwezi','')"
+            "INSERT INTO clients(code,name,address,meter_number,water_enabled) VALUES('SEL-C-OLD','Client ancien','Kolwezi','',0)"
         )
         connection.commit()
+    db.initialize()
+    with db.connect() as connection:
         water_enabled = connection.execute(
             "SELECT water_enabled FROM clients WHERE code='SEL-C-OLD'"
         ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO clients(code,name,address,meter_number,water_enabled) VALUES('SEL-C-NEW','Nouveau','Kolwezi','',0)"
+        )
+        connection.commit()
+        new_water_enabled = connection.execute(
+            "SELECT water_enabled FROM clients WHERE code='SEL-C-NEW'"
+        ).fetchone()[0]
 
     assert "water_enabled" in columns
-    assert water_enabled == 0
+    assert water_enabled == new_water_enabled == 1
 
 
 def test_tariff_and_tax_lookup_are_service_scoped(tmp_path, monkeypatch):

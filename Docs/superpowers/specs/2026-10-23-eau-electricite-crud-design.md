@@ -2,7 +2,7 @@
 
 ## Intention
 
-Permettre à SEL de gérer les deux services dans un parcours local cohérent et d’émettre, pour les abonnés raccordés aux deux services, un document unique avec détail et total communs. Compléter les opérations de création, consultation, modification et suppression des données de référence sans rendre possible l’effacement silencieux de l’historique financier.
+Permettre à SEL de gérer les deux services dans un parcours local cohérent et d’émettre pour chaque abonné un document unique présentant les deux consommations et leurs montants. Compléter les opérations de création, consultation, modification et suppression des données de référence sans rendre possible l’effacement silencieux de l’historique financier.
 
 ## État de départ constaté
 
@@ -14,8 +14,8 @@ Permettre à SEL de gérer les deux services dans un parcours local cohérent et
 ## Objectifs
 
 - Séparer les services, unités, tarifs datés, taxes et calculs; conserver USD/CDF cohérents, `Decimal` et arrondi financier explicite.
-- Permettre d’activer le service d’eau par abonné. Si le service est activé et la consommation vaut zéro, conserver et imprimer une ligne d’eau à zéro; ne pas faire passer un abonné non raccordé pour un abonné à consommation nulle.
-- Refuser l’émission d’eau lorsque le tarif ou la règle fiscale validée manque. Aucun tarif, taux, exemption ou assiette d’eau n’est prérempli à partir des règles électriques ou d’exemples de test.
+- Révision de l’exigence SEL du 23 octobre 2026 : inclure l’eau pour tous les abonnés, y compris les dossiers existants. Chaque nouveau décompte saisit les deux services dans le même formulaire et chaque facture présente les deux; `0 m³` reste une valeur explicite, visible et sans montant fictif.
+- Refuser la facturation d’un volume d’eau positif lorsque le tarif ou la règle fiscale validée manque. Un relevé de 0 m³ demeure visible et facturable à 0 sans inférer de règle fiscale. Aucun tarif, taux, exemption ou assiette d’eau n’est prérempli à partir des règles électriques ou d’exemples de test.
 - Enregistrer les deux services dans un snapshot de facture combinée immuable, produire prévisualisation, PDF A4, total et solde cohérents, exports et rapports corrects.
 - Fournir un CRUD utilisable pour les abonnés, services, tarifs et référentiels, avec suppression physique seulement lorsque les dépendances et l’historique le permettent; utiliser archivage/désactivation ou annulation/correction traçable pour les éléments référencés.
 - Préserver les factures, paiements, sauvegardes et exports historiques; toute migration SQLite est additive et idempotente.
@@ -28,13 +28,13 @@ Pas de distribution d’eau, mesure réseau, stock, ERP, multi-poste, paiement b
 
 1. Ajouter quelques champs `water_*` et juxtaposer un second calcul spécialisé. Rapide, mais duplique les règles et rend les taxes/CRUD difficiles à faire évoluer.
 2. Introduire un nouveau sous-système ou une pile distante. Plus extensible, mais incompatible avec le produit local et inutile pour deux services.
-3. **Recommandée : modèle de services additif dans le socle actuel.** Étendre les plans tarifaires/profils fiscaux par service, garder les champs électriques historiques et les anciennes clés de calcul, ajouter l’activation et les données du service eau à la fiche abonné, puis stocker les nouveaux postes dans `calc_snapshot.services`. C’est le chemin le plus petit qui garde la compatibilité des anciens documents et élimine la logique électrique codée en dur.
+3. **Recommandée : modèle de services additif dans le socle actuel.** Étendre les plans tarifaires/profils fiscaux par service, garder les champs électriques historiques et les anciennes clés de calcul, rendre le service eau universel et stocker les nouveaux postes dans `calc_snapshot.services`. C’est le chemin le plus petit qui garde la compatibilité des anciens documents et élimine la logique électrique codée en dur.
 
 ## Décisions de conception (choix Codex sous carte blanche)
 
 - Le mode d’entrée demandé pour l’eau est une quantité directe en m³, en parallèle de la saisie directe en kWh actuellement utilisée. Les champs de compteur/coefficients eau peuvent être conservés pour une extension de lecture, mais aucun relevé n’est requis ni affiché sans données réelles.
-- Une activation eau est explicite dans la fiche abonné. Un abonné activé à 0 m³ obtient la ligne eau à 0; un abonné non raccordé suit le parcours de compatibilité et ne reçoit pas une ligne fausse.
-- Les plans tarifaires sont identifiés par type d’abonné, service et date d’effet. Les règles fiscales sont propres au service; absence de configuration/confirmation pour l’eau bloque l’aperçu émissible. Les écrans exigent une confirmation explicite et une référence/source pour activer les paramètres d’eau.
+- L’eau est universelle au niveau du produit; toute option individuelle d’activation est supprimée. La migration met à jour les dossiers existants sans modifier les snapshots historiques.
+- Les plans tarifaires sont identifiés par type d’abonné, service et date d’effet. Les règles fiscales sont propres au service; absence de configuration/confirmation bloque seulement la facturation d’une quantité d’eau positive. Les écrans exigent une confirmation explicite et une référence/source pour activer les paramètres d’eau.
 - Les nouveaux snapshots ont un schéma versionné et une liste `services`; les clés de premier niveau requises par l’existant (`total`, `currency`, `energy`, `vat`, `lines`, etc.) restent disponibles pour compatibilité. Les snapshots plus anciens continuent à être rendus avec leur ancien template.
 - Pour le CRUD, les référentiels inutilisés peuvent être supprimés; les éléments déjà utilisés sont désactivés/archivés. Les abonnés ayant des documents restent archivables. Les factures émises sont annulées/corrigées par remplacement; les paiements erronés sont neutralisés par une écriture de correction append-only. Aucun hard-delete en cascade de factures/paiements n’est ajouté.
 - Le périmètre CRUD sera borné aux objets métier existants et nouvellement introduits; les secrets d’administration, clés de confiance, journaux techniques et sauvegardes ne deviennent pas des objets CRUD métier.
@@ -48,8 +48,9 @@ Pas de distribution d’eau, mesure réseau, stock, ERP, multi-poste, paiement b
 
 ## Critères d’acceptation
 
-- Calcul et aperçu de facture combinée exacte; eau zéro visible si le service est activé; aucun montant d’eau si configuration validée absente.
+- Calcul et aperçu combinés; eau présente pour tous les abonnés; eau zéro visible à 0 sans prix ou taxe fictifs; quantité positive facturée seulement avec une configuration validée.
 - Les paramètres d’eau sont entièrement administrables sans changement de code, mais restent inactifs jusqu’à confirmation explicite de SEL.
+- Une quantité nulle peut être enregistrée sans inventer prix ni règle fiscale; une quantité positive exige toujours les paramètres eau datés et confirmés par SEL.
 - CRUD des références sans suppression de données historiques référencées; correction de paiement et annulation de facture auditables.
 - PDF A4 lisible avec sections indépendantes, totaux réconciliables, code QR interne seulement, anciens PDF compatibles.
 - Migration ancienne base, export portable v1, installation/build Windows et tests complets réussis.

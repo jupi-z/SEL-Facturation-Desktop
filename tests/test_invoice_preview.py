@@ -35,7 +35,7 @@ def prepared_client(tmp_path, monkeypatch):
 
 
 def invoice_data(csrf):
-    return {"_csrf": csrf, "client_id": "1", "billing_period": "2026-08", "consumption_kwh": "200", "due_date": "2026-10-31"}
+    return {"_csrf": csrf, "client_id": "1", "billing_period": "2026-08", "consumption_kwh": "200", "water_m3": "0", "due_date": "2026-10-31"}
 
 
 def test_invoice_entry_shows_preview_without_creating_document(prepared_client):
@@ -64,7 +64,23 @@ def test_invoice_confirmation_creates_one_document_after_preview(prepared_client
         assert db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 1
         snapshot = json.loads(row[0])
         assert snapshot["document_template_version"] == 3
-        assert [service["service_code"] for service in snapshot["services"]] == ["ELECTRICITY"]
+        assert [service["service_code"] for service in snapshot["services"]] == ["ELECTRICITY", "WATER"]
+
+
+def test_legacy_pending_confirmation_cannot_create_electricity_only_invoice(prepared_client):
+    client, token = prepared_client
+    with client.session_transaction() as session:
+        session["invoice_draft"] = {
+            "client_id": 1, "billing_period": "2026-08", "consumption_kwh": "200",
+            "previous": "", "current": "", "fee": "0", "due_date": "", "note": "",
+        }
+
+    response = client.post("/invoices/new/confirm", data={"_csrf": token("/invoices/new")})
+
+    assert response.status_code == 302
+    assert response.location.endswith("/invoices/new")
+    with connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0
 
 
 def test_invoice_confirmation_keeps_the_tariff_used_by_preview(prepared_client):

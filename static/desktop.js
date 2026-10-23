@@ -291,19 +291,13 @@
   const clientSelect = document.getElementById('client_id');
   const waterField = document.getElementById('water-consumption-field');
   const waterInput = document.getElementById('water_m3');
-  const waterNotice = document.getElementById('water-service-unavailable');
-  const clientEditLink = document.getElementById('water-client-edit-link');
   if (!clientSelect || !waterField || !waterInput) return;
 
   const applyClient = (clearValue) => {
-    const selected = clientSelect.selectedOptions[0];
-    const connected = selected?.dataset.waterEnabled === 'true';
-    if (clearValue) waterInput.value = '';
-    waterField.hidden = !connected;
-    waterInput.disabled = !connected;
-    waterInput.required = connected;
-    if (waterNotice) waterNotice.hidden = !selected || !selected.value || connected;
-    if (clientEditLink) clientEditLink.href = selected?.value ? `/clients/${encodeURIComponent(selected.value)}/edit` : '/clients';
+    if (clearValue) waterInput.value = '0';
+    waterField.hidden = false;
+    waterInput.disabled = false;
+    waterInput.required = true;
   };
 
   applyClient(false);

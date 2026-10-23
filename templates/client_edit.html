@@ -26,11 +26,8 @@
     </fieldset>
     <fieldset>
       <legend>Services facturés</legend>
-      <label class="check" for="edit-water-enabled">
-        <input id="edit-water-enabled" type="checkbox" name="water_enabled" value="yes" {{ 'checked' if client.get('water_enabled', 0)|string in ('1', 'yes', 'True') else '' }}>
-        Eau (m³) — activer uniquement si l’abonné est raccordé
-      </label>
-      <p class="note">L’activation d’un service ne crée pas de tarif. La facturation de l’eau reste bloquée jusqu’à la configuration confirmée par SEL.</p>
+      <p>L’abonnement comprend l’électricité (kWh) et l’eau (m³).</p>
+      <p class="note">Les décomptes d’eau à 0 m³ restent visibles. Les consommations positives sont facturées selon le tarif et les règles configurés et confirmés par SEL.</p>
     </fieldset>
     <fieldset>
       <legend>Localisation et coordonnées</legend>

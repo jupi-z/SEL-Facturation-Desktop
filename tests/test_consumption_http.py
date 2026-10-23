@@ -37,7 +37,7 @@ def test_monthly_direct_consumption_invoice_without_meter(tmp_path, monkeypatch)
     assert response.status_code == 302
     preview = client.post("/invoices/new", data={
         "_csrf": _token(client, "/invoices/new"), "client_id": "1",
-        "billing_period": "2026-10", "consumption_kwh": "100", "due_date": "2026-10-31",
+        "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "0", "due_date": "2026-10-31",
     })
     assert preview.status_code == 200
     assert "11,02" in preview.get_data(as_text=True)
@@ -91,7 +91,7 @@ def test_current_month_invoice_still_works_after_mid_month_tariff_save(tmp_path,
     period = date.today().strftime("%Y-%m")
     preview = client.post("/invoices/new", data={
         "_csrf": _token(client, "/invoices/new"), "client_id": "1",
-        "billing_period": period, "consumption_kwh": "100",
+        "billing_period": period, "consumption_kwh": "100", "water_m3": "0",
         "due_date": date.today().replace(day=28).isoformat(),
     })
 
@@ -117,7 +117,7 @@ def test_invoice_accepts_a_past_due_date_for_late_billing(tmp_path, monkeypatch)
     past_due = (date.today() - timedelta(days=1)).isoformat()
     preview = client.post("/invoices/new", data={
         "_csrf": _token(client, "/invoices/new"), "client_id": "1",
-        "billing_period": date.today().strftime("%Y-%m"), "consumption_kwh": "100", "due_date": past_due,
+        "billing_period": date.today().strftime("%Y-%m"), "consumption_kwh": "100", "water_m3": "0", "due_date": past_due,
     })
 
     assert preview.status_code == 200
@@ -182,7 +182,7 @@ def test_water_zero_is_included_in_combined_invoice_when_customer_is_connected(t
     assert exported[0]["water_total"] == "0.00"
 
 
-def test_stale_zero_water_is_ignored_for_electricity_only_customer(tmp_path, monkeypatch):
+def test_preexisting_subscriber_always_has_water_and_zero_is_invoiceable_without_fake_tariff(tmp_path, monkeypatch):
     monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
     client = create_app().test_client()
     client.post("/setup", data={"_csrf": _token(client, "/setup"), "password": "TestPassword2026!", "confirm": "TestPassword2026!"})
@@ -198,8 +198,16 @@ def test_stale_zero_water_is_ignored_for_electricity_only_customer(tmp_path, mon
         client_id = cursor.lastrowid
         connection.commit()
     form = client.get("/invoices/new").get_data(as_text=True)
-    assert 'id="water-consumption-field" class="water-field" for="water_m3" hidden' in form
-    assert 'name="water_m3" value="" placeholder="0 si aucune consommation" disabled' in form
+    assert 'id="water-consumption-field" class="water-field" for="water_m3"' in form
+    assert 'name="water_m3" value="0" placeholder="0 si aucune consommation" required' in form
+
+    missing_water = client.post("/invoices/new", data={
+        "_csrf": _token(client, "/invoices/new"), "client_id": str(client_id),
+        "billing_period": "2026-10", "consumption_kwh": "100",
+    })
+    assert "Émission interrompue" in html.unescape(missing_water.get_data(as_text=True))
+    with db.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0
 
     response = client.post("/invoices/new", data={
         "_csrf": _token(client, "/invoices/new"), "client_id": str(client_id),
@@ -210,16 +218,24 @@ def test_stale_zero_water_is_ignored_for_electricity_only_customer(tmp_path, mon
     assert response.status_code == 200
     preview = response.get_data(as_text=True)
     assert "Émission interrompue" not in preview
-    assert "Consommation d’eau" not in preview
+    assert "Consommation d’eau" in preview
     confirm_token = re.search(r'name="_csrf" value="([^"]+)"', preview).group(1)
     created = client.post("/invoices/new/confirm", data={"_csrf": confirm_token})
     assert created.status_code == 302
     with db.connect() as connection:
-        snapshot = json.loads(connection.execute("SELECT calc_snapshot FROM invoices").fetchone()[0])
-    assert [service["service_code"] for service in snapshot["services"]] == ["ELECTRICITY"]
+        invoice = connection.execute("SELECT id,calc_snapshot FROM invoices").fetchone()
+        snapshot = json.loads(invoice["calc_snapshot"])
+    assert [service["service_code"] for service in snapshot["services"]] == ["ELECTRICITY", "WATER"]
+    assert snapshot["services"][1]["quantity"] == "0"
+    assert snapshot["services"][1]["subtotal"] == "0.00"
+    assert snapshot["services"][1]["lines"][0]["unit_price"] == ""
+    pdf = client.get(f"/invoices/{invoice['id']}/pdf")
+    pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(pdf.data)).pages)
+    assert "0 M3" in pdf_text and "Eau" in pdf_text
+    assert "TVA eau" not in pdf_text
 
 
-def test_nonzero_water_is_rejected_for_electricity_only_customer(tmp_path, monkeypatch):
+def test_positive_water_requires_real_confirmed_tariff_for_any_subscriber(tmp_path, monkeypatch):
     monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
     client = create_app().test_client()
     client.post("/setup", data={"_csrf": _token(client, "/setup"), "password": "TestPassword2026!", "confirm": "TestPassword2026!"})
@@ -240,9 +256,7 @@ def test_nonzero_water_is_rejected_for_electricity_only_customer(tmp_path, monke
 
     assert response.status_code == 200
     response_html = html.unescape(response.get_data(as_text=True))
-    assert "Le service d’eau n’est pas activé pour cet abonné." in response_html
-    assert "L’eau n’est pas activée sur cette fiche." in response_html
-    assert f'href="/clients/{client_id}/edit"' in response_html
+    assert "tarif confirmé" in response_html
     with db.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0
 
