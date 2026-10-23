@@ -16,6 +16,13 @@ Lis, **intégralement et dans l'ordre** :
 7. [Index du dossier](Docs/SEL_RELEASE_GATE_V1/README.md)
 8. `AGENTS.md`, les documents antérieurs pertinents et le code réel.
 
+## Suivi opérationnel unique
+
+**Issue de suivi obligatoire : [#49 — stabilisation financière et recette finale](https://github.com/jupi-z/SEL-Facturation-Desktop/issues/49).**
+Le dossier `Docs/SEL_RELEASE_GATE_V1/` est la **seule spécification canonique** de cette mission. Ne pas utiliser une autre branche documentaire comme source concurrente. Consulter également les [points de contrôle indépendants](Docs/SEL_RELEASE_GATE_V1/06_POINTS_DE_CONTROLE_INDEPENDANTS.md).
+
+Codex doit faire figurer dans son rapport chaque ID de test avec preuve `PASS / FAIL / BLOCKED_EXTERNAL / NOT_TESTED`. Pourcentage par phase et global = critères `PASS` / totalité des critères; un blocage externe ou un test non exécuté ne compte pas comme succès. Réactualiser #49 et la PR #47 avec la liste des correctifs et preuves réelles.
+
 ## Instructions immédiates
 1. Vérifie les commits et l'état du dépôt GitHub à l'instant de démarrage : ne suppose pas que la PR #47 est restée identique.
 2. Utilise la PR #47 comme base, **pas `main` seul**, puisqu'elle porte les changements eau + électricité; réconcilie proprement les éventuels nouveaux commits main.
