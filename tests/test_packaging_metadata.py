@@ -79,6 +79,16 @@ def test_windows_packaging_collects_reportlab_dynamic_modules_and_smokes_the_fro
     assert "--sel-packaging-smoke" in workflow
 
 
+def test_windows_quality_gate_runs_for_every_pull_request_to_main():
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    pull_request_trigger = workflow.split("  pull_request:", 1)[1].split("permissions:", 1)[0]
+
+    assert "branches: [main]" in pull_request_trigger
+    assert "paths:" not in pull_request_trigger
+    assert "  test-build:" in workflow
+    assert "Smoke test frozen application imports without opening the UI" in workflow
+
+
 def test_webview2_detection_covers_machine_and_user_runtime_locations():
     bundle = (ROOT / "packaging" / "bundle" / "Bundle.wxs").read_text(encoding="utf-8")
 
