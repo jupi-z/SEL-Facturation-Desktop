@@ -7,7 +7,7 @@
 - Défense serveur : un `0` résiduel est sans effet pour un abonné non raccordé; une quantité positive ou invalide est toujours refusée. Pour un abonné raccordé, `0 m³` reste obligatoire à saisir et apparaît sur la facture combinée.
 - Aucun tarif, taux ou profil fiscal d’eau n’est ajouté. Le tarif et le profil fiscal doivent toujours être explicitement saisis et confirmés par SEL.
 - Migration SQLite : aucune. Les snapshots des factures historiques et les exports restent inchangés.
-- Version de test : `0.3.31`; l’installateur demeure à construire/valider pour cette version. Aucune release ni déploiement n’est effectué.
+- Version de test : `0.3.31`. Build local réussi : `dist/installer/SEL-Facturation-Setup-0.3.31.exe` (264 834 766 octets, SHA-256 `EA6A5EC57B60D4E83F63AAF9677B872CE64DE2FFD7311575DA4A6AC25B5202F8`). Le bootstrapper n’est pas signé Authenticode; le runtime WebView2 embarqué porte une signature Microsoft valide. Smoke test EXE et CI Windows réussis. L’installation interactive et la recette sur le poste cible SEL restent à faire. Aucune release ni déploiement n’est effectué.
 
 Version de travail : **0.3.30**, branche `monarque/water-electricity-crud`.
 
