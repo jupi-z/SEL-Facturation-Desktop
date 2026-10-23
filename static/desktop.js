@@ -169,7 +169,9 @@
     if (!window.confirm('Une sauvegarde vérifiée est prête. Lancer maintenant l’installation ?')) return;
     trigger.disabled = true;
     try {
-      const result = await window.pywebview.api.install_update(trigger.dataset.updateFile, trigger.dataset.updateSha256);
+      const transactionId = trigger.dataset.updateTransaction;
+      if (!transactionId) throw new Error('Transaction de mise à jour absente.');
+      const result = await window.pywebview.api.install_update(transactionId);
       if (!result.ok) throw new Error(result.message || 'Impossible de lancer la mise à jour.');
       trigger.textContent = 'Installation lancée…';
     } catch (error) {
@@ -177,6 +179,27 @@
       alert('Mise à jour : ' + (error.message || String(error)));
     }
   });
+
+  // The updater works outside the request thread. Poll only while it is busy
+  // so the page remains responsive and the progress shown is real bytes.
+  const updatePanel = document.querySelector('[data-update-state]');
+  if (updatePanel && ['checking', 'downloading', 'verifying', 'backup'].includes(updatePanel.dataset.updateState)) {
+    const poll = setInterval(async () => {
+      try {
+        const response = await fetch('/updates/status', {credentials: 'same-origin', headers: {'Accept': 'application/json'}});
+        if (!response.ok) return;
+        const status = await response.json();
+        const progress = document.querySelector('[data-update-progress]');
+        if (progress && status.state === 'downloading') {
+          progress.textContent = `${status.received_bytes || 0} / ${status.total_bytes || 0} octets.`;
+        }
+        if (!['checking', 'downloading', 'verifying', 'backup'].includes(status.state)) {
+          clearInterval(poll);
+          window.location.reload();
+        }
+      } catch (_error) { /* transient local request; next poll retries */ }
+    }, 800);
+  }
 
   document.querySelectorAll('dialog[data-modal-autopen="true"]').forEach((modal) => openModal(modal, null));
 })();

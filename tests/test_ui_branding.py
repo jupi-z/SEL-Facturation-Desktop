@@ -121,14 +121,14 @@ def test_updates_surface_centers_a_compact_content_panel():
     template = (ROOT / "templates" / "updates.html").read_text(encoding="utf-8")
     css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
 
-    assert '<section class="panel updates-panel">' in template
+    assert '<section class="panel updates-panel" aria-labelledby="updates-page-title">' in template
     assert 'update-check-form' in template
     assert "Version installée {{ app_version }}" in template
     assert "Vérifiez si une version plus récente de SEL Facturation est disponible." in template
     assert "La vérification ne bloque pas l’application" not in template
     assert "Votre version est à jour." in template
     assert ".updates-main{display:flex;align-items:center;" in css
-    assert ".updates-panel{width:min(100%,760px);" in css
+    assert ".updates-panel{width:min(100%,720px);" in css
     assert "margin:0 auto;" in css
     assert ".updates-panel{" in css and "text-align:center" in css
     assert ".updates-panel .update-check-form{display:flex;justify-content:center;" in css

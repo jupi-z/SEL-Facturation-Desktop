@@ -20,8 +20,10 @@ from uuid import uuid4
 from werkzeug.serving import make_server
 import db
 from installer_version import is_canonical_installation_executable, write_installation_marker
-from update_client import UPDATE_FILENAME, staging_dir, verify_authenticode
-from update_policy import verify_sha256
+from safeupdate_keys import TRUSTED_UPDATE_KEYS
+from safeupdate_supervisor import spawn as spawn_update_supervisor
+from update_client import staging_dir
+from update_transaction import claim_transaction, release_transaction_lock, verify_transaction
 from version import APP_VERSION
 
 
@@ -163,24 +165,25 @@ class DesktopDocuments:
             logging.exception("Impossible d'ouvrir le lien externe")
             return {"ok": False, "message": str(exc)}
 
-    def install_update(self, filename: str, expected_sha256: str) -> dict:
-        """Launch only a staged bootstrapper that passed hash and signature checks."""
+    def install_update(self, transaction_id: str) -> dict:
+        """Hand only a fully revalidated opaque transaction to the supervisor."""
         try:
-            if not isinstance(filename, str) or UPDATE_FILENAME.fullmatch(filename) is None:
-                raise ValueError("Installateur non autorisé.")
-            root = staging_dir().resolve()
-            target = (root / filename).resolve()
-            if target.parent != root or not target.is_file():
-                raise ValueError("Installateur introuvable dans la zone temporaire.")
-            if not verify_sha256(target, expected_sha256):
-                raise ValueError("L'intégrité de l'installateur n'a pas pu être vérifiée.")
-            publisher = os.environ.get("SEL_UPDATE_EXPECTED_PUBLISHER", "").strip()
-            if not publisher or not verify_authenticode(target, expected_subject=publisher):
-                raise ValueError("La signature Authenticode de l'installateur n'est pas valide.")
-            subprocess.Popen([str(target), "/norestart"], close_fds=True)
+            verified = verify_transaction(
+                transaction_id, staging_root=staging_dir(), current_version=APP_VERSION,
+                trusted_keys=TRUSTED_UPDATE_KEYS,
+            )
+            backup_path = verified.get("backup_path")
+            if backup_path and not Path(backup_path).is_file():
+                raise ValueError("La sauvegarde vérifiée est introuvable.")
+            claim_transaction(transaction_id, staging_root=staging_dir())
+            try:
+                spawn_update_supervisor(transaction_id, os.getpid())
+            except Exception:
+                release_transaction_lock(transaction_id, staging_root=staging_dir())
+                raise
             if self._window is not None:
                 threading.Timer(0.5, self._window.destroy).start()
-            return {"ok": True}
+            return {"ok": True, "transaction_id": transaction_id}
         except Exception as exc:
             logging.exception("Impossible de lancer la mise à jour")
             return {"ok": False, "message": str(exc)}
@@ -223,7 +226,11 @@ def startup_error_message(error: Exception) -> str:
     )
 
 
-def main():
+def main(argv=None):
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "--sel-update-supervisor":
+        from safeupdate_supervisor import main as supervisor_main
+        return supervisor_main(arguments)
     db.home().mkdir(parents=True, exist_ok=True)
     # A standalone EXE is allowed for diagnostics and portable use. Record
     # only copies that have actually been launched so the setup preflight can
@@ -254,6 +261,7 @@ def main():
         import webview
 
         application = create_app()
+        application.extensions["safeupdate"].start_background_check()
         # Port dynamique réservé par Werkzeug. Jamais accessible sur le réseau.
         server = make_server("127.0.0.1", 0, application, threaded=True)
         server_thread = threading.Thread(
@@ -286,7 +294,7 @@ def main():
                 "SEL Facturation",
                 0x10,
             )
-            return
+            return 1
         raise
     finally:
         if server is not None:
@@ -294,7 +302,8 @@ def main():
             server.server_close()
         if os.name == "nt" and mutex not in (None, False):
             ctypes.windll.kernel32.CloseHandle(mutex)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
