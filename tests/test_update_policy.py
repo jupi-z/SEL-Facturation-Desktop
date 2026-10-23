@@ -10,6 +10,7 @@ def manifest(**overrides):
         "url": "https://sel.shuleops.com/releases/SEL-Facturation-Setup-0.4.0.exe",
         "sha256": "a" * 64,
         "package_type": "bootstrapper",
+        "manifest_trusted": True,
     }
     value.update(overrides)
     return value
@@ -70,3 +71,9 @@ def test_verifies_downloaded_package_bytes(tmp_path):
 
     assert verify_sha256(package, digest)
     assert not verify_sha256(package, "0" * 64)
+
+
+def test_rejects_raw_manifest_without_prior_cryptographic_authentication():
+    value = manifest()
+    value.pop("manifest_trusted")
+    assert evaluate_manifest(value, current_version="0.3.0")["reason"] == "manifest_untrusted"

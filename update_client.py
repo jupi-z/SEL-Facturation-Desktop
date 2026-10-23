@@ -1,107 +1,213 @@
-"""Network and package staging primitives for the Windows updater.
+"""Authenticated SafeUpdate V1 transport and staging primitives.
 
-These functions never execute a downloaded file. The caller must verify the
-Authenticode publisher and ask the user before handing the staged bootstrapper
-to the native installer.
+The network layer only fetches and stages bytes. It never executes an
+installer and it never treats Authenticode as the trust root. Trust comes
+from the pinned Ed25519 key and the exact SHA-256/size declared by the
+authenticated manifest.
 """
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
-from tempfile import NamedTemporaryFile
-from urllib.parse import urlparse
+from time import sleep
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
-from update_policy import evaluate_manifest, verify_sha256
+from safeupdate_crypto import (
+    MAX_MANIFEST_BYTES,
+    MAX_SIGNATURE_BYTES,
+    ManifestVerificationError,
+    _safe_https_url,
+    verify_package,
+    verify_signed_manifest,
+)
+from safeupdate_keys import DEFAULT_UPDATE_CHANNEL, TRUSTED_UPDATE_KEYS
+from update_transaction import (
+    default_staging_root,
+    load_sequence_state,
+    new_transaction_directory,
+    save_sequence_state,
+    state_path as default_state_path,
+    write_transaction,
+)
 
 
-MAX_MANIFEST_BYTES = 128 * 1024
 MAX_PACKAGE_BYTES = 512 * 1024 * 1024
-USER_AGENT = "SEL-Facturation-Updater/1"
-UPDATE_FILENAME = re.compile(r"SEL-Facturation-Setup-\d+\.\d+\.\d+\.exe\Z", re.IGNORECASE)
+USER_AGENT = "SEL-Facturation-SafeUpdate/1"
+UPDATE_FILENAME = re.compile(r"SEL-Facturation-Setup-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.exe\Z", re.IGNORECASE)
 
 
 def staging_dir() -> Path:
-    """Return the private temporary directory used for verified installers."""
-    return Path(tempfile.gettempdir()) / "SEL-Facturation-Updater"
+    """Return the private user staging directory used by SafeUpdate."""
+    return default_staging_root()
 
 
-def _https(url: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.netloc:
-        raise ValueError("URL https obligatoire")
+def _https(url: str, *, expected_filename: str | None = None) -> str:
+    return _safe_https_url(url, expected_filename=expected_filename)
 
 
-def fetch_manifest(url: str, *, current_version: str, opener=urlopen) -> dict:
-    _https(url)
-    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    with opener(request, timeout=5) as response:
-        _https(response.geturl())
-        payload = response.read(MAX_MANIFEST_BYTES + 1)
-    if len(payload) > MAX_MANIFEST_BYTES:
-        raise ValueError("Manifest trop volumineux")
+def _signature_url(manifest_url: str) -> str:
+    parsed = urlsplit(_https(manifest_url, expected_filename="latest.json"))
+    path = parsed.path.rsplit("/", 1)[0] + "/latest.sig.json"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _read_response(response, limit: int) -> bytes:
+    payload = response.read(limit + 1)
+    if len(payload) > limit:
+        raise ValueError("Réponse de mise à jour trop volumineuse")
+    return payload
+
+
+def _fetch_bytes(url: str, *, limit: int, accept: str, opener):
+    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept})
+    with opener(request, timeout=15) as response:
+        final_url = _https(response.geturl())
+        return _read_response(response, limit), final_url
+
+
+def fetch_manifest(
+    url: str,
+    *,
+    current_version: str,
+    trusted_keys: dict | None = None,
+    state_path: str | Path | None = None,
+    allowed_channel: str = DEFAULT_UPDATE_CHANNEL,
+    opener=urlopen,
+    now=None,
+    sleep_fn=sleep,
+) -> dict:
+    """Fetch and authenticate the exact manifest and detached signature."""
+    manifest_url = _https(url, expected_filename="latest.json")
+    signature_url = _signature_url(manifest_url)
+    keys = TRUSTED_UPDATE_KEYS if trusted_keys is None else trusted_keys
+    sequence_path = Path(state_path) if state_path is not None else default_state_path()
+    sequence_state = load_sequence_state(path=sequence_path)
+    last_error = None
+    for attempt in range(2):
+        try:
+            manifest_bytes, final_manifest_url = _fetch_bytes(
+                manifest_url, limit=MAX_MANIFEST_BYTES, accept="application/json", opener=opener
+            )
+            signature_bytes, final_signature_url = _fetch_bytes(
+                signature_url, limit=MAX_SIGNATURE_BYTES, accept="application/json", opener=opener
+            )
+            if final_manifest_url != manifest_url or final_signature_url != signature_url:
+                raise ValueError("Redirection du canal de mise à jour refusée")
+            result = verify_signed_manifest(
+                manifest_bytes,
+                signature_bytes,
+                current_version=current_version,
+                trusted_keys=keys,
+                allowed_channel=allowed_channel,
+                last_sequence=sequence_state["sequence"],
+                last_manifest_sha256=sequence_state["manifest_sha256"] or None,
+                now=now,
+            )
+            save_sequence_state(result["sequence"], result["manifest_sha256"], path=sequence_path)
+            result["manifest_url"] = manifest_url
+            result["signature_url"] = signature_url
+            return result
+        except (OSError, TimeoutError, ValueError, ManifestVerificationError) as exc:
+            last_error = exc
+            if attempt == 0:
+                sleep_fn(0.25)
+    raise last_error
+
+
+def download_package(
+    update: dict,
+    destination: str | Path | None = None,
+    *,
+    current_version: str,
+    trusted_keys: dict | None = None,
+    progress=None,
+    cancel_event=None,
+    opener=urlopen,
+) -> dict:
+    """Download an authenticated package into an isolated transaction."""
+    if not isinstance(update, dict) or update.get("state") != "available":
+        raise ValueError("Aucune mise à jour disponible")
+    if update.get("manifest_trusted") is not True:
+        raise ValueError("Manifeste de mise à jour non authentifié")
+    manifest_bytes = update.get("manifest_bytes")
+    signature_bytes = update.get("signature_envelope_bytes")
+    if not isinstance(manifest_bytes, bytes) or not isinstance(signature_bytes, bytes):
+        raise ValueError("Preuves du manifeste manquantes")
+    verified = verify_signed_manifest(
+        manifest_bytes,
+        signature_bytes,
+        current_version=current_version,
+        trusted_keys=TRUSTED_UPDATE_KEYS if trusted_keys is None else trusted_keys,
+        allowed_channel=update.get("channel", DEFAULT_UPDATE_CHANNEL),
+    )
+    if verified.get("state") != "available" or verified["version"] != update.get("version"):
+        raise ValueError("La mise à jour n’est plus disponible")
+    package_url = _https(verified["url"])
+    filename = Path(urlsplit(package_url).path).name
+    if UPDATE_FILENAME.fullmatch(filename) is None:
+        raise ValueError("Nom de package non autorisé")
+    root = Path(destination) if destination is not None else staging_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    transaction_id, transaction_root = new_transaction_directory(staging_root=root)
+    temporary = transaction_root / ".package.partial"
+    target = transaction_root / filename
+    received = 0
     try:
-        manifest = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Manifest JSON invalide") from exc
-    if not isinstance(manifest, dict):
-        raise ValueError("Manifest invalide")
-    decision = evaluate_manifest(manifest, current_version=current_version)
-    if decision["state"] == "rejected":
-        raise ValueError(decision["reason"])
-    return decision
-
-
-def download_package(manifest: dict, destination: str | Path, *, current_version: str,
-                     expected_publisher: str | None = None,
-                     signature_verifier=None, opener=urlopen) -> Path:
-    if not expected_publisher:
-        raise ValueError("signature publisher required")
-    decision = evaluate_manifest(manifest, current_version=current_version)
-    if decision["state"] != "available":
-        raise ValueError(decision.get("reason", "Aucune mise à jour disponible"))
-    if decision.get("signed") is False:
-        raise ValueError("préversion non signée")
-    url = decision["url"]
-    _https(url)
-    target_dir = Path(destination)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"SEL-Facturation-Setup-{decision['version']}.exe"
-    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"})
-    with opener(request, timeout=30) as response:
-        _https(response.geturl())
-        with NamedTemporaryFile(prefix=".sel-update-", suffix=".tmp", dir=target_dir, delete=False) as temp:
-            temporary = Path(temp.name)
-            total = 0
-            try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ValueError("download cancel")
+        request = Request(package_url, headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"})
+        with opener(request, timeout=60) as response:
+            if _https(response.geturl()) != package_url:
+                raise ValueError("Redirection du package refusée")
+            with temporary.open("wb") as stream:
                 while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise ValueError("download cancel")
                     chunk = response.read(1024 * 1024)
                     if not chunk:
                         break
-                    total += len(chunk)
-                    if total > MAX_PACKAGE_BYTES:
+                    received += len(chunk)
+                    if received > MAX_PACKAGE_BYTES or received > verified["size_bytes"]:
                         raise ValueError("Package de mise à jour trop volumineux")
-                    temp.write(chunk)
-            except Exception:
-                temporary.unlink(missing_ok=True)
-                raise
-    if not verify_sha256(temporary, decision["sha256"]):
+                    stream.write(chunk)
+                    if progress:
+                        progress(received, verified["size_bytes"])
+        if received != verified["size_bytes"]:
+            raise ValueError("Taille du package inattendue")
+        temporary.replace(target)
+        verify_package(target, expected_sha256=verified["sha256"], expected_size=verified["size_bytes"])
+        record = write_transaction(
+            transaction_id,
+            staging_root=root,
+            package_name=filename,
+            update={**verified, "manifest_bytes": manifest_bytes, "signature_bytes": signature_bytes},
+        )
+        return {
+            "transaction_id": transaction_id,
+            "filename": filename,
+            "version": verified["version"],
+            "sha256": verified["sha256"],
+            "size_bytes": verified["size_bytes"],
+            "key_id": verified["key_id"],
+            "staging_root": str(root),
+            "record": record,
+        }
+    except BaseException:
         temporary.unlink(missing_ok=True)
-        raise ValueError("Hash SHA-256 du package invalide")
-    verifier = signature_verifier or verify_authenticode
-    if not verifier(temporary, expected_subject=expected_publisher):
-        temporary.unlink(missing_ok=True)
-        raise ValueError("Signature Authenticode invalide")
-    os.replace(temporary, target)
-    return target
+        target.unlink(missing_ok=True)
+        try:
+            transaction_root.rmdir()
+        except OSError:
+            pass
+        raise
 
 
 def verify_authenticode(path: str | Path, *, expected_subject: str) -> bool:
-    """Return true only for a valid Authenticode signature by the expected publisher."""
+    """Optional diagnostic only; SafeUpdate V1 does not require Authenticode."""
     if os.name != "nt" or not expected_subject:
         return False
     escaped = str(Path(path)).replace("'", "''")
@@ -111,14 +217,11 @@ def verify_authenticode(path: str | Path, *, expected_subject: str) -> bool:
         "$s.SignerCertificate.Subject"
     )
     result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
         capture_output=True, text=True, timeout=15, check=False,
     )
     if result.returncode != 0:
         return False
     subject = re.sub(r"\s+", " ", result.stdout.strip()).casefold()
     expected = re.sub(r"\s+", " ", expected_subject.strip()).casefold()
-    # PowerShell may return either the complete subject or the common-name
-    # form when the configured identity is intentionally just the CN. Never
-    # accept a subject merely because it contains the expected text.
     return subject in {expected, f"cn={expected}"}

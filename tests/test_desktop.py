@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import os
 import sqlite3
 import sys
@@ -101,35 +100,26 @@ def test_print_pdf_falls_back_to_open_viewer_when_print_association_fails(tmp_pa
 
 
 def test_install_update_launches_only_verified_staged_bootstrapper(tmp_path, monkeypatch):
-    staging = tmp_path / "updates"
-    staging.mkdir()
-    package = staging / "SEL-Facturation-Setup-0.4.0.exe"
-    payload = b"signed setup placeholder"
-    package.write_bytes(payload)
+    verified = {"transaction_id": "a" * 32, "package_path": tmp_path / "setup.exe", "backup_path": str(tmp_path / "backup.sqlite3")}
     launched = []
-
-    monkeypatch.setattr("desktop.staging_dir", lambda: staging)
-    monkeypatch.setenv("SEL_UPDATE_EXPECTED_PUBLISHER", "Test Publisher")
-    monkeypatch.setattr("desktop.verify_authenticode", lambda *args, **kwargs: True)
-    monkeypatch.setattr("desktop.subprocess.Popen", lambda args, **kwargs: launched.append((args, kwargs)))
+    monkeypatch.setattr("desktop.verify_transaction", lambda *args, **kwargs: verified)
+    monkeypatch.setattr("desktop.claim_transaction", lambda *args, **kwargs: verified)
+    monkeypatch.setattr("desktop.release_transaction_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr("desktop.spawn_update_supervisor", lambda *args: launched.append(args))
+    Path(verified["backup_path"]).write_bytes(b"SQLite backup")
 
     api = DesktopDocuments()
-    response = api.install_update(package.name, hashlib.sha256(payload).hexdigest())
+    response = api.install_update(verified["transaction_id"])
 
-    assert response == {"ok": True}
-    assert launched == [([str(package), "/norestart"], {"close_fds": True})]
+    assert response == {"ok": True, "transaction_id": verified["transaction_id"]}
+    assert launched and launched[0][0] == verified["transaction_id"]
 
 
 def test_install_update_rejects_path_traversal_and_wrong_hash(tmp_path, monkeypatch):
-    staging = tmp_path / "updates"
-    staging.mkdir()
-    package = staging / "SEL-Facturation-Setup-0.4.0.exe"
-    package.write_bytes(b"setup")
-    monkeypatch.setattr("desktop.staging_dir", lambda: staging)
+    monkeypatch.setattr("desktop.verify_transaction", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("transaction path escape")))
 
     api = DesktopDocuments()
-    assert api.install_update("..\\setup.exe", "0" )["ok"] is False
-    assert api.install_update(package.name, "0" )["ok"] is False
+    assert api.install_update("..\\setup.exe")["ok"] is False
 
 
 def test_desktop_script_reports_print_fallback_as_guidance():

@@ -1,36 +1,37 @@
 {% extends 'base.html' %}
 {% block body %}
-<section class="panel updates-panel">
+<section class="panel updates-panel" aria-labelledby="updates-page-title">
+<div class="updates-state" data-update-state="{{ update.state }}">
   <div class="sectionhead updates-header">
-    <div><div class="eyebrow">MAINTENANCE DU SYSTÈME</div><h2>Mises à jour</h2><p class="sub">Vérifiez si une version plus récente de SEL Facturation est disponible.</p></div>
+    <div>
+      <div class="eyebrow">MAINTENANCE DU SYSTÈME</div>
+      <p class="sub">Vérifiez si une version plus récente de SEL Facturation est disponible.</p>
+    </div>
     <span class="pill">Version installée {{ app_version }}</span>
   </div>
   <form method="post" action="{{ url_for('updates_check') }}" class="form update-check-form">
     <input type="hidden" name="_csrf" value="{{ csrf() }}">
     <div class="form-actions"><button class="primary" type="submit">Rechercher une mise à jour</button></div>
   </form>
-  {% if update and update.state == 'ready' %}
-    <div class="alert ok" role="status">Une sauvegarde vérifiée{% if update.backup_name %} ({{ update.backup_name }}){% endif %} est prête avant l’installation.</div>
-    <div class="form-actions"><button class="primary" type="button" data-update-install data-update-file="{{ update.filename }}" data-update-sha256="{{ update.sha256 }}">Installer la mise à jour</button></div>
-  {% elif update and update.state == 'available' %}
-    {% if update.signed is defined and not update.signed %}
-      <div class="notice-warning" role="status"><strong>Préversion {{ update.version }} disponible.</strong><p>Cette préversion n’est pas signée. Elle est réservée à l’acceptation manuelle et l’installation automatique est bloquée jusqu’à la publication d’un package signé.</p></div>
-    {% else %}
-      <div class="notice-warning" role="status"><strong>Version {{ update.version }} disponible.</strong><p>Le package sera téléchargé uniquement après vérification de son hash et de sa signature Authenticode.</p></div>
-      <form method="post" action="{{ url_for('updates_download') }}" class="form">
-        <input type="hidden" name="_csrf" value="{{ csrf() }}">
-        <div class="form-actions"><button class="secondary" type="submit">Télécharger et préparer l’installation</button></div>
-      </form>
-    {% endif %}
-  {% elif update and update.state == 'current' %}
+  {% if update.state == 'checking' %}
+    <div class="alert" role="status">Recherche en cours…</div>
+  {% elif update.state == 'downloading' %}
+    <div class="alert" role="status">Téléchargement sécurisé en cours : <span data-update-progress>{{ update.received_bytes or 0 }} / {{ update.total_bytes or 0 }} octets.</span></div>
+    <form method="post" action="{{ url_for('updates_cancel') }}"><input type="hidden" name="_csrf" value="{{ csrf() }}"><div class="form-actions"><button class="secondary" type="submit">Annuler</button></div></form>
+  {% elif update.state == 'verifying' or update.state == 'backup' %}
+    <div class="alert" role="status">{{ update.message }}</div>
+  {% elif update.state == 'ready' %}
+    <div class="alert ok" role="status">{{ update.message }}{% if update.backup_name %} Sauvegarde : {{ update.backup_name }}.{% endif %}</div>
+    <div class="form-actions"><button class="primary" type="button" data-update-install data-update-transaction="{{ update.transaction_id }}">Installer la mise à jour</button></div>
+  {% elif update.state == 'available' %}
+    <div class="notice-warning" role="status"><strong>Version {{ update.version }} disponible.</strong><p>Le manifeste Ed25519 est validé localement. Le fichier Windows est{% if update.windows_code_signed %} signé par Windows{% else %} sans signature Windows{% endif %}; son empreinte SHA-256 correspond au manifeste validé.</p></div>
+    <form method="post" action="{{ url_for('updates_download') }}" class="form"><input type="hidden" name="_csrf" value="{{ csrf() }}"><div class="form-actions"><button class="secondary" type="submit">Télécharger et préparer l’installation</button></div></form>
+  {% elif update.state == 'current' %}
     <div class="alert ok" role="status">Votre version est à jour.</div>
-  {% elif update and update.state == 'offline' %}
+  {% elif update.state in ['offline', 'unavailable', 'invalid', 'failed', 'cancelled', 'recovery_required'] %}
     <div class="alert" role="status">{{ update.message }}</div>
-  {% elif update and update.state == 'invalid' %}
-    <div class="alert" role="status">{{ update.message }}</div>
-  {% elif update and update.state == 'unavailable' %}
-    <div class="alert" role="status">{{ update.message or 'Le canal de mise à jour n’est pas publié actuellement.' }}</div>
   {% endif %}
-  <p class="note">Les données locales restent séparées du programme. Une sauvegarde SQLite est créée avant toute préparation d’installation.</p>
+  <p class="note">Les données restent locales. Une sauvegarde SQLite contrôlée est exigée avant toute installation.</p>
+</div>
 </section>
 {% endblock %}

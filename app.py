@@ -25,7 +25,7 @@ from domain import (BillingError, calculate_flat_rate, calculate_from_readings,
                     calculate_from_settings, convert_amount, decimal, fmt, money,
                     validate_due_date)
 from invoice_pdf import render_invoice
-from update_client import download_package, fetch_manifest, staging_dir
+from safeupdate_coordinator import SafeUpdateCoordinator
 from version import APP_VERSION
 from config_service import (
     active_customer_types, active_payment_methods, all_currencies,
@@ -97,6 +97,9 @@ def create_app():
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict',
                       PERMANENT_SESSION_LIFETIME=3600*8, TRUSTED_HOSTS=['127.0.0.1','localhost'],
                       MAX_CONTENT_LENGTH=1024*1024)
+    manifest_url = os.environ.get('SEL_UPDATE_MANIFEST_URL', '').strip() or DEFAULT_UPDATE_MANIFEST_URL
+    updater = SafeUpdateCoordinator(manifest_url=manifest_url, current_version=APP_VERSION)
+    app.extensions['safeupdate'] = updater
 
     @app.before_request
     def open_connection_and_authorize():
@@ -165,61 +168,38 @@ def create_app():
     @app.get('/updates/status')
     @protected
     def update_status():
-        """Check availability only; never downloads or executes an installer."""
-        return check_update()
-
-    def check_update():
-        manifest_url = os.environ.get('SEL_UPDATE_MANIFEST_URL', '').strip() or DEFAULT_UPDATE_MANIFEST_URL
-        try:
-            return fetch_manifest(manifest_url, current_version=APP_VERSION)
-        except ValueError as exc:
-            return {'state': 'invalid', 'version': APP_VERSION,
-                    'message': f'Le manifeste de mise à jour a été refusé : {exc}.'}
-        except HTTPError as exc:
-            return {'state': 'unavailable', 'version': APP_VERSION,
-                    'message': f'Le serveur de mise à jour répond, mais le canal publié est indisponible (HTTP {exc.code}).'}
-        except (URLError, ConnectionError, OSError, TimeoutError):
-            return {'state': 'offline', 'version': APP_VERSION,
-                    'message': 'Le serveur de mise à jour est actuellement injoignable. Vérifiez la connexion puis réessayez.'}
+        """Return the asynchronous updater state without blocking the UI."""
+        if updater.snapshot().get('state') == 'idle':
+            updater.start_background_check()
+        return updater.snapshot()
 
     @app.get('/updates')
     @protected
     def updates_view():
-        return render_template('updates.html', title='Mises à jour',
-                               update=session.get('update_result'))
+        if updater.snapshot().get('state') == 'idle':
+            updater.start_background_check()
+        return render_template('updates.html', title='Mises à jour', update=updater.snapshot())
 
     @app.post('/updates/check')
     @protected
     def updates_check():
-        session['update_result'] = check_update()
+        updater.start_check()
         return redirect(url_for('updates_view'))
 
     @app.post('/updates/download')
     @protected
     def updates_download():
-        update = session.get('update_result') or {}
-        if update.get('state') != 'available':
+        if updater.snapshot().get('state') != 'available':
             flash('Aucune mise à jour prête à être téléchargée.','error')
             return redirect(url_for('updates_view'))
-        if update.get('signed') is False:
-            session['update_result'] = {**update, 'state': 'unavailable',
-                                        'message': 'Cette préversion n’est pas signée et ne peut pas être installée automatiquement.'}
-            return redirect(url_for('updates_view'))
-        publisher = os.environ.get('SEL_UPDATE_EXPECTED_PUBLISHER', '').strip()
-        if not publisher:
-            session['update_result'] = {**update, 'state': 'unavailable',
-                                        'message': 'Le téléchargement automatique attend la validation du certificat de signature SEL.'}
-            return redirect(url_for('updates_view'))
-        try:
-            backup = db.pre_update_backup()
-            package = download_package(update, staging_dir(), current_version=APP_VERSION,
-                                       expected_publisher=publisher)
-            session['update_result'] = {**update, 'state': 'ready',
-                                        'filename': package.name,
-                                        'backup_name': backup.name if backup else ''}
-        except (OSError, ValueError, TimeoutError) as exc:
-            session['update_result'] = {**update, 'state': 'unavailable',
-                                        'message': f'Préparation de la mise à jour refusée : {exc}.'}
+        if not updater.start_download():
+            flash('Une préparation de mise à jour est déjà en cours.','error')
+        return redirect(url_for('updates_view'))
+
+    @app.post('/updates/cancel')
+    @protected
+    def updates_cancel():
+        updater.cancel()
         return redirect(url_for('updates_view'))
 
     @app.route('/setup',methods=['GET','POST'])

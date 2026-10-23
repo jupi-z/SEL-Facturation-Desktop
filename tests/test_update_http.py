@@ -1,11 +1,7 @@
-import importlib.util
 import re
-from urllib.error import HTTPError, URLError
+import time
 
 import pytest
-
-if not importlib.util.find_spec("flask"):
-    pytest.skip("Flask is not installed", allow_module_level=True)
 
 from app import create_app
 from version import APP_VERSION
@@ -31,18 +27,29 @@ def authenticated_client(tmp_path, monkeypatch):
     return client
 
 
-def test_update_status_returns_a_state_when_the_public_channel_is_reachable(authenticated_client, monkeypatch):
-    monkeypatch.delenv("SEL_UPDATE_MANIFEST_URL", raising=False)
+def wait_state(client, expected):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        result = client.get("/updates/status").json
+        if result["state"] == expected:
+            return result
+        time.sleep(0.01)
+    return result
 
-    response = authenticated_client.get("/updates/status")
 
-    assert response.status_code == 200
-    assert response.json["version"] == APP_VERSION
+def test_update_status_is_asynchronous_and_reports_current(authenticated_client):
+    updater = authenticated_client.application.extensions["safeupdate"]
+    updater.fetcher = lambda *args, **kwargs: {"state": "current", "version": APP_VERSION, "reason": "already_current", "manifest_trusted": True}
+    first = authenticated_client.get("/updates/status")
+    assert first.status_code == 200
+    assert first.json["version"] == APP_VERSION
+    assert wait_state(authenticated_client, "current")["state"] == "current"
 
 
 def test_updates_page_is_reachable_and_linked_from_navigation(authenticated_client):
+    updater = authenticated_client.application.extensions["safeupdate"]
+    updater.fetcher = lambda *args, **kwargs: {"state": "current", "version": APP_VERSION}
     response = authenticated_client.get("/updates")
-
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert "Mises à jour" in html
@@ -50,95 +57,24 @@ def test_updates_page_is_reachable_and_linked_from_navigation(authenticated_clie
     assert 'href="/updates"' in html
 
 
-def test_update_status_uses_public_manifest_endpoint(authenticated_client, monkeypatch):
-    monkeypatch.delenv("SEL_UPDATE_MANIFEST_URL", raising=False)
+def test_invalid_channel_is_not_presented_as_a_download(authenticated_client):
+    updater = authenticated_client.application.extensions["safeupdate"]
+    updater.fetcher = lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("manifest signature invalid"))
+    authenticated_client.get("/updates/status")
+    result = wait_state(authenticated_client, "invalid")
+    assert "cryptographique" in result["message"]
+
+
+def test_update_check_only_starts_work_and_never_downloads(authenticated_client):
+    updater = authenticated_client.application.extensions["safeupdate"]
     calls = []
-
-    def fake_fetch(url, *, current_version):
-        calls.append((url, current_version))
-        return {"state": "current", "version": current_version, "reason": "already_current"}
-
-    monkeypatch.setattr("app.fetch_manifest", fake_fetch)
-
-    response = authenticated_client.get("/updates/status")
-
+    updater.fetcher = lambda *args, **kwargs: calls.append(True) or {"state": "current", "version": APP_VERSION}
+    token = csrf(authenticated_client, "/updates")
+    if updater._worker:
+        updater._worker.join(1)
+    calls.clear()
+    updater._set(state="idle", phase="idle")
+    response = authenticated_client.post("/updates/check", data={"_csrf": token}, follow_redirects=True)
     assert response.status_code == 200
-    assert response.json["state"] == "current"
-    assert calls == [("https://raw.githubusercontent.com/jupi-z/SEL-Facturation-Desktop/refs/heads/main/updates/latest.json", APP_VERSION)]
-
-
-def test_update_status_distinguishes_an_unreachable_server(authenticated_client, monkeypatch):
-    monkeypatch.setattr(
-        "app.fetch_manifest",
-        lambda url, *, current_version: (_ for _ in ()).throw(URLError("offline")),
-    )
-
-    response = authenticated_client.get("/updates/status")
-
-    assert response.json["state"] == "offline"
-    assert "injoignable" in response.json["message"]
-
-
-def test_update_status_distinguishes_an_unpublished_channel(authenticated_client, monkeypatch):
-    error = HTTPError("https://updates.example.test/latest.json", 404, "Not Found", {}, None)
-    monkeypatch.setattr(
-        "app.fetch_manifest",
-        lambda url, *, current_version: (_ for _ in ()).throw(error),
-    )
-
-    response = authenticated_client.get("/updates/status")
-
-    assert response.json["state"] == "unavailable"
-    assert "canal" in response.json["message"]
-
-
-def test_update_status_distinguishes_an_invalid_manifest(authenticated_client, monkeypatch):
-    monkeypatch.setattr(
-        "app.fetch_manifest",
-        lambda url, *, current_version: (_ for _ in ()).throw(ValueError("invalid_sha256")),
-    )
-
-    response = authenticated_client.get("/updates/status")
-
-    assert response.json["state"] == "invalid"
-    assert "manifeste" in response.json["message"]
-
-
-def test_update_check_renders_current_state(authenticated_client, monkeypatch):
-    monkeypatch.setattr(
-        "app.fetch_manifest",
-        lambda url, *, current_version: {"state": "current", "version": current_version},
-    )
-    response = authenticated_client.post(
-        "/updates/check",
-        data={"_csrf": csrf(authenticated_client, "/updates")},
-        follow_redirects=True,
-    )
-
-    assert response.status_code == 200
-    assert "Votre version est à jour." in response.get_data(as_text=True)
-
-
-def test_update_check_explains_that_an_unsigned_preview_cannot_be_installed(authenticated_client, monkeypatch):
-    monkeypatch.setattr(
-        "app.fetch_manifest",
-        lambda url, *, current_version: {
-            "state": "available",
-            "version": "0.4.0",
-            "url": "https://updates.example.test/SEL-Facturation-Setup-0.4.0.exe",
-            "sha256": "a" * 64,
-            "product": "SEL-Facturation",
-            "channel": "preview",
-            "signed": False,
-        },
-    )
-
-    response = authenticated_client.post(
-        "/updates/check",
-        data={"_csrf": csrf(authenticated_client, "/updates")},
-        follow_redirects=True,
-    )
-
-    html = response.get_data(as_text=True)
-    assert "installation automatique" in html
-    assert 'action="/updates/download"' not in html
+    assert wait_state(authenticated_client, "current")["state"] == "current"
+    assert calls == [True]

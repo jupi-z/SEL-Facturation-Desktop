@@ -1,17 +1,24 @@
 import json
+import pytest
+from safeupdate_crypto import ManifestVerificationError, verify_signed_manifest
 from pathlib import Path
 
 from version import APP_VERSION
-from update_policy import evaluate_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_published_update_manifest_matches_the_current_preview_release():
+def test_legacy_public_manifest_is_not_trusted_by_safeupdate_v1():
     manifest = json.loads((ROOT / "updates" / "latest.json").read_text(encoding="utf-8"))
 
-    assert manifest["version"] == APP_VERSION
+    # Keep this public manifest as historical 0.3.24 metadata until a release is authorized.
+    assert manifest["version"] == "0.3.24"
     assert manifest["channel"] == "preview"
     assert manifest["signed"] is False
-    assert evaluate_manifest(manifest, current_version="0.3.22")["state"] == "available"
+    with pytest.raises(ManifestVerificationError):
+        verify_signed_manifest(
+            json.dumps(manifest, separators=(",", ":")).encode(), b"{}",
+            current_version="0.3.24", trusted_keys={"unused": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            },
+        )
