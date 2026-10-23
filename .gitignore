@@ -6,6 +6,7 @@ __pycache__/
 build/
 build-local/
 dist/
+output/pdf/
 *.spec
 *.sqlite3
 *.sqlite3-*

@@ -59,7 +59,9 @@ def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview
     assert "PUBLISH_UNSIGNED_PREVIEW" in workflow
     assert "aperçu non signé" in workflow
     assert "Signature Authenticode absente" in workflow
-    assert "if: ${{ false }}" in workflow
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true" in workflow
+    assert "La publication doit partir de main après fusion et CI réussie." in workflow
+    assert "cle publique Ed25519 SEL n'est pas epinglee" in workflow
     publish_block = workflow.split("Publish GitHub prerelease without overwriting", 1)[1].split("Upload unsigned acceptance packages", 1)[0]
     assert "’" not in publish_block
 

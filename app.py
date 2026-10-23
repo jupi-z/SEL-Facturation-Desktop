@@ -784,6 +784,8 @@ def create_app():
                 calc.update({'customer_type':customer_type,'customer_type_label':customer_type_label(g.db, customer_type),'tariff_code':draft.get('tariff_code') or plan['code'],'tariff_effective_from':draft.get('tariff_effective_from') or plan['effective_from'],'unit_price':unit_price})
             else:
                 calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft['fee'])
+            # Version du rendu figée à l’émission pour préserver les PDF historiques.
+            calc['document_template_version']=2
             g.db.execute('BEGIN IMMEDIATE')
             if db.active_invoice(g.db,cid,period): raise BillingError('Cette période est déjà facturée pour ce client.')
             year=date.today().year
@@ -881,6 +883,8 @@ def create_app():
         record=db.invoice_full(g.db,iid)
         if not record: abort(404)
         inv,payments=record
+        original_inv=dict(inv)
+        original_calc=json.loads(inv['calc_snapshot'])
         if request.args.get('currency') == 'CDF':
             if inv['currency'] != 'USD':
                 raise BillingError('La variante CDF est disponible pour les factures USD.')
@@ -894,7 +898,7 @@ def create_app():
             calc['lines']=[dict(row,amount=str(money(Decimal(row['amount'])*rate))) for row in calc.get('lines',[])]
             inv['calc_snapshot']=json.dumps(calc,ensure_ascii=False)
             payments=[dict(item,amount=str(money(Decimal(item['amount'])*rate))) for item in payments]
-        pdf=render_invoice(inv, payments)
+        pdf=render_invoice(inv, payments, qr_reference=(original_inv, original_calc))
         return send_file(io.BytesIO(pdf),mimetype='application/pdf',download_name=f'{inv["number"]}.pdf',as_attachment=request.args.get('download')=='1')
 
     @app.get('/export/clients.csv')

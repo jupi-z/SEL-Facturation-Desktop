@@ -60,7 +60,9 @@ def test_invoice_confirmation_creates_one_document_after_preview(prepared_client
 
     assert response.status_code == 302
     with connect() as db:
+        row = db.execute("SELECT calc_snapshot FROM invoices").fetchone()
         assert db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 1
+        assert json.loads(row[0])["document_template_version"] == 2
 
 
 def test_invoice_confirmation_keeps_the_tariff_used_by_preview(prepared_client):
