@@ -1,4 +1,4 @@
-# SEL Facturation Desktop — V0.3.28 (préversion) locale native Windows
+# SEL Facturation Desktop — V0.3.29 (préversion) locale native Windows
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés/compteurs, relevés et périodes, calcul par tranches de kWh, taxe locale et TVA configurables, décomptes A4 PDF, historique, enregistrement de paiements, sauvegarde et export de données.
 
@@ -46,7 +46,7 @@ Créer l'exécutable sur un PC **Windows 64 bits**, ou via le workflow GitHub Ac
 ```powershell
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-build.txt
-.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --icon "packaging\sel-facturation.ico" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
+.venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --icon "packaging\sel-facturation.ico" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview --collect-all reportlab desktop.py
 ```
 
 `dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée avec l'icône du logo SEL ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Pour la distribution, le workflow Windows compile un MSI par utilisateur et le bootstrapper WiX qui installe silencieusement le WebView2 Evergreen Standalone puis le MSI. Le bootstrapper WiX est l'unique paquet de livraison supporté. `packaging\SEL-Facturation.iss` est conservé uniquement pour compatibilité historique et ne doit plus être utilisé pour une nouvelle installation ou une mise à jour. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**

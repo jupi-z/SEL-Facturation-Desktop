@@ -66,6 +66,19 @@ def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview
     assert "’" not in publish_block
 
 
+def test_windows_packaging_collects_reportlab_dynamic_modules_and_smokes_the_frozen_app():
+    build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    spec = (ROOT / "SEL-Facturation.spec").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "--collect-all reportlab" in build_script
+    assert "--collect-all reportlab" in workflow
+    assert "collect_all('reportlab')" in spec
+    assert "--collect-all reportlab" in readme
+    assert "--sel-packaging-smoke" in workflow
+
+
 def test_webview2_detection_covers_machine_and_user_runtime_locations():
     bundle = (ROOT / "packaging" / "bundle" / "Bundle.wxs").read_text(encoding="utf-8")
 

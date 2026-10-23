@@ -42,7 +42,9 @@ jobs:
       - name: Verify Windows desktop dependencies
         run: python -c "import webview, clr; from webview import FileDialog; print('Desktop runtime import OK')"
       - name: Build Windows EXE
-        run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon packaging\sel-facturation.ico --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview desktop.py
+        run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon packaging\sel-facturation.ico --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview --collect-all reportlab desktop.py
+      - name: Smoke test frozen application imports without opening the UI
+        run: .\dist\SEL-Facturation.exe --sel-packaging-smoke
       - name: Build legacy installation migrator
         run: pyinstaller --clean --noconfirm --onefile --noconsole --paths . --name SEL-LegacyCleanup packaging\legacy_cleanup.py
       - name: Install WiX Toolset 4

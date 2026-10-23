@@ -83,6 +83,14 @@ Le shell d'authentification utilise maintenant une composition SEL dédiée sans
 
 **NO-GO pour remise commerciale immédiate.** La CI et le packaging sont maintenant verts, mais le statut reste **pilote non validé sur poste cible** : il manque l'installation/exécution du bootstrapper sur le PC Windows 10/11 SEL, la recette avec imprimante/PDF par défaut, la restauration sur copie et la validation SEL des tarifs, taxes et identifiants d'entreprise. Aucun GO commercial ne doit être annoncé avant ces preuves.
 
+### Incident de démarrage 0.3.28 — module Code 128 non inclus dans PyInstaller
+
+- Le journal `application.log` du poste concerné montre un échec avant toute initialisation de fenêtre : `ModuleNotFoundError: reportlab.graphics.barcode.code128`, déclenché pendant l'import de `invoice_pdf.py`. Le message natif antérieur conseillait à tort de vérifier WebView2 ; le Runtime n'était pas la cause de cet incident.
+- La collecte PyInstaller de la version 0.3.28 embarquait `webview`, mais pas les imports dynamiques de ReportLab utilisés par son registre de codes-barres. Le défaut se reproduisait même avec WebView2 installé.
+- Les commandes de build local, le workflow Windows et le fichier `.spec` collectent désormais tout le paquet ReportLab. Le diagnostic startup indique le nom exact d'un module Python manquant et ne mentionne WebView2 que lorsque l'exception l'identifie réellement.
+- Un mode `--sel-packaging-smoke`, sans fenêtre et sans accès à SQLite, importe l'application réelle et `reportlab.graphics.barcode.code128` depuis l'EXE gelé. Le build local 0.3.29 et ce smoke test passent ; la suite compte 262 tests passants.
+- La version est incrémentée en **0.3.29** pour assurer le chemin de mise à niveau. Le build local réussit pour l'EXE, le MSI et le bootstrapper ; Authenticode reste `NotSigned`. La recette d'installation et de lancement sur le poste cible SEL demeure à effectuer avant de déclarer le pilote validé.
+
 ## Mise à jour métier du 16 octobre 2026
 
 La branche `monarque/consumption-tariffs` ajoute le modèle de facturation confirmé par SEL : Résidentiel 0,095 USD/kWh HT, Commercial 0,12 USD/kWh HT, TVA 16 %, aucune taxe locale pour les nouvelles factures, émission mensuelle en USD, conversion CDF optionnelle au taux configurable initial de 2 360. La consommation directe est disponible sans compteur ; les relevés restent un mode futur optionnel. Les anciennes données et snapshots restent compatibles.
