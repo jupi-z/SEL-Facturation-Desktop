@@ -1,7 +1,7 @@
 ; LEGACY COMPATIBILITY PACKAGE — not used for SEL release delivery.
 ; Use the WiX bootstrapper generated from packaging/bundle/Bundle.wxs.
 #define AppName "SEL Facturation"
-#define AppVersion "0.3.33"
+#define AppVersion "0.3.34"
 [Setup]
 AppId={{7B258C72-AE0B-4D4E-84DE-725C08F20EA1}
 AppName={#AppName}
@@ -9,7 +9,7 @@ AppVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\SEL Facturation
 DefaultGroupName=SEL Facturation
 OutputDir=..\dist\installer
-OutputBaseFilename=SEL-Facturation-Setup-0.3.33
+OutputBaseFilename=SEL-Facturation-Setup-0.3.34
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest

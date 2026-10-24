@@ -1,4 +1,4 @@
-# SEL Facturation Desktop — V0.3.33 (préversion) locale native Windows
+# SEL Facturation Desktop — V0.3.34 (préversion) locale native Windows
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés, facturation de l’électricité et de l’eau ensemble sur un document A4 unique, historique, paiements, sauvegardes et exports.
 
