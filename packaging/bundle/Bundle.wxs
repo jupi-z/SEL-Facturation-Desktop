@@ -5,14 +5,16 @@
       <bal:WixStandardBootstrapperApplication LicenseUrl="" Theme="hyperlinkLicense" ShowVersion="yes" />
     </BootstrapperApplication>
     <bal:Condition Condition="NOT LegacyInnoDetected OR LegacyInnoVersion" Message="Une installation héritée de SEL Facturation est détectée sans version exploitable. La migration automatique (LegacyInnoCleanup) est bloquée pour protéger les données." />
+    <bal:Condition Condition="VersionNT64" Message="SEL Facturation requiert une version 64 bits de Windows." />
+    <bal:Condition Condition="NetFrameworkRelease AND NetFrameworkRelease &gt;= 394802" Message="SEL Facturation requiert .NET Framework 4.6.2 ou supérieur. Activez ou réparez ce composant Windows, puis relancez l'installation." />
     <util:RegistrySearch Id="LegacyInnoDetectedSearch" Variable="LegacyInnoDetected" Root="HKCU" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{7B258C72-AE0B-4D4E-84DE-725C08F20EA1}_is1" Result="exists" />
     <util:RegistrySearch Id="LegacyInnoVersionSearch" Variable="LegacyInnoVersion" Root="HKCU" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{7B258C72-AE0B-4D4E-84DE-725C08F20EA1}_is1" Value="DisplayVersion" Result="value" />
+    <util:RegistrySearch Id="NetFrameworkReleaseSearch" Variable="NetFrameworkRelease" Root="HKLM" Key="SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" Value="Release" Result="value" Bitness="always64" />
     <util:RegistrySearch Id="WebView2RuntimeVersionMachine" Variable="WebView2RuntimeVersionMachine" Root="HKLM" Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Value="pv" Result="value" />
     <util:RegistrySearch Id="WebView2RuntimeVersionUser" Variable="WebView2RuntimeVersionUser" Root="HKCU" Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Value="pv" Result="value" />
     <Chain>
+      <ExePackage Id="WebView2EvergreenBootstrapper" SourceFile="$(var.WebView2Installer)" DisplayName="Microsoft Edge WebView2 Runtime" PerMachine="no" Permanent="yes" Vital="yes" DetectCondition="(WebView2RuntimeVersionMachine AND WebView2RuntimeVersionMachine &lt;&gt; &quot;0.0.0.0&quot;) OR (WebView2RuntimeVersionUser AND WebView2RuntimeVersionUser &lt;&gt; &quot;0.0.0.0&quot;)" InstallArguments="/silent /install" />
       <ExePackage Id="LegacyInnoCleanup" SourceFile="$(var.LegacyCleanupPath)" DisplayName="Migration de l'ancienne installation SEL" Permanent="yes" Vital="yes" DetectCondition="NOT LegacyInnoDetected" InstallArguments="--cleanup-legacy --current-version &quot;[WixBundleVersion]&quot;" />
-        <ExePackage Id="WebView2EvergreenStandalone" SourceFile="$(var.WebView2Installer)" PerMachine="no" Permanent="yes" DetectCondition="WebView2RuntimeVersionMachine OR WebView2RuntimeVersionUser" InstallArguments="/silent /install">
-      </ExePackage>
       <MsiPackage SourceFile="$(var.MsiPath)" />
     </Chain>
   </Bundle>

@@ -1,4 +1,4 @@
-# SEL Facturation Desktop — V0.3.32 (préversion) locale native Windows
+# SEL Facturation Desktop — V0.3.33 (préversion) locale native Windows
 
 Application de bureau locale pour la **Société d'Énergie du Lualaba (SEL)** : gestion des abonnés, facturation de l’électricité et de l’eau ensemble sur un document A4 unique, historique, paiements, sauvegardes et exports.
 
@@ -53,7 +53,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\pyinstaller --clean --noconfirm --onefile --noconsole --name "SEL-Facturation" --icon "packaging\sel-facturation.ico" --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview --collect-all reportlab desktop.py
 ```
 
-`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée avec l'icône du logo SEL ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Pour la distribution, le workflow Windows compile un MSI par utilisateur et le bootstrapper WiX qui installe silencieusement le WebView2 Evergreen Standalone puis le MSI. Le bootstrapper WiX est l'unique paquet de livraison supporté. `packaging\SEL-Facturation.iss` est conservé uniquement pour compatibilité historique et ne doit plus être utilisé pour une nouvelle installation ou une mise à jour. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**
+`dist\SEL-Facturation.exe` lance la fenêtre Windows dédiée avec l'icône du logo SEL ; aucun navigateur externe n'est nécessaire pour les écrans de gestion. Le paquet supporté cible Windows 64 bits. Il vérifie .NET Framework 4.6.2 ou supérieur (fourni par les versions compatibles de Windows), puis compile un MSI par utilisateur et un bootstrapper WiX qui installe le runtime WebView2 s'il manque. Le setup embarque le bootstrapper Microsoft léger (environ 2 Mo), vérifie sa signature Authenticode pendant le build, et ne télécharge le runtime que si le poste ne l'a pas déjà. Une connexion Internet est donc requise uniquement dans ce cas ; le runtime est installé pour l'utilisateur sans demander d'élévation lorsque Windows le permet. Le paquet reste compact et profite du runtime Evergreen maintenu par Microsoft. Le bootstrapper WiX est l'unique paquet de livraison supporté. `packaging\SEL-Facturation.iss` est conservé uniquement pour compatibilité historique et ne doit plus être utilisé pour une nouvelle installation ou une mise à jour. Ne jamais distribuer une version sans recette et sauvegarde. **Un binaire non compilé et non vérifié ne doit pas être annoncé comme disponible.**
 
 ## Où sont les données ?
 
@@ -87,7 +87,7 @@ Sous Windows : `%LOCALAPPDATA%\SEL Facturation\sel.sqlite3` (base SQLite), `sess
 - Les paiements et les factures émises sont immuables : une erreur de paiement est neutralisée par une contre-écriture datée et motivée; un document erroné est annulé, jamais effacé. Un abonné sans document peut être supprimé; avec historique, il reste archivable.
 - Il n'existe qu'un compte administrateur par installation dans cette première version ; pas de journal d'audit nominatif multi-agents.
 - Pas d'envoi SMS, pas de connexion DGI, pas de facturation de masse, pas de multi-postes, pas de comptabilité SYSCOHADA.
-- Pour la **fenêtre native Windows**, le bootstrapper de livraison installe Microsoft Edge WebView2 Runtime si nécessaire. Le programme ne fonctionne pas comme application Windows si ce composant manque ; si la stratégie informatique bloque l'installation silencieuse, un administrateur doit l'autoriser.
+- Pour la **fenêtre native Windows**, le bootstrapper installe Microsoft Edge WebView2 Runtime s'il manque. Le setup standard reste léger et a besoin d'un accès Internet aux serveurs Microsoft uniquement si aucun runtime n'est déjà présent. En cas de proxy ou de stratégie réseau qui bloque cet accès, l'installation s'arrête avant la migration de l'ancienne version ; il faut autoriser l'accès ou faire installer WebView2 par l'administrateur, puis relancer SEL Facturation.
 - La visualisation du PDF et sa commande d'impression utilisent le lecteur PDF associé à Windows. La commande « Imprimer » doit être testée avec l'imprimante de SEL ; l'interface de ce lecteur est externe à l'application principale.
 - Sous Windows le programme empêche une seconde instance simultanée. Les PDF prévisualisés sont temporairement sauvegardés sous `%LOCALAPPDATA%\SEL Facturation\documents-temporaires`.
 

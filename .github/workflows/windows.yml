@@ -78,19 +78,15 @@ jobs:
             & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SEL_CODESIGN_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $artifact
             if ($LASTEXITCODE -ne 0) { throw "Signature échouée: $artifact" }
           }
-      - name: Compile MSI
+      - name: Download and validate WebView2 bootstrapper, then compile MSI
         shell: pwsh
         run: |
           $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
           if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
           $version = $Matches[1]
           New-Item -ItemType Directory -Force -Path build\webview2, dist\installer | Out-Null
-          $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?LinkId=2124701' -OutFile $webview
-          $webviewPayload = Get-Item -LiteralPath $webview
-          if ($webviewPayload.Length -lt 100MB) { throw 'WebView2 payload is too small; expected the full offline standalone installer.' }
-          $webviewSignature = Get-AuthenticodeSignature -LiteralPath $webview
-          if ($webviewSignature.Status -ne 'Valid' -or $webviewSignature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') { throw 'WebView2 standalone Microsoft signature is invalid.' }
+          $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebview2Setup.exe'
+          & .\packaging\download-webview2-bootstrapper.ps1 -Destination $webview
           $exePath = (Resolve-Path dist\SEL-Facturation.exe).Path
           $legacyCleanupPath = (Resolve-Path dist\SEL-LegacyCleanup.exe).Path
           wix build packaging\wix\Product.wxs -d "ProductVersion=$version" -d "ExePath=$exePath" -o dist\installer\SEL-Facturation.msi
@@ -113,7 +109,7 @@ jobs:
           if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
           $version = $Matches[1]
           $msiPath = (Resolve-Path dist\installer\SEL-Facturation.msi).Path
-          $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+          $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebview2Setup.exe'
           $legacyCleanupPath = (Resolve-Path dist\SEL-LegacyCleanup.exe).Path
           $iconPath = (Resolve-Path packaging\sel-facturation.ico).Path
           wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d "ProductVersion=$version" -d "MsiPath=$msiPath" -d "WebView2Installer=$webview" -d "LegacyCleanupPath=$legacyCleanupPath" -d "IconPath=$iconPath" -o "dist\installer\SEL-Facturation-Setup-${version}-core.exe"
@@ -180,7 +176,7 @@ jobs:
               if ($signature.Status -ne 'Valid') { throw "Artefact non signé: $artifact" }
             }
             $title = "SEL Facturation Desktop v$version - installateur Windows"
-            $notes = 'Release préversion signée pour SEL : bootstrapper WebView2 autonome, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4. Essai réel sur le PC cible indispensable.'
+            $notes = 'Release préversion signée pour SEL : setup compact avec bootstrapper WebView2 Microsoft (connexion Internet requise uniquement si le runtime manque), MSI par utilisateur, Flask/SQLite local, facturation et PDF A4. Essai réel sur le PC cible indispensable.'
           } else {
             $title = "SEL Facturation Desktop v$version - aperçu non signé"
             $notes = "Preversion non signee Authenticode, reservee a l'installation et a l'acceptation manuelles. Le canal integre ne proposera pas le paquet tant qu'une cle publique Ed25519 SEL n'est pas epinglee et qu'un manifeste signe n'est pas publie. Ce paquet n'est pas une version de production; SmartScreen ou les regles Windows du poste peuvent intervenir."

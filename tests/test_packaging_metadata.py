@@ -3,20 +3,29 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NS = {"wix": "http://wixtoolset.org/schemas/v4/wxs"}
+NS = {
+    "wix": "http://wixtoolset.org/schemas/v4/wxs",
+    "bal": "http://wixtoolset.org/schemas/v4/wxs/bal",
+    "util": "http://wixtoolset.org/schemas/v4/wxs/util",
+}
 
 
 def test_bundle_uses_wix4_exe_arguments():
     root = ET.parse(ROOT / "packaging" / "bundle" / "Bundle.wxs").getroot()
     bundle = root.find("wix:Bundle", NS)
     chain = bundle.find("wix:Chain", NS)
-    exe = next(node for node in chain.findall("wix:ExePackage", NS) if node.attrib["Id"] == "WebView2EvergreenStandalone")
+    packages = chain.findall("wix:ExePackage", NS)
+    exe = next(node for node in packages if node.attrib["Id"] == "WebView2EvergreenBootstrapper")
+    legacy = next(node for node in packages if node.attrib["Id"] == "LegacyInnoCleanup")
     msi = chain.find("wix:MsiPackage", NS)
     assert exe.attrib["SourceFile"] == "$(var.WebView2Installer)"
     # The application MSI is per-user; keeping WebView2 per-user avoids
     # requiring an elevated token just to secure C:\\ProgramData\\Package Cache.
     assert exe.attrib["PerMachine"] == "no"
     assert exe.attrib["InstallArguments"] == "/silent /install"
+    assert exe.attrib["Vital"] == "yes"
+    ordered_packages = list(chain)
+    assert ordered_packages.index(exe) < ordered_packages.index(legacy) < ordered_packages.index(chain.find("wix:MsiPackage", NS))
     assert "UninstallArguments" not in exe.attrib
     assert exe.find("wix:InstallCommand", NS) is None
     assert exe.find("wix:UninstallCommand", NS) is None
@@ -47,11 +56,22 @@ def test_windows_builds_use_sel_logo_icon():
     assert "--icon packaging\\sel-facturation.ico" in workflow
 
 
-def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview_publication():
+def test_windows_build_embeds_small_signed_webview2_bootstrapper_and_separates_publication_modes():
     workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
+    downloader = (ROOT / "packaging" / "download-webview2-bootstrapper.ps1").read_text(encoding="utf-8")
 
-    assert "MicrosoftEdgeWebView2RuntimeInstallerX64.exe" in workflow
-    assert "Invoke-WebRequest" in workflow
+    assert "MicrosoftEdgeWebview2Setup.exe" in workflow
+    assert "MicrosoftEdgeWebview2Setup.exe" in build_script
+    assert "2124703" in downloader
+    assert "Get-AuthenticodeSignature" in downloader
+    assert "Microsoft Corporation" in downloader
+    assert "100MB" not in downloader
+    assert "512KB" in downloader and "10MB" in downloader
+    assert "for ($attempt = 1; $attempt -le 3; $attempt++)" in downloader
+    assert "$partialPath" in downloader and "Move-Item" in downloader
+    assert "download-webview2-bootstrapper.ps1" in workflow
+    assert "download-webview2-bootstrapper.ps1" in build_script
     assert "SEL_CODESIGN_PFX_BASE64" in workflow
     assert "Get-AuthenticodeSignature" in workflow
     assert "wix extension add -g WixToolset.Util.wixext/4.0.5" in workflow
@@ -85,13 +105,28 @@ def test_webview2_detection_covers_machine_and_user_runtime_locations():
     assert "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" in bundle
     assert "Root=\"HKLM\"" in bundle
     assert "Root=\"HKCU\"" in bundle
-    assert "WebView2RuntimeVersionMachine OR WebView2RuntimeVersionUser" in bundle
+    assert '&lt;&gt; &quot;0.0.0.0&quot;' in bundle
+    assert "WebView2RuntimeVersionMachine AND" in bundle
+    assert "WebView2RuntimeVersionUser AND" in bundle
+
+
+def test_bundle_blocks_unsupported_architecture_and_missing_dotnet_framework():
+    root = ET.parse(ROOT / "packaging" / "bundle" / "Bundle.wxs").getroot()
+    bundle = root.find("wix:Bundle", NS)
+    conditions = bundle.findall("bal:Condition", NS)
+    searches = bundle.findall("util:RegistrySearch", NS)
+
+    assert any(condition.attrib["Condition"] == "VersionNT64" for condition in conditions)
+    assert any(condition.attrib["Condition"] == "NetFrameworkRelease AND NetFrameworkRelease >= 394802" for condition in conditions)
+    netfx_search = next(search for search in searches if search.attrib["Id"] == "NetFrameworkReleaseSearch")
+    assert netfx_search.attrib["Value"] == "Release"
+    assert netfx_search.attrib["Bitness"] == "always64"
 
 
 def test_signing_order_protects_embedded_payloads():
     workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
 
-    assert workflow.index("Sign application payloads before MSI") < workflow.index("Compile MSI")
+    assert workflow.index("Sign application payloads before MSI") < workflow.index("Download and validate WebView2 bootstrapper, then compile MSI")
     assert workflow.index("Sign MSI before Burn") < workflow.index("wix build packaging\\bundle\\Bundle.wxs")
     assert workflow.index("Sign Burn core before preflight wrapper") < workflow.index("preflight_launcher.py")
     assert workflow.index("Sign final setup launcher") > workflow.index("preflight_launcher.py")
@@ -106,7 +141,7 @@ def test_release_workflow_has_one_supported_installer_path():
     assert "Inno Setup absent" not in build_script
     assert "bootstrapper WiX" in build_script
     assert "wix build packaging\\wix\\Product.wxs" in build_script
-    assert "WebView2RuntimeInstallerX64.exe" in build_script
+    assert "MicrosoftEdgeWebview2Setup.exe" in build_script
 
 
 def test_wix_build_resolves_paths_before_preprocessing():

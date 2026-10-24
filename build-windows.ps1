@@ -23,14 +23,8 @@ if (-not $wix) { throw 'WiX Toolset 4 est requis pour construire le paquet offic
 $version = (Select-String -Path version.py -Pattern 'APP_VERSION\s*=\s*["'']([^"'']+)["'']').Matches.Groups[1].Value
 if ([string]::IsNullOrWhiteSpace($version)) { throw 'APP_VERSION introuvable.' }
 New-Item -ItemType Directory -Force -Path 'build\webview2','dist\installer' | Out-Null
-$webview = (Resolve-Path 'build\webview2').Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?LinkId=2124701' -OutFile $webview
-$webviewPayload = Get-Item -LiteralPath $webview
-if ($webviewPayload.Length -lt 100MB) { throw 'WebView2 reçu trop petit : ce n’est pas le programme autonome complet hors ligne.' }
-$webviewSignature = Get-AuthenticodeSignature -LiteralPath $webview
-if ($webviewSignature.Status -ne 'Valid' -or $webviewSignature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
-  throw 'La signature Microsoft de l’installateur WebView2 autonome est invalide.'
-}
+$webview = (Resolve-Path 'build\webview2').Path + '\MicrosoftEdgeWebview2Setup.exe'
+& .\packaging\download-webview2-bootstrapper.ps1 -Destination $webview
 $exePath = (Resolve-Path 'dist\SEL-Facturation.exe').Path
 $legacyCleanupPath = (Resolve-Path 'dist\SEL-LegacyCleanup.exe').Path
 & wix build packaging\wix\Product.wxs -d "ProductVersion=$version" -d "ExePath=$exePath" -o 'dist\installer\SEL-Facturation.msi'
