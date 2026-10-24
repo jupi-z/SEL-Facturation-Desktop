@@ -13,10 +13,10 @@ Version applicative conservée : `0.3.32` (aucune release ni publication demand�
 | 1. Audit du code, des snapshots et des migrations | Terminé | Défauts reproductibles localisés dans les lookups tarifaires, l’état de raccordement, la confirmation de facture et le PDF CDF. |
 | 2. Corrections métier, SQLite, facturation et compatibilité | Terminé en local | Migration additive, aucune réécriture des snapshots; les tests dédiés passent. |
 | 3. Calculs, tests de régression, PDF/QR et exports | Terminé localement | Trois vrais PDFs issus des routes générés, extraits et rendus en image; suite complète : 296 tests réussis. |
-| 4. Build/CI Windows du commit final | En attente du push du commit candidat | Le build local d’installateur ne remplace pas le runner Windows; aucun résultat final n’est revendiqué avant CI. |
+| 4. Build/CI Windows du commit de code `bb967308eb75c5933cddab26022e41a963f7fa0e` | Réussi | GitHub Actions run `40086417697`, job `test-build`, 4 min 59 s; tests, SafeUpdate, EXE gelé, smoke test, MSI, Burn et préinstallateur réussis. |
 | 5. Essai sur poste SEL et décision de livraison | Non réalisé | Aucun accès au matériel SEL; pilote non validé sur poste cible. |
 
-Progression globale vérifiable : **en cours — tests et CI finale non encore clôturés**. Les phases 4 et 5 sont des critères obligatoires et ne sont pas comptées comme réussies.
+Progression globale vérifiable : **4 phases sur 5 terminées (80 %)**. La phase 5 — essai sur un poste SEL — n’est pas réalisable depuis cet environnement; le projet n’est donc pas déclaré intégralement validé pour production.
 
 ## Corrections réalisées
 
@@ -48,7 +48,8 @@ Fichiers de preuve : `Docs/SEL_RELEASE_GATE_V1/evidence/` (`.pdf`, `.png`, `mani
 | Vérification de patch | Passe au dernier contrôle | `git diff --check` |
 | PDF réel via route / extraction / rendu visuel | Passe pour 3 cas, une page chacun | Script de preuve ci-dessus; empreintes dans `evidence/manifest.json`. |
 | Tests adversariaux Ed25519/SHA-256 et transactions SafeUpdate | Inclus dans la suite complète locale : réussis | `py -3.12 -m pytest -q`; aucun mécanisme de vérification n’a été désactivé. L’exécution indépendante du job Windows reste à vérifier en CI. |
-| Windows build, packaging smoke, MSI/Burn autonome et CI sur SHA final | En attente | Workflow GitHub Actions `Build Windows Desktop`; aucun installateur n’est publié par cette intervention. |
+| CI Windows sur SHA du code `bb967308eb75c5933cddab26022e41a963f7fa0e` | **Réussi** le 24 octobre 2026 | [Run GitHub Actions 40086417697](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/40086417697) : tests unitaires/HTTP, SafeUpdate sans clés de production, dépendances WebView2, EXE PyInstaller, smoke test gelé, migrateur, MSI WiX, Burn autonome, préinstallateur et dépôt d’artefacts acceptation réussis. |
+| Artefact de test Windows | Présent, non publié en release | `SEL-Facturation-Windows-165`, 586 702 296 octets; expiration annoncée le 22 janvier 2027; accessible depuis le run ci-dessus. Le workflow a sauté la signature Authenticode et la publication de prerelease (déclenchement PR). |
 | Installation/mise à niveau/impression sur poste SEL | Non testé | Matériel cible inaccessible : **pilote non validé sur poste cible**. |
 
 ## Préservation et limites
@@ -60,10 +61,10 @@ Fichiers de preuve : `Docs/SEL_RELEASE_GATE_V1/evidence/` (`.pdf`, `.png`, `mani
 - L’absence de clé de production Ed25519 et de manifeste signé signifie que la compatibilité SafeUpdate reste à valider avec les clés épinglées prévues; la vérification Ed25519 ne sera pas contournée.
 - Les binaires resteront non signés Authenticode conformément à l’exigence actuelle; cela ne justifie aucun contournement Windows. Les contrôles SmartScreen et la recette matérielle restent à effectuer.
 
-## Verdicts — provisoires jusqu’à la fin des contrôles
+## Verdicts
 
-- Revue technique : **NO-GO provisoire** — suite complète et CI Windows sur le commit final non encore établies.
+- Revue technique : **GO pour revue de PR** — 296 tests locaux réussis, preuves PDF vérifiables et CI Windows verte sur le commit de code. Le commit `bb96730` porte les changements logiciels validés; le commit documentaire qui actualise ce rapport ne modifie pas le code.
 - Pilote Windows : **NO-GO** — **pilote non validé sur poste cible**.
 - Livraison commerciale : **NO-GO** — confirmation écrite par SEL des tarifs/profils eau, recette sur poste cible et état SafeUpdate de production encore requis.
 
-La PR #47 reste ouverte et ne sera ni fusionnée dans `main`, ni publiée en release, ni déployée chez SEL.
+La PR #47 reste ouverte. L’artefact du workflow est un paquet d’acceptation éphémère, pas une release; aucune release n’a été publiée et rien n’a été installé chez SEL. Aucun changement n’a été fusionné dans `main`.
