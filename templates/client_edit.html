@@ -26,8 +26,8 @@
     </fieldset>
     <fieldset>
       <legend>Services facturés</legend>
-      <p>L’abonnement comprend l’électricité (kWh) et l’eau (m³).</p>
-      <p class="note">Les décomptes d’eau à 0 m³ restent visibles. Les consommations positives sont facturées selon le tarif et les règles configurés et confirmés par SEL.</p>
+      <label for="edit-water-connection-status">Raccordement physique à l’eau<select id="edit-water-connection-status" name="water_connection_status" required><option value="UNKNOWN" {{ 'selected' if client['water_connection_status']=='UNKNOWN' else '' }}>À vérifier</option><option value="CONNECTED" {{ 'selected' if client['water_connection_status']=='CONNECTED' else '' }}>Raccordé</option><option value="DISCONNECTED" {{ 'selected' if client['water_connection_status']=='DISCONNECTED' else '' }}>Non raccordé</option></select></label>
+      <p class="note">Ce statut décrit le raccordement réel. La facture conserve toujours la ligne eau; toute consommation positive exige un raccordement confirmé ainsi qu’un tarif validé par SEL.</p>
     </fieldset>
     <fieldset>
       <legend>Localisation et coordonnées</legend>

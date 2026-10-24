@@ -14,11 +14,27 @@
       <label class="wide" for="client_id">Abonné<select id="client_id" name="client_id" required><option value="">Sélectionner…</option>{% for c in clients %}<option value="{{ c['id'] }}" data-water-enabled="true" {{ 'selected' if draft.get('client_id','')|string == c['id']|string else '' }}>{{ c['code'] }} — {{ c['name'] }} — {{ c['customer_type'] or 'Type à définir' }} · Eau + électricité</option>{% endfor %}</select></label>
       <label for="billing_period">Période (mois)<input id="billing_period" type="month" name="billing_period" value="{{ draft.get('billing_period', period) }}" required></label>
       <label for="consumption_kwh">Consommation électrique (kWh)<input id="consumption_kwh" type="number" step="0.001" min="0" name="consumption_kwh" value="{{ draft.get('consumption_kwh','') }}" required placeholder="100"></label>
-      <label id="water-consumption-field" class="water-field" for="water_m3">Consommation d’eau (m³)<input id="water_m3" type="number" step="0.001" min="0" name="water_m3" value="{{ draft.get('water_m3','0') }}" placeholder="0 si aucune consommation" required><small>Le volume, y compris 0, apparaît sur la facture. Un volume positif nécessite un tarif eau confirmé par SEL.</small></label>
+      <label id="water-consumption-field" class="water-field" for="water_m3">Consommation d’eau (m³)<input id="water_m3" type="number" step="0.001" min="0" name="water_m3" value="{{ draft.get('water_m3','0') }}" placeholder="0 si aucune consommation" required><small>Le volume, y compris 0, apparaît sur la facture. Un volume positif nécessite un tarif eau confirmé par SEL et un raccordement déclaré.</small></label>
+      <label id="water-zero-ack-field" class="wide"><span><input id="water_zero_confirmed" type="checkbox" name="water_zero_confirmed" value="yes" {{ 'checked' if draft.get('water_zero_confirmed') else '' }}> Je confirme que le relevé d’eau de cette période est exactement de 0 m³.</span></label>
       <label for="due_date">Date limite de paiement<input id="due_date" type="date" name="due_date" value="{{ draft.get('due_date','') }}"></label>
       <label class="wide" for="note">Observation<input id="note" name="note" maxlength="500" value="{{ draft.get('note','') }}" placeholder="Optionnel"></label>
     </div>
     <div class="form-actions"><button class="primary" type="submit" {% if not configured or not clients %}aria-describedby="invoice-preview-help" disabled{% endif %}>Prévisualiser la facture</button></div>
   </form>
 </section>
+<script>
+(() => {
+  const quantity = document.getElementById('water_m3');
+  const acknowledgement = document.getElementById('water_zero_confirmed');
+  const wrapper = document.getElementById('water-zero-ack-field');
+  const update = () => {
+    const isZero = quantity.value !== '' && Number(quantity.value) === 0;
+    wrapper.hidden = !isZero;
+    acknowledgement.required = isZero;
+    if (!isZero) acknowledgement.checked = false;
+  };
+  quantity.addEventListener('input', update);
+  update();
+})();
+</script>
 {% endblock %}

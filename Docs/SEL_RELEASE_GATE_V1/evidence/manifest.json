@@ -1,0 +1,29 @@
+{
+  "database": "temporary synthetic SQLite",
+  "cases": [
+    {
+      "file": "invoice-usd-zero-water.pdf",
+      "sha256": "f56de320dddc84ef33e542fb624791d8977f8418dd67438cd9a5e7c535805b99",
+      "bytes": 432015,
+      "snapshot_unchanged": true,
+      "extracted_text_sha256": "2b905f7de7519525585dfceaf1ca5b49fd547b6319669bc250d7a07c1d6d61bb",
+      "visual_render": "invoice-usd-zero-water.png"
+    },
+    {
+      "file": "invoice-cdf-zero-water.pdf",
+      "sha256": "b37b016df7c175a9996bb44b434e66cec37a0bc238c7434c5f1af9ac8b7ac3b4",
+      "bytes": 432169,
+      "snapshot_unchanged": true,
+      "extracted_text_sha256": "fb9f8114b132c641f07c4c81dd3d1621cb605ea1004a09d22696d4913720b07f",
+      "visual_render": "invoice-cdf-zero-water.png"
+    },
+    {
+      "file": "invoice-cdf-positive-water-net-payment.pdf",
+      "sha256": "cfca73d6e23086dc0fe2d100bed32e482f943b68be48558e9c64dc8be7d762a3",
+      "bytes": 432226,
+      "snapshot_unchanged": true,
+      "extracted_text_sha256": "0fb746aff54a6a65fef1eb920e9a8df8fb53829e2b851d5c7a71960e8055809d",
+      "visual_render": "invoice-cdf-positive-water-net-payment.png"
+    }
+  ]
+}

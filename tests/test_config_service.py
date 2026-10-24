@@ -112,6 +112,7 @@ def test_water_tariff_does_not_replace_electricity_tariff_in_legacy_settings_vie
     monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
     db.initialize()
     with db.connect() as connection:
+        connection.execute("UPDATE tariff_plans SET confirmed=1 WHERE service_code='ELECTRICITY'")
         connection.execute(
             "INSERT INTO tariff_plans "
             "(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active,service_code,source,confirmed) "

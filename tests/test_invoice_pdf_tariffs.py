@@ -64,7 +64,7 @@ def test_pdf_uses_the_snapshot_label_for_a_future_customer_type():
     assert "Industriel" in text
 
 
-def test_v2_invoice_mentions_both_services_without_adding_water_charges():
+def test_v2_electricity_snapshot_keeps_its_historical_service_label():
     invoice = {
         "number": "SEL-2026-000104", "issue_date": "2026-10-20", "due_date": "2026-10-31",
         "billing_period": "2026-09", "currency": "USD", "status": "ISSUED", "note": "",
@@ -76,7 +76,8 @@ def test_v2_invoice_mentions_both_services_without_adding_water_charges():
     text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_invoice(invoice, []))).pages)
 
     normalized = " ".join(text.split())
-    assert "FACTURE D’EAU ET D’ÉLECTRICITÉ" in normalized
+    assert "FACTURE D’ÉLECTRICITÉ" in normalized
+    assert "FACTURE D’EAU ET D’ÉLECTRICITÉ" not in normalized
 
 
 def test_combined_pdf_shows_water_zero_line_and_service_totals():

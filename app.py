@@ -90,13 +90,17 @@ def combine_invoice_calculation(connection, client, electricity, billing_period,
         'fee':electricity.get('fee','0.00'),
         'total':electricity.get('total','0.00'),
         'tariff_code':electricity.get('tariff_code',''),
-        'tax_profile_code':'SEL_STANDARD',
+        'tax_profile_code':electricity.get('tax_profile_code',''),
     }
     services=[electric_service]
     water_value=(water_m3 or '').strip()
     if not water_value:
         raise BillingError('Saisissez la consommation d’eau en m³, y compris 0 si elle est nulle.')
     water_quantity=decimal(water_value, 'Consommation d’eau')
+    if water_quantity > 0 and client.get('water_connection_status') != 'CONNECTED':
+        if client.get('water_connection_status') == 'DISCONNECTED':
+            raise BillingError('La consommation d’eau positive est impossible : le raccordement est déclaré déconnecté.')
+        raise BillingError('Confirmez le raccordement physique à l’eau sur la fiche abonné avant de saisir une consommation positive.')
     customer_type=client.get('customer_type') or ''
     try:
         plan=db.tariff_plan_for(connection,customer_type,billing_period+'-01',
@@ -146,6 +150,88 @@ def combine_invoice_calculation(connection, client, electricity, billing_period,
         'total':combined['total'],'currency':currency,
     })
     return result
+
+
+def calculate_invoice_draft(connection, client, draft, conf):
+    """Rebuild a billable preview from current, validated configuration."""
+    period=draft['billing_period']
+    if draft.get('consumption_kwh'):
+        customer_type=client.get('customer_type') or ''
+        if not customer_type:
+            raise BillingError('Attribuez un type d’abonné avant de facturer.')
+        plan=db.tariff_plan_for(connection,customer_type,period+'-01',require_confirmed=True)
+        currency=plan['currency']
+        active_currency=connection.execute("SELECT 1 FROM currency_catalog WHERE code=? AND active=1",(currency,)).fetchone()
+        if not active_currency:
+            raise BillingError('La devise du dernier tarif est inactive.')
+        tax=tax_profile_for(connection,period+'-01',code=None,service_code='ELECTRICITY',require_confirmed=True)
+        if Decimal(str(tax['vat_rate'])) != Decimal(str(plan['vat_rate'])):
+            raise BillingError('Le tarif et le profil fiscal électricité ne sont pas cohérents; vérifiez les paramètres validés.')
+        base_map={'ENERGY':'SUBTOTAL','ENERGY_LOCAL':'SUBTOTAL_LOCAL','ENERGY_LOCAL_FEE':'SUBTOTAL_LOCAL'}
+        service=calculate_service(service_code='ELECTRICITY',quantity=draft['consumption_kwh'],unit='KWH',
+                                  unit_price=plan['unit_price'],currency=currency,
+                                  taxes={'vat_rate':tax['vat_rate'],'vat_base':base_map.get(tax['vat_base'],tax['vat_base']),
+                                         'local_rate':tax['local_rate']})
+        calc=calculate_flat_rate(consumption_kwh=draft['consumption_kwh'],unit_price=plan['unit_price'],vat_rate=tax['vat_rate'],currency=currency)
+        calc.update({'energy':service['subtotal'],'local_rate':service['local_rate'],
+                     'local_tax':service['local_tax'],'vat_base':tax['vat_base'],
+                     'vat_basis':service['vat_basis'],'vat':service['vat'],'total':service['total'],
+                     'lines':[{'range':'Consommation','quantity':service['quantity'],'unit_price':service['unit_price'],'amount':service['subtotal']}]})
+        calc.update({'customer_type':customer_type,'customer_type_label':customer_type_label(connection,customer_type),
+                     'tariff_code':plan['code'],'tariff_effective_from':plan['effective_from'],
+                     'tariff_source':plan['source'],'unit_price':plan['unit_price'],
+                     'tax_profile_code':tax['code'],'tax_source':tax['source']})
+    else:
+        calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft.get('fee','0'))
+    return combine_invoice_calculation(connection,client,calc,period,draft.get('water_m3',''))
+
+
+def converted_invoice_copy(invoice, payments, rate_row, rate_value):
+    """Build a CDF-only display copy; source snapshots and SQLite stay untouched."""
+    rate=decimal(rate_value,'Taux USD/CDF',allow_zero=False)
+    inv=dict(invoice)
+    calc=json.loads(inv['calc_snapshot'])
+    def convert(value):
+        return str(money(Decimal(str(value))*rate))
+    for key in ('unit_price','energy','subtotal','service_subtotal_total','local_tax','vat_basis','vat','fee','total'):
+        if calc.get(key) not in (None,''):
+            calc[key]=convert(calc[key])
+    for line in calc.get('lines',[]):
+        if line.get('amount') not in (None,''):
+            line['amount']=convert(line['amount'])
+        if line.get('unit_price') not in (None,''):
+            line['unit_price']=convert(line['unit_price'])
+    services=calc.get('services',[])
+    for service in services:
+        for key in ('unit_price','subtotal','local_tax','vat_basis','vat','fee','total'):
+            if service.get(key) not in (None,''):
+                service[key]=convert(service[key])
+        for line in service.get('lines',[]):
+            for key in ('unit_price','amount'):
+                if line.get(key) not in (None,''):
+                    line[key]=convert(line[key])
+        service['currency']='CDF'
+    if services:
+        for root_key, service_key in (('subtotal','subtotal'),('service_subtotal_total','subtotal'),
+                                      ('local_tax','local_tax'),('vat_basis','vat_basis'),
+                                      ('vat','vat'),('fee','fee')):
+            values=[Decimal(str(item.get(service_key,'0') or '0')) for item in services]
+            calc[root_key]=str(money(sum(values,Decimal('0'))))
+        calc['total']=str(money(sum((Decimal(str(item.get('total','0') or '0')) for item in services),Decimal('0'))))
+    calc.update({'currency':'CDF','conversion_source_currency':'USD','conversion_rate':str(rate),
+                 'conversion_date':rate_row.get('effective_on','') if rate_row else '',
+                 'conversion_source':rate_row.get('source','') if rate_row else 'Taux saisi pour cette impression'})
+    inv['currency']='CDF'
+    inv['calc_snapshot']=json.dumps(calc,ensure_ascii=False)
+    converted_payments=[]
+    for payment in payments:
+        item=dict(payment)
+        amount=Decimal(convert(item['amount']))
+        reversed_amount=Decimal(convert(item['reversed_amount']))
+        item.update({'amount':str(amount),'reversed_amount':str(reversed_amount),
+                     'net_amount':str(money(amount-reversed_amount))})
+        converted_payments.append(item)
+    return inv,converted_payments
 
 
 def resource(name):
@@ -365,20 +451,22 @@ def create_app():
         customer_type_codes = {item['code'] for item in customer_types}
         client_form=session.get('client_form',{})
         if request.method=='POST':
-            values={k:request.form.get(k,'').strip() for k in ('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient')}
-            values['water_enabled']='1'
+            values={k:request.form.get(k,'').strip() for k in ('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient','water_connection_status')}
+            values['water_connection_status']=values['water_connection_status'] or 'UNKNOWN'
             try:
                 if not values['name'] or not values['address']:
                     raise BillingError('Nom et adresse sont obligatoires.')
                 if values['customer_type'] and values['customer_type'] not in customer_type_codes:
                     raise BillingError('Type d’abonné invalide.')
+                if values['water_connection_status'] not in {'UNKNOWN','CONNECTED','DISCONNECTED'}:
+                    raise BillingError('Sélectionnez un état de raccordement à l’eau valide.')
                 decimal(values['coefficient'] or '1','Coefficient',allow_zero=False)
                 if len(values['name'])>180 or len(values['meter_number'])>80: raise BillingError('Nom ou numéro de compteur trop long.')
                 g.db.execute('BEGIN IMMEDIATE')
                 next_id=g.db.execute('SELECT COALESCE(MAX(id),0)+1 FROM clients').fetchone()[0]
                 code=f'SEL-C-{next_id:05d}'
-                g.db.execute('''INSERT INTO clients(code,name,address,category,client_type,customer_type,billing_frequency,contract_number,meter_number,center,service_point,nif,phone,coefficient,water_enabled)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(code,values['name'],values['address'],values['category'] or '',values['client_type'] or '',values['customer_type'],values['billing_frequency'] or 'MONTHLY',values['contract_number'],values['meter_number'],values['center'] or 'KOLWEZI',values['service_point'],values['nif'],values['phone'],values['coefficient'] or '1',int(values['water_enabled'])))
+                g.db.execute('''INSERT INTO clients(code,name,address,category,client_type,customer_type,billing_frequency,contract_number,meter_number,center,service_point,nif,phone,coefficient,water_enabled,water_connection_status)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(code,values['name'],values['address'],values['category'] or '',values['client_type'] or '',values['customer_type'],values['billing_frequency'] or 'MONTHLY',values['contract_number'],values['meter_number'],values['center'] or 'KOLWEZI',values['service_point'],values['nif'],values['phone'],values['coefficient'] or '1',int(values['water_connection_status']=='CONNECTED'),values['water_connection_status']))
                 g.db.commit();session.pop('client_form',None);flash('Client enregistré.','success');return redirect(url_for('clients'))
             except (BillingError,sqlite3.IntegrityError) as e:
                 g.db.rollback();session['client_form']=values;client_form=values;flash(str(e),'error')
@@ -420,14 +508,18 @@ def create_app():
         if request.method=='POST':
             editable=('name','address','category','client_type','customer_type','billing_frequency','contract_number','meter_number','center','service_point','nif','phone','coefficient')
             values={k:request.form.get(k, current[k] or '').strip() for k in editable}
-            values['water_enabled']='1'
+            values['water_connection_status']=request.form.get('water_connection_status',current['water_connection_status']).strip()
             try:
                 if not values['name'] or not values['address']: raise BillingError('Nom et adresse obligatoires.')
                 if values['customer_type'] and values['customer_type'] not in customer_type_codes: raise BillingError('Type d’abonné invalide.')
+                if values['water_connection_status'] not in {'UNKNOWN','CONNECTED','DISCONNECTED'}: raise BillingError('Sélectionnez un état de raccordement à l’eau valide.')
                 decimal(values['coefficient'] or '1','Coefficient',allow_zero=False)
                 if len(values['name'])>180 or len(values['meter_number'])>80:
                     raise BillingError('Nom ou numéro de compteur trop long.')
-                g.db.execute('''UPDATE clients SET name=?,address=?,category=?,client_type=?,customer_type=?,billing_frequency=?,contract_number=?,meter_number=?,center=?,service_point=?,nif=?,phone=?,coefficient=?,water_enabled=? WHERE id=?''',(*[values[k] for k in editable],int(values['water_enabled']),cid))
+                legacy_water_enabled=(int(values['water_connection_status']=='CONNECTED')
+                                      if values['water_connection_status']!='UNKNOWN'
+                                      else int(current['water_enabled']))
+                g.db.execute('''UPDATE clients SET name=?,address=?,category=?,client_type=?,customer_type=?,billing_frequency=?,contract_number=?,meter_number=?,center=?,service_point=?,nif=?,phone=?,coefficient=?,water_enabled=?,water_connection_status=? WHERE id=?''',(*[values[k] for k in editable],legacy_water_enabled,values['water_connection_status'],cid))
                 g.db.commit();session.pop(draft_key,None);flash('Fiche mise à jour. Les anciennes factures conservent leurs données.','success');return redirect(url_for('clients'))
             except BillingError as e:
                 session[draft_key]=values;form_client=dict(current);form_client.update(values);flash(str(e),'error')
@@ -553,12 +645,15 @@ def create_app():
                         raise BillingError('Le libellé du type d’abonné est obligatoire et limité à 80 caractères.')
                     active=request.form.get('active')=='yes'
                     initial_rate=decimal(request.form.get('initial_rate',''),'Tarif initial',allow_zero=False) if active else None
+                    confirmed=request.form.get('confirmed')=='yes'
+                    if active and not confirmed:
+                        raise BillingError('Confirmez que le tarif initial est validé par SEL avant d’activer ce type.')
                     effective_from=date.today().replace(day=1).isoformat()
                     with g.db:
                         g.db.execute("INSERT INTO customer_types(code,label,active,sort_order) VALUES(?,?,?,?)", (code,label,1 if active else 0,100))
                         record_change(g.db,'customer_types',code,'',label,'Création depuis Paramètres')
                         if active:
-                            g.db.execute("INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (f'{code}-{effective_from[:7]}',code,'KWH',str(initial_rate),'USD','16',effective_from))
+                            g.db.execute("INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active,source,confirmed) VALUES(?,?,?,?,?,?,?,1,'Configuration SEL',1)", (f'{code}-{effective_from[:7]}',code,'KWH',str(initial_rate),'USD','16',effective_from))
                             record_change(g.db,'tariffs',code,'',str(initial_rate),'Tarif initial depuis Paramètres')
                     flash('Type d’abonné ajouté.','success')
                     clear_settings_draft(section)
@@ -780,10 +875,10 @@ def create_app():
                         previous=g.db.execute("SELECT unit_price FROM tariff_plans WHERE code=?", (tariff_code,)).fetchone()
                         if previous:
                             record_change(g.db, 'tariffs', code, previous['unit_price'], str(submitted_rates[code]), 'Modification depuis Paramètres')
-                            g.db.execute("UPDATE tariff_plans SET unit_price=?,currency='USD',vat_rate='16',active=1 WHERE code=?", (str(submitted_rates[code]),tariff_code))
+                            g.db.execute("UPDATE tariff_plans SET unit_price=?,currency='USD',vat_rate='16',active=1,source='Configuration SEL',confirmed=1 WHERE code=?", (str(submitted_rates[code]),tariff_code))
                         else:
                             record_change(g.db, 'tariffs', code, '', str(submitted_rates[code]), 'Création depuis Paramètres')
-                            g.db.execute("INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active) VALUES(?,?,?,?,?,?,?,1)", (tariff_code,code,'KWH',str(submitted_rates[code]),'USD','16',effective_from))
+                            g.db.execute("INSERT INTO tariff_plans(code,customer_type,unit,unit_price,currency,vat_rate,effective_from,active,source,confirmed) VALUES(?,?,?,?,?,?,?,1,'Configuration SEL',1)", (tariff_code,code,'KWH',str(submitted_rates[code]),'USD','16',effective_from))
                     g.db.execute("UPDATE settings SET value='1' WHERE key='configured'")
                 flash('Paramètres validés. Les anciennes factures restent inchangées.','success')
                 clear_settings_draft(section)
@@ -895,7 +990,7 @@ def create_app():
             # Une nouvelle tentative invalide ne doit jamais pouvoir confirmer
             # un aperçu plus ancien resté en session.
             session.pop('invoice_draft',None)
-            submitted_form={key:request.form.get(key,'').strip() for key in ('client_id','billing_period','consumption_kwh','water_m3','due_date','note','previous','current','fee')}
+            submitted_form={key:request.form.get(key,'').strip() for key in ('client_id','billing_period','consumption_kwh','water_m3','water_zero_confirmed','due_date','note','previous','current','fee')}
             session['invoice_form']=submitted_form
             try:
                 if conf.get('configured')!='1': raise BillingError('Validez d’abord le barème et les taxes dans Paramètres.')
@@ -908,19 +1003,16 @@ def create_app():
                 client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
                 if not client: raise BillingError('Client inexistant.')
                 client=dict(client)
+                water_value=request.form.get('water_m3','').strip()
+                if water_value and decimal(water_value,'Consommation d’eau') == 0 and request.form.get('water_zero_confirmed') != 'yes':
+                    raise BillingError('Confirmez explicitement que le relevé d’eau est bien de 0 m³.')
                 direct_kwh=request.form.get('consumption_kwh','').strip()
-                if direct_kwh:
-                    customer_type=client['customer_type']
-                    if not customer_type:
-                        raise BillingError('Attribuez un type d’abonné avant de facturer.')
-                    plan=db.tariff_plan_for(g.db,customer_type,period+'-01')
-                    calc=calculate_flat_rate(consumption_kwh=direct_kwh,unit_price=plan['unit_price'],vat_rate=plan['vat_rate'],currency='USD')
-                    calc.update({'customer_type':customer_type,'customer_type_label':customer_type_label(g.db, customer_type),'tariff_code':plan['code'],'tariff_effective_from':plan['effective_from'],'unit_price':plan['unit_price']})
-                else:
-                    calc=calculate_from_settings(request.form.get('previous',''),request.form.get('current',''),client['coefficient'],conf,request.form.get('fee','0') or '0')
-                calc=combine_invoice_calculation(g.db,client,calc,period,request.form.get('water_m3',''))
+                calc=calculate_invoice_draft(g.db,client,{
+                    'billing_period':period,'consumption_kwh':direct_kwh,
+                    'water_m3':water_value,'previous':request.form.get('previous','').strip(),
+                    'current':request.form.get('current','').strip(),'fee':request.form.get('fee','0') or '0'},conf)
                 if db.active_invoice(g.db,cid,period): raise BillingError('Une facture active existe déjà pour ce client et cette période.')
-                session['invoice_draft']={'client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'consumption_kwh':direct_kwh,'water_m3':request.form.get('water_m3','').strip(),'fee':request.form.get('fee','').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500], 'tariff_code':calc.get('tariff_code',''), 'tariff_effective_from':calc.get('tariff_effective_from',''), 'unit_price':calc.get('unit_price',''), 'vat_rate':calc.get('vat_rate',''), 'currency':calc.get('currency','USD'), 'calculation':calc}
+                session['invoice_draft']={'client_id':cid,'billing_period':period,'previous':request.form.get('previous','').strip(),'current':request.form.get('current','').strip(),'consumption_kwh':direct_kwh,'water_m3':water_value,'water_zero_confirmed':request.form.get('water_zero_confirmed') == 'yes','fee':request.form.get('fee','').strip() or '0','due_date':due,'note':request.form.get('note','').strip()[:500], 'tariff_code':calc.get('tariff_code',''), 'tariff_effective_from':calc.get('tariff_effective_from',''), 'unit_price':calc.get('unit_price',''), 'vat_rate':calc.get('vat_rate',''), 'currency':calc.get('currency','USD'), 'calculation':calc}
                 session.pop('invoice_form',None)
                 return render_template('invoice_preview.html',title='Vérifier le décompte',draft=session['invoice_draft'],client=client,calc=calc,configured=True)
             except (BillingError,ValueError,sqlite3.IntegrityError) as e:
@@ -944,29 +1036,17 @@ def create_app():
             client=g.db.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
             if not client: raise BillingError('Client inexistant.')
             client=dict(client)
-            if draft.get('calculation'):
-                calc=draft['calculation']
-            elif draft.get('consumption_kwh'):
-                customer_type=client['customer_type']
-                if not customer_type:
-                    raise BillingError('Type d’abonné manquant ou invalide.')
-                plan=db.tariff_plan_for(g.db,customer_type,period+'-01')
-                unit_price=draft.get('unit_price') or plan['unit_price']
-                vat_rate=draft.get('vat_rate') or plan['vat_rate']
-                invoice_currency=draft.get('currency') or plan['currency']
-                calc=calculate_flat_rate(consumption_kwh=draft['consumption_kwh'],unit_price=unit_price,vat_rate=vat_rate,currency=invoice_currency)
-                calc.update({'customer_type':customer_type,'customer_type_label':customer_type_label(g.db, customer_type),'tariff_code':draft.get('tariff_code') or plan['code'],'tariff_effective_from':draft.get('tariff_effective_from') or plan['effective_from'],'unit_price':unit_price})
-            else:
-                calc=calculate_from_settings(draft['previous'],draft['current'],client['coefficient'],conf,draft['fee'])
-            if 'services' not in calc:
-                # Sessions d’une ancienne version peuvent encore contenir un
-                # aperçu électrique seul. Recompose-le avec l’eau demandée;
-                # l’émission échoue si aucun volume n’a été saisi.
-                calc=combine_invoice_calculation(g.db,client,calc,period,draft.get('water_m3',''))
+            water_value=draft.get('water_m3','')
+            if water_value and decimal(water_value,'Consommation d’eau') == 0 and not draft.get('water_zero_confirmed'):
+                raise BillingError('Le relevé d’eau à 0 m³ doit être confirmé depuis une nouvelle prévisualisation.')
+            g.db.execute('BEGIN IMMEDIATE')
+            fresh_calc=calculate_invoice_draft(g.db,client,draft,conf)
+            if not draft.get('calculation') or json.dumps(fresh_calc,sort_keys=True,separators=(',',':')) != json.dumps(draft['calculation'],sort_keys=True,separators=(',',':')):
+                raise BillingError('Les tarifs ou paramètres ont changé depuis l’aperçu. Prévisualisez de nouveau la facture.')
+            calc=fresh_calc
             service_codes=[item.get('service_code') for item in calc.get('services',[])]
             if sorted(service_codes)!=['ELECTRICITY','WATER']:
                 raise BillingError('Une facture doit contenir l’électricité et l’eau. Recommencez la prévisualisation.')
-            g.db.execute('BEGIN IMMEDIATE')
             if db.active_invoice(g.db,cid,period): raise BillingError('Cette période est déjà facturée pour ce client.')
             year=date.today().year
             row=g.db.execute('SELECT last_number FROM sequences WHERE year=?',(year,)).fetchone()
@@ -1095,24 +1175,11 @@ def create_app():
         if request.args.get('currency') == 'CDF':
             if inv['currency'] != 'USD':
                 raise BillingError('La variante CDF est disponible pour les factures USD.')
-            rate_value=request.args.get('rate') or db.exchange_rate_for(g.db,'USD','CDF',date.today().isoformat())['rate']
-            rate=decimal(rate_value,'Taux USD/CDF',allow_zero=False)
-            inv=dict(inv); inv['currency']='CDF'
-            calc=json.loads(inv['calc_snapshot'])
-            for key in ('energy','local_tax','vat_basis','vat','fee','total'):
-                calc[key]=str(money(Decimal(calc[key])*rate))
-            calc['currency']='CDF'; calc['conversion_source_currency']='USD'; calc['conversion_rate']=str(rate)
-            calc['lines']=[dict(row,amount=str(money(Decimal(row['amount'])*rate))) for row in calc.get('lines',[])]
-            inv['calc_snapshot']=json.dumps(calc,ensure_ascii=False)
-            payments=[dict(item,amount=str(money(Decimal(item['amount'])*rate)),
-                           net_amount=str(money(Decimal(item['net_amount'])*rate)),
-                           reversed_amount=str(money(Decimal(item['reversed_amount'])*rate))) for item in payments]
-            if 'services' in calc:
-                for service in calc['services']:
-                    for key in ('subtotal','local_tax','vat_basis','vat','total'):
-                        if key in service: service[key]=str(money(Decimal(service[key])*rate))
-                    service['lines']=[dict(row,amount=str(money(Decimal(row['amount'])*rate))) for row in service.get('lines',[])]
-            calc['total']=str(money(Decimal(calc['total'])*rate));calc['currency']='CDF'
+            if request.args.get('rate'):
+                return render_template('error.html',title='Taux de conversion refusé',status_code=400,
+                                       message='Le taux d’impression ne peut pas être remplacé par un paramètre libre; utilisez le taux SEL enregistré.'),400
+            rate_row=dict(db.exchange_rate_for(g.db,'USD','CDF',inv['issue_date']))
+            inv,payments=converted_invoice_copy(inv,payments,rate_row,rate_row['rate'])
         pdf=render_invoice(inv, payments, qr_reference=(original_inv, original_calc))
         return send_file(io.BytesIO(pdf),mimetype='application/pdf',download_name=f'{inv["number"]}.pdf',as_attachment=request.args.get('download')=='1')
 

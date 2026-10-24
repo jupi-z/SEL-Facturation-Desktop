@@ -35,7 +35,7 @@ def prepared_client(tmp_path, monkeypatch):
 
 
 def invoice_data(csrf):
-    return {"_csrf": csrf, "client_id": "1", "billing_period": "2026-08", "consumption_kwh": "200", "water_m3": "0", "due_date": "2026-10-31"}
+    return {"_csrf": csrf, "client_id": "1", "billing_period": date.today().strftime("%Y-%m"), "consumption_kwh": "200", "water_m3": "0", "water_zero_confirmed": "yes", "due_date": "2026-10-31"}
 
 
 def test_invoice_entry_shows_preview_without_creating_document(prepared_client):
@@ -83,7 +83,7 @@ def test_legacy_pending_confirmation_cannot_create_electricity_only_invoice(prep
         assert db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0
 
 
-def test_invoice_confirmation_keeps_the_tariff_used_by_preview(prepared_client):
+def test_invoice_confirmation_rejects_preview_when_confirmed_tariff_changes(prepared_client):
     client, token = prepared_client
     data = dict(invoice_data(token("/invoices/new")), billing_period=date.today().strftime("%Y-%m"))
     preview = client.post("/invoices/new", data=data)
@@ -94,12 +94,12 @@ def test_invoice_confirmation_keeps_the_tariff_used_by_preview(prepared_client):
         "tariff_rate_RESIDENTIAL": "0.20", "tariff_rate_COMMERCIAL": "0.12",
         "exchange_rate_usd_cdf": "2360", "vat_rate": "16", "confirmed": "yes",
     })
-    client.post("/invoices/new/confirm", data={"_csrf": confirm_token})
+    response=client.post("/invoices/new/confirm", data={"_csrf": confirm_token},follow_redirects=True)
 
     with connect() as db:
-        calc = json.loads(db.execute("SELECT calc_snapshot FROM invoices").fetchone()[0])
-    assert calc["unit_price"] == "0.095"
-    assert calc["tariff_code"] == "RESIDENTIAL-2026-10"
+        assert db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM sequences").fetchone()[0] == 0
+    assert "Prévisualisez de nouveau" in response.get_data(as_text=True)
 
 
 def test_invalid_invoice_preview_does_not_consume_sequence(prepared_client):

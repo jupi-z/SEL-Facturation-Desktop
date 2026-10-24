@@ -82,7 +82,7 @@ def test_client_edit_persists_contract_and_all_visible_business_fields(tmp_path,
     assert row["service_point"] == "LIKASI CENTRE"
 
 
-def test_client_water_service_is_universal_and_cannot_be_disabled(
+def test_client_water_connection_is_independent_of_universal_invoice_line(
     tmp_path, monkeypatch
 ):
     client = _authenticated_client(tmp_path, monkeypatch)
@@ -90,6 +90,7 @@ def test_client_water_service_is_universal_and_cannot_be_disabled(
     edit_url = f"/clients/{client_id}/edit"
 
     assert 'name="water_enabled"' not in client.get(edit_url).get_data(as_text=True)
+    assert 'name="water_connection_status"' in client.get(edit_url).get_data(as_text=True)
     response = client.post(edit_url, data={
         "_csrf": _token(client, edit_url),
         "name": "Client CRUD", "address": "Kolwezi", "customer_type": "RESIDENTIAL",
@@ -98,7 +99,8 @@ def test_client_water_service_is_universal_and_cannot_be_disabled(
     })
     assert response.status_code == 302
     with db.connect() as connection:
-        assert connection.execute("SELECT water_enabled FROM clients WHERE id=?", (client_id,)).fetchone()[0] == 1
+        row=connection.execute("SELECT water_enabled,water_connection_status FROM clients WHERE id=?", (client_id,)).fetchone()
+        assert row['water_connection_status']=='UNKNOWN'
 
     response = client.post(edit_url, data={
         "_csrf": _token(client, edit_url),
@@ -108,7 +110,7 @@ def test_client_water_service_is_universal_and_cannot_be_disabled(
     })
     assert response.status_code == 302
     with db.connect() as connection:
-        assert connection.execute("SELECT water_enabled FROM clients WHERE id=?", (client_id,)).fetchone()[0] == 1
+        assert connection.execute("SELECT water_connection_status FROM clients WHERE id=?", (client_id,)).fetchone()[0] == 'UNKNOWN'
 
 
 def test_water_tariff_and_tax_require_explicit_sel_confirmation_and_source(tmp_path, monkeypatch):
@@ -202,10 +204,12 @@ def test_payment_correction_is_append_only_and_allows_traceable_invoice_void(tmp
     client_id = _create_client(client, "Client correction paiement")
     with db.connect() as connection:
         connection.execute("UPDATE settings SET value='1' WHERE key='configured'")
+        connection.execute("UPDATE tariff_plans SET confirmed=1,source='TEST fixture approval'")
+        connection.execute("UPDATE tax_profiles SET confirmed=1,source='TEST fixture approval'")
         connection.commit()
     preview = client.post("/invoices/new", data={
         "_csrf": _token(client, "/invoices/new"), "client_id": str(client_id),
-        "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "0",
+        "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "0", "water_zero_confirmed": "yes",
     })
     confirm = client.post("/invoices/new/confirm", data={
         "_csrf": re.search(r'name="_csrf" value="([^"]+)"', preview.get_data(as_text=True)).group(1),
@@ -274,10 +278,12 @@ def test_unbilled_client_can_be_deleted_and_billed_client_can_only_be_archived(t
     client_id = _create_client(client, "Client à archiver")
     with db.connect() as connection:
         connection.execute("UPDATE settings SET value='1' WHERE key='configured'")
+        connection.execute("UPDATE tariff_plans SET confirmed=1,source='TEST fixture approval'")
+        connection.execute("UPDATE tax_profiles SET confirmed=1,source='TEST fixture approval'")
         connection.commit()
     preview = client.post("/invoices/new", data={
         "_csrf": _token(client, "/invoices/new"),
-        "client_id": str(client_id), "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "0",
+        "client_id": str(client_id), "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "0", "water_zero_confirmed": "yes",
     })
     confirm = client.post("/invoices/new/confirm", data={
         "_csrf": re.search(r'name="_csrf" value="([^"]+)"', preview.get_data(as_text=True)).group(1),

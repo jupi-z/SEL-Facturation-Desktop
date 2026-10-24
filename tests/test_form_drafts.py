@@ -27,6 +27,8 @@ def _authenticated_client(tmp_path, monkeypatch):
 def _enable_billing():
     with db.connect() as connection:
         connection.execute("UPDATE settings SET value='1' WHERE key='configured'")
+        connection.execute("UPDATE tariff_plans SET confirmed=1,source='TEST fixture approval'")
+        connection.execute("UPDATE tax_profiles SET confirmed=1,source='TEST fixture approval'")
         connection.commit()
 
 
@@ -55,6 +57,7 @@ def _create_invoice(client):
         "billing_period": "2026-10",
         "consumption_kwh": "100",
         "water_m3": "0",
+        "water_zero_confirmed": "yes",
         "due_date": "2026-10-31",
         "note": "Essai",
     })
@@ -75,6 +78,7 @@ def test_new_invoice_preserves_invalid_submission_after_refresh(tmp_path, monkey
         "billing_period": "2026-11",
         "consumption_kwh": "pas-un-nombre",
         "water_m3": "0",
+        "water_zero_confirmed": "yes",
         "due_date": "2026-11-30",
         "note": "Brouillon conservé",
     })

@@ -194,6 +194,8 @@ def initialize():
           BEGIN SELECT RAISE(ABORT, 'Contre-écriture de paiement immuable'); END;
         ''')
         columns = {row['name'] for row in c.execute('PRAGMA table_info(clients)')}
+        water_was_present = 'water_enabled' in columns
+        legacy_water_trigger = c.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name IN ('clients_water_required_insert','clients_water_required_update') LIMIT 1").fetchone()
         if 'customer_type' not in columns:
             c.execute("ALTER TABLE clients ADD COLUMN customer_type TEXT NOT NULL DEFAULT ''")
         if 'billing_frequency' not in columns:
@@ -206,18 +208,14 @@ def initialize():
             c.execute("ALTER TABLE clients ADD COLUMN archive_reason TEXT NOT NULL DEFAULT ''")
         if 'water_enabled' not in columns:
             c.execute('ALTER TABLE clients ADD COLUMN water_enabled INTEGER NOT NULL DEFAULT 1 CHECK(water_enabled IN (0,1))')
-        # Water is now a universal service. Backfill every existing subscriber
-        # and enforce the invariant for future inserts/edits without touching
-        # immutable invoice snapshots.
-        c.execute('UPDATE clients SET water_enabled=1 WHERE water_enabled<>1')
-        c.executescript('''
-        CREATE TRIGGER IF NOT EXISTS clients_water_required_insert
-          AFTER INSERT ON clients WHEN NEW.water_enabled<>1
-          BEGIN UPDATE clients SET water_enabled=1 WHERE id=NEW.id; END;
-        CREATE TRIGGER IF NOT EXISTS clients_water_required_update
-          AFTER UPDATE OF water_enabled ON clients WHEN NEW.water_enabled<>1
-          BEGIN UPDATE clients SET water_enabled=1 WHERE id=NEW.id; END;
-        ''')
+        if 'water_connection_status' not in columns:
+            c.execute("ALTER TABLE clients ADD COLUMN water_connection_status TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK(water_connection_status IN ('UNKNOWN','CONNECTED','DISCONNECTED'))")
+            # A previous build forcibly rewrote every subscriber to water_enabled=1.
+            # Where its triggers prove that may have happened, preserve uncertainty.
+            if not legacy_water_trigger and water_was_present:
+                c.execute("UPDATE clients SET water_connection_status=CASE water_enabled WHEN 1 THEN 'CONNECTED' ELSE 'DISCONNECTED' END")
+        c.execute('DROP TRIGGER IF EXISTS clients_water_required_insert')
+        c.execute('DROP TRIGGER IF EXISTS clients_water_required_update')
         c.execute("CREATE INDEX IF NOT EXISTS clients_status_lookup ON clients(status, name, code)")
         # Service-scoped configuration is additive: pre-existing catalogs are
         # explicitly classified as electricity, never inferred as water.
@@ -316,12 +314,15 @@ def tariff_plan_for(c, customer_type: str, on_date: str, service_code: str = 'EL
     known = c.execute('SELECT code FROM customer_types WHERE code=? AND active=1', (customer_type,)).fetchone()
     if not known:
         raise ValueError('Type d’abonné invalide.')
-    confirmation = ' AND confirmed=1' if require_confirmed else ''
-    row = c.execute(f'''SELECT * FROM tariff_plans
-        WHERE customer_type=? AND service_code=? AND effective_from<=?{confirmation}
+    row = c.execute('''SELECT * FROM tariff_plans
+        WHERE customer_type=? AND service_code=? AND effective_from<=?
         ORDER BY effective_from DESC, id DESC LIMIT 1''', (customer_type, service_code, on_date)).fetchone()
     if not row:
         raise ValueError(f'Aucun tarif confirmé applicable au service {service_code}, type {customer_type}, à la date {on_date}.')
+    if require_confirmed and not row['active']:
+        raise ValueError(f'Le dernier tarif applicable au service {service_code} est désactivé; aucun ancien tarif ne sera réutilisé.')
+    if require_confirmed and not row['confirmed']:
+        raise ValueError(f'Le dernier tarif applicable au service {service_code} n’est pas confirmé; aucun ancien tarif ne sera réutilisé.')
     return row
 
 

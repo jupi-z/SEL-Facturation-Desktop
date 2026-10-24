@@ -99,13 +99,11 @@ def tax_profile_for(
 ) -> dict:
     if service_code not in {"ELECTRICITY", "WATER"}:
         raise ValueError(f"Service inconnu : {service_code}.")
-    clauses = ["service_code=?", "active=1", "effective_from<=?"]
+    clauses = ["service_code=?", "effective_from<=?"]
     params = [service_code, on_date]
     if code:
         clauses.insert(0, "code=?")
         params.insert(0, code)
-    if require_confirmed:
-        clauses.append("confirmed=1")
     row = connection.execute(
         "SELECT * FROM tax_profiles WHERE " + " AND ".join(clauses)
         + " ORDER BY effective_from DESC, code LIMIT 1",
@@ -117,6 +115,10 @@ def tax_profile_for(
             f"Aucun profil fiscal {qualification}applicable au service {service_code} "
             f"à la date {on_date}."
         )
+    if require_confirmed and not row['active']:
+        raise ValueError(f"Le dernier profil fiscal applicable au service {service_code} est désactivé; aucun ancien profil ne sera réutilisé.")
+    if require_confirmed and not row['confirmed']:
+        raise ValueError(f"Le dernier profil fiscal applicable au service {service_code} n’est pas confirmé; aucun ancien profil ne sera réutilisé.")
     return dict(row)
 
 
@@ -160,10 +162,13 @@ def current_tariffs(connection, on_date: str | None = None) -> list[dict]:
             (customer_type["code"], effective),
         ).fetchone()
         item = dict(customer_type)
-        item["unit_price"] = plan["unit_price"] if plan else ""
+        billable = bool(plan and plan['active'] and plan['confirmed'])
+        item["unit_price"] = plan["unit_price"] if billable else ""
         item["currency"] = plan["currency"] if plan else "USD"
         item["effective_from"] = plan["effective_from"] if plan else effective
-        item["tariff_code"] = plan["code"] if plan else ""
+        item["tariff_code"] = plan["code"] if billable else ""
+        item["tariff_active"] = bool(plan and plan['active'])
+        item["tariff_confirmed"] = bool(plan and plan['confirmed'])
         rows.append(item)
     return rows
 

@@ -52,7 +52,7 @@ def internal_qr_payload(invoice, calc) -> str:
 
 
 def _internal_qr(payload):
-    size = 25 * mm
+    size = 17 * mm
     drawing = Drawing(size, size)
     widget = QrCodeWidget(payload, barWidth=size, barHeight=size)
     drawing.add(widget)
@@ -95,7 +95,7 @@ def render_invoice(invoice, payments, qr_reference=None) -> bytes:
          Paragraph(p(co.get('tagline','')),muted),
          Paragraph(p(co.get('address','')),small),
          Paragraph(' · '.join([p(v) for v in (co.get('phone'),co.get('email'),co.get('website')) if v]),small)],
-        [Paragraph(('FACTURE D’EAU ET<br/>D’ÉLECTRICITÉ' if has_water else 'FACTURE D’ÉLECTRICITÉ') if template_version >= 3 else ('FACTURE D’EAU ET<br/>D’ÉLECTRICITÉ' if template_version >= 2 else 'DÉCOMPTE D’ÉLECTRICITÉ'),document_title),
+        [Paragraph(('FACTURE D’EAU ET<br/>D’ÉLECTRICITÉ' if has_water else 'FACTURE D’ÉLECTRICITÉ') if template_version >= 3 else ('FACTURE D’EAU ET<br/>D’ÉLECTRICITÉ' if has_water else ('FACTURE D’ÉLECTRICITÉ' if template_version >= 2 else 'DÉCOMPTE D’ÉLECTRICITÉ')),document_title),
          Paragraph('N° '+p(inv['number']),ParagraphStyle('ref',parent=normal,fontName='Helvetica-Bold',fontSize=9,alignment=TA_RIGHT,textColor=BLUE)),
          Paragraph('Émis le '+p(inv['issue_date']),right)]]
     table=Table([company_cells],colWidths=[26*mm,86*mm,66*mm])
@@ -157,9 +157,12 @@ def render_invoice(invoice, payments, qr_reference=None) -> bytes:
                 recap.append((f"TVA {service_name.lower()} ({p(service.get('vat_rate','0'))} %)",fmt(service.get('vat','0'))+' '+p(service.get('currency',inv['currency']))))
             recap.append((f"Total {service_name.lower()}",fmt(service.get('total','0'))+' '+p(service.get('currency',inv['currency']))))
         if d.get('conversion_rate'):
-            recap.append(('Conversion indicative',f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"))
+            rate_text=f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"
+            if d.get('conversion_date') or d.get('conversion_source'):
+                rate_text+=f" · {p(d.get('conversion_date') or 'Date non précisée')} ({p(d.get('conversion_source') or 'Source non précisée')})"
+            recap.append(('Conversion indicative',rate_text))
         recap.append(('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total'])+' '+p(inv['currency'])))
-        rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
+        rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[105*mm,73*mm])
         rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
         story.extend([Spacer(1,7),rec,Spacer(1,10)])
     else:
@@ -188,23 +191,29 @@ def render_invoice(invoice, payments, qr_reference=None) -> bytes:
         if d.get('unit_price') and template_version < 2:
             recap.append(('Tarif unitaire HT',f"{rate_fmt(d['unit_price'])} {p(inv['currency'])}/kWh"))
         if d.get('conversion_rate'):
-            recap.append(('Conversion indicative',f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"))
+            rate_text=f"1 {p(d.get('conversion_source_currency','USD'))} = {rate_fmt(d['conversion_rate'])} {p(inv['currency'])}"
+            if d.get('conversion_date') or d.get('conversion_source'):
+                rate_text+=f" · {p(d.get('conversion_date') or 'Date non précisée')} ({p(d.get('conversion_source') or 'Source non précisée')})"
+            recap.append(('Conversion indicative',rate_text))
         recap.extend([(f"TVA ({p(d['vat_rate'])} %) — base {fmt(d['vat_basis'])}",fmt(d['vat'])),
                ('MONTANT TOTAL ('+p(inv['currency'])+')',fmt(d['total']))])
-        rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[130*mm,48*mm])
+        rec=Table([[Paragraph(a,total_label if a.startswith('MONTANT') else normal),Paragraph(b,total_value if a.startswith('MONTANT') else right)] for a,b in recap],colWidths=[105*mm,73*mm])
         rec.setStyle(TableStyle([('LINEABOVE',(0,-1),(-1,-1),1.2,BLUE),('BACKGROUND',(0,-1),(-1,-1),PALE),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(1,0),(1,-1),8),('LEFTPADDING',(0,0),(0,-1),8)]))
         story.extend([Spacer(1,7),rec,Spacer(1,10)])
-    payment_box=Table([[Paragraph('CONDITIONS DE RÈGLEMENT',twhite),Paragraph('SITUATION DU COMPTE',twhite)],
-                       [Paragraph(f"Échéance : <b>{p(inv['due_date'])}</b><br/>Paiement accepté selon les modalités de SEL.",normal),
-                        Paragraph(f"Déjà réglé : <b>{fmt(paid)} {p(inv['currency'])}</b><br/>MONTANT À RÉGLER : <b>{fmt(balance)} {p(inv['currency'])}</b>",normal)]],
-                      colWidths=[89*mm,89*mm])
-    payment_box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('BACKGROUND',(0,1),(-1,1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.65,BORDER),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),9),('RIGHTPADDING',(0,0),(-1,-1),9)]))
-    story.append(payment_box)
+    payment_headers=[Paragraph('CONDITIONS DE RÈGLEMENT',twhite),Paragraph('SITUATION DU COMPTE',twhite)]
+    payment_values=[Paragraph(f"Échéance : <b>{p(inv['due_date'])}</b><br/>Paiement accepté selon les modalités de SEL.",normal),
+                    Paragraph(f"Déjà réglé : <b>{fmt(paid)} {p(inv['currency'])}</b><br/>MONTANT À RÉGLER : <b>{fmt(balance)} {p(inv['currency'])}</b>",normal)]
+    payment_widths=[89*mm,89*mm]
     if template_version >= 2:
-        qr_label = Paragraph('<b>Référence interne</b><br/>Lecture locale du document', small)
-        qr_block = Table([[_internal_qr(internal_qr_payload(qr_invoice, qr_calc)), qr_label]], colWidths=[30*mm, 148*mm])
-        qr_block.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),4),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),0)]))
-        story.extend([Spacer(1,5), qr_block])
+        qr_label=Paragraph('<b>Référence interne</b><br/>Lecture locale',small)
+        qr_cell=Table([[_internal_qr(internal_qr_payload(qr_invoice,qr_calc)),qr_label]],colWidths=[18*mm,27*mm])
+        qr_cell.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),2),('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0)]))
+        payment_headers.append(Paragraph('RÉFÉRENCE',twhite))
+        payment_values.append(qr_cell)
+        payment_widths=[66*mm,66*mm,46*mm]
+    payment_box=Table([payment_headers,payment_values],colWidths=payment_widths)
+    payment_box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),BLUE),('BACKGROUND',(0,1),(-1,1),colors.HexColor('#F5F9FB')),('BOX',(0,0),(-1,-1),.65,BORDER),('INNERGRID',(0,0),(-1,-1),.45,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),6)]))
+    story.append(payment_box)
     if inv['status']=='VOID':story.append(Paragraph('<font color="red"><b>DOCUMENT ANNULÉ - NE PAS UTILISER</b></font>',section))
     if inv['note']:story.extend([Spacer(1,6),Paragraph('<b>Note :</b> '+p(inv['note']),small)])
     story.extend([Spacer(1,10),Paragraph('<b>MENTIONS ENTREPRISE :</b> RCCM : '+p(co.get('rccm'))+' &nbsp;&nbsp; NIF : '+p(co.get('nif'))+' &nbsp;&nbsp; ID NAT : '+p(co.get('id_nat')),small),

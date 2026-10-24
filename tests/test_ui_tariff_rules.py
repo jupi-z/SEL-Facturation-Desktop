@@ -84,7 +84,7 @@ def test_admin_can_add_an_active_customer_type_with_its_initial_tariff(tmp_path,
     token = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
     response = client.post("/settings", data={
         "_csrf": token, "section": "customer_type", "code": "PUBLIC_SERVICE",
-        "label": "Service public", "initial_rate": "0.13", "active": "yes",
+        "label": "Service public", "initial_rate": "0.13", "active": "yes", "confirmed": "yes",
     })
     assert response.status_code == 302
     assert 'value="PUBLIC_SERVICE"' in client.get("/clients").get_data(as_text=True)
@@ -107,7 +107,7 @@ def test_configured_future_customer_type_can_be_billed(tmp_path, monkeypatch):
     token = re.search(r'name="_csrf" value="([^"]+)"', client.get("/settings").get_data(as_text=True)).group(1)
     client.post("/settings", data={
         "_csrf": token, "section": "customer_type", "code": "INDUSTRIAL",
-        "label": "Industriel", "initial_rate": "0.15", "active": "yes",
+        "label": "Industriel", "initial_rate": "0.15", "active": "yes", "confirmed": "yes",
     })
     client.post("/clients", data={
         "_csrf": re.search(r'name="_csrf" value="([^"]+)"', client.get("/clients").get_data(as_text=True)).group(1),
@@ -116,7 +116,7 @@ def test_configured_future_customer_type_can_be_billed(tmp_path, monkeypatch):
     })
     response = client.post("/invoices/new", data={
         "_csrf": re.search(r'name="_csrf" value="([^"]+)"', client.get("/invoices/new").get_data(as_text=True)).group(1),
-        "client_id": "1", "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "0",
+        "client_id": "1", "billing_period": "2026-10", "consumption_kwh": "100", "water_m3": "0", "water_zero_confirmed": "yes",
     })
     assert response.status_code == 200
     assert "15,00" in response.get_data(as_text=True)
