@@ -212,8 +212,8 @@ def test_preexisting_subscriber_always_has_water_and_zero_is_invoiceable_without
         client_id = cursor.lastrowid
         connection.commit()
     form = client.get("/invoices/new").get_data(as_text=True)
-    assert 'id="water-consumption-field" class="water-field" for="water_m3"' in form
-    assert 'name="water_m3" value="0" placeholder="0 si aucune consommation" required' in form
+    assert 'id="water-consumption-field" class="field-stack water-field"' in form
+    assert re.search(r'<input id="water_m3"[^>]*name="water_m3"[^>]*value="0"[^>]*required', form)
 
     missing_water = client.post("/invoices/new", data={
         "_csrf": _token(client, "/invoices/new"), "client_id": str(client_id),

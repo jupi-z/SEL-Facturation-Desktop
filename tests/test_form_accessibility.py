@@ -1,5 +1,6 @@
 import importlib.util
 import re
+from pathlib import Path
 
 import pytest
 
@@ -7,6 +8,8 @@ if not importlib.util.find_spec("flask"):
     pytest.skip("Flask is not installed in this offline test environment", allow_module_level=True)
 
 from app import create_app
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
@@ -53,3 +56,21 @@ def test_official_tariff_form_does_not_expose_legacy_tier_or_local_tax_fields(au
     assert 'name="tiers"' not in html
     assert 'name="local_rate"' not in html
     assert 'name="vat_base"' not in html
+
+
+def test_zero_water_confirmation_is_grouped_with_its_water_field():
+    template = (ROOT / "templates" / "new_invoice.html").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "brand.css").read_text(encoding="utf-8")
+
+    water_group = re.search(
+        r'<div id="water-consumption-field" class="field-stack water-field">(.*?)<label for="due_date">',
+        template,
+        re.DOTALL,
+    )
+    assert water_group, "The water input and its zero confirmation must share one grid cell."
+    group_html = water_group.group(1)
+    assert 'id="water_m3"' in group_html
+    assert 'id="water_zero_confirmed"' in group_html
+    assert 'for="water_zero_confirmed"' in group_html
+    assert "Je confirme que le relevé d’eau" in group_html
+    assert ".water-zero-confirmation{" in css

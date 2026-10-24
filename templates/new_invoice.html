@@ -14,8 +14,17 @@
       <label class="wide" for="client_id">Abonné<select id="client_id" name="client_id" required><option value="">Sélectionner…</option>{% for c in clients %}<option value="{{ c['id'] }}" data-water-enabled="true" {{ 'selected' if draft.get('client_id','')|string == c['id']|string else '' }}>{{ c['code'] }} — {{ c['name'] }} — {{ c['customer_type'] or 'Type à définir' }} · Eau + électricité</option>{% endfor %}</select></label>
       <label for="billing_period">Période (mois)<input id="billing_period" type="month" name="billing_period" value="{{ draft.get('billing_period', period) }}" required></label>
       <label for="consumption_kwh">Consommation électrique (kWh)<input id="consumption_kwh" type="number" step="0.001" min="0" name="consumption_kwh" value="{{ draft.get('consumption_kwh','') }}" required placeholder="100"></label>
-      <label id="water-consumption-field" class="water-field" for="water_m3">Consommation d’eau (m³)<input id="water_m3" type="number" step="0.001" min="0" name="water_m3" value="{{ draft.get('water_m3','0') }}" placeholder="0 si aucune consommation" required><small>Le volume, y compris 0, apparaît sur la facture. Un volume positif nécessite un tarif eau confirmé par SEL et un raccordement déclaré.</small></label>
-      <label id="water-zero-ack-field" class="wide"><span><input id="water_zero_confirmed" type="checkbox" name="water_zero_confirmed" value="yes" {{ 'checked' if draft.get('water_zero_confirmed') else '' }}> Je confirme que le relevé d’eau de cette période est exactement de 0 m³.</span></label>
+      <div id="water-consumption-field" class="field-stack water-field">
+        <label for="water_m3">Consommation d’eau (m³)</label>
+        <input id="water_m3" type="number" step="0.001" min="0" name="water_m3" value="{{ draft.get('water_m3','0') }}" placeholder="0 si aucune consommation" aria-describedby="water-consumption-help" required>
+        <small id="water-consumption-help">Le volume, y compris 0, apparaît sur la facture. Un volume positif nécessite un tarif eau confirmé par SEL et un raccordement déclaré.</small>
+        <div id="water-zero-ack-field" class="water-zero-confirmation" {% if draft.get('water_m3', '0')|float != 0 %}hidden{% endif %}>
+          <label for="water_zero_confirmed">
+            <input id="water_zero_confirmed" type="checkbox" name="water_zero_confirmed" value="yes" {{ 'checked' if draft.get('water_zero_confirmed') else '' }}>
+            <span>Je confirme que le relevé d’eau de cette période est exactement de 0 m³.</span>
+          </label>
+        </div>
+      </div>
       <label for="due_date">Date limite de paiement<input id="due_date" type="date" name="due_date" value="{{ draft.get('due_date','') }}"></label>
       <label class="wide" for="note">Observation<input id="note" name="note" maxlength="500" value="{{ draft.get('note','') }}" placeholder="Optionnel"></label>
     </div>

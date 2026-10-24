@@ -275,6 +275,13 @@ th { background: var(--sel-blue-soft); color: var(--sel-navy); }
 .modal>form{overscroll-behavior:contain}
 .modal-actions{position:sticky;bottom:0;z-index:1;padding-top:12px;background:var(--white);border-top:1px solid var(--border)}
 .water-field[hidden]{display:none!important}
+.field-stack{display:grid;align-content:start;gap:7px;min-width:0}
+.field-stack>label{display:flex}
+.water-zero-confirmation{padding:11px 12px;border:1px solid var(--border);border-radius:6px;background:#fff}
+.water-zero-confirmation[hidden]{display:none!important}
+.water-zero-confirmation label{display:flex;flex-direction:row;align-items:flex-start;gap:10px;cursor:pointer;font-size:12px;font-weight:600;line-height:1.45;color:var(--ink)}
+.water-zero-confirmation input{flex:0 0 16px;width:16px;height:16px;margin:1px 0 0;accent-color:var(--blue)}
+.field-stack>small{color:var(--muted);font-size:11px;line-height:1.45}
 
 @media(max-width:980px){
   .side{position:static;height:auto;max-height:none;overflow:visible}
