@@ -1,6 +1,8 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -13,7 +15,7 @@ use sel_domain::billing;
 use sel_storage::LocalStore;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 use uuid::Uuid;
 
 pub fn router() -> Router {
@@ -148,7 +150,47 @@ pub async fn pull_once(
     Ok(count)
 }
 
+/// Runs one push/pull cycle immediately and retries on a fixed interval. A
+/// failed cycle leaves the outbox untouched, so reconnecting automatically
+/// resumes transmission without losing or duplicating business effects.
+pub fn spawn_sync_worker(
+    store: LocalStore,
+    endpoint: impl Into<String>,
+    bearer_token: impl Into<String>,
+    interval: std::time::Duration,
+) -> tokio::task::JoinHandle<()> {
+    let endpoint = endpoint.into();
+    let bearer_token = bearer_token.into();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval.max(std::time::Duration::from_millis(50)));
+        loop {
+            ticker.tick().await;
+            if let Err(error) = sync_once(&store, &endpoint, &bearer_token).await {
+                eprintln!("SEL local synchronization deferred: {error}");
+            }
+        }
+    })
+}
+
 pub fn router_with_store(store: LocalStore) -> Router {
+    router_with_store_base(store)
+}
+
+/// Builds the local API with the same routes used by the desktop client, but
+/// requires a process-local bearer token on every non-health request.
+///
+/// `router_with_store` intentionally remains unauthenticated for in-process
+/// unit/integration tests. The executable calls this production constructor
+/// after validating `SEL_LOCAL_AUTH_TOKEN`.
+pub fn router_with_store_and_auth(store: LocalStore, auth_token: impl Into<String>) -> Router {
+    let expected = Arc::<str>::from(auth_token.into());
+    router_with_store_base(store).layer(middleware::from_fn(move |request, next| {
+        let expected = Arc::clone(&expected);
+        async move { local_auth_guard(request, next, expected).await }
+    }))
+}
+
+fn router_with_store_base(store: LocalStore) -> Router {
     Router::new()
         .route(
             "/local/v1/customers",
@@ -169,6 +211,34 @@ pub fn router_with_store(store: LocalStore) -> Router {
         .route("/local/v1/sync/trigger", post(trigger_sync_with_store))
         .route("/local/v1/updates/status", get(update_status))
         .with_state(LocalAppState { store })
+}
+
+async fn local_auth_guard(
+    request: Request<axum::body::Body>,
+    next: Next,
+    expected: Arc<str>,
+) -> Response {
+    let presented = request
+        .headers()
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default();
+    if !constant_time_equal(presented.as_bytes(), expected.as_bytes()) {
+        return (StatusCode::UNAUTHORIZED, "local bearer token is required").into_response();
+    }
+    next.run(request).await
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for index in 0..left.len().max(right.len()) {
+        difference |= usize::from(
+            left.get(index).copied().unwrap_or_default()
+                ^ right.get(index).copied().unwrap_or_default(),
+        );
+    }
+    difference == 0
 }
 
 async fn status() -> Json<serde_json::Value> {
@@ -439,4 +509,29 @@ pub async fn run(addr: SocketAddr) -> Result<(), std::io::Error> {
 pub async fn run_with_store(addr: SocketAddr, store: LocalStore) -> Result<(), std::io::Error> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router_with_store(store)).await
+}
+
+pub async fn run_with_store_and_auth(
+    addr: SocketAddr,
+    store: LocalStore,
+    auth_token: impl Into<String>,
+) -> Result<(), std::io::Error> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, router_with_store_and_auth(store, auth_token)).await
+}
+
+pub async fn run_with_store_and_auth_and_sync(
+    addr: SocketAddr,
+    store: LocalStore,
+    auth_token: impl Into<String>,
+    sync_endpoint: impl Into<String>,
+    sync_bearer_token: impl Into<String>,
+) -> Result<(), std::io::Error> {
+    let _worker = spawn_sync_worker(
+        store.clone(),
+        sync_endpoint,
+        sync_bearer_token,
+        std::time::Duration::from_secs(30),
+    );
+    run_with_store_and_auth(addr, store, auth_token).await
 }

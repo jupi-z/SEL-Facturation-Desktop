@@ -88,6 +88,15 @@ pub struct UtilityBillingResponse {
     pub snapshot_sha256: String,
 }
 
+/// Versioned offline payload carrying the client-generated identifiers that
+/// must remain stable when PostgreSQL accepts the command after a retry.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UtilityInvoiceSyncPayload {
+    pub request: UtilityBillingRequest,
+    pub invoice_id: Uuid,
+    pub receivable_id: Uuid,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PaymentAllocationRequest {
     pub receivable_id: Uuid,
@@ -102,6 +111,12 @@ pub struct RecordPaymentRequest {
     pub method: String,
     pub occurred_at: DateTime<Utc>,
     pub allocations: Vec<PaymentAllocationRequest>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PaymentSyncPayload {
+    pub request: RecordPaymentRequest,
+    pub payment_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -191,6 +206,20 @@ pub struct SolarSaleResponse {
     pub principal: Decimal,
     pub currency: String,
     pub status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SolarSaleSyncPayload {
+    pub request: CreateSolarSaleRequest,
+    pub sale_id: Uuid,
+    pub receivable_id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SolarContractSyncPayload {
+    pub request: ActivateSolarContractRequest,
+    pub contract_id: Uuid,
+    pub installment_plan_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

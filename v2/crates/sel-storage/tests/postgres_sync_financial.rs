@@ -71,7 +71,11 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
             amount: Decimal::new(3, 0),
         }],
     };
-    let payload = serde_json::to_value(&request).unwrap();
+    let payment_id = Uuid::new_v4();
+    let payload = serde_json::json!({
+        "request": request,
+        "payment_id": payment_id,
+    });
     let event = SyncEnvelope {
         protocol_version: 1,
         event_id: Uuid::new_v4(),
@@ -79,7 +83,7 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
         organization_id,
         actor_id,
         command_type: "PAYMENT_RECORDED".into(),
-        aggregate_id: Uuid::new_v4(),
+        aggregate_id: payment_id,
         aggregate_expected_version: 0,
         occurred_at: Utc::now(),
         offline_grant_id: grant_id,
@@ -96,6 +100,13 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
         .unwrap()
         .get::<i64, _>("count");
     assert_eq!(count, 1);
+    let stored_payment_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM payments WHERE customer_id = $1")
+            .bind(customer_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_payment_id, payment_id);
     let retry = store.apply_sync_event(&event).await.unwrap();
     assert!(matches!(retry, SyncEventResult::Duplicate { .. }));
     let allocation_total: Decimal = sqlx::query_scalar(
@@ -118,6 +129,7 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
     let grant_id = Uuid::new_v4();
     let customer_id = Uuid::new_v4();
     let invoice_id = Uuid::new_v4();
+    let receivable_id = Uuid::new_v4();
     let store = CentralStore::connect(&database_url, organization_id)
         .await
         .unwrap();
@@ -191,7 +203,11 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
         tariff_revision: "UTILITY-TEST-1".into(),
         due_date: Some(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()),
     };
-    let payload = serde_json::to_value(&request).unwrap();
+    let payload = serde_json::json!({
+        "request": request,
+        "invoice_id": invoice_id,
+        "receivable_id": receivable_id,
+    });
     let event = SyncEnvelope {
         protocol_version: 1,
         event_id: Uuid::new_v4(),
@@ -224,6 +240,14 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
     .await
     .unwrap();
     assert_eq!(water_quantity, Decimal::ZERO);
+    let stored_receivable_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM receivables WHERE source_type = 'INVOICE' AND source_id = $1",
+    )
+    .bind(invoice_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_receivable_id, receivable_id);
     let retry = store.apply_sync_event(&event).await.unwrap();
     assert!(matches!(retry, SyncEventResult::Duplicate { .. }));
 }
@@ -271,6 +295,8 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
         .await
         .unwrap();
     let product_code = format!("SYNC-KIT-{}", Uuid::new_v4());
+    let expected_sale_id = Uuid::new_v4();
+    let expected_receivable_id = Uuid::new_v4();
     sqlx::query("INSERT INTO products (id, sku, product_type, label, price_reference, currency, active) VALUES ($1, $2, 'SOLAR_KIT', 'Sync solar kit', 1000, 'USD', TRUE)")
         .bind(Uuid::new_v4())
         .bind(&product_code)
@@ -284,7 +310,11 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
         currency: "USD".into(),
         terms_revision: "solar-sync-v1".into(),
     };
-    let sale_payload = serde_json::to_value(&sale_request).unwrap();
+    let sale_payload = serde_json::json!({
+        "request": sale_request,
+        "sale_id": expected_sale_id,
+        "receivable_id": expected_receivable_id,
+    });
     let sale_event = SyncEnvelope {
         protocol_version: 1,
         event_id: Uuid::new_v4(),
@@ -292,7 +322,7 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
         organization_id,
         actor_id,
         command_type: "SOLAR_SALE_CREATED".into(),
-        aggregate_id: Uuid::new_v4(),
+        aggregate_id: expected_sale_id,
         aggregate_expected_version: 0,
         occurred_at: Utc::now(),
         offline_grant_id: grant_id,
@@ -307,13 +337,16 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
         } => server_entity_id,
         other => panic!("unexpected sale sync result: {other:?}"),
     };
+    assert_eq!(sale_id, expected_sale_id);
     let (receivable_id,): (Uuid,) =
         sqlx::query_as("SELECT id FROM receivables WHERE source_type = 'SALE' AND source_id = $1")
             .bind(sale_id)
             .fetch_one(&store.pool)
             .await
             .unwrap();
+    assert_eq!(receivable_id, expected_receivable_id);
     let contract_id = Uuid::new_v4();
+    let expected_plan_id = Uuid::new_v4();
     let contract_request = ActivateSolarContractRequest {
         sale_id,
         receivable_id,
@@ -332,7 +365,11 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
         currency: "USD".into(),
         approved_terms_revision: "solar-sync-v1".into(),
     };
-    let contract_payload = serde_json::to_value(&contract_request).unwrap();
+    let contract_payload = serde_json::json!({
+        "request": contract_request,
+        "contract_id": contract_id,
+        "installment_plan_id": expected_plan_id,
+    });
     let contract_event = SyncEnvelope {
         protocol_version: 1,
         event_id: Uuid::new_v4(),
@@ -350,6 +387,13 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
     };
     let contract_result = store.apply_sync_event(&contract_event).await.unwrap();
     assert!(matches!(contract_result, SyncEventResult::Accepted { .. }));
+    let stored_plan_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM installment_plans WHERE receivable_id = $1")
+            .bind(receivable_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_plan_id, expected_plan_id);
     let counts = sqlx::query(
         "SELECT (SELECT count(*) FROM receivables WHERE id = $1) AS receivables,
                 (SELECT count(*) FROM installment_plans WHERE receivable_id = $1) AS plans,

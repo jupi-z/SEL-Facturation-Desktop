@@ -2,8 +2,9 @@ use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use sel_contracts::{
     ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
-    RecordPaymentRequest, SolarSaleResponse, SyncEnvelope, SyncEventResult, UpdateCustomer,
-    UtilityBillingRequest, UtilityBillingResponse,
+    PaymentSyncPayload, RecordPaymentRequest, SolarContractSyncPayload, SolarSaleResponse,
+    SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -469,6 +470,17 @@ impl CentralStore {
         idempotency_key: &str,
         request_digest: &str,
     ) -> Result<PaymentWriteOutcome, PaymentWriteError> {
+        self.record_payment_with_id(input, Uuid::new_v4(), idempotency_key, request_digest)
+            .await
+    }
+
+    pub async fn record_payment_with_id(
+        &self,
+        input: &RecordPaymentRequest,
+        payment_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<PaymentWriteOutcome, PaymentWriteError> {
         let mut tx = self.pool.begin().await?;
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
@@ -535,7 +547,6 @@ impl CentralStore {
                 return Err(PaymentWriteError::Overallocated);
             }
         }
-        let payment_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO payments
              (id, customer_id, amount_received, currency, method, paid_at, status)
@@ -639,6 +650,24 @@ impl CentralStore {
         idempotency_key: &str,
         request_digest: &str,
     ) -> Result<SolarSaleWriteOutcome, SolarSaleWriteError> {
+        self.create_solar_sale_with_ids(
+            input,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            idempotency_key,
+            request_digest,
+        )
+        .await
+    }
+
+    pub async fn create_solar_sale_with_ids(
+        &self,
+        input: &CreateSolarSaleRequest,
+        sale_id: Uuid,
+        receivable_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<SolarSaleWriteOutcome, SolarSaleWriteError> {
         let mut tx = self.pool.begin().await?;
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
@@ -681,8 +710,6 @@ impl CentralStore {
         if !product_exists {
             return Err(SolarSaleWriteError::ProductNotFound);
         }
-        let sale_id = Uuid::new_v4();
-        let receivable_id = Uuid::new_v4();
         let response = SolarSaleResponse {
             sale_id,
             receivable_id,
@@ -754,6 +781,24 @@ impl CentralStore {
     pub async fn activate_solar_contract(
         &self,
         contract_id: Uuid,
+        input: &ActivateSolarContractRequest,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<SolarContractWriteOutcome, SolarContractWriteError> {
+        self.activate_solar_contract_with_plan_id(
+            contract_id,
+            Uuid::new_v4(),
+            input,
+            idempotency_key,
+            request_digest,
+        )
+        .await
+    }
+
+    pub async fn activate_solar_contract_with_plan_id(
+        &self,
+        contract_id: Uuid,
+        plan_id: Uuid,
         input: &ActivateSolarContractRequest,
         idempotency_key: &str,
         request_digest: &str,
@@ -843,7 +888,6 @@ impl CentralStore {
             .bind(input.sale_id)
             .execute(&mut *tx)
             .await?;
-        let plan_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO installment_plans
              (id, receivable_id, contract_id, principal_amount, currency, start_date, status, terms_snapshot)
@@ -1107,26 +1151,28 @@ impl CentralStore {
                 Ok(result)
             }
             "UTILITY_INVOICE_ISSUED" => {
-                let input: UtilityBillingRequest =
-                    match serde_json::from_value(event.payload.clone()) {
-                        Ok(input) => input,
-                        Err(_) => {
-                            let result = SyncEventResult::Rejected {
-                                code: "UTILITY_PAYLOAD_INVALID".into(),
-                                required_action: "send_a_valid_utility_request".into(),
-                            };
-                            persist_sync_result(
-                                &mut tx,
-                                self.organization_id,
-                                event,
-                                &result,
-                                None,
-                            )
+                let payload: UtilityInvoiceSyncPayload = match serde_json::from_value(
+                    event.payload.clone(),
+                ) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        let result = SyncEventResult::Rejected {
+                            code: "UTILITY_PAYLOAD_LEGACY_IDS_REQUIRED".into(),
+                            required_action:
+                                "recreate_the_local_invoice_with_stable_invoice_and_receivable_ids"
+                                    .into(),
+                        };
+                        persist_sync_result(&mut tx, self.organization_id, event, &result, None)
                             .await?;
-                            tx.commit().await?;
-                            return Ok(result);
-                        }
-                    };
+                        tx.commit().await?;
+                        return Ok(result);
+                    }
+                };
+                let UtilityInvoiceSyncPayload {
+                    request: input,
+                    invoice_id,
+                    receivable_id,
+                } = payload;
                 tx.rollback().await?;
                 if input.electricity.unit != "KWH" || input.water.unit != "M3" {
                     return self
@@ -1210,8 +1256,8 @@ impl CentralStore {
                     })
                     .collect::<Vec<_>>();
                 let response = UtilityBillingResponse {
-                    invoice_id: event.aggregate_id,
-                    receivable_id: Some(Uuid::new_v4()),
+                    invoice_id,
+                    receivable_id: Some(receivable_id),
                     invoice_number: None,
                     status: "CENTRAL_ACCEPTED".into(),
                     currency: calculated.currency,
@@ -1229,9 +1275,9 @@ impl CentralStore {
                 let outcome = self
                     .issue_utility_invoice(&input, &response, &operation_key, &event.payload_sha256)
                     .await;
-                let (invoice_id, created) = match outcome {
-                    Ok(UtilityIssueOutcome::Created(response)) => (response.invoice_id, true),
-                    Ok(UtilityIssueOutcome::Replay(response)) => (response.invoice_id, false),
+                let (accepted_response, created) = match outcome {
+                    Ok(UtilityIssueOutcome::Created(response)) => (response, true),
+                    Ok(UtilityIssueOutcome::Replay(response)) => (response, false),
                     Err(_) => {
                         return self
                             .persist_sync_rejection(
@@ -1249,10 +1295,18 @@ impl CentralStore {
                     event,
                     &SyncEventResult::Accepted {
                         server_sequence: 0,
-                        server_entity_id: invoice_id,
+                        server_entity_id: accepted_response.invoice_id,
                     },
                     if created {
-                        Some(("invoices", invoice_id, 1, json!({"invoice_id": invoice_id})))
+                        Some((
+                            "invoices",
+                            accepted_response.invoice_id,
+                            1,
+                            json!({
+                                "request": input,
+                                "response": accepted_response
+                            }),
+                        ))
                     } else {
                         None
                     },
@@ -1262,9 +1316,9 @@ impl CentralStore {
                 Ok(result)
             }
             "SOLAR_SALE_CREATED" => {
-                let input: CreateSolarSaleRequest =
+                let payload: SolarSaleSyncPayload =
                     match serde_json::from_value(event.payload.clone()) {
-                        Ok(input) => input,
+                        Ok(payload) => payload,
                         Err(_) => {
                             let result = SyncEventResult::Rejected {
                                 code: "SOLAR_SALE_PAYLOAD_INVALID".into(),
@@ -1282,10 +1336,21 @@ impl CentralStore {
                             return Ok(result);
                         }
                     };
+                let SolarSaleSyncPayload {
+                    request: input,
+                    sale_id,
+                    receivable_id,
+                } = payload;
                 tx.rollback().await?;
                 let operation_key = format!("sync-solar-sale-{}", event.event_id);
                 let outcome = self
-                    .create_solar_sale(&input, &operation_key, &event.payload_sha256)
+                    .create_solar_sale_with_ids(
+                        &input,
+                        sale_id,
+                        receivable_id,
+                        &operation_key,
+                        &event.payload_sha256,
+                    )
                     .await;
                 let (response, created) = match outcome {
                     Ok(SolarSaleWriteOutcome::Created(response)) => (response, true),
@@ -1330,9 +1395,9 @@ impl CentralStore {
                 Ok(result)
             }
             "SOLAR_CONTRACT_ACTIVATED" => {
-                let input: ActivateSolarContractRequest =
+                let payload: SolarContractSyncPayload =
                     match serde_json::from_value(event.payload.clone()) {
-                        Ok(input) => input,
+                        Ok(payload) => payload,
                         Err(_) => {
                             let result = SyncEventResult::Rejected {
                                 code: "SOLAR_CONTRACT_PAYLOAD_INVALID".into(),
@@ -1350,11 +1415,17 @@ impl CentralStore {
                             return Ok(result);
                         }
                     };
+                let SolarContractSyncPayload {
+                    request: input,
+                    contract_id,
+                    installment_plan_id,
+                } = payload;
                 tx.rollback().await?;
                 let operation_key = format!("sync-solar-contract-{}", event.event_id);
                 let outcome = self
-                    .activate_solar_contract(
-                        input.sale_id,
+                    .activate_solar_contract_with_plan_id(
+                        contract_id,
+                        installment_plan_id,
                         &input,
                         &operation_key,
                         &event.payload_sha256,
@@ -1398,30 +1469,40 @@ impl CentralStore {
                 Ok(result)
             }
             "PAYMENT_RECORDED" => {
-                let input: RecordPaymentRequest =
-                    match serde_json::from_value(event.payload.clone()) {
-                        Ok(input) => input,
-                        Err(_) => {
-                            let result = SyncEventResult::Rejected {
-                                code: "PAYMENT_PAYLOAD_INVALID".into(),
-                                required_action: "send_a_valid_payment_request".into(),
-                            };
-                            persist_sync_result(
-                                &mut tx,
-                                self.organization_id,
-                                event,
-                                &result,
-                                None,
-                            )
-                            .await?;
-                            tx.commit().await?;
-                            return Ok(result);
-                        }
+                let (input, payment_id) =
+                    match serde_json::from_value::<PaymentSyncPayload>(event.payload.clone()) {
+                        Ok(payload) => (payload.request, payload.payment_id),
+                        Err(_) => match serde_json::from_value::<RecordPaymentRequest>(
+                            event.payload.clone(),
+                        ) {
+                            Ok(input) => (input, event.aggregate_id),
+                            Err(_) => {
+                                let result = SyncEventResult::Rejected {
+                                    code: "PAYMENT_PAYLOAD_INVALID".into(),
+                                    required_action: "send_a_valid_payment_request".into(),
+                                };
+                                persist_sync_result(
+                                    &mut tx,
+                                    self.organization_id,
+                                    event,
+                                    &result,
+                                    None,
+                                )
+                                .await?;
+                                tx.commit().await?;
+                                return Ok(result);
+                            }
+                        },
                     };
                 tx.rollback().await?;
                 let operation_key = format!("sync-payment-{}", event.event_id);
                 let outcome = self
-                    .record_payment(&input, &operation_key, &event.payload_sha256)
+                    .record_payment_with_id(
+                        &input,
+                        payment_id,
+                        &operation_key,
+                        &event.payload_sha256,
+                    )
                     .await;
                 let (body, payment_id, created) = match outcome {
                     Ok(PaymentWriteOutcome::Created(body)) => {
@@ -1475,7 +1556,16 @@ impl CentralStore {
                         server_entity_id: payment_id,
                     },
                     if created {
-                        Some(("payments", payment_id, 1, body))
+                        Some((
+                            "payments",
+                            payment_id,
+                            1,
+                            json!({
+                                "customer_id": input.customer_id,
+                                "payment": body,
+                                "allocations": input.allocations,
+                            }),
+                        ))
                     } else {
                         None
                     },
