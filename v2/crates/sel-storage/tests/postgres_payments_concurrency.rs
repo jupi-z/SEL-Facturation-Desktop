@@ -55,10 +55,12 @@ async fn duplicate_allocations_are_aggregated_before_balance_validation() {
                     PaymentAllocationRequest {
                         receivable_id,
                         amount: Decimal::new(7, 0),
+                        schedule_id: None,
                     },
                     PaymentAllocationRequest {
                         receivable_id,
                         amount: Decimal::new(7, 0),
+                        schedule_id: None,
                     },
                 ],
             },
@@ -129,6 +131,7 @@ async fn concurrent_payments_cannot_both_consume_the_same_balance() {
         allocations: vec![PaymentAllocationRequest {
             receivable_id,
             amount: Decimal::new(6, 0),
+            schedule_id: None,
         }],
     };
     let left_request = make_request();

@@ -7,14 +7,14 @@ use axum::{
     Json, Router,
 };
 use sel_contracts::{
-    CreateCustomer, Customer, InvoiceLineResponse, RecordPaymentRequest, SyncEventResult,
-    SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse,
+    ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
+    InvoiceLineResponse, RecordPaymentRequest, SolarSaleResponse, SyncEventResult, SyncPushRequest,
+    SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, utility_snapshot_sha256,
 };
 use sel_domain::billing;
 use sel_storage::LocalStore;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::{net::SocketAddr, sync::Arc};
 use uuid::Uuid;
 
@@ -207,6 +207,11 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route("/local/v1/invoices/:id", get(get_invoice))
         .route("/local/v1/receivables/:id", get(get_receivable))
         .route("/local/v1/payments", post(record_payment))
+        .route("/local/v1/solar/sales", post(create_solar_sale))
+        .route(
+            "/local/v1/solar/contracts/:id/activate",
+            post(activate_solar_contract),
+        )
         .route("/local/v1/sync/status", get(status_with_store))
         .route("/local/v1/sync/trigger", post(trigger_sync_with_store))
         .route("/local/v1/updates/status", get(update_status))
@@ -411,8 +416,8 @@ async fn issue_utility_invoice(
         total: result.total,
         snapshot_sha256: String::new(),
     };
-    let snapshot = json!({"input": input, "response": response});
-    response.snapshot_sha256 = digest_json(&snapshot)?;
+    response.snapshot_sha256 = utility_snapshot_sha256(&response)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     state
         .store
         .issue_utility_invoice(&input, &response)
@@ -459,6 +464,31 @@ async fn record_payment(
     Ok((StatusCode::CREATED, Json(body)))
 }
 
+async fn create_solar_sale(
+    State(state): State<LocalAppState>,
+    Json(input): Json<CreateSolarSaleRequest>,
+) -> Result<(StatusCode, Json<SolarSaleResponse>), (StatusCode, String)> {
+    let (response, _) = state
+        .store
+        .create_solar_sale_offline(&input)
+        .await
+        .map_err(internal_error)?;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn activate_solar_contract(
+    State(state): State<LocalAppState>,
+    Path(contract_id): Path<Uuid>,
+    Json(input): Json<ActivateSolarContractRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let (response, _) = state
+        .store
+        .activate_solar_contract_offline(contract_id, &input)
+        .await
+        .map_err(internal_error)?;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
 async fn trigger_sync_with_store(
     State(state): State<LocalAppState>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
@@ -491,14 +521,6 @@ fn local_payment_error(error: sel_storage::sqlite::LocalPaymentError) -> (Status
         sel_storage::sqlite::LocalPaymentError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, error.to_string())
-}
-
-fn digest_json(value: &serde_json::Value) -> Result<String, (StatusCode, String)> {
-    let bytes = serde_json::to_vec(value)
-        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    let mut digest = Sha256::new();
-    digest.update(bytes);
-    Ok(hex::encode(digest.finalize()))
 }
 
 pub async fn run(addr: SocketAddr) -> Result<(), std::io::Error> {

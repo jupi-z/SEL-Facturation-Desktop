@@ -70,6 +70,7 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
         allocations: vec![PaymentAllocationRequest {
             receivable_id,
             amount: Decimal::new(3, 0),
+            schedule_id: None,
         }],
     };
     let payment_id = Uuid::new_v4();

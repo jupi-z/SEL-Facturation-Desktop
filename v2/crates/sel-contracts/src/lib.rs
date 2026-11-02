@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -88,6 +89,85 @@ pub struct UtilityBillingResponse {
     pub snapshot_sha256: String,
 }
 
+#[derive(Serialize)]
+struct CanonicalUtilitySnapshot<'a> {
+    schema_version: u32,
+    invoice_id: Uuid,
+    receivable_id: Option<Uuid>,
+    currency: &'a str,
+    lines: &'a [InvoiceLineResponse],
+    subtotal: Decimal,
+    tax: Decimal,
+    total: Decimal,
+}
+
+/// Hashes the immutable financial portion of a utility invoice.
+///
+/// Synchronisation lifecycle fields (`status`, `invoice_number` and the hash
+/// itself) are intentionally excluded. This lets a locally issued invoice be
+/// confirmed centrally without manufacturing a financial conflict.
+pub fn utility_snapshot_sha256(
+    response: &UtilityBillingResponse,
+) -> Result<String, serde_json::Error> {
+    let canonical = CanonicalUtilitySnapshot {
+        schema_version: DOCUMENT_SCHEMA_VERSION,
+        invoice_id: response.invoice_id,
+        receivable_id: response.receivable_id,
+        currency: &response.currency,
+        lines: &response.lines,
+        subtotal: response.subtotal,
+        tax: response.tax,
+        total: response.total,
+    };
+    let bytes = serde_json::to_vec(&canonical)?;
+    let mut digest = Sha256::new();
+    digest.update(bytes);
+    Ok(hex::encode(digest.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utility_snapshot_hash_is_shared_and_ignores_sync_status() {
+        let mut pending = UtilityBillingResponse {
+            invoice_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+            receivable_id: Some(
+                Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap(),
+            ),
+            invoice_number: None,
+            status: "LOCAL_PENDING".into(),
+            currency: "USD".into(),
+            lines: vec![InvoiceLineResponse {
+                service_code: "ELECTRICITY".into(),
+                quantity: Decimal::new(250, 0),
+                unit: "KWH".into(),
+                unit_price: Some(Decimal::new(95, 3)),
+                subtotal: Decimal::new(2375, 2),
+                tax: Decimal::new(38, 2),
+                total: Decimal::new(2413, 2),
+            }],
+            subtotal: Decimal::new(2375, 2),
+            tax: Decimal::new(38, 2),
+            total: Decimal::new(2413, 2),
+            snapshot_sha256: String::new(),
+        };
+        let accepted = UtilityBillingResponse {
+            status: "CENTRAL_ACCEPTED".into(),
+            ..pending.clone()
+        };
+
+        let pending_hash = utility_snapshot_sha256(&pending).unwrap();
+        let accepted_hash = utility_snapshot_sha256(&accepted).unwrap();
+
+        assert_eq!(pending_hash, accepted_hash);
+        assert_eq!(pending_hash.len(), 64);
+        pending.snapshot_sha256 = pending_hash.clone();
+        assert_eq!(pending.snapshot_sha256, pending_hash);
+    }
+}
+
 /// Versioned offline payload carrying the client-generated identifiers that
 /// must remain stable when PostgreSQL accepts the command after a retry.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -101,6 +181,8 @@ pub struct UtilityInvoiceSyncPayload {
 pub struct PaymentAllocationRequest {
     pub receivable_id: Uuid,
     pub amount: Decimal,
+    #[serde(default)]
+    pub schedule_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -206,6 +288,16 @@ pub struct SolarSaleResponse {
     pub principal: Decimal,
     pub currency: String,
     pub status: String,
+    #[serde(default)]
+    pub product_code: Option<String>,
+}
+
+/// Stable local/central identifier for one solar installment row.
+pub fn solar_schedule_id(plan_id: Uuid, sequence: u32) -> Uuid {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("SEL:SOLAR_SCHEDULE:{plan_id}:{sequence}").as_bytes(),
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

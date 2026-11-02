@@ -4,7 +4,8 @@ use sel_contracts::{
     ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
     PaymentSyncPayload, RecordPaymentRequest, SolarContractSyncPayload, SolarSaleResponse,
     SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    UtilityBillingResponse, UtilityInvoiceSyncPayload, solar_schedule_id,
+    utility_snapshot_sha256,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -504,12 +505,16 @@ impl CentralStore {
             return Err(PaymentWriteError::InvalidAllocation);
         }
         let mut grouped_allocations = BTreeMap::<Uuid, Decimal>::new();
+        let mut persisted_allocations = BTreeMap::<(Uuid, Option<Uuid>), Decimal>::new();
         for allocation in &input.allocations {
             if allocation.amount <= Decimal::ZERO {
                 return Err(PaymentWriteError::InvalidAllocation);
             }
             *grouped_allocations
                 .entry(allocation.receivable_id)
+                .or_insert(Decimal::ZERO) += allocation.amount;
+            *persisted_allocations
+                .entry((allocation.receivable_id, allocation.schedule_id))
                 .or_insert(Decimal::ZERO) += allocation.amount;
         }
         let allocated_total: Decimal = grouped_allocations.values().copied().sum();
@@ -546,6 +551,29 @@ impl CentralStore {
             if paid + allocated_amount > principal {
                 return Err(PaymentWriteError::Overallocated);
             }
+            for ((allocation_receivable_id, schedule_id), _) in persisted_allocations
+                .iter()
+                .filter(|((allocation_receivable_id, _), _)| {
+                    allocation_receivable_id == receivable_id
+                })
+            {
+                if let Some(schedule_id) = schedule_id {
+                    let schedule_exists = sqlx::query(
+                        "SELECT s.id FROM installment_schedule s
+                         JOIN installment_plans p ON p.id = s.plan_id
+                         WHERE s.id = $1 AND p.receivable_id = $2
+                         FOR SHARE",
+                    )
+                    .bind(schedule_id)
+                    .bind(receivable_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .is_some();
+                    if !schedule_exists {
+                        return Err(PaymentWriteError::ContextInvalid);
+                    }
+                }
+            }
         }
         sqlx::query(
             "INSERT INTO payments
@@ -560,15 +588,16 @@ impl CentralStore {
         .bind(input.occurred_at)
         .execute(&mut *tx)
         .await?;
-        for (receivable_id, allocated_amount) in grouped_allocations {
+        for ((receivable_id, schedule_id), allocated_amount) in persisted_allocations {
             sqlx::query(
                 "INSERT INTO payment_allocations
-                 (id, payment_id, receivable_id, allocated_amount, currency)
-                 VALUES ($1, $2, $3, $4, $5)",
+                 (id, payment_id, receivable_id, schedule_id, allocated_amount, currency)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(Uuid::new_v4())
             .bind(payment_id)
             .bind(receivable_id)
+            .bind(schedule_id)
             .bind(allocated_amount)
             .bind(&input.currency)
             .execute(&mut *tx)
@@ -717,6 +746,7 @@ impl CentralStore {
             principal: input.principal.round_dp(2),
             currency: input.currency.clone(),
             status: "CENTRAL_ACCEPTED".into(),
+            product_code: Some(input.product_code.trim().to_owned()),
         };
         let snapshot = serde_json::to_value(&response)?;
         sqlx::query(
@@ -898,7 +928,7 @@ impl CentralStore {
         .bind(contract_id)
         .bind(principal)
         .bind(&currency)
-        .bind(json!({"terms_revision": input.approved_terms_revision}))
+        .bind(json!({"terms_revision": &input.approved_terms_revision}))
         .execute(&mut *tx)
         .await?;
         for installment in &input.schedule {
@@ -907,7 +937,7 @@ impl CentralStore {
                  (id, plan_id, sequence, due_date, amount_due, schedule_status)
                  VALUES ($1, $2, $3, $4, $5, 'OPEN')",
             )
-            .bind(Uuid::new_v4())
+            .bind(solar_schedule_id(plan_id, installment.sequence))
             .bind(plan_id)
             .bind(installment.sequence as i32)
             .bind(installment.due_date)
@@ -923,6 +953,7 @@ impl CentralStore {
             "contract_id": contract_id,
             "principal": principal.round_dp(2),
             "currency": currency,
+            "terms_revision": &input.approved_terms_revision,
             "schedule": input.schedule
         });
         sqlx::query(
@@ -1270,11 +1301,19 @@ impl CentralStore {
                     subtotal: calculated.subtotal,
                     tax: calculated.tax,
                     total: calculated.total,
-                    snapshot_sha256: payload_digest(&json!({
-                        "input": &input,
-                        "total": calculated.total,
-                        "tariff_revision": input.tariff_revision
-                    })),
+                    snapshot_sha256: String::new(),
+                };
+                response.snapshot_sha256 = match utility_snapshot_sha256(&response) {
+                    Ok(hash) => hash,
+                    Err(error) => {
+                        return self
+                            .persist_sync_rejection(
+                                event,
+                                "UTILITY_SNAPSHOT_INVALID",
+                                &error.to_string(),
+                            )
+                            .await;
+                    }
                 };
                 let operation_key = format!("sync-utility-{}", event.event_id);
                 let outcome = self

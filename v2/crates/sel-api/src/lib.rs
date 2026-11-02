@@ -13,7 +13,7 @@ use sel_contracts::{
     CreateCustomer, CreateSolarSaleRequest, Customer, DocumentData, InvoiceLineResponse,
     PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest, SolarSaleResponse,
     SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse,
+    UtilityBillingResponse, utility_snapshot_sha256,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -550,13 +550,7 @@ async fn calculate_utility(
             total: line.total,
         })
         .collect();
-    let snapshot = json!({"input":input,"result":{"subtotal":result.subtotal,"tax":result.tax,"total":result.total},"tariff_revision":input.tariff_revision});
-    let snapshot_sha256 = digest_bytes(
-        serde_json::to_vec(&snapshot)
-            .map_err(ApiError::internal)?
-            .as_slice(),
-    );
-    Ok(UtilityBillingResponse {
+    let mut response = UtilityBillingResponse {
         invoice_id: Uuid::new_v4(),
         receivable_id: None,
         invoice_number: None,
@@ -566,8 +560,10 @@ async fn calculate_utility(
         subtotal: result.subtotal,
         tax: result.tax,
         total: result.total,
-        snapshot_sha256,
-    })
+        snapshot_sha256: String::new(),
+    };
+    response.snapshot_sha256 = utility_snapshot_sha256(&response).map_err(ApiError::internal)?;
+    Ok(response)
 }
 
 async fn get_invoice(
@@ -970,6 +966,7 @@ async fn create_solar_sale(
         principal: input.principal,
         currency: input.currency.clone(),
         status: "CENTRAL_ACCEPTED".into(),
+        product_code: Some(input.product_code.clone()),
     };
     state
         .solar_sales

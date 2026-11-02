@@ -21,6 +21,7 @@ async fn sqlite_migrations_are_repeatable_and_create_local_sync_tables() {
         "outbox",
         "sync_inbox",
         "sync_conflicts",
+        "sale_lines",
     ] {
         assert!(
             tables.iter().any(|name| name == required),

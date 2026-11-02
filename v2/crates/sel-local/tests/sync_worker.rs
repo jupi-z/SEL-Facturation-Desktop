@@ -1,7 +1,8 @@
 use axum::{routing::post, Json, Router};
 use chrono::Utc;
 use sel_contracts::{
-    SyncEnvelope, SyncEventResult, SyncPullResponse, SyncPushRequest, SyncPushResponse,
+    utility_snapshot_sha256, SyncEnvelope, SyncEventResult, SyncPullResponse, SyncPushRequest,
+    SyncPushResponse, UtilityBillingResponse,
 };
 use sel_local::{spawn_sync_worker, sync_once};
 use sel_storage::LocalStore;
@@ -186,7 +187,7 @@ async fn pulled_utility_invoice_and_payment_changes_project_locally() {
         "revision": 1,
         "change": {"customer_code":"PULL-FIN-1","legal_name":"Pull finance customer","status":"ACTIVE"}
     });
-    let invoice_change = serde_json::json!({
+    let mut invoice_change = serde_json::json!({
         "sequence": 2,
         "entity": "invoices",
         "entity_id": invoice_id,
@@ -216,6 +217,13 @@ async fn pulled_utility_invoice_and_payment_changes_project_locally() {
             }
         }
     });
+    let invoice_response: UtilityBillingResponse = serde_json::from_value(
+        invoice_change["change"]["response"].clone(),
+    )
+    .expect("invoice fixture response");
+    invoice_change["change"]["response"]["snapshot_sha256"] = serde_json::json!(
+        utility_snapshot_sha256(&invoice_response).expect("invoice fixture hash")
+    );
     let payment_change = serde_json::json!({
         "sequence": 3,
         "entity": "payments",
@@ -278,7 +286,7 @@ async fn central_acceptance_reconciles_pending_invoice_and_payment_without_dupli
     .execute(&store.pool)
     .await
     .expect("seed customer");
-    let response = serde_json::json!({
+    let mut response = serde_json::json!({
         "invoice_id": invoice_id,
         "receivable_id": receivable_id,
         "invoice_number": null,
@@ -290,6 +298,11 @@ async fn central_acceptance_reconciles_pending_invoice_and_payment_without_dupli
         ],
         "subtotal":"10.00","tax":"1.60","total":"11.60","snapshot_sha256":"fixture"
     });
+    let response_object: UtilityBillingResponse =
+        serde_json::from_value(response.clone()).expect("pending invoice fixture response");
+    response["snapshot_sha256"] = serde_json::json!(
+        utility_snapshot_sha256(&response_object).expect("pending invoice fixture hash")
+    );
     sqlx::query(
         "INSERT INTO invoices
          (id, customer_id, period, issued_at, currency, total, template_version, immutable_snapshot_json, status, version)
@@ -391,5 +404,142 @@ async fn central_acceptance_reconciles_pending_invoice_and_payment_without_dupli
             .await
             .expect("count allocations");
     assert_eq!(allocation_count, 1);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn unsupported_central_projection_is_audited_instead_of_dropped() {
+    let path = std::env::temp_dir().join(format!("sel-v2-unsupported-pull-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("connect local store");
+
+    store
+        .apply_pulled_changes(&SyncPullResponse {
+            changes: vec![serde_json::json!({
+                "sequence": 42,
+                "entity": "future_financial_entity",
+                "entity_id": Uuid::new_v4(),
+                "revision": 3,
+                "change": {"amount":"9.00","currency":"USD"}
+            })],
+            next_cursor: 42,
+        })
+        .await
+        .expect("audit unsupported projection");
+
+    let conflicts: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_conflicts")
+        .fetch_one(&store.pool)
+        .await
+        .expect("count projection conflicts");
+    assert_eq!(conflicts, 1);
+    assert_eq!(store.central_cursor().await.unwrap(), 42);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn solar_sale_and_contract_projections_converge_idempotently() {
+    let path = std::env::temp_dir().join(format!("sel-v2-solar-pull-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("connect local store");
+    let customer_id = Uuid::new_v4();
+    let sale_id = Uuid::new_v4();
+    let receivable_id = Uuid::new_v4();
+    let contract_id = Uuid::new_v4();
+    let plan_id = Uuid::new_v4();
+    let sale_change = serde_json::json!({
+        "sequence": 2,
+        "entity": "sales",
+        "entity_id": sale_id,
+        "revision": 1,
+        "change": {
+            "sale_id": sale_id,
+            "receivable_id": receivable_id,
+            "customer_id": customer_id,
+            "principal": "120.00",
+            "currency": "USD",
+            "status": "CENTRAL_ACCEPTED",
+            "product_code": "KIT-100"
+        }
+    });
+    let contract_change = serde_json::json!({
+        "sequence": 3,
+        "entity": "installment_plans",
+        "entity_id": plan_id,
+        "revision": 1,
+        "change": {
+            "status": "CENTRAL_ACCEPTED",
+            "sale_id": sale_id,
+            "receivable_id": receivable_id,
+            "installment_plan_id": plan_id,
+            "contract_id": contract_id,
+            "principal": "120.00",
+            "currency": "USD",
+            "terms_revision": "solar-v1",
+            "schedule": [
+                {"sequence":1,"due_date":"2026-12-01","amount":"60.00"},
+                {"sequence":2,"due_date":"2027-01-01","amount":"60.00"}
+            ]
+        }
+    });
+    let changes = vec![
+        serde_json::json!({
+            "sequence": 1,
+            "entity": "customers",
+            "entity_id": customer_id,
+            "revision": 1,
+            "change": {"customer_code":"SOLAR-PULL-1","legal_name":"Solar pull customer","status":"ACTIVE"}
+        }),
+        sale_change,
+        contract_change,
+    ];
+    let pull = SyncPullResponse {
+        changes: changes.clone(),
+        next_cursor: 3,
+    };
+    store.apply_pulled_changes(&pull).await.expect("project solar changes");
+    store.apply_pulled_changes(&pull).await.expect("replay solar changes");
+
+    let sale_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sales WHERE id = $1")
+        .bind(sale_id.to_string())
+        .fetch_one(&store.pool)
+        .await
+        .expect("count projected sale");
+    let line_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sale_lines WHERE sale_id = $1")
+        .bind(sale_id.to_string())
+        .fetch_one(&store.pool)
+        .await
+        .expect("count projected sale lines");
+    let schedule_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM installment_schedule WHERE plan_id = $1",
+    )
+    .bind(plan_id.to_string())
+    .fetch_one(&store.pool)
+    .await
+    .expect("count projected schedule");
+    let schedule_id: String = sqlx::query_scalar(
+        "SELECT id FROM installment_schedule WHERE plan_id = $1 AND sequence = 1",
+    )
+    .bind(plan_id.to_string())
+    .fetch_one(&store.pool)
+    .await
+    .expect("read projected schedule id");
+    assert_eq!(sale_count, 1);
+    assert_eq!(line_count, 1);
+    assert_eq!(schedule_count, 2);
+    assert_eq!(
+        schedule_id,
+        sel_contracts::solar_schedule_id(plan_id, 1).to_string()
+    );
+    assert_eq!(store.central_cursor().await.unwrap(), 3);
     let _ = std::fs::remove_file(path);
 }

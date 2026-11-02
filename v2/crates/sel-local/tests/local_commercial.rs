@@ -203,3 +203,101 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert_eq!(reopened.pending_count().await.unwrap(), 4);
     let _ = std::fs::remove_file(path);
 }
+
+#[tokio::test]
+async fn local_solar_sale_and_contract_are_persisted_offline() {
+    let path = std::env::temp_dir().join(format!("sel-v2-local-solar-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("connect local store");
+    sqlx::query(
+        "INSERT INTO products (id, sku, product_type, label, price_reference, currency, active)
+         VALUES ($1, 'KIT-LOCAL-1', 'SOLAR_KIT', 'Local kit', '120.00', 'USD', 1)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed local solar product");
+    let (customer, _) = store
+        .create_customer(&CreateCustomer {
+            customer_code: "SOLAR-LOCAL-1".into(),
+            legal_name: "Local solar customer".into(),
+            address: None,
+            phone: None,
+        })
+        .await
+        .expect("create local solar customer");
+    let app = router_with_store(store.clone());
+    let sale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/local/v1/solar/sales")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "customer_id": customer.id,
+                        "product_code": "KIT-LOCAL-1",
+                        "principal": "120.00",
+                        "currency": "USD",
+                        "terms_revision": "solar-local-v1"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sale.status(), StatusCode::CREATED);
+    let sale = json_body(sale).await;
+    let contract_id = Uuid::new_v4();
+    let contract = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/solar/contracts/{contract_id}/activate"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "sale_id": sale["sale_id"],
+                        "receivable_id": sale["receivable_id"],
+                        "schedule": [
+                            {"sequence":1,"due_date":"2026-12-01","amount":"60.00"},
+                            {"sequence":2,"due_date":"2027-01-01","amount":"60.00"}
+                        ],
+                        "currency":"USD",
+                        "approved_terms_revision":"solar-local-v1"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(contract.status(), StatusCode::CREATED);
+    let plan_id = json_body(contract)
+        .await["installment_plan_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let counts: (i64, i64, i64) = sqlx::query_as(
+        "SELECT
+           (SELECT count(*) FROM sale_lines WHERE sale_id = $1),
+           (SELECT count(*) FROM installment_plans WHERE id = $2),
+           (SELECT count(*) FROM installment_schedule WHERE plan_id = $2)",
+    )
+    .bind(sale["sale_id"].as_str().unwrap())
+    .bind(plan_id.to_string())
+    .fetch_one(&store.pool)
+    .await
+    .expect("read local solar projections");
+    assert_eq!(counts, (1, 1, 2));
+    assert_eq!(store.pending_count().await.unwrap(), 3);
+    let _ = std::fs::remove_file(path);
+}
