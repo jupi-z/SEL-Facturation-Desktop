@@ -619,7 +619,7 @@ impl LocalStore {
         id: Uuid,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT r.id, r.customer_id, r.currency, r.principal_total
+            "SELECT r.id, r.customer_id, r.currency, r.principal_total, r.status
              FROM receivables r
              WHERE r.id = $1 AND r.customer_id IN (SELECT id FROM customers WHERE organization_id = $2)
              LIMIT 1",
@@ -632,8 +632,11 @@ impl LocalStore {
             return Ok(None);
         };
         let principal = decimal_text(&row, "principal_total")?;
+        let receivable_status: String = row.try_get("status")?;
         let paid_values: Vec<String> = sqlx::query_scalar(
-            "SELECT allocated_amount FROM payment_allocations WHERE receivable_id = $1",
+            "SELECT pa.allocated_amount FROM payment_allocations pa
+             JOIN payments p ON p.id = pa.payment_id
+             WHERE pa.receivable_id = $1 AND p.status IN ('LOCAL_PENDING', 'CENTRAL_ACCEPTED')",
         )
         .bind(id.to_string())
         .fetch_all(&self.pool)
@@ -646,14 +649,26 @@ impl LocalStore {
                 })?;
                 Ok::<Decimal, sqlx::Error>(total + amount)
             })?;
+        let rejected = receivable_status == "REJECTED";
+        let balance = if rejected {
+            Decimal::ZERO
+        } else {
+            principal - paid
+        };
         Ok(Some(json!({
             "id": row.try_get::<String, _>("id")?,
             "customer_id": row.try_get::<String, _>("customer_id")?,
             "currency": row.try_get::<String, _>("currency")?,
             "principal": principal,
             "paid": paid,
-            "balance": principal - paid,
-            "status": if paid >= principal { "SETTLED" } else { "OPEN" }
+            "balance": balance,
+            "status": if rejected {
+                "REJECTED"
+            } else if paid >= principal {
+                "SETTLED"
+            } else {
+                "OPEN"
+            }
         })))
     }
 
@@ -959,6 +974,9 @@ impl LocalStore {
             SyncEventResult::Conflict { .. } => "CONFLICT",
             SyncEventResult::Rejected { .. } => "REJECTED",
         };
+        if state == "CONFLICT" || state == "REJECTED" {
+            mark_local_effect_rejected(&mut tx, event_id.to_string()).await?;
+        }
         let updated = sqlx::query(
             "UPDATE outbox SET state = $2, last_error = NULL WHERE event_id = $1 AND state IN ('PENDING', 'IN_FLIGHT')",
         )
@@ -1003,6 +1021,64 @@ impl LocalStore {
         tx.commit().await?;
         Ok(())
     }
+}
+
+async fn mark_local_effect_rejected(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    event_id: String,
+) -> Result<(), sqlx::Error> {
+    let journal =
+        sqlx::query("SELECT aggregate_id, command_type FROM command_journal WHERE event_id = $1")
+            .bind(&event_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let Some(journal) = journal else {
+        return Ok(());
+    };
+    let aggregate_id: String = journal.try_get("aggregate_id")?;
+    let command_type: String = journal.try_get("command_type")?;
+    match command_type.as_str() {
+        "PAYMENT_RECORDED" => {
+            sqlx::query("UPDATE payments SET status = 'REJECTED' WHERE id = $1")
+                .bind(&aggregate_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        "UTILITY_INVOICE_ISSUED" => {
+            sqlx::query("UPDATE invoices SET status = 'REJECTED' WHERE id = $1")
+                .bind(&aggregate_id)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query(
+                "UPDATE receivables SET status = 'REJECTED'
+                 WHERE source_type = 'INVOICE' AND source_id = $1",
+            )
+            .bind(&aggregate_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        "SOLAR_SALE_CREATED" => {
+            sqlx::query("UPDATE sales SET status = 'REJECTED' WHERE id = $1")
+                .bind(&aggregate_id)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query(
+                "UPDATE receivables SET status = 'REJECTED'
+                 WHERE source_type = 'SALE' AND source_id = $1",
+            )
+            .bind(&aggregate_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        "SOLAR_CONTRACT_ACTIVATED" => {
+            sqlx::query("UPDATE installment_plans SET status = 'REJECTED' WHERE id = $1")
+                .bind(&aggregate_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 async fn insert_command_in_tx(

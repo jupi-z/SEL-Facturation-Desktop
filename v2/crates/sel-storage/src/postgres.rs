@@ -551,12 +551,11 @@ impl CentralStore {
             if paid + allocated_amount > principal {
                 return Err(PaymentWriteError::Overallocated);
             }
-            for ((allocation_receivable_id, schedule_id), _) in
-                persisted_allocations
-                    .iter()
-                    .filter(|((allocation_receivable_id, _), _)| {
-                        allocation_receivable_id == receivable_id
-                    })
+            for ((_allocation_receivable_id, schedule_id), _) in persisted_allocations
+                .iter()
+                .filter(|((allocation_receivable_id, _), _)| {
+                    allocation_receivable_id == receivable_id
+                })
             {
                 if let Some(schedule_id) = schedule_id {
                     let schedule_exists = sqlx::query(

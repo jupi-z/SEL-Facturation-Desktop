@@ -1542,10 +1542,12 @@ name = "sel-contracts"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "hex",
  "rust_decimal",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "uuid",
 ]
 
@@ -1571,6 +1573,7 @@ dependencies = [
  "http-body-util",
  "reqwest",
  "rust_decimal",
+ "sel-api",
  "sel-contracts",
  "sel-domain",
  "sel-storage",
@@ -1716,6 +1719,12 @@ dependencies = [
  "cpufeatures 0.2.17",
  "digest",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -2360,6 +2369,7 @@ checksum = "81dfa00651efa65069b0b6b651f4aaa31ba9e3c3ce0137aaad053604ee7e0314"
 dependencies = [
  "getrandom 0.2.17",
  "serde",
+ "sha1_smol",
 ]
 
 [[package]]

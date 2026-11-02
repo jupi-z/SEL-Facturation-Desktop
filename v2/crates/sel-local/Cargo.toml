@@ -23,5 +23,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
+sel-api = { path = "../sel-api" }
 tower = "0.5"
 
