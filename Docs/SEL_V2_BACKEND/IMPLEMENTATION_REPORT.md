@@ -2,7 +2,7 @@
 
 Date de contrôle : 2 novembre 2026, Africa/Lubumbashi  
 Branche : `monarque/sel-v2-backend`  
-Commit d'implémentation contrôlé : `b17c1d5`  
+Commit d'implémentation contrôlé : `b17c1d5` ; tête finale de la PR au moment du rapport : `7d7d329`  
 Périmètre : backend Rust/API, migrations, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
@@ -49,7 +49,7 @@ Résultats :
 - LiveUpdate : PASS, signature valide ; PASS, signature falsifiée ; PASS, ressource altérée ; PASS, expiration ; PASS, downgrade ; PASS, traversal ; PASS, activation/rollback connu-bon.
 - OpenAPI : PASS, YAML parseable et aucune route PDF déclarée.
 - Compose : PASS, image release construite sans le `v2/target` local, PostgreSQL healthy, API accessible sur `127.0.0.1:18080/health/live`, migrations appliquées et 30 tables centrales visibles ; volume de test supprimé ensuite.
-- CI GitHub : PASS sur la PR #58, workflow `SEL V2 Backend`, run `41452364375`, job `rust` `125300436266`, commit testé `7c122f01d1eca69ba6c620409ada2246ca5e7777`. Les trois étapes `fmt`, `clippy -D warnings` et `cargo test --workspace` sont vertes. Les annotations GitHub concernent uniquement la migration Node.js 20 des actions et le futur label `ubuntu-latest`, pas le code Rust.
+- CI GitHub : PASS sur la PR #58, workflow `SEL V2 Backend`, run `41452693324`, job `rust` `125301531864`, commit testé `7d7d32909d69fed49fca56fe8e7dda1c825557af`. Les trois étapes `fmt`, `clippy -D warnings` et `cargo test --workspace` sont vertes. Les annotations GitHub concernent uniquement la migration Node.js 20 des actions et le futur label `ubuntu-latest`, pas le code Rust.
 - V1 Python : `260 passed, 2 failed` sur 262. Les deux échecs sont historiques et temporellement fragiles : `tests/test_invoice_preview.py::test_invoice_confirmation_keeps_the_tariff_used_by_preview` attend le code `RESIDENTIAL-2026-10` alors que la date système est novembre 2026 ; `tests/test_ui_tariff_rules.py::test_configured_future_customer_type_can_be_billed` configure une tarification effective le mois courant puis facture octobre. Ils ne proviennent pas d'une modification V2, mais empêchent un verdict de non-régression V1 totalement vert et doivent être corrigés/confirmés séparément.
 
 ## Matrice de recette
