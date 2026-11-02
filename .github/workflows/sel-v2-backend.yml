@@ -15,6 +15,20 @@ permissions:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: sel
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sel_v2_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U sel -d sel_v2_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
     defaults:
       run:
         working-directory: v2
@@ -28,4 +42,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: PostgreSQL persistence and transaction tests
+        env:
+          TEST_DATABASE_URL: postgres://sel:postgres@127.0.0.1:5432/sel_v2_test
+        run: cargo test --workspace -- --ignored
 

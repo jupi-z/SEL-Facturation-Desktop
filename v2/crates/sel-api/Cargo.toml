@@ -14,6 +14,7 @@ sel-sync = { path = "../sel-sync" }
 sel-storage = { path = "../sel-storage" }
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true

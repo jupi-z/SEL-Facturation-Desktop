@@ -5,7 +5,9 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+hex.workspace = true
 sel-storage = { path = "../sel-storage" }
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 

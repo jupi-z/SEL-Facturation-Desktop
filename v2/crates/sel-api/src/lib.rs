@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -25,6 +26,8 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct AppState {
     pub organization_id: Uuid,
+    pub central: Option<sel_storage::CentralStore>,
+    strict_auth: bool,
     pub tariffs: Arc<RwLock<TariffBook>>,
     pub customers: Arc<RwLock<HashMap<Uuid, Customer>>>,
     pub invoices: Arc<RwLock<HashMap<Uuid, InvoiceRecord>>>,
@@ -78,6 +81,8 @@ impl AppState {
     pub fn new(organization_id: Uuid) -> Self {
         Self {
             organization_id,
+            central: None,
+            strict_auth: false,
             tariffs: Arc::new(RwLock::new(TariffBook::default())),
             customers: Arc::new(RwLock::new(HashMap::new())),
             invoices: Arc::new(RwLock::new(HashMap::new())),
@@ -89,12 +94,25 @@ impl AppState {
         }
     }
 
+    pub fn with_central_store(store: sel_storage::CentralStore) -> Self {
+        let mut state = Self::new(store.organization_id);
+        state.central = Some(store);
+        state
+    }
+
+    pub fn with_production_central_store(store: sel_storage::CentralStore) -> Self {
+        let mut state = Self::with_central_store(store);
+        state.strict_auth = true;
+        state
+    }
+
     pub async fn configure_tariffs(&self, tariffs: TariffBook) {
         *self.tariffs.write().await = tariffs;
     }
 }
 
 pub fn router(state: AppState) -> Router {
+    let auth_state = state.clone();
     Router::new()
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
@@ -121,6 +139,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/solar/contracts/:id/activate",
             post(activate_solar_contract),
         )
+        .layer(middleware::from_fn_with_state(
+            auth_state,
+            production_auth_guard,
+        ))
         .with_state(state)
 }
 
@@ -131,6 +153,42 @@ pub async fn run(addr: std::net::SocketAddr, state: AppState) -> Result<(), std:
 
 async fn health_live() -> Json<serde_json::Value> {
     Json(json!({"status":"live","service":"sel-api","protocol_version":1}))
+}
+
+async fn production_auth_guard(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !state.strict_auth || !request.uri().path().starts_with("/v1/") {
+        return next.run(request).await;
+    }
+    let configured = std::env::var("SEL_API_AUTH_TOKEN").unwrap_or_default();
+    let presented = request
+        .headers()
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default();
+    if configured.is_empty() || !constant_time_equal(presented.as_bytes(), configured.as_bytes()) {
+        return ApiError::unauthorized(
+            "AUTH_NOT_CONFIGURED_OR_INVALID",
+            "a configured production API token is required",
+        )
+        .into_response();
+    }
+    next.run(request).await
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for index in 0..left.len().max(right.len()) {
+        difference |= usize::from(
+            left.get(index).copied().unwrap_or_default()
+                ^ right.get(index).copied().unwrap_or_default(),
+        );
+    }
+    difference == 0
 }
 
 async fn health_ready(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -153,6 +211,13 @@ async fn list_customers(
     headers: HeaderMap,
 ) -> Result<Json<Vec<Customer>>, ApiError> {
     require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        return store
+            .list_customers()
+            .await
+            .map(Json)
+            .map_err(storage_error);
+    }
     let mut customers: Vec<_> = state.customers.read().await.values().cloned().collect();
     customers.sort_by(|a, b| a.customer_code.cmp(&b.customer_code));
     Ok(Json(customers))
@@ -169,6 +234,13 @@ async fn create_customer(
             "CUSTOMER_REQUIRED",
             "customer code and legal name are required",
         ));
+    }
+    if let Some(store) = &state.central {
+        return store
+            .create_customer(&input)
+            .await
+            .map(|customer| (StatusCode::CREATED, Json(customer)))
+            .map_err(storage_error);
     }
     let mut customers = state.customers.write().await;
     if customers
@@ -200,6 +272,14 @@ async fn get_customer(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Customer>, ApiError> {
     require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        return store
+            .get_customer(id)
+            .await
+            .map_err(storage_error)?
+            .map(Json)
+            .ok_or_else(|| ApiError::not_found("CUSTOMER_NOT_FOUND", "customer not found"));
+    }
     state
         .customers
         .read()
@@ -227,6 +307,26 @@ async fn update_customer(
                 "If-Match must contain the customer revision",
             )
         })?;
+    if let Some(store) = &state.central {
+        let customer = store
+            .update_customer(id, expected, &input)
+            .await
+            .map_err(storage_error)?
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    "CUSTOMER_REVISION_CONFLICT",
+                    "customer was changed by another actor or does not exist",
+                )
+            })?;
+        let body = Json(customer.clone()).into_response();
+        let mut response = body;
+        response.headers_mut().insert(
+            "etag",
+            HeaderValue::from_str(&format!("\"{}\"", customer.revision))
+                .map_err(ApiError::internal)?,
+        );
+        return Ok(response);
+    }
     let mut customers = state.customers.write().await;
     let customer = customers
         .get_mut(&id)
@@ -312,6 +412,20 @@ async fn issue_utility(
     committed.status = "CENTRAL_ACCEPTED".into();
     let receivable_id = Uuid::new_v4();
     committed.receivable_id = Some(receivable_id);
+    if let Some(store) = &state.central {
+        return match store
+            .issue_utility_invoice(&input, &committed, key, &digest)
+            .await
+            .map_err(utility_issue_error)?
+        {
+            sel_storage::postgres::UtilityIssueOutcome::Created(response) => {
+                Ok((StatusCode::CREATED, Json(response)).into_response())
+            }
+            sel_storage::postgres::UtilityIssueOutcome::Replay(response) => {
+                Ok((StatusCode::OK, Json(response)).into_response())
+            }
+        };
+    }
     let mut invoices = state.invoices.write().await;
     if invoices.values().any(|invoice| {
         invoice.customer_id == input.customer_id && invoice.period == input.billing_period
@@ -361,7 +475,25 @@ async fn calculate_utility(
             "utility units must be KWH and M3",
         ));
     }
-    let tariffs = state.tariffs.read().await;
+    let tariffs = if let Some(store) = &state.central {
+        let snapshot = store
+            .load_tariffs(
+                &input.tariff_revision,
+                &input.currency,
+                &input.billing_period,
+            )
+            .await
+            .map_err(storage_error)?;
+        TariffBook {
+            electricity_unit_price: snapshot.electricity_unit_price,
+            electricity_tax_rate: snapshot.electricity_tax_rate,
+            water_unit_price: snapshot.water_unit_price,
+            water_tax_rate: snapshot.water_tax_rate,
+            revision: Some(input.tariff_revision.clone()),
+        }
+    } else {
+        state.tariffs.read().await.clone()
+    };
     if tariffs.revision.as_deref() != Some(input.tariff_revision.as_str()) {
         return Err(ApiError::unprocessable(
             "TARIFF_REVISION_INVALID",
@@ -444,6 +576,14 @@ async fn get_invoice(
     Path(id): Path<Uuid>,
 ) -> Result<Json<UtilityBillingResponse>, ApiError> {
     require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        return store
+            .get_invoice_response(id)
+            .await
+            .map_err(storage_error)?
+            .map(Json)
+            .ok_or_else(|| ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found"));
+    }
     state
         .invoices
         .read()
@@ -459,6 +599,22 @@ async fn get_document_data(
     Path(id): Path<Uuid>,
 ) -> Result<Json<DocumentData>, ApiError> {
     require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        let invoice = store
+            .get_invoice_response(id)
+            .await
+            .map_err(storage_error)?
+            .ok_or_else(|| ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found"))?;
+        let reference = format!("SEL-V2-{id}");
+        return Ok(Json(DocumentData {
+            document_schema_version: 1,
+            template_version: "v2-a4-1".into(),
+            document_reference: reference.clone(),
+            invoice,
+            qr_internal_reference: reference,
+            origin: "CENTRAL_ACCEPTED".into(),
+        }));
+    }
     let invoice = state
         .invoices
         .read()
@@ -515,6 +671,20 @@ async fn record_payment(
             "PAYMENT_ALLOCATION_INVALID",
             "allocation amounts must be positive",
         ));
+    }
+    if let Some(store) = &state.central {
+        return match store
+            .record_payment(&input, key, &digest)
+            .await
+            .map_err(payment_write_error)?
+        {
+            sel_storage::postgres::PaymentWriteOutcome::Created(body) => {
+                Ok((StatusCode::CREATED, Json(body)))
+            }
+            sel_storage::postgres::PaymentWriteOutcome::Replay(body) => {
+                Ok((StatusCode::OK, Json(body)))
+            }
+        };
     }
     let receivables = state.receivables.read().await;
     let payments = state.payments.read().await;
@@ -589,6 +759,14 @@ async fn get_receivable(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        return store
+            .get_receivable_summary(id)
+            .await
+            .map_err(storage_error)?
+            .map(Json)
+            .ok_or_else(|| ApiError::not_found("RECEIVABLE_NOT_FOUND", "receivable not found"));
+    }
     let receivable = state
         .receivables
         .read()
@@ -616,6 +794,14 @@ async fn get_statement(
     Path(customer_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        return store
+            .customer_statement(customer_id)
+            .await
+            .map_err(storage_error)?
+            .map(Json)
+            .ok_or_else(|| ApiError::not_found("CUSTOMER_NOT_FOUND", "customer not found"));
+    }
     let receivables = state
         .receivables
         .read()
@@ -655,6 +841,18 @@ async fn sync_push(
             "sync device or organization context is invalid",
         ));
     }
+    if let Some(store) = &state.central {
+        let mut results = Vec::with_capacity(input.events.len());
+        for event in &input.events {
+            results.push(
+                store
+                    .apply_sync_event(event)
+                    .await
+                    .map_err(sync_apply_error)?,
+            );
+        }
+        return Ok(Json(SyncPushResponse { results }));
+    }
     let results = state
         .sync
         .write()
@@ -684,6 +882,16 @@ async fn sync_pull(
         ));
     }
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    if let Some(store) = &state.central {
+        let (changes, next_cursor) = store
+            .pull_changes(cursor, limit as i64)
+            .await
+            .map_err(storage_error)?;
+        return Ok(Json(SyncPullResponse {
+            changes,
+            next_cursor,
+        }));
+    }
     let (changes, next_cursor) = state.sync.read().await.pull(cursor, limit);
     let changes = changes
         .into_iter()
@@ -700,6 +908,9 @@ async fn sync_status(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        return store.sync_status().await.map(Json).map_err(storage_error);
+    }
     Ok(Json(
         json!({"protocol_version":1,"state":"READY","pending":state.sync.read().await.pending(),"conflicts":0,"rejected":0,"last_successful_sync":null}),
     ))
@@ -725,7 +936,7 @@ async fn create_solar_sale(
     Json(input): Json<CreateSolarSaleRequest>,
 ) -> Result<(StatusCode, Json<SolarSaleResponse>), ApiError> {
     require_auth(&headers)?;
-    require_idempotency(&headers)?;
+    let key = require_idempotency(&headers)?;
     if input.principal <= Decimal::ZERO
         || input.product_code.trim().is_empty()
         || input.currency.trim().is_empty()
@@ -734,6 +945,21 @@ async fn create_solar_sale(
             "SOLAR_SALE_INVALID",
             "solar product, currency and a positive principal are required",
         ));
+    }
+    let digest = digest_json(&input)?;
+    if let Some(store) = &state.central {
+        return match store
+            .create_solar_sale(&input, key, &digest)
+            .await
+            .map_err(solar_sale_write_error)?
+        {
+            sel_storage::postgres::SolarSaleWriteOutcome::Created(response) => {
+                Ok((StatusCode::CREATED, Json(response)))
+            }
+            sel_storage::postgres::SolarSaleWriteOutcome::Replay(response) => {
+                Ok((StatusCode::OK, Json(response)))
+            }
+        };
     }
     let sale_id = Uuid::new_v4();
     let receivable_id = Uuid::new_v4();
@@ -765,11 +991,22 @@ async fn create_solar_sale(
 async fn activate_solar_contract(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(_id): Path<Uuid>,
+    Path(id): Path<Uuid>,
     Json(input): Json<sel_contracts::ActivateSolarContractRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_auth(&headers)?;
-    require_idempotency(&headers)?;
+    let key = require_idempotency(&headers)?;
+    let digest = digest_json(&input)?;
+    if let Some(store) = &state.central {
+        return match store
+            .activate_solar_contract(id, &input, key, &digest)
+            .await
+            .map_err(solar_contract_write_error)?
+        {
+            sel_storage::postgres::SolarContractWriteOutcome::Created(body)
+            | sel_storage::postgres::SolarContractWriteOutcome::Replay(body) => Ok(Json(body)),
+        };
+    }
     let receivable = state
         .receivables
         .read()
@@ -839,6 +1076,124 @@ fn digest_bytes(value: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(value);
     hex::encode(digest.finalize())
+}
+
+fn storage_error(error: sqlx::Error) -> ApiError {
+    if let sqlx::Error::Database(database) = &error {
+        if database.constraint() == Some("customers_organization_id_customer_code_key") {
+            return ApiError::conflict("CUSTOMER_CODE_EXISTS", "customer code already exists");
+        }
+    }
+    ApiError::internal(error)
+}
+
+fn utility_issue_error(error: sel_storage::postgres::UtilityIssueError) -> ApiError {
+    match error {
+        sel_storage::postgres::UtilityIssueError::IdempotencyPayloadMismatch => ApiError::conflict(
+            "IDEMPOTENCY_PAYLOAD_MISMATCH",
+            "idempotency key was reused with another payload",
+        ),
+        sel_storage::postgres::UtilityIssueError::InvoicePeriodExists => ApiError::conflict(
+            "INVOICE_PERIOD_EXISTS",
+            "an active invoice already exists for this customer and period",
+        ),
+        sel_storage::postgres::UtilityIssueError::Database(sqlx::Error::RowNotFound) => {
+            ApiError::not_found("CUSTOMER_NOT_FOUND", "customer not found")
+        }
+        sel_storage::postgres::UtilityIssueError::Database(error) => storage_error(error),
+        sel_storage::postgres::UtilityIssueError::StoredResponse(error) => {
+            ApiError::internal(error)
+        }
+    }
+}
+
+fn payment_write_error(error: sel_storage::postgres::PaymentWriteError) -> ApiError {
+    match error {
+        sel_storage::postgres::PaymentWriteError::IdempotencyPayloadMismatch => ApiError::conflict(
+            "IDEMPOTENCY_PAYLOAD_MISMATCH",
+            "idempotency key was reused with another payload",
+        ),
+        sel_storage::postgres::PaymentWriteError::Overallocated => ApiError::conflict(
+            "RECEIVABLE_OVERALLOCATED",
+            "payment would exceed the receivable balance",
+        ),
+        sel_storage::postgres::PaymentWriteError::ContextInvalid => ApiError::unprocessable(
+            "PAYMENT_CONTEXT_INVALID",
+            "payment customer or currency does not match the receivable",
+        ),
+        sel_storage::postgres::PaymentWriteError::AllocationExceedsReceipt => {
+            ApiError::unprocessable(
+                "PAYMENT_ALLOCATION_EXCEEDS_RECEIPT",
+                "allocations exceed received amount",
+            )
+        }
+        sel_storage::postgres::PaymentWriteError::Database(error) => storage_error(error),
+        sel_storage::postgres::PaymentWriteError::StoredResponse(error) => {
+            ApiError::internal(error)
+        }
+    }
+}
+
+fn solar_sale_write_error(error: sel_storage::postgres::SolarSaleWriteError) -> ApiError {
+    match error {
+        sel_storage::postgres::SolarSaleWriteError::IdempotencyPayloadMismatch => {
+            ApiError::conflict(
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "idempotency key was reused with another payload",
+            )
+        }
+        sel_storage::postgres::SolarSaleWriteError::CustomerNotFound => {
+            ApiError::not_found("CUSTOMER_NOT_FOUND", "customer not found")
+        }
+        sel_storage::postgres::SolarSaleWriteError::ProductNotFound => ApiError::unprocessable(
+            "SOLAR_PRODUCT_NOT_FOUND",
+            "an active solar kit product is required",
+        ),
+        sel_storage::postgres::SolarSaleWriteError::Database(error) => storage_error(error),
+        sel_storage::postgres::SolarSaleWriteError::StoredResponse(error) => {
+            ApiError::internal(error)
+        }
+    }
+}
+
+fn solar_contract_write_error(error: sel_storage::postgres::SolarContractWriteError) -> ApiError {
+    match error {
+        sel_storage::postgres::SolarContractWriteError::IdempotencyPayloadMismatch => {
+            ApiError::conflict(
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "idempotency key was reused with another payload",
+            )
+        }
+        sel_storage::postgres::SolarContractWriteError::SaleNotFound => {
+            ApiError::not_found("SOLAR_SALE_NOT_FOUND", "solar sale or receivable not found")
+        }
+        sel_storage::postgres::SolarContractWriteError::ContractAlreadyExists => {
+            ApiError::conflict(
+                "SOLAR_CONTRACT_ALREADY_EXISTS",
+                "the solar sale already has an installment contract",
+            )
+        }
+        sel_storage::postgres::SolarContractWriteError::CurrencyMismatch => {
+            ApiError::unprocessable(
+                "CURRENCY_MISMATCH",
+                "schedule currency does not match the receivable",
+            )
+        }
+        sel_storage::postgres::SolarContractWriteError::InvalidSchedule(detail) => {
+            ApiError::unprocessable("SOLAR_SCHEDULE_INVALID", detail)
+        }
+        sel_storage::postgres::SolarContractWriteError::Database(error) => storage_error(error),
+        sel_storage::postgres::SolarContractWriteError::StoredResponse(error) => {
+            ApiError::internal(error)
+        }
+    }
+}
+
+fn sync_apply_error(error: sel_storage::postgres::SyncApplyError) -> ApiError {
+    match error {
+        sel_storage::postgres::SyncApplyError::Database(error) => storage_error(error),
+        sel_storage::postgres::SyncApplyError::StoredResult(error) => ApiError::internal(error),
+    }
 }
 
 #[derive(Debug)]

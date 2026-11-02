@@ -8,5 +8,13 @@ axum.workspace = true
 sel-storage = { path = "../sel-storage" }
 sel-sync = { path = "../sel-sync" }
 serde_json.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+http-body-util.workspace = true
+sel-contracts = { path = "../sel-contracts" }
+tower = "0.5"
 

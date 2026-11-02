@@ -1294,6 +1294,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sqlx",
  "tokio",
  "tower",
  "tracing",
@@ -1306,8 +1307,10 @@ name = "sel-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "hex",
  "sel-storage",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -1340,10 +1343,16 @@ name = "sel-local"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
+ "http-body-util",
+ "sel-contracts",
  "sel-storage",
  "sel-sync",
  "serde_json",
+ "sqlx",
  "tokio",
+ "tower",
+ "uuid",
 ]
 
 [[package]]
@@ -1352,9 +1361,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "hex",
  "rust_decimal",
+ "sel-contracts",
+ "sel-sync",
  "serde_json",
+ "sha2",
  "sqlx",
+ "thiserror",
  "tokio",
  "uuid",
 ]

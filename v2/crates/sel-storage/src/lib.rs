@@ -1,3 +1,9 @@
+pub mod postgres;
+pub mod sqlite;
+
+pub use postgres::CentralStore;
+pub use sqlite::LocalStore;
+
 use sqlx::{PgPool, SqlitePool};
 
 pub async fn migrate_postgres(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
