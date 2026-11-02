@@ -85,6 +85,39 @@ fn required_token(name: &str) -> Result<String, std::io::Error> {
 }
 
 #[cfg(test)]
+fn required_uuid_value(name: &str, value: Option<String>) -> Result<Uuid, std::io::Error> {
+    let value = value.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} is missing"),
+        )
+    })?;
+    value.parse().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} must be a valid UUID"),
+        )
+    })
+}
+
+#[cfg(test)]
+fn validate_token_value(name: &str, value: Option<String>) -> Result<String, std::io::Error> {
+    let token = value.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} is missing"),
+        )
+    })?;
+    if token.trim().len() < 16 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} is too short"),
+        ));
+    }
+    Ok(token)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -103,35 +136,4 @@ mod tests {
             validate_token_value("SEL_API_AUTH_TOKEN", Some("a-secure-test-token".into())).is_ok()
         );
     }
-}
-
-fn required_uuid_value(name: &str, value: Option<String>) -> Result<Uuid, std::io::Error> {
-    let value = value.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{name} is missing"),
-        )
-    })?;
-    value.parse().map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{name} must be a valid UUID"),
-        )
-    })
-}
-
-fn validate_token_value(name: &str, value: Option<String>) -> Result<String, std::io::Error> {
-    let token = value.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{name} is missing"),
-        )
-    })?;
-    if token.trim().len() < 16 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{name} is too short"),
-        ));
-    }
-    Ok(token)
 }

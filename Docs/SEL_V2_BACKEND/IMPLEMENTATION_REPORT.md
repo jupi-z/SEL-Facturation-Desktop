@@ -2,12 +2,20 @@
 
 Date de contrôle : 2 novembre 2026, Africa/Lubumbashi  
 Branche : `monarque/sel-v2-backend`  
-Commits de référence : socle précédent `40a97fc`, implémentation `402fece`, rapport/documentation `88fc431288fac3ce1491965a418c096adb7c5986`.
+Commits de référence : socle précédent `40a97fc`, implémentation `402fece`, rapport/documentation `88fc431288fac3ce1491965a418c096adb7c5986`, correctifs de cette reprise `ddd78bb`, `e7b2294`, `70afddd`, `a5faffa`.
 Périmètre : backend Rust/API, migrations, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
 
 Le dépôt contient maintenant un workspace Rust autonome, les contrats JSON versionnés, un moteur de calcul Decimal pour l'électricité et l'eau, des migrations PostgreSQL/SQLite, des repositories SQLx transactionnels, des routes commerciales centrales persistantes, un journal/outbox SQLite durable, un protocole de synchronisation central idempotent, un agent local loopback, un vérificateur LiveUpdate Ed25519/SHA-256 et une commande de simulation d'import V1.
+
+### Actualisation de la reprise du 2 novembre 2026
+
+- `ddd78bb` agrège les affectations d'un même paiement avant validation, verrouille les créances dans un ordre déterministe et couvre la concurrence PostgreSQL ainsi que la double affectation de 7 + 7 USD sur une créance de 10 USD.
+- `e7b2294` impose les identités organisation/appareil en mode commercial, refuse les jetons d'authentification absents ou trop courts et empêche les changements d'identité d'une base SQLite existante.
+- `70afddd` ajoute les opérations locales durables de création client, facture eau + électricité, paiement partiel et consultation des soldes, avec journal et outbox dans la même transaction.
+- `a5faffa` ajoute le worker push/pull SQLite, le curseur central durable, les accusés persistants, la projection des clients reçus, la reprise des événements `CUSTOMER_UPDATED`, `PAYMENT_RECORDED` et `UTILITY_INVOICE_ISSUED`, ainsi que l'identité d'agent/grant hors ligne persistée.
+- Les tests réellement rejoués sur ce jalon sont : `cargo test -p sel-local` (4 tests), `cargo test -p sel-storage` (6 tests non ignorés), `cargo test -p sel-storage --test postgres_sync_financial -- --ignored` (2 tests PostgreSQL réels) et `cargo test -p sel-storage --test sqlite_identity` (1 test ciblé). La campagne globale fmt/Clippy/workspace doit encore être relancée sur `a5faffa` avant de fermer ce jalon.
 
 Les preuves locales exécutées sur ce jalon sont vertes : `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (15 tests non ignorés, les scénarios PostgreSQL étant explicitement ignorés dans cette commande), puis `cargo test --workspace -- --ignored` contre PostgreSQL 16 réel (5 tests réussis). Les scénarios couvrent la reprise après redémarrage, la facture utility à deux lignes avec eau à zéro, le paiement partiel idempotent, la vente solaire avec une créance et un échéancier exacts, et la synchronisation centrale avec conflit de payload durable.
 

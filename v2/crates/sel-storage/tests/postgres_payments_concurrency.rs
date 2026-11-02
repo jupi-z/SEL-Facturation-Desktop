@@ -139,7 +139,7 @@ async fn concurrent_payments_cannot_both_consume_the_same_balance() {
     );
     let accepted = [&left, &right]
         .into_iter()
-        .filter(|result| matches!(result, Ok(_)))
+        .filter(|result| result.is_ok())
         .count();
     let rejected = [&left, &right]
         .into_iter()
