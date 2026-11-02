@@ -27,7 +27,8 @@ services:
     networks: [sel-v2-private]
 networks:
   sel-v2-private:
-    internal: true
+    # The API is published only on loopback for test calls; PostgreSQL remains
+    # un-published and is reachable only from this Docker network.
 volumes:
   sel-v2-pg:
 

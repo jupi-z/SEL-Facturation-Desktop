@@ -1,0 +1,4 @@
+.git
+v2/target
+__pycache__
+*.pyc
