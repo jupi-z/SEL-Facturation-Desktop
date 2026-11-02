@@ -1127,6 +1127,10 @@ fn payment_write_error(error: sel_storage::postgres::PaymentWriteError) -> ApiEr
                 "allocations exceed received amount",
             )
         }
+        sel_storage::postgres::PaymentWriteError::InvalidAllocation => ApiError::unprocessable(
+            "PAYMENT_ALLOCATION_INVALID",
+            "payment amount and allocations must be strictly positive",
+        ),
         sel_storage::postgres::PaymentWriteError::Database(error) => storage_error(error),
         sel_storage::postgres::PaymentWriteError::StoredResponse(error) => {
             ApiError::internal(error)

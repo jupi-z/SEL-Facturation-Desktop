@@ -31,6 +31,7 @@ impl LocalStore {
             .connect_with(options)
             .await?;
         crate::migrate_sqlite(&pool).await?;
+        ensure_identity(&pool, organization_id, device_id).await?;
         Ok(Self {
             pool,
             organization_id,
@@ -154,6 +155,42 @@ impl LocalStore {
         tx.commit().await?;
         Ok(())
     }
+}
+
+async fn ensure_identity(
+    pool: &SqlitePool,
+    organization_id: Uuid,
+    device_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for (key, expected, label) in [
+        (
+            "organization_id",
+            organization_id.to_string(),
+            "organization identity",
+        ),
+        ("device_id", device_id.to_string(), "device identity"),
+    ] {
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT value FROM sync_state WHERE key = $1")
+                .bind(key)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if let Some(stored) = stored {
+            if stored != expected {
+                return Err(sqlx::Error::Protocol(format!(
+                    "{label} changed in the existing local database"
+                )));
+            }
+        } else {
+            sqlx::query("INSERT INTO sync_state (key, value) VALUES ($1, $2)")
+                .bind(key)
+                .bind(expected)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await
 }
 
 fn payload_digest(payload: &serde_json::Value) -> String {
