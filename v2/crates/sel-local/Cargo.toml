@@ -5,16 +5,20 @@ edition.workspace = true
 
 [dependencies]
 axum.workspace = true
+chrono.workspace = true
+hex.workspace = true
+rust_decimal.workspace = true
+sel-contracts = { path = "../sel-contracts" }
+sel-domain = { path = "../sel-domain" }
 sel-storage = { path = "../sel-storage" }
 sel-sync = { path = "../sel-sync" }
+sha2.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-chrono.workspace = true
 http-body-util.workspace = true
-sel-contracts = { path = "../sel-contracts" }
 tower = "0.5"
 
