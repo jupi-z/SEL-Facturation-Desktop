@@ -133,9 +133,7 @@ mod tests {
     fn utility_snapshot_hash_is_shared_and_ignores_sync_status() {
         let mut pending = UtilityBillingResponse {
             invoice_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
-            receivable_id: Some(
-                Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap(),
-            ),
+            receivable_id: Some(Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap()),
             invoice_number: None,
             status: "LOCAL_PENDING".into(),
             currency: "USD".into(),

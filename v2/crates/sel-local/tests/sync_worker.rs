@@ -217,10 +217,9 @@ async fn pulled_utility_invoice_and_payment_changes_project_locally() {
             }
         }
     });
-    let invoice_response: UtilityBillingResponse = serde_json::from_value(
-        invoice_change["change"]["response"].clone(),
-    )
-    .expect("invoice fixture response");
+    let invoice_response: UtilityBillingResponse =
+        serde_json::from_value(invoice_change["change"]["response"].clone())
+            .expect("invoice fixture response");
     invoice_change["change"]["response"]["snapshot_sha256"] = serde_json::json!(
         utility_snapshot_sha256(&invoice_response).expect("invoice fixture hash")
     );
@@ -409,7 +408,8 @@ async fn central_acceptance_reconciles_pending_invoice_and_payment_without_dupli
 
 #[tokio::test]
 async fn unsupported_central_projection_is_audited_instead_of_dropped() {
-    let path = std::env::temp_dir().join(format!("sel-v2-unsupported-pull-{}.sqlite", Uuid::new_v4()));
+    let path =
+        std::env::temp_dir().join(format!("sel-v2-unsupported-pull-{}.sqlite", Uuid::new_v4()));
     let store = LocalStore::connect(
         &format!("sqlite://{}", path.display()),
         Uuid::new_v4(),
@@ -506,8 +506,14 @@ async fn solar_sale_and_contract_projections_converge_idempotently() {
         changes: changes.clone(),
         next_cursor: 3,
     };
-    store.apply_pulled_changes(&pull).await.expect("project solar changes");
-    store.apply_pulled_changes(&pull).await.expect("replay solar changes");
+    store
+        .apply_pulled_changes(&pull)
+        .await
+        .expect("project solar changes");
+    store
+        .apply_pulled_changes(&pull)
+        .await
+        .expect("replay solar changes");
 
     let sale_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sales WHERE id = $1")
         .bind(sale_id.to_string())
@@ -519,13 +525,12 @@ async fn solar_sale_and_contract_projections_converge_idempotently() {
         .fetch_one(&store.pool)
         .await
         .expect("count projected sale lines");
-    let schedule_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM installment_schedule WHERE plan_id = $1",
-    )
-    .bind(plan_id.to_string())
-    .fetch_one(&store.pool)
-    .await
-    .expect("count projected schedule");
+    let schedule_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM installment_schedule WHERE plan_id = $1")
+            .bind(plan_id.to_string())
+            .fetch_one(&store.pool)
+            .await
+            .expect("count projected schedule");
     let schedule_id: String = sqlx::query_scalar(
         "SELECT id FROM installment_schedule WHERE plan_id = $1 AND sequence = 1",
     )

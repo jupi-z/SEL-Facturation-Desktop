@@ -1,12 +1,11 @@
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
-    solar_schedule_id, ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest,
-    Customer,
-    InvoiceLineResponse, PaymentSyncPayload, RecordPaymentRequest, SolarSaleResponse,
-    SolarContractSyncPayload, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult,
-    SyncPullResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, UtilityInvoiceSyncPayload, utility_snapshot_sha256,
+    solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
+    CreateSolarSaleRequest, Customer, InvoiceLineResponse, PaymentSyncPayload,
+    RecordPaymentRequest, SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload,
+    SyncEnvelope, SyncEventResult, SyncPullResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -380,13 +379,12 @@ impl LocalStore {
                 "solar sale principal must be strictly positive".into(),
             ));
         }
-        let customer_exists: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM customers WHERE id = $1 AND organization_id = $2",
-        )
-        .bind(input.customer_id.to_string())
-        .bind(self.organization_id.to_string())
-        .fetch_optional(&self.pool)
-        .await?;
+        let customer_exists: Option<String> =
+            sqlx::query_scalar("SELECT id FROM customers WHERE id = $1 AND organization_id = $2")
+                .bind(input.customer_id.to_string())
+                .bind(self.organization_id.to_string())
+                .fetch_optional(&self.pool)
+                .await?;
         if customer_exists.is_none() {
             return Err(sqlx::Error::Protocol(
                 "solar sale customer is not present locally".into(),
@@ -436,7 +434,11 @@ impl LocalStore {
         .await?;
         let line_id = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
-            format!("SEL:SOLAR_SALE_LINE:{sale_id}:{}", input.product_code.trim()).as_bytes(),
+            format!(
+                "SEL:SOLAR_SALE_LINE:{sale_id}:{}",
+                input.product_code.trim()
+            )
+            .as_bytes(),
         );
         sqlx::query(
             "INSERT INTO sale_lines
@@ -495,7 +497,10 @@ impl LocalStore {
         }
         if currency != input.currency
             || input.schedule.is_empty()
-            || input.schedule.iter().any(|item| item.amount.is_sign_negative())
+            || input
+                .schedule
+                .iter()
+                .any(|item| item.amount.is_sign_negative())
             || input
                 .schedule
                 .iter()
@@ -715,9 +720,9 @@ impl LocalStore {
             if paid + amount > principal {
                 return Err(LocalPaymentError::Overallocated);
             }
-            for ((allocation_receivable_id, schedule_id), _) in persisted.iter().filter(|((id, _), _)| {
-                id == receivable_id
-            }) {
+            for ((allocation_receivable_id, schedule_id), _) in
+                persisted.iter().filter(|((id, _), _)| id == receivable_id)
+            {
                 if let Some(schedule_id) = schedule_id {
                     let schedule_exists: Option<String> = sqlx::query_scalar(
                         "SELECT s.id FROM installment_schedule s
@@ -1228,10 +1233,8 @@ async fn apply_invoice_change(
     {
         let existing_customer: String = existing.try_get("customer_id")?;
         let existing_snapshot: String = existing.try_get("immutable_snapshot_json")?;
-        let existing_response: UtilityBillingResponse =
-            serde_json::from_str(&existing_snapshot).map_err(|error| {
-                sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
-            })?;
+        let existing_response: UtilityBillingResponse = serde_json::from_str(&existing_snapshot)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}")))?;
         let existing_hash = utility_snapshot_sha256(&existing_response)
             .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}")))?;
         if existing_customer != request.customer_id.to_string() || existing_hash != expected_hash {
@@ -1356,24 +1359,22 @@ async fn apply_solar_sale_change(
             "solar sale entity id does not match response id".into(),
         ));
     }
-    let customer_exists: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM customers WHERE id = $1 AND organization_id = $2",
-    )
-    .bind(response.customer_id.to_string())
-    .bind(organization_id.to_string())
-    .fetch_optional(&mut **tx)
-    .await?;
+    let customer_exists: Option<String> =
+        sqlx::query_scalar("SELECT id FROM customers WHERE id = $1 AND organization_id = $2")
+            .bind(response.customer_id.to_string())
+            .bind(organization_id.to_string())
+            .fetch_optional(&mut **tx)
+            .await?;
     if customer_exists.is_none() {
         return Err(sqlx::Error::Protocol(
             "solar sale customer is not present locally".into(),
         ));
     }
-    if let Some(existing) = sqlx::query(
-        "SELECT customer_id, currency, status FROM sales WHERE id = $1",
-    )
-    .bind(entity_id)
-    .fetch_optional(&mut **tx)
-    .await?
+    if let Some(existing) =
+        sqlx::query("SELECT customer_id, currency, status FROM sales WHERE id = $1")
+            .bind(entity_id)
+            .fetch_optional(&mut **tx)
+            .await?
     {
         let customer_id: String = existing.try_get("customer_id")?;
         let currency: String = existing.try_get("currency")?;
@@ -1382,13 +1383,11 @@ async fn apply_solar_sale_change(
                 "conflicting local solar sale projection".into(),
             ));
         }
-        sqlx::query(
-            "UPDATE sales SET status = $1 WHERE id = $2",
-        )
-        .bind(&response.status)
-        .bind(entity_id)
-        .execute(&mut **tx)
-        .await?;
+        sqlx::query("UPDATE sales SET status = $1 WHERE id = $2")
+            .bind(&response.status)
+            .bind(entity_id)
+            .execute(&mut **tx)
+            .await?;
     } else {
         sqlx::query(
             "INSERT INTO sales
@@ -1506,17 +1505,13 @@ async fn apply_solar_contract_change(
             .ok_or_else(|| sqlx::Error::Protocol("solar contract sale id is missing".into()))?,
     )
     .map_err(|error| sqlx::Error::Protocol(format!("invalid solar contract sale id: {error}")))?;
-    let receivable_id: Uuid = serde_json::from_value(
-        change
-            .get("receivable_id")
-            .cloned()
-            .ok_or_else(|| {
-                sqlx::Error::Protocol("solar contract receivable id is missing".into())
-            })?,
-    )
-    .map_err(|error| {
-        sqlx::Error::Protocol(format!("invalid solar contract receivable id: {error}"))
-    })?;
+    let receivable_id: Uuid =
+        serde_json::from_value(change.get("receivable_id").cloned().ok_or_else(|| {
+            sqlx::Error::Protocol("solar contract receivable id is missing".into())
+        })?)
+        .map_err(|error| {
+            sqlx::Error::Protocol(format!("invalid solar contract receivable id: {error}"))
+        })?;
     let contract_id: Uuid = serde_json::from_value(
         change
             .get("contract_id")
@@ -1584,7 +1579,10 @@ async fn apply_solar_contract_change(
             "conflicting local solar contract financial context".into(),
         ));
     }
-    if existing_contract.as_deref().is_some_and(|id| id != contract_id.to_string()) {
+    if existing_contract
+        .as_deref()
+        .is_some_and(|id| id != contract_id.to_string())
+    {
         return Err(sqlx::Error::Protocol(
             "conflicting local solar contract id".into(),
         ));

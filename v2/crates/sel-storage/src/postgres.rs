@@ -1,11 +1,11 @@
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use sel_contracts::{
-    ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
-    PaymentSyncPayload, RecordPaymentRequest, SolarContractSyncPayload, SolarSaleResponse,
-    SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, UtilityInvoiceSyncPayload, solar_schedule_id,
-    utility_snapshot_sha256,
+    solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
+    CreateSolarSaleRequest, Customer, PaymentSyncPayload, RecordPaymentRequest,
+    SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope,
+    SyncEventResult, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
+    UtilityInvoiceSyncPayload,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -551,11 +551,12 @@ impl CentralStore {
             if paid + allocated_amount > principal {
                 return Err(PaymentWriteError::Overallocated);
             }
-            for ((allocation_receivable_id, schedule_id), _) in persisted_allocations
-                .iter()
-                .filter(|((allocation_receivable_id, _), _)| {
-                    allocation_receivable_id == receivable_id
-                })
+            for ((allocation_receivable_id, schedule_id), _) in
+                persisted_allocations
+                    .iter()
+                    .filter(|((allocation_receivable_id, _), _)| {
+                        allocation_receivable_id == receivable_id
+                    })
             {
                 if let Some(schedule_id) = schedule_id {
                     let schedule_exists = sqlx::query(

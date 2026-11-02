@@ -280,8 +280,7 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .await
         .unwrap();
     assert_eq!(contract.status(), StatusCode::CREATED);
-    let plan_id = json_body(contract)
-        .await["installment_plan_id"]
+    let plan_id = json_body(contract).await["installment_plan_id"]
         .as_str()
         .unwrap()
         .parse::<Uuid>()

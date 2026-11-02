@@ -10,10 +10,10 @@ use axum::{
 };
 use rust_decimal::Decimal;
 use sel_contracts::{
-    CreateCustomer, CreateSolarSaleRequest, Customer, DocumentData, InvoiceLineResponse,
-    PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest, SolarSaleResponse,
-    SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, utility_snapshot_sha256,
+    utility_snapshot_sha256, CreateCustomer, CreateSolarSaleRequest, Customer, DocumentData,
+    InvoiceLineResponse, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
+    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
+    UtilityBillingRequest, UtilityBillingResponse,
 };
 use sel_domain::billing;
 use sel_domain::solar;

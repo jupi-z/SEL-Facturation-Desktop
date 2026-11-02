@@ -7,10 +7,10 @@ use axum::{
     Json, Router,
 };
 use sel_contracts::{
-    ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
-    InvoiceLineResponse, RecordPaymentRequest, SolarSaleResponse, SyncEventResult, SyncPushRequest,
-    SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, utility_snapshot_sha256,
+    utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest,
+    Customer, InvoiceLineResponse, RecordPaymentRequest, SolarSaleResponse, SyncEventResult,
+    SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse,
 };
 use sel_domain::billing;
 use sel_storage::LocalStore;
