@@ -8,6 +8,7 @@ use sel_contracts::{
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use std::collections::BTreeMap;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -98,6 +99,8 @@ pub enum PaymentWriteError {
     ContextInvalid,
     #[error("payment allocations exceed the received amount")]
     AllocationExceedsReceipt,
+    #[error("payment amount and allocations must be strictly positive")]
+    InvalidAllocation,
     #[error("stored idempotency response is invalid: {0}")]
     StoredResponse(#[from] serde_json::Error),
 }
@@ -484,8 +487,23 @@ impl CentralStore {
             let original: serde_json::Value = row.try_get("response_json")?;
             return Ok(PaymentWriteOutcome::Replay(serde_json::from_value(original)?));
         }
-        let mut allocated_total = Decimal::ZERO;
+        if input.received_amount <= Decimal::ZERO {
+            return Err(PaymentWriteError::InvalidAllocation);
+        }
+        let mut grouped_allocations = BTreeMap::<Uuid, Decimal>::new();
         for allocation in &input.allocations {
+            if allocation.amount <= Decimal::ZERO {
+                return Err(PaymentWriteError::InvalidAllocation);
+            }
+            *grouped_allocations
+                .entry(allocation.receivable_id)
+                .or_insert(Decimal::ZERO) += allocation.amount;
+        }
+        let allocated_total: Decimal = grouped_allocations.values().copied().sum();
+        if allocated_total > input.received_amount {
+            return Err(PaymentWriteError::AllocationExceedsReceipt);
+        }
+        for (receivable_id, allocated_amount) in &grouped_allocations {
             let row = sqlx::query(
                 "SELECT r.principal_total, r.currency, r.customer_id
                  FROM receivables r
@@ -493,7 +511,7 @@ impl CentralStore {
                    AND r.customer_id IN (SELECT id FROM customers WHERE organization_id = $3)
                  FOR UPDATE",
             )
-            .bind(allocation.receivable_id)
+            .bind(receivable_id)
             .bind(input.customer_id)
             .bind(self.organization_id)
             .fetch_optional(&mut *tx)
@@ -509,16 +527,12 @@ impl CentralStore {
             let paid: Decimal = sqlx::query_scalar(
                 "SELECT COALESCE(SUM(allocated_amount), 0) FROM payment_allocations WHERE receivable_id = $1",
             )
-            .bind(allocation.receivable_id)
+            .bind(receivable_id)
             .fetch_one(&mut *tx)
             .await?;
-            if paid + allocation.amount > principal {
+            if paid + allocated_amount > principal {
                 return Err(PaymentWriteError::Overallocated);
             }
-            allocated_total += allocation.amount;
-        }
-        if allocated_total > input.received_amount {
-            return Err(PaymentWriteError::AllocationExceedsReceipt);
         }
         let payment_id = Uuid::new_v4();
         sqlx::query(
@@ -534,7 +548,7 @@ impl CentralStore {
         .bind(input.occurred_at)
         .execute(&mut *tx)
         .await?;
-        for allocation in &input.allocations {
+        for (receivable_id, allocated_amount) in grouped_allocations {
             sqlx::query(
                 "INSERT INTO payment_allocations
                  (id, payment_id, receivable_id, allocated_amount, currency)
@@ -542,8 +556,8 @@ impl CentralStore {
             )
             .bind(Uuid::new_v4())
             .bind(payment_id)
-            .bind(allocation.receivable_id)
-            .bind(allocation.amount)
+            .bind(receivable_id)
+            .bind(allocated_amount)
             .bind(&input.currency)
             .execute(&mut *tx)
             .await?;
