@@ -2,7 +2,7 @@ use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
     CreateCustomer, Customer, InvoiceLineResponse, RecordPaymentRequest, SyncEnvelope,
-    SyncEventResult, UtilityBillingRequest, UtilityBillingResponse,
+    SyncEventResult, SyncPullResponse, UtilityBillingRequest, UtilityBillingResponse,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -20,6 +20,8 @@ pub struct LocalStore {
     pub pool: SqlitePool,
     pub organization_id: Uuid,
     pub device_id: Uuid,
+    pub actor_id: Uuid,
+    pub offline_grant_id: Uuid,
     write_lock: Arc<Mutex<()>>,
 }
 
@@ -61,12 +63,56 @@ impl LocalStore {
             .await?;
         crate::migrate_sqlite(&pool).await?;
         ensure_identity(&pool, organization_id, device_id).await?;
+        let actor_id = load_optional_identity(&pool, "actor_id").await?;
+        let offline_grant_id = load_optional_identity(&pool, "offline_grant_id").await?;
         Ok(Self {
             pool,
             organization_id,
             device_id,
+            actor_id,
+            offline_grant_id,
             write_lock: Arc::new(Mutex::new(())),
         })
+    }
+
+    pub async fn configure_offline_identity(
+        &mut self,
+        actor_id: Uuid,
+        offline_grant_id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        for (key, expected, label) in [
+            ("actor_id", actor_id.to_string(), "actor identity"),
+            (
+                "offline_grant_id",
+                offline_grant_id.to_string(),
+                "offline grant identity",
+            ),
+        ] {
+            let stored: Option<String> =
+                sqlx::query_scalar("SELECT value FROM sync_state WHERE key = $1")
+                    .bind(key)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            if let Some(stored) = stored {
+                if stored != expected {
+                    return Err(sqlx::Error::Protocol(format!(
+                        "{label} changed in the existing local database"
+                    )));
+                }
+            } else {
+                sqlx::query("INSERT INTO sync_state (key, value) VALUES ($1, $2)")
+                    .bind(key)
+                    .bind(&expected)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+        self.actor_id = actor_id;
+        self.offline_grant_id = offline_grant_id;
+        Ok(())
     }
 
     pub async fn record_command(&self, event: &SyncEnvelope) -> Result<(), sqlx::Error> {
@@ -422,6 +468,115 @@ impl LocalStore {
             .await
     }
 
+    pub async fn central_cursor(&self) -> Result<i64, sqlx::Error> {
+        Ok(sqlx::query_scalar::<_, String>(
+            "SELECT value FROM sync_state WHERE key = 'central_cursor'",
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0))
+    }
+
+    pub async fn apply_pulled_changes(
+        &self,
+        response: &SyncPullResponse,
+    ) -> Result<(), sqlx::Error> {
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        for change in &response.changes {
+            let sequence = change
+                .get("sequence")
+                .and_then(serde_json::Value::as_i64)
+                .ok_or_else(|| sqlx::Error::Protocol("sync change sequence is missing".into()))?;
+            let entity = change
+                .get("entity")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| sqlx::Error::Protocol("sync change entity is missing".into()))?;
+            let entity_id = change
+                .get("entity_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| sqlx::Error::Protocol("sync change entity id is missing".into()))?;
+            let revision = change
+                .get("revision")
+                .and_then(serde_json::Value::as_i64)
+                .ok_or_else(|| sqlx::Error::Protocol("sync change revision is missing".into()))?;
+            let change_json = change
+                .get("change")
+                .cloned()
+                .ok_or_else(|| sqlx::Error::Protocol("sync change payload is missing".into()))?;
+            sqlx::query(
+                "INSERT INTO central_changes (sequence, entity, entity_id, revision, change_json)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT(sequence) DO NOTHING",
+            )
+            .bind(sequence)
+            .bind(entity)
+            .bind(entity_id)
+            .bind(revision)
+            .bind(change_json.clone().to_string())
+            .execute(&mut *tx)
+            .await?;
+            if entity == "customers" {
+                apply_customer_change(
+                    &mut tx,
+                    self.organization_id,
+                    entity_id,
+                    revision,
+                    &change_json,
+                )
+                .await?;
+            }
+        }
+        sqlx::query(
+            "INSERT INTO sync_state (key, value) VALUES ('central_cursor', $1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(response.next_cursor.to_string())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    }
+
+    pub async fn claim_pending(&self, limit: i64) -> Result<Vec<SyncEnvelope>, sqlx::Error> {
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query(
+            "SELECT event_id, envelope_json FROM outbox
+             WHERE state = 'PENDING' ORDER BY rowid LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows {
+            let event_id: String = row.try_get("event_id")?;
+            let envelope_json: String = row.try_get("envelope_json")?;
+            let event: SyncEnvelope = serde_json::from_str(&envelope_json).map_err(|error| {
+                sqlx::Error::Protocol(format!("invalid outbox envelope: {error}"))
+            })?;
+            sqlx::query(
+                "UPDATE outbox SET state = 'IN_FLIGHT', attempts = attempts + 1 WHERE event_id = $1",
+            )
+            .bind(event_id)
+            .execute(&mut *tx)
+            .await?;
+            events.push(event);
+        }
+        tx.commit().await?;
+        Ok(events)
+    }
+
+    pub async fn retry(&self, event_id: Uuid, reason: &str) -> Result<(), sqlx::Error> {
+        let _guard = self.write_lock.lock().await;
+        sqlx::query("UPDATE outbox SET state = 'PENDING', last_error = $2 WHERE event_id = $1")
+            .bind(event_id.to_string())
+            .bind(reason)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn journal_count(&self, event_id: Uuid) -> Result<i64, sqlx::Error> {
         sqlx::query_scalar("SELECT count(*) FROM command_journal WHERE event_id = $1")
             .bind(event_id.to_string())
@@ -438,17 +593,24 @@ impl LocalStore {
         let mut tx = self.pool.begin().await?;
         let result_json = serde_json::to_string(result)
             .map_err(|error| sqlx::Error::Protocol(format!("invalid sync result: {error}")))?;
+        let state = match result {
+            SyncEventResult::Accepted { .. } | SyncEventResult::Duplicate { .. } => "ACKED",
+            SyncEventResult::Conflict { .. } => "CONFLICT",
+            SyncEventResult::Rejected { .. } => "REJECTED",
+        };
         let updated = sqlx::query(
-            "UPDATE outbox SET state = 'ACKED', last_error = NULL WHERE event_id = $1 AND state = 'PENDING'",
+            "UPDATE outbox SET state = $2, last_error = NULL WHERE event_id = $1 AND state IN ('PENDING', 'IN_FLIGHT')",
         )
         .bind(event_id.to_string())
+        .bind(state)
         .execute(&mut *tx)
         .await?;
         if updated.rows_affected() == 0 {
             return Err(sqlx::Error::RowNotFound);
         }
-        sqlx::query("UPDATE command_journal SET status = 'ACKED' WHERE event_id = $1")
+        sqlx::query("UPDATE command_journal SET status = $2 WHERE event_id = $1")
             .bind(event_id.to_string())
+            .bind(state)
             .execute(&mut *tx)
             .await?;
         sqlx::query(
@@ -524,12 +686,12 @@ fn local_event(
         event_id,
         device_id: store.device_id,
         organization_id: store.organization_id,
-        actor_id: Uuid::nil(),
+        actor_id: store.actor_id,
         command_type: command_type.into(),
         aggregate_id,
         aggregate_expected_version: 0,
         occurred_at: Utc::now(),
-        offline_grant_id: Uuid::nil(),
+        offline_grant_id: store.offline_grant_id,
         payload_sha256: payload_digest(&payload),
         payload,
         client_schema_version: sel_contracts::DOCUMENT_SCHEMA_VERSION,
@@ -605,6 +767,58 @@ async fn insert_invoice_line(
     Ok(())
 }
 
+async fn apply_customer_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    customer_id: &str,
+    revision: i64,
+    change: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let existing: Option<i64> =
+        sqlx::query_scalar("SELECT revision FROM customers WHERE id = $1 AND organization_id = $2")
+            .bind(customer_id)
+            .bind(organization_id.to_string())
+            .fetch_optional(&mut **tx)
+            .await?;
+    if existing.is_some_and(|current| current >= revision) {
+        return Ok(());
+    }
+    let customer_code = change
+        .get("customer_code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(customer_id);
+    let legal_name = change
+        .get("legal_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Client synchronisé");
+    let status = change
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("ACTIVE");
+    let contact = json!({
+        "address": change.get("address").cloned().unwrap_or(serde_json::Value::Null),
+        "phone": change.get("phone").cloned().unwrap_or(serde_json::Value::Null)
+    });
+    sqlx::query(
+        "INSERT INTO customers
+         (id, organization_id, customer_code, legal_name, contact_fields_json, status, revision, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, datetime('now'))
+         ON CONFLICT(id) DO UPDATE SET legal_name = excluded.legal_name,
+           contact_fields_json = excluded.contact_fields_json, status = excluded.status,
+           revision = excluded.revision",
+    )
+    .bind(customer_id)
+    .bind(organization_id.to_string())
+    .bind(customer_code)
+    .bind(legal_name)
+    .bind(contact.to_string())
+    .bind(status)
+    .bind(revision)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 fn decimal_text(row: &SqliteRow, column: &str) -> Result<Decimal, sqlx::Error> {
     let value: String = row.try_get(column)?;
     Decimal::from_str(&value)
@@ -668,7 +882,28 @@ async fn ensure_identity(
     .bind(organization_id.to_string())
     .execute(&mut *tx)
     .await?;
+    sqlx::query(
+        "UPDATE outbox SET state = 'PENDING', last_error = 'recovered after local restart'
+         WHERE state = 'IN_FLIGHT'",
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await
+}
+
+async fn load_optional_identity(pool: &SqlitePool, key: &str) -> Result<Uuid, sqlx::Error> {
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM sync_state WHERE key = $1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    value
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|error| sqlx::Error::Protocol(format!("invalid persisted {key}: {error}")))
+        })
+        .transpose()
+        .map(|value| value.unwrap_or_else(Uuid::nil))
 }
 
 fn payload_digest(payload: &serde_json::Value) -> String {

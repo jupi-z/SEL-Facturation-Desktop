@@ -5,8 +5,8 @@ use axum::{
     Json, Router,
 };
 use sel_contracts::{
-    CreateCustomer, Customer, InvoiceLineResponse, RecordPaymentRequest, UtilityBillingRequest,
-    UtilityBillingResponse,
+    CreateCustomer, Customer, InvoiceLineResponse, RecordPaymentRequest, SyncEventResult,
+    SyncPushRequest, SyncPushResponse, UtilityBillingRequest, UtilityBillingResponse,
 };
 use sel_domain::billing;
 use sel_storage::LocalStore;
@@ -25,6 +25,126 @@ pub fn router() -> Router {
 #[derive(Clone)]
 pub struct LocalAppState {
     pub store: LocalStore,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct SyncRunSummary {
+    pub attempted: usize,
+    pub pulled: usize,
+    pub accepted: usize,
+    pub duplicates: usize,
+    pub conflicts: usize,
+    pub rejected: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SyncWorkerError {
+    #[error("local storage failed: {0}")]
+    Storage(#[from] sqlx::Error),
+    #[error("sync request failed: {0}")]
+    Network(#[from] reqwest::Error),
+    #[error("sync server returned HTTP {status}: {body}")]
+    Server { status: u16, body: String },
+    #[error("sync response did not contain one result per event")]
+    ResponseCardinality,
+}
+
+pub async fn sync_once(
+    store: &LocalStore,
+    endpoint: &str,
+    bearer_token: &str,
+) -> Result<SyncRunSummary, SyncWorkerError> {
+    let events = store.claim_pending(100).await?;
+    let mut summary = SyncRunSummary {
+        attempted: events.len(),
+        ..SyncRunSummary::default()
+    };
+    if !events.is_empty() {
+        let request = SyncPushRequest {
+            device_id: store.device_id,
+            events: events.clone(),
+        };
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/sync/push", endpoint.trim_end_matches('/')))
+            .bearer_auth(bearer_token)
+            .header("Idempotency-Key", format!("local-sync-{}", Uuid::new_v4()))
+            .json(&request)
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                for event in &events {
+                    store.retry(event.event_id, &error.to_string()).await?;
+                }
+                return Err(error.into());
+            }
+        };
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            for event in &events {
+                store
+                    .retry(event.event_id, &format!("HTTP {status}: {body}"))
+                    .await?;
+            }
+            return Err(SyncWorkerError::Server { status, body });
+        }
+        let payload: SyncPushResponse = match response.json().await {
+            Ok(payload) => payload,
+            Err(error) => {
+                for event in &events {
+                    store.retry(event.event_id, &error.to_string()).await?;
+                }
+                return Err(error.into());
+            }
+        };
+        if payload.results.len() != events.len() {
+            for event in &events {
+                store
+                    .retry(event.event_id, "sync response cardinality mismatch")
+                    .await?;
+            }
+            return Err(SyncWorkerError::ResponseCardinality);
+        }
+        for (event, result) in events.iter().zip(payload.results.iter()) {
+            match result {
+                SyncEventResult::Accepted { .. } => summary.accepted += 1,
+                SyncEventResult::Duplicate { .. } => summary.duplicates += 1,
+                SyncEventResult::Conflict { .. } => summary.conflicts += 1,
+                SyncEventResult::Rejected { .. } => summary.rejected += 1,
+            }
+            store.acknowledge(event.event_id, result).await?;
+        }
+    }
+    summary.pulled = pull_once(store, endpoint, bearer_token).await?;
+    Ok(summary)
+}
+
+pub async fn pull_once(
+    store: &LocalStore,
+    endpoint: &str,
+    bearer_token: &str,
+) -> Result<usize, SyncWorkerError> {
+    let cursor = store.central_cursor().await?;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/sync/pull?cursor={cursor}&limit=100",
+            endpoint.trim_end_matches('/')
+        ))
+        .bearer_auth(bearer_token)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(SyncWorkerError::Server {
+            status: response.status().as_u16(),
+            body: response.text().await.unwrap_or_default(),
+        });
+    }
+    let payload: sel_contracts::SyncPullResponse = response.json().await?;
+    let count = payload.changes.len();
+    store.apply_pulled_changes(&payload).await?;
+    Ok(count)
 }
 
 pub fn router_with_store(store: LocalStore) -> Router {

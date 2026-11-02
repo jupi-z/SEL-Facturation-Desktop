@@ -9,6 +9,7 @@ chrono.workspace = true
 hex.workspace = true
 rust_decimal.workspace = true
 sel-contracts = { path = "../sel-contracts" }
+sel-domain = { path = "../sel-domain" }
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true

@@ -5,6 +5,7 @@ use sel_contracts::{
     RecordPaymentRequest, SolarSaleResponse, SyncEnvelope, SyncEventResult, UpdateCustomer,
     UtilityBillingRequest, UtilityBillingResponse,
 };
+use sel_domain::billing;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -947,8 +948,8 @@ impl CentralStore {
             tx.commit().await?;
             return Ok(result);
         }
-        let payload_digest = payload_digest(&event.payload);
-        if payload_digest != event.payload_sha256 {
+        let event_payload_digest = payload_digest(&event.payload);
+        if event_payload_digest != event.payload_sha256 {
             let result = SyncEventResult::Rejected {
                 code: "PAYLOAD_HASH_MISMATCH".into(),
                 required_action: "rebuild_event_with_canonical_payload".into(),
@@ -1025,6 +1026,326 @@ impl CentralStore {
                 )
                 .await?;
                 tx.commit().await?;
+                Ok(result)
+            }
+            "CUSTOMER_UPDATED" => {
+                let current = sqlx::query(
+                    "SELECT revision FROM customers
+                     WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+                )
+                .bind(event.aggregate_id)
+                .bind(self.organization_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let Some(current) = current else {
+                    let result = SyncEventResult::Rejected {
+                        code: "CUSTOMER_NOT_FOUND".into(),
+                        required_action: "refresh_customer_before_retry".into(),
+                    };
+                    persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                        .await?;
+                    tx.commit().await?;
+                    return Ok(result);
+                };
+                let current_revision: i64 = current.try_get("revision")?;
+                if current_revision != event.aggregate_expected_version {
+                    let result = SyncEventResult::Conflict {
+                        reason: "CUSTOMER_REVISION_CONFLICT".into(),
+                        central_revision: Some(current_revision),
+                    };
+                    persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                        .await?;
+                    tx.commit().await?;
+                    return Ok(result);
+                }
+                let legal_name = event
+                    .payload
+                    .get("legal_name")
+                    .and_then(serde_json::Value::as_str);
+                let address = event
+                    .payload
+                    .get("address")
+                    .and_then(serde_json::Value::as_str);
+                let phone = event
+                    .payload
+                    .get("phone")
+                    .and_then(serde_json::Value::as_str);
+                let status = event
+                    .payload
+                    .get("status")
+                    .and_then(serde_json::Value::as_str);
+                let contact_fields = json!({"address": address, "phone": phone});
+                sqlx::query(
+                    "UPDATE customers SET legal_name = COALESCE($1, legal_name),
+                         contact_fields = $2, status = COALESCE($3, status), revision = revision + 1
+                     WHERE id = $4 AND organization_id = $5",
+                )
+                .bind(legal_name)
+                .bind(contact_fields)
+                .bind(status)
+                .bind(event.aggregate_id)
+                .bind(self.organization_id)
+                .execute(&mut *tx)
+                .await?;
+                let result = persist_sync_result(
+                    &mut tx,
+                    self.organization_id,
+                    event,
+                    &SyncEventResult::Accepted {
+                        server_sequence: 0,
+                        server_entity_id: event.aggregate_id,
+                    },
+                    Some((
+                        "customers",
+                        event.aggregate_id,
+                        current_revision + 1,
+                        event.payload.clone(),
+                    )),
+                )
+                .await?;
+                tx.commit().await?;
+                Ok(result)
+            }
+            "UTILITY_INVOICE_ISSUED" => {
+                let input: UtilityBillingRequest =
+                    match serde_json::from_value(event.payload.clone()) {
+                        Ok(input) => input,
+                        Err(_) => {
+                            let result = SyncEventResult::Rejected {
+                                code: "UTILITY_PAYLOAD_INVALID".into(),
+                                required_action: "send_a_valid_utility_request".into(),
+                            };
+                            persist_sync_result(
+                                &mut tx,
+                                self.organization_id,
+                                event,
+                                &result,
+                                None,
+                            )
+                            .await?;
+                            tx.commit().await?;
+                            return Ok(result);
+                        }
+                    };
+                tx.rollback().await?;
+                if input.electricity.unit != "KWH" || input.water.unit != "M3" {
+                    return self
+                        .persist_sync_rejection(
+                            event,
+                            "UTILITY_UNIT_INVALID",
+                            "send_electricity_in_kwh_and_water_in_m3",
+                        )
+                        .await;
+                }
+                if input.water.quantity.is_zero() && !input.water_zero_confirmed {
+                    return self
+                        .persist_sync_rejection(
+                            event,
+                            "WATER_ZERO_CONFIRMATION_REQUIRED",
+                            "confirm_zero_water_consumption",
+                        )
+                        .await;
+                }
+                let tariffs = self
+                    .load_tariffs(
+                        &input.tariff_revision,
+                        &input.currency,
+                        &input.billing_period,
+                    )
+                    .await?;
+                let water = if input.water.quantity.is_zero() {
+                    billing::WaterInput::ZeroConfirmed
+                } else {
+                    billing::WaterInput::Positive(input.water.quantity)
+                };
+                let Some(electricity_unit_price) = tariffs.electricity_unit_price else {
+                    return self
+                        .persist_sync_rejection(
+                            event,
+                            "ELECTRICITY_TARIFF_UNAVAILABLE",
+                            "publish_an_approved_electricity_tariff_for_the_period",
+                        )
+                        .await;
+                };
+                let Some(electricity_tax_rate) = tariffs.electricity_tax_rate else {
+                    return self
+                        .persist_sync_rejection(
+                            event,
+                            "ELECTRICITY_TAX_UNAVAILABLE",
+                            "publish_an_approved_electricity_tax_for_the_period",
+                        )
+                        .await;
+                };
+                let calculated = match billing::calculate_utility(billing::UtilityInput {
+                    electricity_kwh: input.electricity.quantity,
+                    water_m3: water,
+                    electricity_unit_price,
+                    electricity_tax_rate,
+                    water_tariff: tariffs.water_unit_price,
+                    water_tax_rate: tariffs.water_tax_rate,
+                    currency: input.currency.clone(),
+                }) {
+                    Ok(calculated) => calculated,
+                    Err(error) => {
+                        return self
+                            .persist_sync_rejection(
+                                event,
+                                "UTILITY_RULE_INVALID",
+                                &error.to_string(),
+                            )
+                            .await;
+                    }
+                };
+                let lines = calculated
+                    .lines
+                    .into_iter()
+                    .map(|line| sel_contracts::InvoiceLineResponse {
+                        service_code: format!("{:?}", line.service).to_uppercase(),
+                        quantity: line.quantity,
+                        unit: line.unit.into(),
+                        unit_price: line.unit_price,
+                        subtotal: line.subtotal,
+                        tax: line.tax,
+                        total: line.total,
+                    })
+                    .collect::<Vec<_>>();
+                let response = UtilityBillingResponse {
+                    invoice_id: event.aggregate_id,
+                    receivable_id: Some(Uuid::new_v4()),
+                    invoice_number: None,
+                    status: "CENTRAL_ACCEPTED".into(),
+                    currency: calculated.currency,
+                    lines,
+                    subtotal: calculated.subtotal,
+                    tax: calculated.tax,
+                    total: calculated.total,
+                    snapshot_sha256: payload_digest(&json!({
+                        "input": &input,
+                        "total": calculated.total,
+                        "tariff_revision": input.tariff_revision
+                    })),
+                };
+                let operation_key = format!("sync-utility-{}", event.event_id);
+                let outcome = self
+                    .issue_utility_invoice(&input, &response, &operation_key, &event.payload_sha256)
+                    .await;
+                let (invoice_id, created) = match outcome {
+                    Ok(UtilityIssueOutcome::Created(response)) => (response.invoice_id, true),
+                    Ok(UtilityIssueOutcome::Replay(response)) => (response.invoice_id, false),
+                    Err(_) => {
+                        return self
+                            .persist_sync_rejection(
+                                event,
+                                "UTILITY_INVOICE_NOT_ACCEPTED",
+                                "review_tariffs_and_invoice_period",
+                            )
+                            .await;
+                    }
+                };
+                let mut ack_tx = self.pool.begin().await?;
+                let result = persist_sync_result(
+                    &mut ack_tx,
+                    self.organization_id,
+                    event,
+                    &SyncEventResult::Accepted {
+                        server_sequence: 0,
+                        server_entity_id: invoice_id,
+                    },
+                    if created {
+                        Some(("invoices", invoice_id, 1, json!({"invoice_id": invoice_id})))
+                    } else {
+                        None
+                    },
+                )
+                .await?;
+                ack_tx.commit().await?;
+                Ok(result)
+            }
+            "PAYMENT_RECORDED" => {
+                let input: RecordPaymentRequest =
+                    match serde_json::from_value(event.payload.clone()) {
+                        Ok(input) => input,
+                        Err(_) => {
+                            let result = SyncEventResult::Rejected {
+                                code: "PAYMENT_PAYLOAD_INVALID".into(),
+                                required_action: "send_a_valid_payment_request".into(),
+                            };
+                            persist_sync_result(
+                                &mut tx,
+                                self.organization_id,
+                                event,
+                                &result,
+                                None,
+                            )
+                            .await?;
+                            tx.commit().await?;
+                            return Ok(result);
+                        }
+                    };
+                tx.rollback().await?;
+                let operation_key = format!("sync-payment-{}", event.event_id);
+                let outcome = self
+                    .record_payment(&input, &operation_key, &event.payload_sha256)
+                    .await;
+                let (body, payment_id, created) = match outcome {
+                    Ok(PaymentWriteOutcome::Created(body)) => {
+                        let payment_id = body
+                            .get("payment_id")
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(event.aggregate_id);
+                        (body, payment_id, true)
+                    }
+                    Ok(PaymentWriteOutcome::Replay(body)) => {
+                        let payment_id = body
+                            .get("payment_id")
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(event.aggregate_id);
+                        (body, payment_id, false)
+                    }
+                    Err(_) => {
+                        let mut reject_tx = self.pool.begin().await?;
+                        let result = SyncEventResult::Rejected {
+                            code: "PAYMENT_NOT_ACCEPTED".into(),
+                            required_action: "review_payment_and_retry".into(),
+                        };
+                        persist_sync_result(
+                            &mut reject_tx,
+                            self.organization_id,
+                            event,
+                            &result,
+                            None,
+                        )
+                        .await?;
+                        reject_tx.commit().await?;
+                        return Ok(result);
+                    }
+                };
+                let mut ack_tx = self.pool.begin().await?;
+                sqlx::query(
+                    "UPDATE payments SET origin_event_id = $1 WHERE id = $2 AND origin_event_id IS NULL",
+                )
+                .bind(event.event_id)
+                .bind(payment_id)
+                .execute(&mut *ack_tx)
+                .await?;
+                let result = persist_sync_result(
+                    &mut ack_tx,
+                    self.organization_id,
+                    event,
+                    &SyncEventResult::Accepted {
+                        server_sequence: 0,
+                        server_entity_id: payment_id,
+                    },
+                    if created {
+                        Some(("payments", payment_id, 1, body))
+                    } else {
+                        None
+                    },
+                )
+                .await?;
+                ack_tx.commit().await?;
                 Ok(result)
             }
             _ => {
@@ -1144,6 +1465,22 @@ impl CentralStore {
         .fetch_optional(&mut **tx)
         .await?
         .is_some())
+    }
+
+    async fn persist_sync_rejection(
+        &self,
+        event: &SyncEnvelope,
+        code: &str,
+        required_action: &str,
+    ) -> Result<SyncEventResult, SyncApplyError> {
+        let mut tx = self.pool.begin().await?;
+        let result = SyncEventResult::Rejected {
+            code: code.into(),
+            required_action: required_action.into(),
+        };
+        persist_sync_result(&mut tx, self.organization_id, event, &result, None).await?;
+        tx.commit().await?;
+        Ok(result)
     }
 }
 
