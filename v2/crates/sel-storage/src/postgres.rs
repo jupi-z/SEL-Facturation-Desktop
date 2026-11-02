@@ -1261,6 +1261,142 @@ impl CentralStore {
                 ack_tx.commit().await?;
                 Ok(result)
             }
+            "SOLAR_SALE_CREATED" => {
+                let input: CreateSolarSaleRequest =
+                    match serde_json::from_value(event.payload.clone()) {
+                        Ok(input) => input,
+                        Err(_) => {
+                            let result = SyncEventResult::Rejected {
+                                code: "SOLAR_SALE_PAYLOAD_INVALID".into(),
+                                required_action: "send_a_valid_solar_sale_request".into(),
+                            };
+                            persist_sync_result(
+                                &mut tx,
+                                self.organization_id,
+                                event,
+                                &result,
+                                None,
+                            )
+                            .await?;
+                            tx.commit().await?;
+                            return Ok(result);
+                        }
+                    };
+                tx.rollback().await?;
+                let operation_key = format!("sync-solar-sale-{}", event.event_id);
+                let outcome = self
+                    .create_solar_sale(&input, &operation_key, &event.payload_sha256)
+                    .await;
+                let (response, created) = match outcome {
+                    Ok(SolarSaleWriteOutcome::Created(response)) => (response, true),
+                    Ok(SolarSaleWriteOutcome::Replay(response)) => (response, false),
+                    Err(_) => {
+                        return self
+                            .persist_sync_rejection(
+                                event,
+                                "SOLAR_SALE_NOT_ACCEPTED",
+                                "review_solar_product_and_customer",
+                            )
+                            .await;
+                    }
+                };
+                let sale_id = response.sale_id;
+                let mut ack_tx = self.pool.begin().await?;
+                let result = persist_sync_result(
+                    &mut ack_tx,
+                    self.organization_id,
+                    event,
+                    &SyncEventResult::Accepted {
+                        server_sequence: 0,
+                        server_entity_id: sale_id,
+                    },
+                    if created {
+                        Some((
+                            "sales",
+                            sale_id,
+                            1,
+                            serde_json::to_value(&response).map_err(|error| {
+                                sqlx::Error::Protocol(format!(
+                                    "invalid solar sale response: {error}"
+                                ))
+                            })?,
+                        ))
+                    } else {
+                        None
+                    },
+                )
+                .await?;
+                ack_tx.commit().await?;
+                Ok(result)
+            }
+            "SOLAR_CONTRACT_ACTIVATED" => {
+                let input: ActivateSolarContractRequest =
+                    match serde_json::from_value(event.payload.clone()) {
+                        Ok(input) => input,
+                        Err(_) => {
+                            let result = SyncEventResult::Rejected {
+                                code: "SOLAR_CONTRACT_PAYLOAD_INVALID".into(),
+                                required_action: "send_a_valid_solar_contract_request".into(),
+                            };
+                            persist_sync_result(
+                                &mut tx,
+                                self.organization_id,
+                                event,
+                                &result,
+                                None,
+                            )
+                            .await?;
+                            tx.commit().await?;
+                            return Ok(result);
+                        }
+                    };
+                tx.rollback().await?;
+                let operation_key = format!("sync-solar-contract-{}", event.event_id);
+                let outcome = self
+                    .activate_solar_contract(
+                        input.sale_id,
+                        &input,
+                        &operation_key,
+                        &event.payload_sha256,
+                    )
+                    .await;
+                let (body, created) = match outcome {
+                    Ok(SolarContractWriteOutcome::Created(body)) => (body, true),
+                    Ok(SolarContractWriteOutcome::Replay(body)) => (body, false),
+                    Err(_) => {
+                        return self
+                            .persist_sync_rejection(
+                                event,
+                                "SOLAR_CONTRACT_NOT_ACCEPTED",
+                                "review_solar_schedule_and_receivable",
+                            )
+                            .await;
+                    }
+                };
+                let entity_id = body
+                    .get("installment_plan_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(event.aggregate_id);
+                let mut ack_tx = self.pool.begin().await?;
+                let result = persist_sync_result(
+                    &mut ack_tx,
+                    self.organization_id,
+                    event,
+                    &SyncEventResult::Accepted {
+                        server_sequence: 0,
+                        server_entity_id: entity_id,
+                    },
+                    if created {
+                        Some(("installment_plans", entity_id, 1, body))
+                    } else {
+                        None
+                    },
+                )
+                .await?;
+                ack_tx.commit().await?;
+                Ok(result)
+            }
             "PAYMENT_RECORDED" => {
                 let input: RecordPaymentRequest =
                     match serde_json::from_value(event.payload.clone()) {
