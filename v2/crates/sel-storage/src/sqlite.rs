@@ -720,8 +720,7 @@ impl LocalStore {
             if paid + amount > principal {
                 return Err(LocalPaymentError::Overallocated);
             }
-            for ((allocation_receivable_id, schedule_id), _) in
-                persisted.iter().filter(|((id, _), _)| id == receivable_id)
+            for ((_, schedule_id), _) in persisted.iter().filter(|((id, _), _)| id == receivable_id)
             {
                 if let Some(schedule_id) = schedule_id {
                     let schedule_exists: Option<String> = sqlx::query_scalar(

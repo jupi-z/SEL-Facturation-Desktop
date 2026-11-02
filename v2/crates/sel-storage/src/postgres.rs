@@ -1292,7 +1292,7 @@ impl CentralStore {
                         total: line.total,
                     })
                     .collect::<Vec<_>>();
-                let response = UtilityBillingResponse {
+                let mut response = UtilityBillingResponse {
                     invoice_id,
                     receivable_id: Some(receivable_id),
                     invoice_number: None,
