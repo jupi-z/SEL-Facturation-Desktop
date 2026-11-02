@@ -1151,23 +1151,28 @@ impl CentralStore {
                 Ok(result)
             }
             "UTILITY_INVOICE_ISSUED" => {
-                let payload: UtilityInvoiceSyncPayload = match serde_json::from_value(
-                    event.payload.clone(),
-                ) {
-                    Ok(payload) => payload,
-                    Err(_) => {
-                        let result = SyncEventResult::Rejected {
+                let payload: UtilityInvoiceSyncPayload =
+                    match serde_json::from_value(event.payload.clone()) {
+                        Ok(payload) => payload,
+                        Err(_) => {
+                            let result = SyncEventResult::Rejected {
                             code: "UTILITY_PAYLOAD_LEGACY_IDS_REQUIRED".into(),
                             required_action:
                                 "recreate_the_local_invoice_with_stable_invoice_and_receivable_ids"
                                     .into(),
                         };
-                        persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                            persist_sync_result(
+                                &mut tx,
+                                self.organization_id,
+                                event,
+                                &result,
+                                None,
+                            )
                             .await?;
-                        tx.commit().await?;
-                        return Ok(result);
-                    }
-                };
+                            tx.commit().await?;
+                            return Ok(result);
+                        }
+                    };
                 let UtilityInvoiceSyncPayload {
                     request: input,
                     invoice_id,
