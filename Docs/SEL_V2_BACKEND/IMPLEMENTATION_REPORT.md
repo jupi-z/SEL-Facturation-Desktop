@@ -63,7 +63,7 @@ Résultats :
 - LiveUpdate : PASS, signature valide ; PASS, signature falsifiée ; PASS, ressource altérée ; PASS, expiration ; PASS, downgrade ; PASS, traversal ; PASS, activation/rollback connu-bon.
 - OpenAPI : PASS, YAML parseable et aucune route PDF déclarée.
 - Compose : PASS, image release construite sans le `v2/target` local, PostgreSQL healthy, API accessible sur `127.0.0.1:18080/health/live`, migrations appliquées et 30 tables centrales visibles ; volume de test supprimé ensuite.
-- CI GitHub historique : le run `41474895274` / job `125377741644` était vert sur un commit antérieur (`88fc431288fac3ce1491965a418c096adb7c5986`) et ne constitue pas une preuve du commit actuel. Sur `f0d0f955e78bc64d96ffb3836922039af54c0a09`, le run `41513829666` a échoué à l'étape `cargo fmt --all -- --check` uniquement ; GitHub a signalé l'écart dans `v2/crates/sel-storage/src/postgres.rs`, puis a ignoré Clippy et les tests. Le formatage a été corrigé localement et doit être relancé par la CI avant tout verdict vert. L'avertissement Node.js 20 des actions GitHub est indépendant du code Rust.
+- CI GitHub : le run `41515293414` / job `125517184357` est vert sur le commit final `6f840ca9fcf9fa719fde529f970fe1d0151e3cc2`. `cargo fmt --all -- --check`, Clippy, la suite workspace et les tests PostgreSQL réels ont tous été exécutés avec succès. Le run précédent `41513829666` avait échoué uniquement sur rustfmt avant correction. L'avertissement Node.js 20 des actions GitHub est indépendant du code Rust.
 - V1 Python : `260 passed, 2 failed` sur 262. Les deux échecs sont historiques et temporellement fragiles : `tests/test_invoice_preview.py::test_invoice_confirmation_keeps_the_tariff_used_by_preview` attend le code `RESIDENTIAL-2026-10` alors que la date système est novembre 2026 ; `tests/test_ui_tariff_rules.py::test_configured_future_customer_type_can_be_billed` configure une tarification effective le mois courant puis facture octobre. Ils ne proviennent pas d'une modification V2, mais empêchent un verdict de non-régression V1 totalement vert et doivent être corrigés/confirmés séparément.
 
 ## Matrice de recette
@@ -117,7 +117,7 @@ Résultats :
 | FILE-03 | NOT_TESTED | inspection complète volumes/logs/backups après 100 factures non exécutée |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors périmètre backend |
 | OPS-01 | PASS | fmt, Clippy et cargo test workspace verts |
-| OPS-02 | PARTIAL | Les checks locaux et le run historique sont verts, mais le run `41513829666` du commit `f0d0f95` a échoué sur le formatage avant les tests ; le rerun après correction est requis |
+| OPS-02 | PASS | Le run `41515293414` du commit `6f840ca` valide formatage, Clippy, workspace et PostgreSQL réel ; le compose de déploiement reste une configuration de test |
 | OPS-03 | NOT_TESTED | TLS/reverse proxy, logs PII, backup chiffrée et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, VPS, impression et tarifs réels non accessibles/validés |
 
@@ -133,7 +133,7 @@ Résultats :
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** pour les parcours PostgreSQL/SQLite démontrés ; **CI GitHub du commit `f0d0f95` en attente de rerun après correction de `rustfmt`**.
+- Revue technique du jalon persistance/synchronisation : **GO limité** pour les parcours PostgreSQL/SQLite démontrés ; CI GitHub du commit `6f840ca` **PASS**.
 - Pilote Windows/PG/offline : **NO-GO — validations externes et intégration durable manquantes**.
 - Livraison commerciale : **NO-GO**.
 - Fusion dans `main` : **non effectuée**.
