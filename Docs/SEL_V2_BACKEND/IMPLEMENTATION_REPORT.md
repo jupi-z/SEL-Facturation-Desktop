@@ -2,7 +2,7 @@
 
 Date de contrôle : 2 novembre 2026, Africa/Lubumbashi  
 Branche : `monarque/sel-v2-backend`  
-Commit d'implémentation contrôlé : `b17c1d5` ; tête finale de la PR au moment du rapport : `7d7d329`  
+Commits de référence : implémentation `b17c1d5`, code vérifié par CI `7d7d329`, dernier commit documentaire de la PR `4dc5c16`.  
 Périmètre : backend Rust/API, migrations, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
