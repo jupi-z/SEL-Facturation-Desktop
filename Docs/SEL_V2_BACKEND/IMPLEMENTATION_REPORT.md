@@ -2,7 +2,7 @@
 
 Date de contrôle : 2 novembre 2026, Africa/Lubumbashi  
 Branche : `monarque/sel-v2-backend`  
-Commits de référence : socle précédent `40a97fc`, jalon de persistance `402fece` (branche locale avant mise à jour de ce rapport).
+Commits de référence : socle précédent `40a97fc`, implémentation `402fece`, rapport/documentation `88fc431288fac3ce1491965a418c096adb7c5986`.
 Périmètre : backend Rust/API, migrations, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
@@ -53,7 +53,7 @@ Résultats :
 - LiveUpdate : PASS, signature valide ; PASS, signature falsifiée ; PASS, ressource altérée ; PASS, expiration ; PASS, downgrade ; PASS, traversal ; PASS, activation/rollback connu-bon.
 - OpenAPI : PASS, YAML parseable et aucune route PDF déclarée.
 - Compose : PASS, image release construite sans le `v2/target` local, PostgreSQL healthy, API accessible sur `127.0.0.1:18080/health/live`, migrations appliquées et 30 tables centrales visibles ; volume de test supprimé ensuite.
-- CI GitHub : le dernier run vert historique de la PR #58 (`41452693324`) ne couvre pas encore `402fece`. Le workflow a été étendu avec un service PostgreSQL et une étape `cargo test --workspace -- --ignored`; une nouvelle exécution CI du commit final est requise avant le verdict de revue.
+- CI GitHub : PASS sur la PR #58, run `41474895274`, job `rust` `125377741644`, head `88fc431288fac3ce1491965a418c096adb7c5986`. Le workflow a démarré PostgreSQL 16.4, puis `fmt`, Clippy, la suite workspace et `cargo test --workspace -- --ignored`; tous les tests passent. Les deux annotations restantes concernent uniquement l’avertissement GitHub sur les actions Node.js 20, pas le code Rust.
 - V1 Python : `260 passed, 2 failed` sur 262. Les deux échecs sont historiques et temporellement fragiles : `tests/test_invoice_preview.py::test_invoice_confirmation_keeps_the_tariff_used_by_preview` attend le code `RESIDENTIAL-2026-10` alors que la date système est novembre 2026 ; `tests/test_ui_tariff_rules.py::test_configured_future_customer_type_can_be_billed` configure une tarification effective le mois courant puis facture octobre. Ils ne proviennent pas d'une modification V2, mais empêchent un verdict de non-régression V1 totalement vert et doivent être corrigés/confirmés séparément.
 
 ## Matrice de recette
@@ -107,7 +107,7 @@ Résultats :
 | FILE-03 | NOT_TESTED | inspection complète volumes/logs/backups après 100 factures non exécutée |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors périmètre backend |
 | OPS-01 | PASS | fmt, Clippy et cargo test workspace verts |
-| OPS-02 | PARTIAL | compose historique et health prouvés ; nouveau workflow PG réel ajouté mais non encore exécuté sur le commit final |
+| OPS-02 | PASS | CI du commit final démarre PostgreSQL 16.4, applique les migrations au travers des tests et valide les scénarios centraux réels ; le compose de déploiement reste une configuration de test |
 | OPS-03 | NOT_TESTED | TLS/reverse proxy, logs PII, backup chiffrée et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, VPS, impression et tarifs réels non accessibles/validés |
 
