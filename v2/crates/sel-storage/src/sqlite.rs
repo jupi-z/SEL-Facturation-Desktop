@@ -2,7 +2,8 @@ use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
     CreateCustomer, Customer, InvoiceLineResponse, RecordPaymentRequest, SyncEnvelope,
-    SyncEventResult, SyncPullResponse, UtilityBillingRequest, UtilityBillingResponse,
+    SyncEventResult, SyncPullResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -183,6 +184,59 @@ impl LocalStore {
         .fetch_optional(&self.pool)
         .await?;
         row.map(|row| customer_from_row(&row)).transpose()
+    }
+
+    pub async fn update_customer(
+        &self,
+        id: Uuid,
+        expected_revision: i64,
+        input: &UpdateCustomer,
+    ) -> Result<Option<(Customer, SyncEnvelope)>, sqlx::Error> {
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let Some(current) = sqlx::query(
+            "SELECT id, organization_id, customer_code, legal_name, contact_fields_json, status, revision
+             FROM customers WHERE id = $1 AND organization_id = $2 AND revision = $3",
+        )
+        .bind(id.to_string())
+        .bind(self.organization_id.to_string())
+        .bind(expected_revision)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let current_customer = customer_from_row(&current)?;
+        let legal_name = input
+            .legal_name
+            .clone()
+            .unwrap_or(current_customer.legal_name.clone());
+        let address = input.address.clone().or(current_customer.address);
+        let phone = input.phone.clone().or(current_customer.phone);
+        let status = input
+            .status
+            .clone()
+            .unwrap_or(current_customer.status.clone());
+        sqlx::query(
+            "UPDATE customers SET legal_name = $1, contact_fields_json = $2,
+             status = $3, revision = revision + 1
+             WHERE id = $4 AND organization_id = $5 AND revision = $6",
+        )
+        .bind(&legal_name)
+        .bind(json!({"address": address, "phone": phone}).to_string())
+        .bind(&status)
+        .bind(id.to_string())
+        .bind(self.organization_id.to_string())
+        .bind(expected_revision)
+        .execute(&mut *tx)
+        .await?;
+        let payload = serde_json::to_value(input)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid customer JSON: {error}")))?;
+        let event = local_event(self, Uuid::new_v4(), id, "CUSTOMER_UPDATED", payload)?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        let customer = load_customer_from_tx(&mut tx, id, self.organization_id).await?;
+        tx.commit().await?;
+        Ok(Some((customer, event)))
     }
 
     pub async fn list_customers(&self) -> Result<Vec<Customer>, sqlx::Error> {

@@ -6,7 +6,8 @@ use axum::{
 };
 use sel_contracts::{
     CreateCustomer, Customer, InvoiceLineResponse, RecordPaymentRequest, SyncEventResult,
-    SyncPushRequest, SyncPushResponse, UtilityBillingRequest, UtilityBillingResponse,
+    SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse,
 };
 use sel_domain::billing;
 use sel_storage::LocalStore;
@@ -153,7 +154,10 @@ pub fn router_with_store(store: LocalStore) -> Router {
             "/local/v1/customers",
             get(list_customers).post(create_customer),
         )
-        .route("/local/v1/customers/:id", get(get_customer))
+        .route(
+            "/local/v1/customers/:id",
+            get(get_customer).patch(update_customer),
+        )
         .route(
             "/local/v1/billing/utility/issue",
             post(issue_utility_invoice),
@@ -230,6 +234,36 @@ async fn get_customer(
         .map_err(internal_error)?
         .map(Json)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "customer not found".into()))
+}
+
+async fn update_customer(
+    State(state): State<LocalAppState>,
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<UpdateCustomer>,
+) -> Result<Json<Customer>, (StatusCode, String)> {
+    let expected_revision = headers
+        .get("if-match")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim_matches('"').parse::<i64>().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::PRECONDITION_REQUIRED,
+                "If-Match revision is required".into(),
+            )
+        })?;
+    state
+        .store
+        .update_customer(id, expected_revision, &input)
+        .await
+        .map_err(internal_error)?
+        .map(|(customer, _)| Json(customer))
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                "customer is missing or its revision has changed".into(),
+            )
+        })
 }
 
 async fn issue_utility_invoice(

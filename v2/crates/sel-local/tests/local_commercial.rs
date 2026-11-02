@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use sel_contracts::CreateCustomer;
+use sel_contracts::{CreateCustomer, UpdateCustomer};
 use sel_local::router_with_store;
 use sel_storage::LocalStore;
 use serde_json::json;
@@ -65,6 +65,47 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .unwrap();
     assert_eq!(customer.status(), StatusCode::CREATED);
     let customer = json_body(customer).await;
+    let updated_customer = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/local/v1/customers/{}",
+                    customer["id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .header("if-match", "1")
+                .body(Body::from(
+                    serde_json::to_vec(&UpdateCustomer {
+                        legal_name: Some("Updated local customer".into()),
+                        address: Some("Local address".into()),
+                        phone: None,
+                        status: None,
+                    })
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let updated_customer_status = updated_customer.status();
+    let updated_customer_body = updated_customer
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    assert_eq!(
+        updated_customer_status,
+        StatusCode::OK,
+        "update body: {}",
+        String::from_utf8_lossy(&updated_customer_body)
+    );
+    let updated_customer: serde_json::Value =
+        serde_json::from_slice(&updated_customer_body).unwrap();
+    assert_eq!(updated_customer["legal_name"], "Updated local customer");
+    assert_eq!(updated_customer["revision"], 2);
     let invoice_request = json!({
         "customer_id": customer["id"],
         "billing_period": "2026-11",
@@ -159,6 +200,6 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .await
         .expect("read invoice after restart")
         .is_some());
-    assert_eq!(reopened.pending_count().await.unwrap(), 3);
+    assert_eq!(reopened.pending_count().await.unwrap(), 4);
     let _ = std::fs::remove_file(path);
 }

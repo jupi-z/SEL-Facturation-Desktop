@@ -13,7 +13,7 @@ Le dépôt contient maintenant un workspace Rust autonome, les contrats JSON ver
 
 - `ddd78bb` agrège les affectations d'un même paiement avant validation, verrouille les créances dans un ordre déterministe et couvre la concurrence PostgreSQL ainsi que la double affectation de 7 + 7 USD sur une créance de 10 USD.
 - `e7b2294` impose les identités organisation/appareil en mode commercial, refuse les jetons d'authentification absents ou trop courts et empêche les changements d'identité d'une base SQLite existante.
-- `70afddd` ajoute les opérations locales durables de création client, facture eau + électricité, paiement partiel et consultation des soldes, avec journal et outbox dans la même transaction.
+- `70afddd` ajoute les opérations locales durables de création et modification client, facture eau + électricité, paiement partiel et consultation des soldes, avec journal et outbox dans la même transaction.
 - `a5faffa` ajoute le worker push/pull SQLite, le curseur central durable, les accusés persistants, la projection des clients reçus, la reprise des événements `CUSTOMER_UPDATED`, `PAYMENT_RECORDED` et `UTILITY_INVOICE_ISSUED`, ainsi que l'identité d'agent/grant hors ligne persistée.
 - Les tests réellement rejoués sur ce jalon sont : `cargo test -p sel-local` (4 tests), `cargo test -p sel-storage` (6 tests non ignorés), `cargo test -p sel-storage --test postgres_sync_financial -- --ignored` (2 tests PostgreSQL réels) et `cargo test -p sel-storage --test sqlite_identity` (1 test ciblé). La campagne globale fmt/Clippy/workspace doit encore être relancée sur `a5faffa` avant de fermer ce jalon.
 
