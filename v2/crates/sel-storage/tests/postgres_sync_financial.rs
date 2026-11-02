@@ -5,6 +5,7 @@ use sel_contracts::{
     PaymentAllocationRequest, RecordPaymentRequest, SyncEnvelope, SyncEventResult,
     UtilityBillingRequest, UtilityServiceInput,
 };
+use sel_storage::postgres::PaymentWriteOutcome;
 use sel_storage::{migrate_postgres, CentralStore};
 use sel_sync::payload_digest;
 use sqlx::Row;
@@ -91,6 +92,18 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
         payload,
         client_schema_version: 1,
     };
+    // Simulate a process crash after the durable business/idempotency commit
+    // and before the sync acknowledgement/publication transaction.
+    let pre_ack = store
+        .record_payment_with_id(
+            &request,
+            payment_id,
+            &format!("sync-payment-{}", event.event_id),
+            &event.payload_sha256,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(pre_ack, PaymentWriteOutcome::Created(_)));
     let first = store.apply_sync_event(&event).await.unwrap();
     assert!(matches!(first, SyncEventResult::Accepted { .. }));
     let count = sqlx::query("SELECT count(*) AS count FROM payments WHERE customer_id = $1")
@@ -117,6 +130,24 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
     .await
     .unwrap();
     assert_eq!(allocation_total, Decimal::new(3, 0));
+    let publication_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM central_changes WHERE organization_id = $1 AND entity = 'payments' AND entity_id = $2",
+    )
+    .bind(organization_id)
+    .bind(payment_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(publication_count, 1);
+    let inbox_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sync_inbox WHERE device_id = $1 AND event_id = $2",
+    )
+    .bind(device_id)
+    .bind(event.event_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(inbox_count, 1);
 }
 
 #[tokio::test]

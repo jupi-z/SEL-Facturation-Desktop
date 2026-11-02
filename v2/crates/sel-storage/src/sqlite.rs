@@ -372,7 +372,7 @@ impl LocalStore {
         id: Uuid,
     ) -> Result<Option<UtilityBillingResponse>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT immutable_snapshot_json FROM invoices
+            "SELECT immutable_snapshot_json, status FROM invoices
              WHERE id = $1 AND customer_id IN (SELECT id FROM customers WHERE organization_id = $2)",
         )
         .bind(id.to_string())
@@ -381,9 +381,13 @@ impl LocalStore {
         .await?;
         row.map(|row| {
             let snapshot: String = row.try_get("immutable_snapshot_json")?;
-            serde_json::from_str(&snapshot).map_err(|error| {
-                sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
-            })
+            let mut response: UtilityBillingResponse =
+                serde_json::from_str(&snapshot).map_err(|error| {
+                    sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
+                })?;
+            let status: String = row.try_get("status")?;
+            response.status = status;
+            Ok(response)
         })
         .transpose()
     }
@@ -946,14 +950,71 @@ async fn apply_invoice_change(
     {
         let existing_customer: String = existing.try_get("customer_id")?;
         let existing_snapshot: String = existing.try_get("immutable_snapshot_json")?;
-        let expected_snapshot = serde_json::to_string(&response)
+        let mut existing_response: UtilityBillingResponse =
+            serde_json::from_str(&existing_snapshot).map_err(|error| {
+                sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
+            })?;
+        let mut expected_response = response.clone();
+        existing_response.status.clear();
+        expected_response.status.clear();
+        let existing_immutable = serde_json::to_value(&existing_response)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}")))?;
+        let expected_immutable = serde_json::to_value(&expected_response)
             .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}")))?;
         if existing_customer != request.customer_id.to_string()
-            || existing_snapshot != expected_snapshot
+            || existing_immutable != expected_immutable
         {
             return Err(sqlx::Error::Protocol(
                 "conflicting local invoice projection".into(),
             ));
+        }
+        sqlx::query(
+            "UPDATE invoices SET status = $1, version = CASE WHEN version < $2 THEN $2 ELSE version END WHERE id = $3",
+        )
+        .bind(&response.status)
+        .bind(revision)
+        .bind(entity_id)
+        .execute(&mut **tx)
+        .await?;
+        let receivable_id = response
+            .receivable_id
+            .ok_or_else(|| sqlx::Error::Protocol("invoice sync receivable id is missing".into()))?;
+        if let Some(receivable) = sqlx::query(
+            "SELECT id FROM receivables WHERE source_type = 'INVOICE' AND source_id = $1",
+        )
+        .bind(entity_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        {
+            let existing_id: String = receivable.try_get("id")?;
+            if existing_id != receivable_id.to_string() {
+                return Err(sqlx::Error::Protocol(
+                    "conflicting local receivable projection".into(),
+                ));
+            }
+        } else {
+            sqlx::query(
+                "INSERT INTO receivables
+                 (id, source_type, source_id, customer_id, currency, principal_total, status)
+                 VALUES ($1, 'INVOICE', $2, $3, $4, $5, 'OPEN')",
+            )
+            .bind(receivable_id.to_string())
+            .bind(entity_id)
+            .bind(request.customer_id.to_string())
+            .bind(&response.currency)
+            .bind(response.total.to_string())
+            .execute(&mut **tx)
+            .await?;
+        }
+        let line_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM invoice_lines WHERE invoice_id = $1")
+                .bind(entity_id)
+                .fetch_one(&mut **tx)
+                .await?;
+        if line_count == 0 {
+            for line in &response.lines {
+                insert_invoice_line(tx, response.invoice_id, line).await?;
+            }
         }
         return Ok(());
     }
@@ -1033,6 +1094,10 @@ async fn apply_payment_change(
         .get("currency")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| sqlx::Error::Protocol("payment sync currency is missing".into()))?;
+    let status = payment
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("payment sync status is missing".into()))?;
     let customer_exists: Option<String> = sqlx::query_scalar(
         "SELECT c.id FROM customers c WHERE c.id = $1 AND c.organization_id = $2",
     )
@@ -1057,6 +1122,53 @@ async fn apply_payment_change(
             return Err(sqlx::Error::Protocol(
                 "conflicting local payment projection".into(),
             ));
+        }
+        sqlx::query("UPDATE payments SET status = $1 WHERE id = $2")
+            .bind(status)
+            .bind(payment_id)
+            .execute(&mut **tx)
+            .await?;
+        let allocations = change
+            .get("allocations")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| sqlx::Error::Protocol("payment sync allocations are missing".into()))?;
+        for allocation in allocations {
+            let receivable_id = allocation
+                .get("receivable_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    sqlx::Error::Protocol("payment sync receivable id is missing".into())
+                })?;
+            let allocated_amount = allocation
+                .get("amount")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    sqlx::Error::Protocol("payment sync allocation amount is missing".into())
+                })?;
+            let already_present: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM payment_allocations
+                 WHERE payment_id = $1 AND receivable_id = $2 AND allocated_amount = $3 AND currency = $4",
+            )
+            .bind(payment_id)
+            .bind(receivable_id)
+            .bind(allocated_amount)
+            .bind(currency)
+            .fetch_one(&mut **tx)
+            .await?;
+            if already_present == 0 {
+                sqlx::query(
+                    "INSERT INTO payment_allocations
+                     (id, payment_id, receivable_id, allocated_amount, currency)
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(Uuid::new_v4().to_string())
+                .bind(payment_id)
+                .bind(receivable_id)
+                .bind(allocated_amount)
+                .bind(currency)
+                .execute(&mut **tx)
+                .await?;
+            }
         }
         return Ok(());
     }

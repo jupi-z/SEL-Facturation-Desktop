@@ -1280,9 +1280,9 @@ impl CentralStore {
                 let outcome = self
                     .issue_utility_invoice(&input, &response, &operation_key, &event.payload_sha256)
                     .await;
-                let (accepted_response, created) = match outcome {
-                    Ok(UtilityIssueOutcome::Created(response)) => (response, true),
-                    Ok(UtilityIssueOutcome::Replay(response)) => (response, false),
+                let accepted_response = match outcome {
+                    Ok(UtilityIssueOutcome::Created(response)) => response,
+                    Ok(UtilityIssueOutcome::Replay(response)) => response,
                     Err(_) => {
                         return self
                             .persist_sync_rejection(
@@ -1302,19 +1302,15 @@ impl CentralStore {
                         server_sequence: 0,
                         server_entity_id: accepted_response.invoice_id,
                     },
-                    if created {
-                        Some((
-                            "invoices",
-                            accepted_response.invoice_id,
-                            1,
-                            json!({
-                                "request": input,
-                                "response": accepted_response
-                            }),
-                        ))
-                    } else {
-                        None
-                    },
+                    Some((
+                        "invoices",
+                        accepted_response.invoice_id,
+                        1,
+                        json!({
+                            "request": input,
+                            "response": accepted_response
+                        }),
+                    )),
                 )
                 .await?;
                 ack_tx.commit().await?;
@@ -1357,9 +1353,9 @@ impl CentralStore {
                         &event.payload_sha256,
                     )
                     .await;
-                let (response, created) = match outcome {
-                    Ok(SolarSaleWriteOutcome::Created(response)) => (response, true),
-                    Ok(SolarSaleWriteOutcome::Replay(response)) => (response, false),
+                let response = match outcome {
+                    Ok(SolarSaleWriteOutcome::Created(response)) => response,
+                    Ok(SolarSaleWriteOutcome::Replay(response)) => response,
                     Err(_) => {
                         return self
                             .persist_sync_rejection(
@@ -1380,20 +1376,14 @@ impl CentralStore {
                         server_sequence: 0,
                         server_entity_id: sale_id,
                     },
-                    if created {
-                        Some((
-                            "sales",
-                            sale_id,
-                            1,
-                            serde_json::to_value(&response).map_err(|error| {
-                                sqlx::Error::Protocol(format!(
-                                    "invalid solar sale response: {error}"
-                                ))
-                            })?,
-                        ))
-                    } else {
-                        None
-                    },
+                    Some((
+                        "sales",
+                        sale_id,
+                        1,
+                        serde_json::to_value(&response).map_err(|error| {
+                            sqlx::Error::Protocol(format!("invalid solar sale response: {error}"))
+                        })?,
+                    )),
                 )
                 .await?;
                 ack_tx.commit().await?;
@@ -1436,9 +1426,9 @@ impl CentralStore {
                         &event.payload_sha256,
                     )
                     .await;
-                let (body, created) = match outcome {
-                    Ok(SolarContractWriteOutcome::Created(body)) => (body, true),
-                    Ok(SolarContractWriteOutcome::Replay(body)) => (body, false),
+                let body = match outcome {
+                    Ok(SolarContractWriteOutcome::Created(body)) => body,
+                    Ok(SolarContractWriteOutcome::Replay(body)) => body,
                     Err(_) => {
                         return self
                             .persist_sync_rejection(
@@ -1463,11 +1453,7 @@ impl CentralStore {
                         server_sequence: 0,
                         server_entity_id: entity_id,
                     },
-                    if created {
-                        Some(("installment_plans", entity_id, 1, body))
-                    } else {
-                        None
-                    },
+                    Some(("installment_plans", entity_id, 1, body)),
                 )
                 .await?;
                 ack_tx.commit().await?;
@@ -1509,14 +1495,14 @@ impl CentralStore {
                         &event.payload_sha256,
                     )
                     .await;
-                let (body, payment_id, created) = match outcome {
+                let (body, payment_id) = match outcome {
                     Ok(PaymentWriteOutcome::Created(body)) => {
                         let payment_id = body
                             .get("payment_id")
                             .and_then(serde_json::Value::as_str)
                             .and_then(|value| value.parse().ok())
                             .unwrap_or(event.aggregate_id);
-                        (body, payment_id, true)
+                        (body, payment_id)
                     }
                     Ok(PaymentWriteOutcome::Replay(body)) => {
                         let payment_id = body
@@ -1524,7 +1510,7 @@ impl CentralStore {
                             .and_then(serde_json::Value::as_str)
                             .and_then(|value| value.parse().ok())
                             .unwrap_or(event.aggregate_id);
-                        (body, payment_id, false)
+                        (body, payment_id)
                     }
                     Err(_) => {
                         let mut reject_tx = self.pool.begin().await?;
@@ -1560,20 +1546,16 @@ impl CentralStore {
                         server_sequence: 0,
                         server_entity_id: payment_id,
                     },
-                    if created {
-                        Some((
-                            "payments",
-                            payment_id,
-                            1,
-                            json!({
-                                "customer_id": input.customer_id,
-                                "payment": body,
-                                "allocations": input.allocations,
-                            }),
-                        ))
-                    } else {
-                        None
-                    },
+                    Some((
+                        "payments",
+                        payment_id,
+                        1,
+                        json!({
+                            "customer_id": input.customer_id,
+                            "payment": body,
+                            "allocations": input.allocations,
+                        }),
+                    )),
                 )
                 .await?;
                 ack_tx.commit().await?;

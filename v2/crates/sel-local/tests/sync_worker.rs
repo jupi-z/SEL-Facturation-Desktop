@@ -249,3 +249,147 @@ async fn pulled_utility_invoice_and_payment_changes_project_locally() {
     assert_eq!(store.central_cursor().await.unwrap(), 3);
     let _ = std::fs::remove_file(path);
 }
+
+#[tokio::test]
+async fn central_acceptance_reconciles_pending_invoice_and_payment_without_duplicates() {
+    let path = std::env::temp_dir().join(format!(
+        "sel-v2-reconcile-pending-{}.sqlite",
+        Uuid::new_v4()
+    ));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("connect local store");
+    let customer_id = Uuid::new_v4();
+    let invoice_id = Uuid::new_v4();
+    let receivable_id = Uuid::new_v4();
+    let payment_id = Uuid::new_v4();
+    let allocation_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO customers
+         (id, organization_id, customer_code, legal_name, contact_fields_json, status, revision, created_at)
+         VALUES ($1, $2, 'RECON-1', 'Reconciliation customer', '{}', 'ACTIVE', 1, datetime('now'))",
+    )
+    .bind(customer_id.to_string())
+    .bind(store.organization_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed customer");
+    let response = serde_json::json!({
+        "invoice_id": invoice_id,
+        "receivable_id": receivable_id,
+        "invoice_number": null,
+        "status": "CENTRAL_ACCEPTED",
+        "currency": "USD",
+        "lines": [
+            {"service_code":"ELECTRICITY","quantity":"100","unit":"KWH","unit_price":"0.10","subtotal":"10.00","tax":"1.60","total":"11.60"},
+            {"service_code":"WATER","quantity":"0","unit":"M3","unit_price":null,"subtotal":"0.00","tax":"0.00","total":"0.00"}
+        ],
+        "subtotal":"10.00","tax":"1.60","total":"11.60","snapshot_sha256":"fixture"
+    });
+    sqlx::query(
+        "INSERT INTO invoices
+         (id, customer_id, period, issued_at, currency, total, template_version, immutable_snapshot_json, status, version)
+         VALUES ($1, $2, '2026-11', datetime('now'), 'USD', '11.60', 'v2-a4-1', $3, 'LOCAL_PENDING', 1)",
+    )
+    .bind(invoice_id.to_string())
+    .bind(customer_id.to_string())
+    .bind(response.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed pending invoice");
+    sqlx::query(
+        "INSERT INTO receivables
+         (id, source_type, source_id, customer_id, currency, principal_total, status)
+         VALUES ($1, 'INVOICE', $2, $3, 'USD', '11.60', 'OPEN')",
+    )
+    .bind(receivable_id.to_string())
+    .bind(invoice_id.to_string())
+    .bind(customer_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed receivable");
+    sqlx::query(
+        "INSERT INTO payments
+         (id, customer_id, amount_received, currency, method, paid_at, status)
+         VALUES ($1, $2, '3.00', 'USD', 'CASH', datetime('now'), 'LOCAL_PENDING')",
+    )
+    .bind(payment_id.to_string())
+    .bind(customer_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed pending payment");
+    sqlx::query(
+        "INSERT INTO payment_allocations
+         (id, payment_id, receivable_id, allocated_amount, currency)
+         VALUES ($1, $2, $3, '3.00', 'USD')",
+    )
+    .bind(allocation_id.to_string())
+    .bind(payment_id.to_string())
+    .bind(receivable_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed pending allocation");
+
+    store
+        .apply_pulled_changes(&SyncPullResponse {
+            changes: vec![
+                serde_json::json!({
+                    "sequence": 10,
+                    "entity": "invoices",
+                    "entity_id": invoice_id,
+                    "revision": 2,
+                    "change": {
+                        "request": {
+                            "customer_id": customer_id,
+                            "billing_period": "2026-11",
+                            "electricity": {"quantity":"100","unit":"KWH"},
+                            "water": {"quantity":"0","unit":"M3"},
+                            "water_zero_confirmed": true,
+                            "currency":"USD",
+                            "tariff_revision":"fixture"
+                        },
+                        "response": response
+                    }
+                }),
+                serde_json::json!({
+                    "sequence": 11,
+                    "entity": "payments",
+                    "entity_id": payment_id,
+                    "revision": 1,
+                    "change": {
+                        "customer_id": customer_id,
+                        "payment": {"payment_id":payment_id,"status":"CENTRAL_ACCEPTED","amount":"3.00","currency":"USD"},
+                        "allocations":[{"receivable_id":receivable_id,"amount":"3.00"}]
+                    }
+                })
+            ],
+            next_cursor: 11,
+        })
+        .await
+        .expect("reconcile central acceptance");
+
+    let local_invoice = store
+        .get_invoice_response(invoice_id)
+        .await
+        .expect("read reconciled invoice")
+        .expect("invoice exists");
+    assert_eq!(local_invoice.status, "CENTRAL_ACCEPTED");
+    let payment_status: String = sqlx::query_scalar("SELECT status FROM payments WHERE id = $1")
+        .bind(payment_id.to_string())
+        .fetch_one(&store.pool)
+        .await
+        .expect("read payment status");
+    assert_eq!(payment_status, "CENTRAL_ACCEPTED");
+    let allocation_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM payment_allocations WHERE payment_id = $1")
+            .bind(payment_id.to_string())
+            .fetch_one(&store.pool)
+            .await
+            .expect("count allocations");
+    assert_eq!(allocation_count, 1);
+    let _ = std::fs::remove_file(path);
+}
