@@ -62,3 +62,11 @@ Les PR fusionnées historiques de V1 (#1, #2, #8–#11, #14–#20, #22–#45 hor
 - Ne pas fusionner `main`, ne pas publier de release et ne pas déployer.
 
 Le dépôt ne peut donc pas être réduit immédiatement à deux branches sans intégrer ou archiver explicitement les travaux V1/Windows encore ouverts. Le nettoyage sûr commence par les branches obsolètes clairement identifiées ; les branches utiles restent visibles jusqu'à leur consolidation dédiée.
+
+## Résultat du nettoyage du 2 novembre
+
+Après vérification des PR et des références distantes, les branches suivantes ont été supprimées :
+
+`docs/codex-facture-eau-electricite-20261022`, `docs/sel-final-go-no-go-audit-20261023`, `docs/sel-final-stabilization-codex-20261023`, `docs/sel-release-gate-consolidate-issue49-20261023`, `docs/sel-release-gate-finalization-20261023`, `docs/sel-safeupdate-v1-unsigned-authenticated`, `docs/sel-v2-backend-offline-api-contract-20261102`, `monarque/auth-layout-polish`, `monarque/auth-login-centering`, `monarque/complete-crud-management`, `monarque/external-links-browser`, `monarque/fix-preview-publish`, `monarque/fix-preview-publish-notes`, `monarque/fix-startup-reportlab-code128`, `monarque/footer-bottom-layout`, `monarque/local-nav-icons`, `monarque/past-due-invoices`, `monarque/release-0.3.24`, `monarque/release-0.3.24-manifest`, `monarque/release-0.3.24-manifest-url`, `monarque/update-channel`, `monarque/update-manifest`, `monarque/updates-centered-copy` et `monarque/updates-layout-online`.
+
+La PR #53 a été fermée avec un commentaire de traçabilité avant la suppression de sa branche. Les références distantes restantes sont `main`, `monarque/sel-v2-backend` et les branches provisoirement conservées listées plus haut. Leur suppression finale nécessite une consolidation ou une décision explicite, car elles contiennent encore des changements V1, SafeUpdate ou Windows non intégrés.
