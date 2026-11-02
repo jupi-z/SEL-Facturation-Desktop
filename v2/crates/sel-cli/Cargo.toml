@@ -1,0 +1,11 @@
+[package]
+name = "sel-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+sel-storage = { path = "../sel-storage" }
+serde_json.workspace = true
+tokio.workspace = true
+

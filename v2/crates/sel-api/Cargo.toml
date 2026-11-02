@@ -1,0 +1,26 @@
+[package]
+name = "sel-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum.workspace = true
+chrono.workspace = true
+hex.workspace = true
+rust_decimal.workspace = true
+sel-contracts = { path = "../sel-contracts" }
+sel-domain = { path = "../sel-domain" }
+sel-sync = { path = "../sel-sync" }
+sel-storage = { path = "../sel-storage" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+tower = "0.5"
+

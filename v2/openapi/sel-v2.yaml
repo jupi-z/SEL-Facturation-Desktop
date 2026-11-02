@@ -1,0 +1,307 @@
+openapi: 3.1.0
+info:
+  title: SEL V2 Backend API
+  version: 0.1.0
+  description: Structured SEL billing API. Invoice documents are JSON; PDF generation is client-side only.
+servers:
+  - url: https://api.example.invalid
+paths:
+  /health/live:
+    get:
+      operationId: healthLive
+      responses:
+        '200': { description: Service is alive }
+  /health/ready:
+    get:
+      operationId: healthReady
+      responses:
+        '200': { description: Service readiness }
+  /v1/meta/capabilities:
+    get:
+      operationId: capabilities
+      responses:
+        '200': { description: Protocol capabilities }
+  /v1/customers:
+    get:
+      operationId: listCustomers
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Customers, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Customer' } } } } }
+    post:
+      operationId: createCustomer
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateCustomer' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Customer' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/customers/{id}:
+    get:
+      operationId: getCustomer
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Customer, content: { application/json: { schema: { $ref: '#/components/schemas/Customer' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateCustomer
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { name: If-Match, in: header, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateCustomer' } } } }
+      responses:
+        '200': { description: Updated customer }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/billing/utility/preview:
+    post:
+      operationId: previewUtility
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingRequest' } } } }
+      responses:
+        '200': { description: Two service lines, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingResponse' } } } }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/billing/utility/issue:
+    post:
+      operationId: issueUtility
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingRequest' } } } }
+      responses:
+        '201': { description: Central accepted, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingResponse' } } } }
+        '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/invoices/{id}:
+    get:
+      operationId: getInvoice
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Structured invoice, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingResponse' } } } }
+  /v1/invoices/{id}/document-data:
+    get:
+      operationId: getInvoiceDocumentData
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Client rendering data only, content: { application/json: { schema: { $ref: '#/components/schemas/DocumentData' } } } }
+  /v1/payments:
+    post:
+      operationId: recordPayment
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RecordPaymentRequest' } } } }
+      responses:
+        '201': { description: Payment recorded }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/receivables/{id}:
+    get:
+      operationId: getReceivable
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Receivable balance projection }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/customers/{id}/statement:
+    get:
+      operationId: getCustomerStatement
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Customer receivables statement }
+  /v1/sync/push:
+    post:
+      operationId: syncPush
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '200': { description: Durable event results }
+  /v1/sync/pull:
+    get:
+      operationId: syncPull
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Paged central changes }
+  /v1/config/versions:
+    get:
+      operationId: configVersions
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Declarative update metadata }
+  /v1/client-resources/manifest:
+    get:
+      operationId: clientResourcesManifest
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Signed declarative resource metadata only }
+  /v1/sync/status:
+    get:
+      operationId: syncStatus
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Honest local/central synchronization status }
+  /v1/solar/sales:
+    post:
+      operationId: createSolarSale
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateSolarSaleRequest' } } } }
+      responses:
+        '201': { description: One sale and one receivable }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/solar/contracts/{id}/activate:
+    post:
+      operationId: activateSolarContract
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ActivateSolarContractRequest' } } } }
+      responses:
+        '200': { description: Exact installment schedule accepted }
+        '422': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    UuidPath: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8 } }
+  responses:
+    Problem:
+      description: Stable problem detail
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetails' } } }
+  schemas:
+    Customer:
+      type: object
+      required: [id, organization_id, customer_code, legal_name, status, revision]
+      properties:
+        id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid }
+        customer_code: { type: string }
+        legal_name: { type: string }
+        address: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        status: { type: string }
+        revision: { type: integer, format: int64 }
+    CreateCustomer:
+      type: object
+      required: [customer_code, legal_name]
+      properties:
+        customer_code: { type: string }
+        legal_name: { type: string }
+        address: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+    UpdateCustomer:
+      type: object
+      properties:
+        legal_name: { type: [string, 'null'] }
+        address: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        status: { type: [string, 'null'], enum: [ACTIVE, ARCHIVED, null] }
+    UtilityBillingRequest:
+      type: object
+      required: [customer_id, billing_period, electricity, water, water_zero_confirmed, currency, tariff_revision]
+      properties:
+        customer_id: { type: string, format: uuid }
+        billing_period: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }
+        electricity: { $ref: '#/components/schemas/ServiceInput' }
+        water: { $ref: '#/components/schemas/ServiceInput' }
+        water_zero_confirmed: { type: boolean }
+        currency: { type: string }
+        tariff_revision: { type: string }
+        due_date: { type: [string, 'null'], format: date }
+    ServiceInput:
+      type: object
+      required: [quantity, unit]
+      properties:
+        quantity: { type: string, description: Decimal encoded as a JSON string }
+        unit: { type: string, enum: [KWH, M3] }
+    InvoiceLine:
+      type: object
+      required: [service_code, quantity, unit, subtotal, tax, total]
+      properties:
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        quantity: { type: string }
+        unit: { type: string }
+        unit_price: { type: [string, 'null'] }
+        subtotal: { type: string }
+        tax: { type: string }
+        total: { type: string }
+    UtilityBillingResponse:
+      type: object
+      required: [invoice_id, receivable_id, status, currency, lines, subtotal, tax, total, snapshot_sha256]
+      properties:
+        invoice_id: { type: string, format: uuid }
+        receivable_id: { type: [string, 'null'], format: uuid }
+        invoice_number: { type: [string, 'null'] }
+        status: { type: string }
+        currency: { type: string }
+        lines: { type: array, minItems: 2, maxItems: 2, items: { $ref: '#/components/schemas/InvoiceLine' } }
+        subtotal: { type: string }
+        tax: { type: string }
+        total: { type: string }
+        snapshot_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    PaymentAllocation:
+      type: object
+      required: [receivable_id, amount]
+      properties:
+        receivable_id: { type: string, format: uuid }
+        amount: { type: string }
+    RecordPaymentRequest:
+      type: object
+      required: [customer_id, received_amount, currency, method, occurred_at, allocations]
+      properties:
+        customer_id: { type: string, format: uuid }
+        received_amount: { type: string }
+        currency: { type: string }
+        method: { type: string }
+        occurred_at: { type: string, format: date-time }
+        allocations: { type: array, items: { $ref: '#/components/schemas/PaymentAllocation' } }
+    CreateSolarSaleRequest:
+      type: object
+      required: [customer_id, product_code, principal, currency, terms_revision]
+      properties:
+        customer_id: { type: string, format: uuid }
+        product_code: { type: string }
+        principal: { type: string }
+        currency: { type: string }
+        terms_revision: { type: string }
+    ActivateSolarContractRequest:
+      type: object
+      required: [sale_id, receivable_id, schedule, currency, approved_terms_revision]
+      properties:
+        sale_id: { type: string, format: uuid }
+        receivable_id: { type: string, format: uuid }
+        currency: { type: string }
+        approved_terms_revision: { type: string }
+        schedule:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [sequence, due_date, amount]
+            properties:
+              sequence: { type: integer, minimum: 1 }
+              due_date: { type: string, format: date }
+              amount: { type: string }
+    DocumentData:
+      type: object
+      required: [document_schema_version, template_version, document_reference, invoice, qr_internal_reference, origin]
+      properties:
+        document_schema_version: { type: integer }
+        template_version: { type: string }
+        document_reference: { type: string }
+        invoice: { $ref: '#/components/schemas/UtilityBillingResponse' }
+        qr_internal_reference: { type: string }
+        origin: { type: string }
+    ProblemDetails:
+      type: object
+      required: [type, title, status, code, detail, request_id]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        request_id: { type: string }
+

@@ -1,0 +1,12 @@
+[package]
+name = "sel-local"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum.workspace = true
+sel-storage = { path = "../sel-storage" }
+sel-sync = { path = "../sel-sync" }
+serde_json.workspace = true
+tokio.workspace = true
+

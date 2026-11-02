@@ -1,0 +1,15 @@
+[package]
+name = "sel-contracts"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_yaml.workspace = true
+
