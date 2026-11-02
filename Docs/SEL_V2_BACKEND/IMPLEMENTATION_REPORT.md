@@ -2,7 +2,7 @@
 
 Date de contrôle : 2 novembre 2026, Africa/Lubumbashi  
 Branche : `monarque/sel-v2-backend`  
-Commits de référence : socle précédent `40a97fc`, implémentation `402fece`, rapport/documentation `88fc431288fac3ce1491965a418c096adb7c5986`, correctifs de cette reprise `ddd78bb`, `e7b2294`, `70afddd`, `a5faffa`, `f0d0f95`.
+Commits de référence : socle précédent `40a97fc`, implémentation `402fece`, rapport/documentation `88fc431288fac3ce1491965a418c096adb7c5986`, correctifs de cette reprise `ddd78bb`, `e7b2294`, `70afddd`, `a5faffa`, `f0d0f95`, `1f70302`.
 Périmètre : backend Rust/API, migrations, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
@@ -17,9 +17,10 @@ Le dépôt contient maintenant un workspace Rust autonome, les contrats JSON ver
 - `a5faffa` ajoute le worker push/pull SQLite, le curseur central durable, les accusés persistants, la projection des clients reçus, la reprise des événements `CUSTOMER_UPDATED`, `PAYMENT_RECORDED` et `UTILITY_INVOICE_ISSUED`, ainsi que l'identité d'agent/grant hors ligne persistée.
 - `4293c3b` branche aussi `SOLAR_SALE_CREATED` et `SOLAR_CONTRACT_ACTIVATED` sur les repositories centraux transactionnels ; le test PostgreSQL réel vérifie une seule créance et un seul plan de deux échéances après synchronisation.
 - `f0d0f95` rend les identifiants de facture, créance, vente solaire, plan solaire et paiement stables dans les enveloppes de synchronisation ; les projections SQLite des factures et paiements reçus sont transactionnelles et idempotentes ; l'API locale de production exige `SEL_LOCAL_AUTH_TOKEN` et un worker push/pull périodique reprend automatiquement l'outbox après une coupure.
-- Les tests réellement rejoués sur ce jalon sont : `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -- --nocapture` (vert), `cargo test -p sel-local --tests -- --nocapture` (7 tests), `cargo test -p sel-storage --tests -- --nocapture` (tests SQLite et tests PostgreSQL ignorés explicitement), et `cargo test -p sel-storage --tests -- --ignored --nocapture` contre PostgreSQL réel (6 tests verts, dont les trois synchronisations financières).
+- `1f70302` corrige la réconciliation des projections locales : une facture dont le snapshot financier est identique mais dont le statut passe de `LOCAL_PENDING` à `CENTRAL_ACCEPTED` est confirmée sans réécrire le snapshot ni dupliquer la créance ; les paiements existants sont confirmés et leurs allocations sont dédupliquées. La publication centrale est désormais récupérable après un commit métier suivi d'une panne avant accusé : le replay idempotent republie la modification et l'accusé dans une transaction unique, sans recréer l'opération.
+- Les tests réellement rejoués sur ce jalon sont : `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p sel-local --tests -- --nocapture` (8 tests verts, dont la réconciliation locale), et `cargo test -p sel-storage --tests -- --ignored --nocapture` contre PostgreSQL réel (6 tests verts, dont la reprise d'un paiement après commit métier avant accusé).
 
-Les preuves locales exécutées sur ce jalon sont vertes : `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (15 tests non ignorés, les scénarios PostgreSQL étant explicitement ignorés dans cette commande), puis `cargo test --workspace -- --ignored` contre PostgreSQL 16 réel (5 tests réussis). Les scénarios couvrent la reprise après redémarrage, la facture utility à deux lignes avec eau à zéro, le paiement partiel idempotent, la vente solaire avec une créance et un échéancier exacts, et la synchronisation centrale avec conflit de payload durable.
+Les preuves locales du jalon précédent restent valides ; les nouveaux scénarios sont verts : `central_acceptance_reconciles_pending_invoice_and_payment_without_duplicates` sur SQLite, et `payment_sync_is_applied_before_the_central_ack_and_is_idempotent` sur PostgreSQL réel après pré-commit métier simulé. Le contrôle courant couvre la reprise après redémarrage, la facture utility à deux lignes avec eau à zéro, le paiement partiel idempotent, la vente solaire avec une créance et un échéancier exacts, et la synchronisation centrale avec conflit de payload durable. Une campagne complète `cargo test --workspace` après ce dernier commit et la CI GitHub doivent encore être rejouées.
 
 Le verdict reste NO-GO pour la production commerciale. Les parcours centraux testés ne reposent plus sur les HashMaps quand `DATABASE_URL` est fourni, et l'agent local protège désormais son API et son worker, mais l'authentification centrale reste une garde par jeton configuré (pas encore sessions courtes, rotation et RBAC fin), les ventes solaires et corrections comptables ne sont pas encore entièrement exécutées/projetées localement, les grants offline signés restent à finaliser, et l'import V1 est actuellement un dry-run vérifié sans écriture.
 
@@ -58,7 +59,7 @@ Résultats :
 - Rust : PASS, formatage vérifié ; PASS, Clippy sans warning ; PASS, `cargo test --workspace` après correction du chemin du test OpenAPI ; PASS, campagne séparée des cinq tests PostgreSQL ignorés.
 - PostgreSQL : PASS, tests réels `postgres_persistence`, `postgres_customer_api`, `postgres_commercial`, `postgres_solar` et `postgres_sync` ; les réponses d'idempotence sont relues depuis `idempotency_keys`, les compteurs SQL restent à une facture/deux lignes/une créance et un seul plan solaire, et la sync vérifie inbox/change/conflict après commit.
 - API : PASS, facture utility JSON à deux lignes avec eau zéro ; PASS, tarifs approuvés/inactifs lus côté central ; PASS, modification client protégée par révision ; PASS, paiement partiel et solde ; PASS, vente solaire et activation 400+600 ; PASS, sync retry → duplicate, conflit payload durable, pull et status central.
-- SQLite : PASS, WAL + migrations et journal/outbox survivent à une réouverture ; PASS, acknowledgement atomique conserve le journal ; PARTIAL, les opérations métier locales ne sont pas encore toutes exécutées par projection SQLite.
+- SQLite : PASS, WAL + migrations et journal/outbox survivent à une réouverture ; PASS, acknowledgement atomique conserve le journal ; PASS, facture locale et paiement local déjà présents sont réconciliés vers l'état central sans doublon ; PARTIAL, les opérations métier locales ne sont pas encore toutes exécutées par projection SQLite.
 - CLI migration : PASS, dry-run synthétique avec SHA-256, compteurs, références et zéro modification de la source.
 - LiveUpdate : PASS, signature valide ; PASS, signature falsifiée ; PASS, ressource altérée ; PASS, expiration ; PASS, downgrade ; PASS, traversal ; PASS, activation/rollback connu-bon.
 - OpenAPI : PASS, YAML parseable et aucune route PDF déclarée.
@@ -92,13 +93,13 @@ Résultats :
 | FIN-12 | NOT_TESTED | validation API en mémoire ; transaction PG anti-effet partiel non démontrée |
 | SYN-01 | PASS limité | SQLite WAL, journal et outbox persistent après réouverture ; factures utility et paiements reçus sont projetés ; solaire/corrections locales restent incomplets |
 | SYN-02 | NOT_TESTED | interruption/reprise de 100 commandes non exécutée |
-| SYN-03 | PASS | retry PostgreSQL après commit retourne le résultat durable ; conflit de payload écrit dans `sync_conflicts` |
+| SYN-03 | PASS limité | retry PostgreSQL après commit métier avant accusé republie `central_changes` et `sync_inbox` dans une transaction de reprise ; conflit de payload écrit dans `sync_conflicts` ; la panne physique réelle entre commits reste non injectée |
 | SYN-04 | PARTIAL | pull central paginé et cursor testés ; scénario crash SQLite injecté avant commit à compléter |
 | SYN-05 | NOT_TESTED | contrainte de période dans le schéma, deux appareils réels non testés |
 | SYN-06 | NOT_TESTED | surallocation contrôlée côté API ; deux appareils offline non testés |
 | SYN-07 | NOT_TESTED | révision attendue dans l'enveloppe, conflit d'échéancier non implémenté |
 | SYN-08 | NOT_TESTED | révocation/grant offline non implémentés |
-| SYN-09 | PASS limité | `sync_once` et worker périodique push/pull testés ; reprise après erreur réseau et convergence multi-postes restent à éprouver avec un central réel |
+| SYN-09 | PASS limité | `sync_once` et worker périodique push/pull testés ; reprise centrale après commit métier démontrée ; reprise réseau réelle et convergence multi-postes restent à éprouver |
 | SYN-10 | NOT_TESTED | rebootstrap multi-postes sans suppression d'outbox non démontré |
 | SYN-11 | PASS | états `LOCAL_PREVIEW`, `CENTRAL_ACCEPTED`, `DUPLICATE`, `CONFLICT` exposés dans les contrats |
 | SYN-12 | NOT_TESTED | réservation/stock kit non implémentés |
