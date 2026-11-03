@@ -6,7 +6,7 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `f706435` (`feat(v2): enforce approved solar prices and expose quotes`)
+Commit contrôlé : `ab73fc0` (`fix(v2): export local solar sale error`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — avoirs append-only
@@ -59,7 +59,7 @@ Les corrections cumulées pendant la reprise de la PR #58 ferment plusieurs rég
 - les routes obligatoires de création de contrat solaire sont maintenant exposées côté central (`POST /v1/solar/contracts`) et côté agent local (`POST /local/v1/solar/contracts`) ; elles réutilisent la validation de schedule, l'idempotence et les projections existantes, avec des tests HTTP central/offline.
 - un devis solaire central (`POST /v1/solar/quotes`) et local (`POST /local/v1/solar/quotes`) renvoie désormais le prix du catalogue actif approuvé ; une vente ne peut plus déclarer un principal différent du prix validé, avec rejet HTTP `422` et test PostgreSQL réel ; le parcours local vérifie également le devis hors connexion.
 
-La CI du commit contrôlé est verte : [run — 41654954322](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41654954322), job `rust` `125982672650`, sur `f706435`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris les devis et le rejet des prix solaires divergents.
+La CI du commit contrôlé est verte : [run — 41656677873](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41656677873), job `rust` `125988733922`, sur `ab73fc0`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris les devis et le rejet des prix solaires divergents côté central et local.
 
 ## Audit des branches GitHub
 
@@ -82,7 +82,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le correctif de canonisation (`358ba74`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La validation du correctif actuel `f706435` est suivie ci-dessus. Cette exécution distante valide notamment le rapprochement V1→V2 en lecture seule, la pagination/filtre clients, les référentiels actifs/approuvés, le test RBAC/IDOR, la concurrence solaire, la lecture centrale et locale d'un échéancier persistant, le rollback atomique d'un pull SQLite, la canonicalisation de l'empreinte, les transactions de synchronisation financière, le rejet des collisions de séquence, les garde-fous de restauration, l'import V1 réel sur fixture synthétique avec rejeu idempotent, l'annulation complète d'une migration échouée, les routes de création de contrat solaire central/offline et le prix solaire dérivé du catalogue actif. L'environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL réelle, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La validation du correctif actuel `ab73fc0` est suivie ci-dessus. Cette exécution distante valide notamment le rapprochement V1→V2 en lecture seule, la pagination/filtre clients, les référentiels actifs/approuvés, le test RBAC/IDOR, la concurrence solaire, la lecture centrale et locale d'un échéancier persistant, le rollback atomique d'un pull SQLite, la canonicalisation de l'empreinte, les transactions de synchronisation financière, le rejet des collisions de séquence, les garde-fous de restauration, l'import V1 réel sur fixture synthétique avec rejeu idempotent, l'annulation complète d'une migration échouée, les routes de création de contrat solaire central/offline, le prix solaire dérivé du catalogue actif et l'erreur métier locale `422` pour un prix divergent. L'environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL réelle, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -139,19 +139,20 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 ### Exécution locale
 
 - Suite Rust complète locale : **NOT_EXECUTED** ; la compilation MSVC locale est bloquée par l'absence de `link.exe`/Build Tools.
-- Tests du commit contrôlé `f706435` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
+- Tests du commit contrôlé `ab73fc0` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
 - Vérification locale de formatage : **PASS** ; tentative locale de compilation : **BLOCKED_EXTERNAL** par l'absence de `link.exe`.
 - Relecture statique du diff et vérification `git status` : **PASS** ; aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [41654954322](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41654954322), job `rust` `125982672650` : **SUCCESS** sur `f706435`.
+Run [41656677873](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41656677873), job `rust` `125988733922` : **SUCCESS** sur `ab73fc0`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
 - `cargo test --workspace` : **PASS** ;
 - `cargo test --workspace -- --ignored` avec PostgreSQL 16.4 : **PASS** ;
 - test HTTP de devis solaire issu du catalogue actif et rejet d'un principal divergent : **PASS** ;
+- test local du rejet HTTP `422` pour un prix solaire divergent : **PASS** ;
 - test `two_sqlite_devices_converge_through_real_postgres_and_http` : **PASS après correction du double comptage d’affectation** ;
 - test `migration_apply_is_transactional_and_idempotent_on_postgres` : **PASS**, avec fixture V1, sauvegarde `pg_dump`, import transactionnel et rejeu sans écriture ;
 - test `concurrent_utility_invoices_same_customer_period_return_one_business_conflict` : **PASS dans la CI PostgreSQL du commit contrôlé** ;
@@ -210,7 +211,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41652681930` sur `6d0c09e` |
+| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41656677873` sur `ab73fc0` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -226,7 +227,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41652681930` est verte sur `6d0c09e`, avec l'import V1 synthétique idempotent, son rollback transactionnel, les nouveaux parcours de contrat solaire, les tests PostgreSQL/SQLite, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement et le rejet des collisions de séquence.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41656677873` est verte sur `ab73fc0`, avec l'import V1 synthétique idempotent, son rollback transactionnel, les parcours de contrat et devis solaire, les tests PostgreSQL/SQLite, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement et le rejet des collisions de séquence.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
