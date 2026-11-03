@@ -147,9 +147,15 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
         client_schema_version: 1,
     };
     let allocation_result = store.apply_sync_event(&allocation_event).await.unwrap();
-    assert!(matches!(allocation_result, SyncEventResult::Accepted { .. }));
+    assert!(matches!(
+        allocation_result,
+        SyncEventResult::Accepted { .. }
+    ));
     let allocation_retry = store.apply_sync_event(&allocation_event).await.unwrap();
-    assert!(matches!(allocation_retry, SyncEventResult::Duplicate { .. }));
+    assert!(matches!(
+        allocation_retry,
+        SyncEventResult::Duplicate { .. }
+    ));
     let retry = store.apply_sync_event(&event).await.unwrap();
     assert!(matches!(retry, SyncEventResult::Duplicate { .. }));
     let reversal_id = Uuid::new_v4();
