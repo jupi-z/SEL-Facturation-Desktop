@@ -1201,6 +1201,10 @@ fn payment_reverse_error(error: sel_storage::postgres::PaymentReverseError) -> A
             "ACTOR_NOT_ACTIVE",
             "the reversal actor is not active in this organization",
         ),
+        sel_storage::postgres::PaymentReverseError::ActorNotAuthorized => ApiError::forbidden(
+            "ACTOR_NOT_AUTHORIZED",
+            "the actor role cannot perform a financial reversal",
+        ),
         sel_storage::postgres::PaymentReverseError::InvalidAmount => ApiError::unprocessable(
             "PAYMENT_REVERSAL_INVALID",
             "reversal amount must be strictly positive",
@@ -1300,6 +1304,13 @@ impl ApiError {
     fn not_found(code: &'static str, detail: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            code,
+            detail: detail.into(),
+        }
+    }
+    fn forbidden(code: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
             code,
             detail: detail.into(),
         }

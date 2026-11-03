@@ -125,6 +125,8 @@ pub enum PaymentReverseError {
     PaymentNotAccepted,
     #[error("payment reversal actor is not active in the organization")]
     ActorNotActive,
+    #[error("payment reversal actor is not authorized")]
+    ActorNotAuthorized,
     #[error("reversal amount is invalid")]
     InvalidAmount,
     #[error("reversal exceeds the payment amount still reversible")]
@@ -725,17 +727,19 @@ impl CentralStore {
         if input.reason.trim().is_empty() {
             return Err(PaymentReverseError::ReasonRequired);
         }
-        let actor_exists = sqlx::query(
-            "SELECT id FROM users
+        let actor_role = sqlx::query_scalar::<_, String>(
+            "SELECT role FROM users
              WHERE id = $1 AND organization_id = $2 AND status = 'ACTIVE'",
         )
         .bind(actor_id)
         .bind(self.organization_id)
         .fetch_optional(&mut *tx)
-        .await?
-        .is_some();
-        if !actor_exists {
+        .await?;
+        let Some(actor_role) = actor_role else {
             return Err(PaymentReverseError::ActorNotActive);
+        };
+        if !matches!(actor_role.as_str(), "ADMIN" | "CASHIER" | "SUPERVISOR") {
+            return Err(PaymentReverseError::ActorNotAuthorized);
         }
         let Some(payment) = sqlx::query(
             "SELECT p.amount_received, p.status
