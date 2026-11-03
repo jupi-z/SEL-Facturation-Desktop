@@ -29,7 +29,7 @@ Ces règles guident les incréments backend, client Windows, migration et exploi
 - Reconstruire le nouveau client à partir de l’inventaire et des frames Figma réconciliés ; respecter les composants, polices, tokens, assets, parcours et états spécifiés.
 - Valider le shell Windows et son installateur par un spike avant d’investir dans les écrans ; l’interface et ses ressources doivent fonctionner localement sans connexion Internet.
 - Garder dans le client les données d’affichage et interactions ; laisser les règles métier, montants, permissions et transitions d’état à Rust.
-- Passer par un adaptateur de transport typé/versionné vers l’agent Rust local. Aucun accès direct à PostgreSQL depuis le client.
+- Passer par un adaptateur de transport typé/versionné vers l’agent Rust local ; préférer des commandes natives IPC pour que le bearer local ne soit jamais exposé au JavaScript. Aucun accès direct à PostgreSQL depuis le client.
 - Construire les données dynamiques via DOM sûr, sans concaténation HTML non échappée.
 - Prévoir chargement, vide, erreur, hors connexion, attente, confirmation, conflit et refus d’accès.
 - Embarquer les ressources nécessaires localement.
