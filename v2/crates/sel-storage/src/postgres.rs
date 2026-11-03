@@ -1453,6 +1453,27 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<PaymentWriteOutcome, PaymentWriteError> {
         let mut tx = self.pool.begin().await?;
+        let outcome = self
+            .record_payment_with_id_in_tx(
+                &mut *tx,
+                input,
+                payment_id,
+                idempotency_key,
+                request_digest,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn record_payment_with_id_in_tx(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        input: &RecordPaymentRequest,
+        payment_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<PaymentWriteOutcome, PaymentWriteError> {
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
              WHERE organization_id = $1 AND principal_id = $2 AND operation = $3 AND idempotency_key = $4",
@@ -1592,7 +1613,6 @@ impl CentralStore {
         .bind(&body)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
         Ok(PaymentWriteOutcome::Created(body))
     }
 
@@ -3153,7 +3173,8 @@ impl CentralStore {
                     };
                 let operation_key = format!("sync-payment-{}", event.event_id);
                 let outcome = self
-                    .record_payment_with_id(
+                    .record_payment_with_id_in_tx(
+                        &mut *tx,
                         &input,
                         payment_id,
                         &operation_key,
@@ -3178,30 +3199,22 @@ impl CentralStore {
                         (body, payment_id)
                     }
                     Err(_) => {
-                        let mut reject_tx = self.pool.begin().await?;
                         let result = SyncEventResult::Rejected {
                             code: "PAYMENT_NOT_ACCEPTED".into(),
                             required_action: "review_payment_and_retry".into(),
                         };
-                        persist_sync_result(
-                            &mut reject_tx,
-                            self.organization_id,
-                            event,
-                            &result,
-                            None,
-                        )
-                        .await?;
-                        reject_tx.commit().await?;
+                        persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                            .await?;
+                        tx.commit().await?;
                         return Ok(result);
                     }
                 };
-                let mut ack_tx = self.pool.begin().await?;
                 sqlx::query(
                     "UPDATE payments SET origin_event_id = $1 WHERE id = $2 AND origin_event_id IS NULL",
                 )
                 .bind(event.event_id)
                 .bind(payment_id)
-                .execute(&mut *ack_tx)
+                .execute(&mut *tx)
                 .await?;
                 let allocation_rows = sqlx::query(
                     "SELECT id, receivable_id, schedule_id, allocated_amount, currency
@@ -3209,7 +3222,7 @@ impl CentralStore {
                      ORDER BY id",
                 )
                 .bind(payment_id)
-                .fetch_all(&mut *ack_tx)
+                .fetch_all(&mut *tx)
                 .await?;
                 let allocations = allocation_rows
                     .iter()
@@ -3224,7 +3237,7 @@ impl CentralStore {
                     })
                     .collect::<Result<Vec<_>, sqlx::Error>>()?;
                 let result = persist_sync_result(
-                    &mut ack_tx,
+                    &mut tx,
                     self.organization_id,
                     event,
                     &SyncEventResult::Accepted {
@@ -3243,7 +3256,7 @@ impl CentralStore {
                     )),
                 )
                 .await?;
-                ack_tx.commit().await?;
+                tx.commit().await?;
                 Ok(result)
             }
             "PAYMENT_ALLOCATED" => {
