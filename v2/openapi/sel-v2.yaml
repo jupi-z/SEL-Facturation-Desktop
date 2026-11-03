@@ -55,8 +55,16 @@ paths:
     get:
       operationId: listCustomers
       security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Customer code returned by X-Next-Cursor }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [ACTIVE, ARCHIVED] } }
       responses:
-        '200': { description: Customers, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Customer' } } } } }
+        '200':
+          description: Customers page; the legacy array response is preserved
+          headers:
+            X-Next-Cursor: { schema: { type: string }, description: Cursor for the next page when present }
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Customer' } } } }
     post:
       operationId: createCustomer
       security: [{ bearerAuth: [] }]

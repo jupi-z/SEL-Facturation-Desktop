@@ -526,21 +526,76 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| !value.trim().is_empty())
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct CustomerListQuery {
+    cursor: Option<String>,
+    limit: Option<usize>,
+    status: Option<String>,
+}
+
 async fn list_customers(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<Customer>>, ApiError> {
+    Query(query): Query<CustomerListQuery>,
+) -> Result<Response, ApiError> {
     require_auth(&headers)?;
-    if let Some(store) = &state.central {
-        return store
-            .list_customers()
-            .await
-            .map(Json)
-            .map_err(storage_error);
+    let limit = query.limit.unwrap_or(100).clamp(1, 100);
+    if let Some(status) = query.status.as_deref() {
+        if !matches!(status, "ACTIVE" | "ARCHIVED") {
+            return Err(ApiError::unprocessable(
+                "CUSTOMER_STATUS_INVALID",
+                "status filter must be ACTIVE or ARCHIVED",
+            ));
+        }
     }
-    let mut customers: Vec<_> = state.customers.read().await.values().cloned().collect();
-    customers.sort_by(|a, b| a.customer_code.cmp(&b.customer_code));
-    Ok(Json(customers))
+    let (customers, next_cursor) = if let Some(store) = &state.central {
+        store
+            .list_customers_page(
+                query.cursor.as_deref(),
+                query.status.as_deref(),
+                limit as i64,
+            )
+            .await
+            .map_err(storage_error)?
+    } else {
+        let mut customers: Vec<_> = state
+            .customers
+            .read()
+            .await
+            .values()
+            .filter(|item| {
+                query
+                    .status
+                    .as_deref()
+                    .is_none_or(|status| item.status == status)
+            })
+            .filter(|item| {
+                query
+                    .cursor
+                    .as_deref()
+                    .is_none_or(|cursor| item.customer_code.as_str() > cursor)
+            })
+            .cloned()
+            .collect();
+        customers.sort_by(|a, b| a.customer_code.cmp(&b.customer_code));
+        let next_cursor = if customers.len() > limit {
+            customers
+                .get(limit - 1)
+                .map(|customer| customer.customer_code.clone())
+        } else {
+            None
+        };
+        customers.truncate(limit);
+        (customers, next_cursor)
+    };
+    let mut response = Json(customers).into_response();
+    if let Some(next_cursor) = next_cursor {
+        response.headers_mut().insert(
+            "x-next-cursor",
+            HeaderValue::from_str(&next_cursor).map_err(ApiError::internal)?,
+        );
+    }
+    Ok(response)
 }
 
 async fn create_customer(

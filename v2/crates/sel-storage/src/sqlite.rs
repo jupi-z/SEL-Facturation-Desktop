@@ -291,14 +291,44 @@ impl LocalStore {
     }
 
     pub async fn list_customers(&self) -> Result<Vec<Customer>, sqlx::Error> {
+        Ok(self.list_customers_page(None, None, i64::MAX).await?.0)
+    }
+
+    pub async fn list_customers_page(
+        &self,
+        after_customer_code: Option<&str>,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<(Vec<Customer>, Option<String>), sqlx::Error> {
+        let fetch_limit = limit.max(1).saturating_add(1);
         let rows = sqlx::query(
             "SELECT id, organization_id, customer_code, legal_name, contact_fields_json, status, revision
-             FROM customers WHERE organization_id = $1 ORDER BY customer_code",
+             FROM customers
+             WHERE organization_id = $1
+               AND ($2 IS NULL OR customer_code > $2)
+               AND ($3 IS NULL OR status = $3)
+             ORDER BY customer_code
+             LIMIT $4",
         )
         .bind(self.organization_id.to_string())
+        .bind(after_customer_code)
+        .bind(status)
+        .bind(fetch_limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(customer_from_row).collect()
+        let next_cursor = if rows.len() as i64 > limit.max(1) {
+            rows.get(limit.max(1) as usize - 1)
+                .map(|row| row.try_get::<String, _>("customer_code"))
+                .transpose()?
+        } else {
+            None
+        };
+        let customers = rows
+            .iter()
+            .take(limit.max(1) as usize)
+            .map(customer_from_row)
+            .collect::<Result<_, _>>()?;
+        Ok((customers, next_cursor))
     }
 
     pub async fn load_tariffs(

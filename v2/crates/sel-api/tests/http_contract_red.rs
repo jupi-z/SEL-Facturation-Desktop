@@ -96,3 +96,94 @@ async fn utility_invoice_always_returns_electricity_and_zero_water_as_json() {
         .unwrap();
     assert_eq!(receivable.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn customer_listing_supports_bounded_cursor_pagination_and_status_filter() {
+    let app = router(AppState::new(Uuid::new_v4()));
+    for (code, status) in [
+        ("C-001", "ACTIVE"),
+        ("C-002", "ARCHIVED"),
+        ("C-003", "ACTIVE"),
+    ] {
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/customers")
+                    .header("authorization", "Bearer test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({"customer_code":code,"legal_name":code}))
+                            .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        if status == "ARCHIVED" {
+            let customer: serde_json::Value =
+                serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            let archived = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PATCH")
+                        .uri(format!("/v1/customers/{}", customer["id"]))
+                        .header("authorization", "Bearer test")
+                        .header("If-Match", "\"1\"")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&json!({"status":"ARCHIVED"})).unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(archived.status(), StatusCode::OK);
+        }
+    }
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/customers?limit=1&status=ACTIVE")
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let cursor = first
+        .headers()
+        .get("x-next-cursor")
+        .expect("next cursor")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let first_body: serde_json::Value =
+        serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(first_body.as_array().unwrap().len(), 1);
+    assert_eq!(first_body[0]["customer_code"], "C-001");
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/customers?limit=1&status=ACTIVE&cursor={cursor}"
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body: serde_json::Value =
+        serde_json::from_slice(&second.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(second_body[0]["customer_code"], "C-003");
+}

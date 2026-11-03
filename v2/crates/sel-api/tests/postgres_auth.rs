@@ -182,3 +182,105 @@ async fn individual_session_login_rotation_and_revocation_are_enforced() {
         .unwrap();
     assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn role_and_organization_boundaries_reject_write_escalation_and_idor() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    let organization_id = Uuid::new_v4();
+    let foreign_organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .expect("connect organization store");
+    migrate_postgres(&store.pool).await.expect("run migrations");
+    store
+        .ensure_organization("SEL RBAC organization")
+        .await
+        .expect("create organization");
+    let foreign_store = CentralStore::connect(&database_url, foreign_organization_id)
+        .await
+        .expect("connect foreign store");
+    foreign_store
+        .ensure_organization("SEL foreign organization")
+        .await
+        .expect("create foreign organization");
+    let cashier_id = Uuid::new_v4();
+    let password_hash = CentralStore::hash_user_password("cashier boundary password")
+        .expect("hash cashier password");
+    sqlx::query(
+        "INSERT INTO users (id, organization_id, role, status, identity_ref, password_hash)
+         VALUES ($1, $2, 'CASHIER', 'ACTIVE', 'rbac-cashier', $3)",
+    )
+    .bind(cashier_id)
+    .bind(organization_id)
+    .bind(password_hash)
+    .execute(&store.pool)
+    .await
+    .expect("insert cashier");
+    let foreign_customer = foreign_store
+        .create_customer(&sel_contracts::CreateCustomer {
+            customer_code: format!("FOREIGN-{}", &foreign_organization_id.to_string()[..8]),
+            legal_name: "Foreign organization customer".into(),
+            address: None,
+            phone: None,
+        })
+        .await
+        .expect("create foreign customer");
+
+    let app = router(AppState::with_production_central_store(store));
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "identity_ref": "rbac-cashier",
+                        "password": "cashier boundary password"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let login = json_body(login).await;
+    let access_token = login["access_token"].as_str().unwrap();
+
+    let forbidden_write = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/customers")
+                .header("authorization", format!("Bearer {access_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "customer_code": "RBAC-WRITE",
+                        "legal_name": "Must be rejected"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden_write.status(), StatusCode::FORBIDDEN);
+
+    let foreign_read = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/customers/{}", foreign_customer.id))
+                .header("authorization", format!("Bearer {access_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_read.status(), StatusCode::NOT_FOUND);
+}
