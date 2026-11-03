@@ -1292,6 +1292,31 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<InvoiceVoidOutcome, InvoiceVoidError> {
         let mut tx = self.pool.begin().await?;
+        let outcome = self
+            .void_invoice_with_id_in_tx(
+                &mut *tx,
+                invoice_id,
+                void_id,
+                actor_id,
+                reason,
+                idempotency_key,
+                request_digest,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn void_invoice_with_id_in_tx(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        invoice_id: Uuid,
+        void_id: Uuid,
+        actor_id: Uuid,
+        reason: &str,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<InvoiceVoidOutcome, InvoiceVoidError> {
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
              WHERE organization_id = $1 AND principal_id = $2
@@ -1431,7 +1456,6 @@ impl CentralStore {
         .bind(&body)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
         Ok(InvoiceVoidOutcome::Created(body))
     }
 
@@ -1883,6 +1907,31 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<PaymentReverseOutcome, PaymentReverseError> {
         let mut tx = self.pool.begin().await?;
+        let outcome = self
+            .reverse_payment_with_id_in_tx(
+                &mut *tx,
+                payment_id,
+                input,
+                actor_id,
+                reversal_id,
+                idempotency_key,
+                request_digest,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn reverse_payment_with_id_in_tx(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        payment_id: Uuid,
+        input: &ReversePaymentRequest,
+        actor_id: Uuid,
+        reversal_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<PaymentReverseOutcome, PaymentReverseError> {
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
              WHERE organization_id = $1 AND principal_id = $2 AND operation = $3 AND idempotency_key = $4",
@@ -2016,7 +2065,6 @@ impl CentralStore {
         .bind(&body)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
         Ok(PaymentReverseOutcome::Created(body))
     }
 
@@ -2049,6 +2097,31 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<CreditNoteWriteOutcome, CreditNoteWriteError> {
         let mut tx = self.pool.begin().await?;
+        let outcome = self
+            .create_credit_note_with_id_in_tx(
+                &mut *tx,
+                receivable_id,
+                input,
+                actor_id,
+                credit_note_id,
+                idempotency_key,
+                request_digest,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn create_credit_note_with_id_in_tx(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        receivable_id: Uuid,
+        input: &CreditNoteRequest,
+        actor_id: Uuid,
+        credit_note_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<CreditNoteWriteOutcome, CreditNoteWriteError> {
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
              WHERE organization_id = $1 AND principal_id = $2
@@ -2202,7 +2275,6 @@ impl CentralStore {
         .bind(&body)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
         Ok(CreditNoteWriteOutcome::Created(body))
     }
 
@@ -3174,7 +3246,8 @@ impl CentralStore {
                         }
                     };
                 let outcome = self
-                    .void_invoice_with_id(
+                    .void_invoice_with_id_in_tx(
+                        &mut *tx,
                         payload.invoice_id,
                         payload.void_id,
                         payload.actor_id,
@@ -3196,9 +3269,8 @@ impl CentralStore {
                             .await;
                     }
                 };
-                let mut ack_tx = self.pool.begin().await?;
                 let result = persist_sync_result(
-                    &mut ack_tx,
+                    &mut tx,
                     self.organization_id,
                     event,
                     &SyncEventResult::Accepted {
@@ -3208,7 +3280,7 @@ impl CentralStore {
                     Some(("invoices", payload.invoice_id, 2, body)),
                 )
                 .await?;
-                ack_tx.commit().await?;
+                tx.commit().await?;
                 Ok(result)
             }
             "PAYMENT_RECORDED" => {
@@ -3416,7 +3488,8 @@ impl CentralStore {
                 let input = ReversePaymentRequest { amount, reason };
                 let operation_key = format!("sync-payment-reversal-{}", event.event_id);
                 let outcome = self
-                    .reverse_payment_with_id(
+                    .reverse_payment_with_id_in_tx(
+                        &mut *tx,
                         payment_id,
                         &input,
                         actor_id,
@@ -3429,26 +3502,18 @@ impl CentralStore {
                     Ok(PaymentReverseOutcome::Created(body))
                     | Ok(PaymentReverseOutcome::Replay(body)) => body,
                     Err(_) => {
-                        let mut reject_tx = self.pool.begin().await?;
                         let result = SyncEventResult::Rejected {
                             code: "PAYMENT_REVERSAL_NOT_ACCEPTED".into(),
                             required_action: "review_payment_reversal_and_retry".into(),
                         };
-                        persist_sync_result(
-                            &mut reject_tx,
-                            self.organization_id,
-                            event,
-                            &result,
-                            None,
-                        )
-                        .await?;
-                        reject_tx.commit().await?;
+                        persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                            .await?;
+                        tx.commit().await?;
                         return Ok(result);
                     }
                 };
-                let mut ack_tx = self.pool.begin().await?;
                 let result = persist_sync_result(
-                    &mut ack_tx,
+                    &mut tx,
                     self.organization_id,
                     event,
                     &SyncEventResult::Accepted {
@@ -3458,7 +3523,7 @@ impl CentralStore {
                     Some(("payment_reversals", reversal_id, 1, body)),
                 )
                 .await?;
-                ack_tx.commit().await?;
+                tx.commit().await?;
                 Ok(result)
             }
             "CREDIT_NOTE_RECORDED" => {
@@ -3497,7 +3562,8 @@ impl CentralStore {
                     reason: payload.reason,
                 };
                 let outcome = self
-                    .create_credit_note_with_id(
+                    .create_credit_note_with_id_in_tx(
+                        &mut *tx,
                         payload.receivable_id,
                         &input,
                         event.actor_id,
@@ -3510,26 +3576,18 @@ impl CentralStore {
                     Ok(CreditNoteWriteOutcome::Created(body))
                     | Ok(CreditNoteWriteOutcome::Replay(body)) => body,
                     Err(_) => {
-                        let mut reject_tx = self.pool.begin().await?;
                         let result = SyncEventResult::Rejected {
                             code: "CREDIT_NOTE_NOT_ACCEPTED".into(),
                             required_action: "review_credit_note_and_receivable_balance".into(),
                         };
-                        persist_sync_result(
-                            &mut reject_tx,
-                            self.organization_id,
-                            event,
-                            &result,
-                            None,
-                        )
-                        .await?;
-                        reject_tx.commit().await?;
+                        persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                            .await?;
+                        tx.commit().await?;
                         return Ok(result);
                     }
                 };
-                let mut ack_tx = self.pool.begin().await?;
                 let result = persist_sync_result(
-                    &mut ack_tx,
+                    &mut tx,
                     self.organization_id,
                     event,
                     &SyncEventResult::Accepted {
@@ -3539,7 +3597,7 @@ impl CentralStore {
                     Some(("credit_notes", payload.credit_note_id, 1, body)),
                 )
                 .await?;
-                ack_tx.commit().await?;
+                tx.commit().await?;
                 Ok(result)
             }
             _ => {

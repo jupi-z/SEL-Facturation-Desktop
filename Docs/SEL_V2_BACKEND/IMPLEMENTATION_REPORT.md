@@ -44,6 +44,7 @@ Les corrections cumulées pendant la reprise de la PR #58 ferment plusieurs rég
 - un test PostgreSQL de concurrence couvre deux activations simultanées d'un échéancier solaire : une seule création est acceptée et l'autre est rejetée explicitement comme contrat déjà existant ;
 - l'application atomique d'un lot de changements SQLite est maintenant testée sous erreur au milieu du lot : la projection déjà commencée et le curseur sont annulés ensemble, puis le rejeu valide converge.
 - la canonisation de l'empreinte trie les lignes de service par clé stable ; une inversion accidentelle des lignes électricité/eau ne crée donc pas un faux conflit financier.
+- les commandes financières synchronisées utilisent maintenant le même contexte transactionnel PostgreSQL pour l'effet métier et `sync_inbox` : facture eau + électricité, paiement, affectation, vente solaire, contrat solaire, annulation, contre-écriture et avoir ; la validation CI du commit `9d24291` est attendue avant de classer cette couverture comme démontrée.
 
 La CI du commit contrôlé est verte : [run — 41632017706](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41632017706), job `rust` `125903719123`, sur `0539129`. Les deux annotations restantes sont des avertissements d'environnement GitHub Actions, sans échec de compilation ni de test.
 
@@ -171,7 +172,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FIN-10 | PARTIAL | tarif utility approuvé/daté et produit solaire actif contrôlés ; matrice exhaustive des catégories à compléter |
 | SYN-01 | PASS | test deux SQLite + PostgreSQL réel, reprise après ouverture et projections idempotentes |
 | SYN-02 | PARTIAL | retry/replay et rejeu concurrent du même événement démontrés ; coupure injectée à chaque frontière réseau non exhaustive |
-| SYN-03 | PASS limité | publication et accusé récupérables après commit simulé ; panne physique réelle non injectée |
+| SYN-03 | PASS limité | les commandes financières synchronisées et leur accusé sont regroupés dans une transaction PostgreSQL sur le code courant ; publication/récupération après commit simulé couvertes, mais panne physique réelle non injectée |
 | SYN-04 | PARTIAL | pull et curseur durable testés ; crash SQLite avant commit à compléter |
 | SYN-05 | PASS limité | deux connexions PostgreSQL concurrentes sur le même abonné/période donnent une création et un conflit `InvoicePeriodExists`, une seule ligne persistée ; scénario Windows multi-postes non réalisé |
 | SYN-06 | PARTIAL | surallocation centrale et rejeu concurrent protégés ; paiements réellement simultanés sur une même créance entre deux postes à compléter |
