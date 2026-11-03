@@ -28,16 +28,15 @@ async fn main() -> Result<()> {
         }
         "migrate-v1" => {
             let mode = args.next().unwrap_or_default();
-            let path = args.next().ok_or_else(|| {
-                anyhow::anyhow!("usage: sel-cli migrate-v1 --dry-run <file> | --apply --approved-manifest <file>")
-            })?;
+            let approved_flag = if mode == "--apply" {
+                args.next()
+            } else {
+                None
+            };
+            let path = migration_source_path(&mode, approved_flag.as_deref(), args.next())?;
             let report = if mode == "--dry-run" {
                 migration_dry_run(Path::new(&path))?
             } else {
-                anyhow::ensure!(
-                    mode == "--apply" && args.next().as_deref() == Some("--approved-manifest"),
-                    "usage: sel-cli migrate-v1 --dry-run <file> | --apply --approved-manifest <file>"
-                );
                 migration_apply(Path::new(&path)).await?
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
@@ -96,6 +95,28 @@ async fn main() -> Result<()> {
         _ => println!("usage: sel-cli <health|migrate-v1 --dry-run <portable-v1.json>|migrate-v1 --apply --approved-manifest <portable-v1.json>|backup-postgres <backup.dump>|restore-postgres <backup.dump>|reconcile <portable-v1.json>"),
     }
     Ok(())
+}
+
+fn migration_source_path(
+    mode: &str,
+    approved_flag: Option<&str>,
+    path: Option<String>,
+) -> Result<String> {
+    anyhow::ensure!(
+        matches!(mode, "--dry-run" | "--apply"),
+        "usage: sel-cli migrate-v1 --dry-run <file> | --apply --approved-manifest <file>"
+    );
+    if mode == "--apply" {
+        anyhow::ensure!(
+            approved_flag == Some("--approved-manifest"),
+            "usage: sel-cli migrate-v1 --dry-run <file> | --apply --approved-manifest <file>"
+        );
+    }
+    path.ok_or_else(|| {
+        anyhow::anyhow!(
+            "usage: sel-cli migrate-v1 --dry-run <file> | --apply --approved-manifest <file>"
+        )
+    })
 }
 
 async fn migration_apply(path: &Path) -> Result<serde_json::Value> {
@@ -739,7 +760,7 @@ fn unique_values(items: &[serde_json::Value], key: &str) -> Result<HashSet<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{migration_dry_run, require_restore_approval};
+    use super::{migration_dry_run, migration_source_path, require_restore_approval};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -773,5 +794,20 @@ mod tests {
         assert!(require_restore_approval(None).is_err());
         assert!(require_restore_approval(Some("yes")).is_err());
         assert!(require_restore_approval(Some("I_UNDERSTAND")).is_ok());
+    }
+
+    #[test]
+    fn migration_apply_arguments_keep_the_manifest_path() {
+        assert_eq!(
+            migration_source_path(
+                "--apply",
+                Some("--approved-manifest"),
+                Some("fixture.json".into())
+            )
+            .expect("valid apply arguments"),
+            "fixture.json"
+        );
+        assert!(migration_source_path("--apply", Some("fixture.json"), None).is_err());
+        assert!(migration_source_path("--dry-run", None, None).is_err());
     }
 }
