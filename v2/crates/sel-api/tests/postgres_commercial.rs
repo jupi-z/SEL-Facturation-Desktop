@@ -164,8 +164,9 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         )
         .await
         .unwrap();
-    assert_eq!(receivable.status(), StatusCode::OK);
+    let receivable_status = receivable.status();
     let receivable = json_body(receivable).await;
+    assert_eq!(receivable_status, StatusCode::OK, "receivable body: {receivable}");
     assert_eq!(receivable["paid"], "3.00");
     assert_eq!(receivable["balance"], "8.02");
 
