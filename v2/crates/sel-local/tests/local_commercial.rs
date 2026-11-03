@@ -311,8 +311,14 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert_eq!(statement.status(), StatusCode::OK);
     let statement = json_body(statement).await;
     assert_eq!(statement["customer_id"], customer["id"]);
-    assert_eq!(statement["receivables"].as_array().unwrap().len(), 1);
-    assert_eq!(statement["receivables"][0]["balance"], "7.02");
+    assert_eq!(statement["receivables"].as_array().unwrap().len(), 2);
+    assert!(statement["receivables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| {
+            entry["receivable_id"] == invoice["receivable_id"] && entry["balance"] == "7.02"
+        }));
 
     let reversal = app
         .clone()
