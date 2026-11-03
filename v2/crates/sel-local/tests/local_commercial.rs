@@ -246,6 +246,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .unwrap();
     assert_eq!(allocation.status(), StatusCode::CREATED);
     let replay = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
