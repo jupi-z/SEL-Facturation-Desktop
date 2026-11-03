@@ -28,8 +28,9 @@ Le jalon contrôlé sur `d40e2a8be3acd9cf970a2e795c5db3d8356aa85d` ferme plusieu
 - le résumé d’une créance solaire expose maintenant une preuve dédiée des échéances échues : le montant passé impayé est calculé, puis disparaît après affectation du paiement à l’échéance concernée.
 - la liste des clients dispose maintenant d'une pagination par curseur bornée à 100 éléments et d'un filtre de statut, tout en conservant la réponse JSON historique ;
 - un test PostgreSQL de concurrence couvre deux activations simultanées d'un échéancier solaire : une seule création est acceptée et l'autre est rejetée explicitement comme contrat déjà existant.
+- l'application atomique d'un lot de changements SQLite est maintenant testée sous erreur au milieu du lot : la projection déjà commencée et le curseur sont annulés ensemble, puis le rejeu valide converge.
 
-La CI du commit contrôlé est verte : [run — 41626304237](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41626304237), job `rust` `125884407252`, sur `69cb758`. Les deux annotations restantes sont des avertissements d'environnement GitHub Actions (Node.js et ubuntu-latest), sans échec de compilation ni de test.
+La CI du commit contrôlé est verte : [run — 41626964073](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41626964073), job `rust` `125886610023`, sur `b00ae7e`. Les deux annotations restantes sont des avertissements d'environnement GitHub Actions (Node.js et ubuntu-latest), sans échec de compilation ni de test.
 
 ## Résumé exécutif
 
@@ -37,7 +38,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La CI GitHub est verte sur le commit `69cb758` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cette exécution distante valide notamment la pagination/filtre clients, le test RBAC/IDOR et la concurrence solaire ajoutés sur ce jalon. L’environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La CI GitHub est verte sur le commit `b00ae7e` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cette exécution distante valide notamment la pagination/filtre clients, le test RBAC/IDOR, la concurrence solaire et le rollback atomique d'un pull SQLite ajoutés sur ce jalon. L’environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -70,7 +71,7 @@ test two_sqlite_devices_converge_through_real_postgres_and_http ... ok
 test result: ok. 1 passed; 0 failed
 ```
 
-La commande n’a pas été exécutée localement dans cet environnement : la compilation MSVC s'arrête faute de `link.exe`. La preuve reproductible disponible est donc la CI GitHub #76 ci-dessous, et non une prétendue exécution locale.
+La commande n’a pas été exécutée localement dans cet environnement : la compilation MSVC s'arrête faute de `link.exe`. La preuve reproductible disponible est donc la CI GitHub `41626964073` ci-dessous, et non une prétendue exécution locale.
 
 Le scénario vérifie :
 
@@ -92,13 +93,13 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 ### Exécution locale
 
 - Suite Rust complète locale : **NOT_EXECUTED** ; la compilation MSVC locale est bloquée par l'absence de `link.exe`/Build Tools.
-- Tests du commit contrôlé `69cb758` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
+- Tests du commit contrôlé `b00ae7e` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
 - Vérification locale de formatage : **PASS** ; tentative locale de compilation : **BLOCKED_EXTERNAL** par l'absence de `link.exe`.
 - Relecture statique du diff et vérification `git status` : **PASS** ; aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [41626304237](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41626304237), job `rust` `125884407252` : **SUCCESS** sur `69cb758`.
+Run [41626964073](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41626964073), job `rust` `125886610023` : **SUCCESS** sur `b00ae7e`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -122,8 +123,8 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 |---|---|---|
 | API-01 | PASS | routes commerciales centrales testées via Axum + PostgreSQL réel |
 | API-02 | PARTIAL | OpenAPI valide avec l’affectation post-enregistrement ajoutée et tests ciblés ; couverture exhaustive de tous les DTO/routes à industrialiser |
-| API-03 | PARTIAL | sessions Argon2id, rotation/révocation, enrôlement/révocation d'appareils, grants Ed25519 et test RBAC/IDOR ajoutés ; validation distante du nouveau test encore en attente |
-| API-04 | PARTIAL | création/lecture/modification, pagination par curseur bornée et filtre de statut ajoutés ; validation distante du nouveau test encore en attente |
+| API-03 | PARTIAL | sessions Argon2id, rotation/révocation, enrôlement/révocation d'appareils, grants Ed25519 et test RBAC/IDOR ajoutés ; couverture exhaustive des ressources encore incomplète |
+| API-04 | PARTIAL | création/lecture/modification, pagination par curseur bornée et filtre de statut ajoutés et validés en CI ; autres parcours CRUD spécialisés encore incomplets |
 | API-05 | PASS limité | idempotence facture, paiement, solaire et sync démontrée ; concurrence multi-processus non exhaustive |
 | API-06 | PASS | aucune route PDF ; `document-data` JSON côté client ; aucun stockage de fichier |
 | FIN-01 | PASS | facture électrique + eau, `0 m³` visible, Decimal et arrondi testés |
@@ -160,7 +161,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI `41626304237` sur `69cb758` |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI `41626964073` sur `b00ae7e` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -176,7 +177,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI #76 et les tests PostgreSQL/SQLite de la PR sont verts sur `6128112`, après correction du double comptage et du rejeu concurrent.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41626964073` et les tests PostgreSQL/SQLite de la PR sont verts sur `b00ae7e`, après correction du double comptage, du rejeu concurrent et du rollback atomique de pull.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
