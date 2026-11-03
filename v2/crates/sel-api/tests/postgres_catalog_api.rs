@@ -87,7 +87,7 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
     let products = get_json(&app, "/v1/catalog/products").await;
     assert_eq!(products.as_array().unwrap().len(), 1);
     assert_eq!(products[0]["id"], active_product.to_string());
-    assert_eq!(products[0]["price_reference"], "100.00");
+    assert_eq!(products[0]["price_reference"], "100");
 
     let tariffs = get_json(&app, "/v1/catalog/tariffs").await;
     assert_eq!(tariffs.as_array().unwrap().len(), 1);

@@ -1033,7 +1033,7 @@ impl CentralStore {
                     "sku": row.try_get::<String, _>("sku")?,
                     "product_type": row.try_get::<String, _>("product_type")?,
                     "label": row.try_get::<String, _>("label")?,
-                    "price_reference": price.to_string(),
+                    "price_reference": price.normalize().to_string(),
                     "currency": row.try_get::<String, _>("currency")?
                 }))
             })
@@ -1060,7 +1060,7 @@ impl CentralStore {
                     "service_code": row.try_get::<String, _>("service_code")?,
                     "customer_category": row.try_get::<String, _>("customer_category")?,
                     "unit": row.try_get::<String, _>("unit")?,
-                    "unit_price": unit_price.to_string(),
+                    "unit_price": unit_price.normalize().to_string(),
                     "currency": row.try_get::<String, _>("currency")?,
                     "effective_from": effective_from.to_string(),
                     "effective_to": effective_to.map(|date| date.to_string()),
@@ -1090,7 +1090,7 @@ impl CentralStore {
                     "service_code": row.try_get::<String, _>("service_code")?,
                     "jurisdiction": row.try_get::<String, _>("jurisdiction")?,
                     "base": row.try_get::<String, _>("base")?,
-                    "rate": rate.to_string(),
+                    "rate": rate.normalize().to_string(),
                     "source": row.try_get::<String, _>("source")?,
                     "effective_from": effective_from.to_string(),
                     "effective_to": effective_to.map(|date| date.to_string())
@@ -1116,7 +1116,7 @@ impl CentralStore {
                     "id": row.try_get::<Uuid, _>("id")?,
                     "from_currency": row.try_get::<String, _>("from_currency")?,
                     "to_currency": row.try_get::<String, _>("to_currency")?,
-                    "value": value.to_string(),
+                    "value": value.normalize().to_string(),
                     "effective_from": effective_from.to_string(),
                     "source": row.try_get::<String, _>("source")?
                 }))
