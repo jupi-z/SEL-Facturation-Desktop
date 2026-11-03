@@ -452,7 +452,8 @@ impl CentralStore {
         .await?;
         row.map(|row| {
             let snapshot: serde_json::Value = row.try_get("immutable_snapshot")?;
-            serde_json::from_value(snapshot).map_err(|error| {
+            let document = snapshot.get("v2_document").cloned().unwrap_or(snapshot);
+            serde_json::from_value(document).map_err(|error| {
                 sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
             })
         })

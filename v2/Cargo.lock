@@ -1531,10 +1531,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
+ "rust_decimal",
+ "sel-contracts",
  "sel-storage",
  "serde_json",
  "sha2",
+ "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
