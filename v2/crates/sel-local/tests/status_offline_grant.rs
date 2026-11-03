@@ -36,10 +36,8 @@ async fn sync_status_reports_configured_offline_identity() {
         .await
         .unwrap();
     assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let body: serde_json::Value = serde_json::from_slice(
-        &response.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["offline_grant"], "CONFIGURED");
 
     drop(store);
