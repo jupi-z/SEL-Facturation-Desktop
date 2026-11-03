@@ -42,8 +42,52 @@ async fn main() -> Result<()> {
             };
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        "backup-postgres" => {
+            let path = args.next().ok_or_else(|| {
+                anyhow::anyhow!("usage: sel-cli backup-postgres <backup.dump>")
+            })?;
+            let database_url = std::env::var("DATABASE_URL")
+                .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for backup-postgres"))?;
+            let path = Path::new(&path);
+            create_pg_backup(&database_url, path)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "status": "BACKUP_CREATED",
+                    "path": path.display().to_string(),
+                    "sha256": file_sha256(path)?
+                }))?
+            );
+        }
+        "restore-postgres" => {
+            let path = args.next().ok_or_else(|| {
+                anyhow::anyhow!("usage: sel-cli restore-postgres <backup.dump>")
+            })?;
+            require_restore_approval(std::env::var("SEL_RESTORE_APPROVED").ok().as_deref())?;
+            let database_url = std::env::var("DATABASE_URL")
+                .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for restore-postgres"))?;
+            let path = Path::new(&path);
+            let pre_restore_backup = std::env::var("SEL_RESTORE_PRE_BACKUP_PATH")
+                .map(PathBuf::from)
+                .map_err(|_| anyhow::anyhow!("SEL_RESTORE_PRE_BACKUP_PATH is required for restore-postgres"))?;
+            anyhow::ensure!(
+                pre_restore_backup != path,
+                "pre-restore backup path must differ from the restore source"
+            );
+            create_pg_backup(&database_url, &pre_restore_backup)?;
+            restore_pg_backup(&database_url, path)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "status": "RESTORE_COMPLETED",
+                    "path": path.display().to_string(),
+                    "pre_restore_backup": pre_restore_backup.display().to_string(),
+                    "sha256": file_sha256(path)?
+                }))?
+            );
+        }
         "reconcile" => println!("{{\"status\":\"NO_SOURCE_SELECTED\",\"writes\":0}}"),
-        _ => println!("usage: sel-cli <health|migrate-v1 --dry-run <portable-v1.json>|migrate-v1 --apply --approved-manifest <portable-v1.json>|reconcile>"),
+        _ => println!("usage: sel-cli <health|migrate-v1 --dry-run <portable-v1.json>|migrate-v1 --apply --approved-manifest <portable-v1.json>|backup-postgres <backup.dump>|restore-postgres <backup.dump>|reconcile>"),
     }
     Ok(())
 }
@@ -353,6 +397,44 @@ fn create_pg_backup(database_url: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn restore_pg_backup(database_url: &str, path: &Path) -> Result<()> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| anyhow::anyhow!("backup file cannot be read: {error}"))?;
+    anyhow::ensure!(metadata.is_file(), "backup path is not a regular file");
+    anyhow::ensure!(metadata.len() > 0, "backup file is empty");
+    let status = Command::new("pg_restore")
+        .args([
+            "--exit-on-error",
+            "--single-transaction",
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-acl",
+            "--dbname",
+        ])
+        .arg(database_url)
+        .arg(path)
+        .status()
+        .map_err(|error| anyhow::anyhow!("pg_restore is required for restore-postgres: {error}"))?;
+    anyhow::ensure!(status.success(), "pg_restore failed with status {status}");
+    Ok(())
+}
+
+fn require_restore_approval(value: Option<&str>) -> Result<()> {
+    anyhow::ensure!(
+        value == Some("I_UNDERSTAND"),
+        "set SEL_RESTORE_APPROVED=I_UNDERSTAND for an explicit PostgreSQL restore"
+    );
+    Ok(())
+}
+
+fn file_sha256(path: &Path) -> Result<String> {
+    let bytes = fs::read(path)?;
+    let mut digest = Sha256::new();
+    digest.update(bytes);
+    Ok(hex::encode(digest.finalize()))
+}
+
 async fn insert_legacy_map(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     batch_id: Uuid,
@@ -518,7 +600,7 @@ fn unique_values(items: &[serde_json::Value], key: &str) -> Result<HashSet<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::migration_dry_run;
+    use super::{migration_dry_run, require_restore_approval};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -545,5 +627,12 @@ mod tests {
         assert_eq!(report["missing_payment_invoice_references"], 0);
         assert_eq!(fs::read(&path).expect("read fixture"), before);
         fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn postgres_restore_is_fail_closed_without_explicit_approval() {
+        assert!(require_restore_approval(None).is_err());
+        assert!(require_restore_approval(Some("yes")).is_err());
+        assert!(require_restore_approval(Some("I_UNDERSTAND")).is_ok());
     }
 }
