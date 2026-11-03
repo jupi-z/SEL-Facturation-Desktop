@@ -2494,7 +2494,6 @@ impl CentralStore {
                     invoice_id,
                     receivable_id,
                 } = payload;
-                tx.rollback().await?;
                 if input.electricity.unit != "KWH" || input.water.unit != "M3" {
                     return self
                         .persist_sync_rejection(
@@ -2666,7 +2665,6 @@ impl CentralStore {
                     sale_id,
                     receivable_id,
                 } = payload;
-                tx.rollback().await?;
                 let operation_key = format!("sync-solar-sale-{}", event.event_id);
                 let outcome = self
                     .create_solar_sale_with_ids(
@@ -2739,7 +2737,6 @@ impl CentralStore {
                     contract_id,
                     installment_plan_id,
                 } = payload;
-                tx.rollback().await?;
                 let operation_key = format!("sync-solar-contract-{}", event.event_id);
                 let outcome = self
                     .activate_solar_contract_with_plan_id(
@@ -2804,7 +2801,6 @@ impl CentralStore {
                             return Ok(result);
                         }
                     };
-                tx.rollback().await?;
                 let outcome = self
                     .void_invoice_with_id(
                         payload.invoice_id,
@@ -2869,7 +2865,6 @@ impl CentralStore {
                             }
                         },
                     };
-                tx.rollback().await?;
                 let operation_key = format!("sync-payment-{}", event.event_id);
                 let outcome = self
                     .record_payment_with_id(
@@ -2986,7 +2981,6 @@ impl CentralStore {
                             return Ok(result);
                         }
                     };
-                tx.rollback().await?;
                 let operation_key = format!("sync-payment-allocation-{}", event.event_id);
                 let outcome = self
                     .allocate_payment(
@@ -3061,7 +3055,6 @@ impl CentralStore {
                     reason,
                     actor_id,
                 } = payload;
-                tx.rollback().await?;
                 let input = ReversePaymentRequest { amount, reason };
                 let operation_key = format!("sync-payment-reversal-{}", event.event_id);
                 let outcome = self
