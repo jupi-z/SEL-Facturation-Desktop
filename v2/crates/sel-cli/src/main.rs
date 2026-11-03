@@ -302,8 +302,8 @@ async fn migration_apply(path: &Path) -> Result<serde_json::Value> {
         .bind(invoice_id)
         .bind(response.lines[0].quantity)
         .bind(response.lines[0].unit_price)
-        .bind(serde_json::json!({"tax": response.lines[0].tax, "source": "V1_SNAPSHOT"}))
         .bind(response.lines[0].subtotal)
+        .bind(serde_json::json!({"tax": response.lines[0].tax, "source": "V1_SNAPSHOT"}))
         .bind(response.lines[0].total)
         .execute(&mut *tx)
         .await?;
