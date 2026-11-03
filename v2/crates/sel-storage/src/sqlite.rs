@@ -828,11 +828,11 @@ impl LocalStore {
                             .split(',')
                             .filter(|value| !value.is_empty())
                             .try_fold(Decimal::ZERO, |total, value| {
-                                let amount = Decimal::from_str(value).map_err(|error| {
-                                    sqlx::Error::Protocol(format!("invalid reversed amount: {error}"))
-                                })?;
-                                Ok::<Decimal, sqlx::Error>(total + amount)
+                            let amount = Decimal::from_str(value).map_err(|error| {
+                                sqlx::Error::Protocol(format!("invalid reversed amount: {error}"))
                             })?;
+                            Ok::<Decimal, sqlx::Error>(total + amount)
+                        })?;
                         let net_received = (received - reversed).max(Decimal::ZERO);
                         let effective = if received.is_zero() {
                             Decimal::ZERO
