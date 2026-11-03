@@ -85,7 +85,10 @@ fn required_offline_grant_security() -> Result<(), std::io::Error> {
         .ok()
         .and_then(|value| BASE64.decode(value.trim()).ok())
         .is_some_and(|bytes| bytes.len() == 32);
-    if std::env::var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS").ok().as_deref() != Some("1")
+    if std::env::var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS")
+        .ok()
+        .as_deref()
+        != Some("1")
         || !valid_key
     {
         return Err(std::io::Error::new(

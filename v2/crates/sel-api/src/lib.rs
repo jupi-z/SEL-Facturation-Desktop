@@ -241,10 +241,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
             "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
         );
     }
-    if path == "/v1/sync/push"
-        || path.starts_with("/v1/billing/")
-        || path.starts_with("/v1/solar/")
-    {
+    if path == "/v1/sync/push" || path.starts_with("/v1/billing/") || path.starts_with("/v1/solar/") {
         return matches!(role, "ADMIN" | "BILLING_AGENT" | "SUPERVISOR");
     }
     if path == "/v1/payments" || path.starts_with("/v1/payments/") {
@@ -1509,12 +1506,10 @@ fn payment_reverse_error(error: sel_storage::postgres::PaymentReverseError) -> A
 
 fn invoice_void_error(error: sel_storage::postgres::InvoiceVoidError) -> ApiError {
     match error {
-        sel_storage::postgres::InvoiceVoidError::IdempotencyPayloadMismatch => {
-            ApiError::conflict(
-                "IDEMPOTENCY_PAYLOAD_MISMATCH",
-                "idempotency key was reused with another payload",
-            )
-        }
+        sel_storage::postgres::InvoiceVoidError::IdempotencyPayloadMismatch => ApiError::conflict(
+            "IDEMPOTENCY_PAYLOAD_MISMATCH",
+            "idempotency key was reused with another payload",
+        ),
         sel_storage::postgres::InvoiceVoidError::InvoiceNotFound => {
             ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found")
         }

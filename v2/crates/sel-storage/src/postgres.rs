@@ -9,10 +9,10 @@ use rust_decimal::Decimal;
 use sel_contracts::{
     offline_grant_canonical_bytes, solar_schedule_id, utility_snapshot_sha256,
     ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
-    InvoiceVoidSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
-    RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarSaleResponse,
-    SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    InvoiceVoidSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest,
+    ReversePaymentRequest, SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload,
+    SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
+    UtilityInvoiceSyncPayload,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -2199,7 +2199,8 @@ impl CentralStore {
                 Ok(result)
             }
             "INVOICE_VOIDED" => {
-                let payload: InvoiceVoidSyncPayload = match serde_json::from_value(event.payload.clone()) {
+                let payload: InvoiceVoidSyncPayload =
+                    match serde_json::from_value(event.payload.clone()) {
                     Ok(payload) => payload,
                     Err(_) => {
                         let result = SyncEventResult::Rejected {
@@ -2224,9 +2225,8 @@ impl CentralStore {
                     )
                     .await;
                 let body = match outcome {
-                    Ok(InvoiceVoidOutcome::Created(body)) | Ok(InvoiceVoidOutcome::Replay(body)) => {
-                        body
-                    }
+                    Ok(InvoiceVoidOutcome::Created(body))
+                    | Ok(InvoiceVoidOutcome::Replay(body)) => body,
                     Err(_) => {
                         return self
                             .persist_sync_rejection(
@@ -2673,7 +2673,12 @@ fn scope_allows_command(scopes: &serde_json::Value, command_type: &str) -> bool 
     let values = scopes
         .as_array()
         .cloned()
-        .or_else(|| scopes.get("commands").and_then(serde_json::Value::as_array).cloned())
+        .or_else(|| {
+            scopes
+                .get("commands")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        })
         .or_else(|| {
             scopes
                 .get("allowed_commands")
@@ -2683,9 +2688,9 @@ fn scope_allows_command(scopes: &serde_json::Value, command_type: &str) -> bool 
     let Some(values) = values else {
         return scopes.as_object().map_or(true, serde_json::Map::is_empty);
     };
-    values.iter().any(|value| {
-        value.as_str() == Some("*") || value.as_str() == Some(command_type)
-    })
+    values
+        .iter()
+        .any(|value| value.as_str() == Some("*") || value.as_str() == Some(command_type))
 }
 
 async fn limits_allow_event(

@@ -415,13 +415,7 @@ impl LocalStore {
             actor_id: self.actor_id,
         })
         .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice void JSON: {error}")))?;
-        let event = local_event(
-            self,
-            Uuid::new_v4(),
-            invoice_id,
-            "INVOICE_VOIDED",
-            payload,
-        )?;
+        let event = local_event(self, Uuid::new_v4(), invoice_id, "INVOICE_VOIDED", payload)?;
         let mut tx = self.pool.begin().await?;
         let Some(invoice) = sqlx::query(
             "SELECT status FROM invoices WHERE id = $1 AND customer_id IN
@@ -823,29 +817,32 @@ impl LocalStore {
             .bind(schedule_id)
             .fetch_all(&self.pool)
             .await?;
-            let schedule_paid = schedule_paid_rows
-                .into_iter()
-                .try_fold(Decimal::ZERO, |total, payment_row| {
-                    let allocation = decimal_text(&payment_row, "allocated_amount")?;
-                    let received = decimal_text(&payment_row, "amount_received")?;
-                    let reversed_text: String = payment_row.try_get("reversed_amounts")?;
-                    let reversed = reversed_text
-                        .split(',')
-                        .filter(|value| !value.is_empty())
-                        .try_fold(Decimal::ZERO, |total, value| {
-                            let amount = Decimal::from_str(value).map_err(|error| {
-                                sqlx::Error::Protocol(format!("invalid reversed amount: {error}"))
+            let schedule_paid =
+                schedule_paid_rows
+                    .into_iter()
+                    .try_fold(Decimal::ZERO, |total, payment_row| {
+                        let allocation = decimal_text(&payment_row, "allocated_amount")?;
+                        let received = decimal_text(&payment_row, "amount_received")?;
+                        let reversed_text: String = payment_row.try_get("reversed_amounts")?;
+                        let reversed = reversed_text
+                            .split(',')
+                            .filter(|value| !value.is_empty())
+                            .try_fold(Decimal::ZERO, |total, value| {
+                                let amount = Decimal::from_str(value).map_err(|error| {
+                                    sqlx::Error::Protocol(format!(
+                                        "invalid reversed amount: {error}"
+                                    ))
+                                })?;
+                                Ok::<Decimal, sqlx::Error>(total + amount)
                             })?;
-                            Ok::<Decimal, sqlx::Error>(total + amount)
-                        })?;
-                    let net_received = (received - reversed).max(Decimal::ZERO);
-                    let effective = if received.is_zero() {
-                        Decimal::ZERO
-                    } else {
-                        allocation * net_received / received
-                    };
-                    Ok::<Decimal, sqlx::Error>(total + effective)
-                })?;
+                        let net_received = (received - reversed).max(Decimal::ZERO);
+                        let effective = if received.is_zero() {
+                            Decimal::ZERO
+                        } else {
+                            allocation * net_received / received
+                        };
+                        Ok::<Decimal, sqlx::Error>(total + effective)
+                    })?;
             overdue += (amount_due - schedule_paid).max(Decimal::ZERO);
         }
         let overdue = overdue.round_dp(2);
@@ -1157,7 +1154,9 @@ impl LocalStore {
                         .await?;
                     }
                     "invoices" => {
-                        if change_json.get("status").and_then(serde_json::Value::as_str)
+                        if change_json
+                            .get("status")
+                            .and_then(serde_json::Value::as_str)
                             == Some("VOID")
                         {
                             apply_invoice_void_change(

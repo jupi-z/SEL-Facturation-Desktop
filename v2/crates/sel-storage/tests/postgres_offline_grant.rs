@@ -49,13 +49,7 @@ async fn signed_offline_grant_is_verified_and_limits_are_enforced() {
     let issued_at = Utc::now() - Duration::minutes(1);
     let expires_at = Utc::now() + Duration::hours(1);
     let canonical = offline_grant_canonical_bytes(
-        grant_id,
-        actor_id,
-        device_id,
-        &scopes,
-        &limits,
-        issued_at,
-        expires_at,
+        grant_id, actor_id, device_id, &scopes, &limits, issued_at, expires_at,
     )
     .unwrap();
     let signature = BASE64.encode(signing.sign(&canonical).to_bytes());
@@ -65,7 +59,10 @@ async fn signed_offline_grant_is_verified_and_limits_are_enforced() {
         .unwrap()
         .with_offline_grant_verifier(signing.verifying_key());
     migrate_postgres(&store.pool).await.unwrap();
-    store.ensure_organization("signed offline fixture").await.unwrap();
+    store
+        .ensure_organization("signed offline fixture")
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO users (id, organization_id, role, status, identity_ref) VALUES ($1, $2, 'BILLING_AGENT', 'ACTIVE', 'signed-grant-user')")
         .bind(actor_id)
         .bind(organization_id)
