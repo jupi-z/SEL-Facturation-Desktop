@@ -335,7 +335,7 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
         "IDEMPOTENCY_PAYLOAD_MISMATCH"
     );
 
-    let concurrent_category = format!("OVERLAP-{}", Uuid::new_v4());
+    let concurrent_category = format!("OVERLAP-{}", Uuid::new_v4()).to_ascii_uppercase();
     let mut concurrent_tariff_ids = Vec::new();
     for (key, price) in [
         ("tariff-overlap-draft-001", "0.000001"),
