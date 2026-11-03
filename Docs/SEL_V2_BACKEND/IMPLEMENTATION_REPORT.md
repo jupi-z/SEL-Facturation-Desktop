@@ -334,7 +334,7 @@ La PR #58 est prête pour revue technique sur le périmètre démontré, mais ne
 
 ## Phase 1 — point de progression au 3 novembre 2026
 
-Progression actuelle de la phase contrats et sécurité : **87 %** selon les critères locaux ci-dessous. Ce pourcentage ne représente pas le degré d'achèvement de SEL V2.
+Progression actuelle de la phase contrats et sécurité : **90 %** selon les critères locaux ci-dessous. Ce pourcentage ne représente pas le degré d'achèvement de SEL V2.
 
 | Sous-critère phase 1 | Statut | Preuve actuelle |
 |---|---|---|
@@ -344,7 +344,7 @@ Progression actuelle de la phase contrats et sécurité : **87 %** selon les cri
 | Configuration commerciale fail-closed | PARTIAL | sessions individuelles, grant signé, UUID non nuls et nom légal non vide requis ; le jeton legacy partagé est maintenant refusé au démarrage commercial. Provisionnement initial opérationnel à compléter |
 | Rotation de mot de passe auditable et révocation des sessions | CODED, test d'intégration compilé | Transaction SQL vérifie l'acteur ADMIN, change Argon2id, révoque les sessions de la cible et ajoute un audit expurgé ; `postgres_auth` compile, mais exécution PostgreSQL locale non réalisée faute de `TEST_DATABASE_URL`/service de test |
 | Contrats OpenAPI et documentation RBAC | PASS contrat local | Routes login/refresh/logout, mot de passe, annulation et contre-écriture décrites ; `openapi_document_is_valid_yaml_and_declares_no_pdf_route` passe |
-| Exécution PostgreSQL et CI du commit final | IN_PROGRESS | aucun `TEST_DATABASE_URL` local ; PR #58 ouverte et quatre contrôles déclenchés sur le HEAD `a4a3b103`, encore en attente à l'heure de rédaction |
+| Exécution PostgreSQL et CI du commit final | PASS CI | PR #58 SHA `5545c3bfe7cd8b48add7f2f39f37df88297b11c3` ; quatre workflows verts, dont convergence bi-postes PostgreSQL réelle. Le poste local ne disposait pas de service PostgreSQL/Docker |
 
 Commandes locales exécutées : `cargo fmt --all -- --check` (**PASS**), `cargo test -p sel-contracts openapi_document_is_valid_yaml_and_declares_no_pdf_route` (**1 passed**), `cargo test -p sel-api` (**toutes les suites exécutables passent : API 5 + 4, HTTP 2, contrats sync 2 ; les tests PostgreSQL sont ignorés faute de base de test**), `cargo test -p sel-local` (**21 passed ; convergence PostgreSQL ignorée faute de base de test**), `cargo test -p sel-storage offline_role_tests` (**1 passed**), `cargo test -p sel-api --test postgres_auth --no-run` (**compile PASS**), `cargo clippy -p sel-api -p sel-local -p sel-storage --all-targets -- -D warnings` (**PASS**). Le test PostgreSQL ignoré n'a pas été exécuté localement. Aucun merge, release, déploiement ou changement de données réelles n'a été effectué.
 
@@ -355,3 +355,5 @@ Prochaine tranche : attendre et examiner les quatre workflows sur le HEAD couran
 Sur le commit `0b76f993ba6f3fd67502458bbf05859117811564`, la CI Rust a échoué dans `two_sqlite_devices_converge_through_real_postgres_and_http` : l'assertion de premières commandes acceptées obtenait 2 au lieu de 3. Le diagnostic du test et de `offline_role_allows_command` a établi que sa fixture créait un acteur `BILLING_AGENT`, puis lui attribuait également l'encaissement, réservé à `ADMIN`, `CASHIER` ou `SUPERVISOR`. La règle d'autorisation n'est pas élargie ; la fixture est corrigée pour utiliser `SUPERVISOR`, rôle adapté à ce scénario combinant facturation et paiement.
 
 Après correction, `cargo test -p sel-local --test two_device_convergence --no-run` passe localement. Le moteur Docker/PostgreSQL n'étant pas disponible dans cet environnement, le scénario réel n'a pas été rejoué localement. La CI sur `0b76f99` reste en échec ; l'intégration ne sera validée qu'après exécution de la CI sur le commit corrigé. Progression de la phase 1 ramenée à **80 %** en attendant cette preuve.
+
+Résultat final sur le commit correctif `5545c3bfe7cd8b48add7f2f39f37df88297b11c3` : les quatre workflows sont **PASS** (`SEL V2 Backend` run `41720409442`, paquet serveur `41720409520`, build Windows Desktop `41720409835`, candidat Windows `41720409433`). Le workflow Rust a réussi `cargo fmt`, Clippy, `cargo test --workspace` et les tests PostgreSQL, dont `two_sqlite_devices_converge_through_real_postgres_and_http`. Le candidat Windows a compilé et téléversé ses packages d’acceptation non publiés. Le SHA distant de la PR #58 correspond exactement à ce commit et la PR reste ouverte. Progression révisée de la phase 1 : **90 %** ; le provisionnement initial utilisable des comptes commerciaux reste à traiter. Aucun merge, aucune release publique et aucun déploiement n'ont été effectués.
