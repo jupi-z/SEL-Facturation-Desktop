@@ -689,13 +689,7 @@ impl CentralStore {
                 return Err(OfflineGrantWriteError::UntrustedSignature);
             };
             let canonical = offline_grant_canonical_bytes(
-                grant_id,
-                user_id,
-                device_id,
-                scopes,
-                limits,
-                issued_at,
-                expires_at,
+                grant_id, user_id, device_id, scopes, limits, issued_at, expires_at,
             )?;
             if verifying_key.verify(&canonical, &parsed_signature).is_err() {
                 return Err(OfflineGrantWriteError::UntrustedSignature);

@@ -1547,12 +1547,10 @@ fn auth_error(error: sel_storage::postgres::AuthError) -> ApiError {
 
 fn device_write_error(error: sel_storage::postgres::DeviceWriteError) -> ApiError {
     match error {
-        sel_storage::postgres::DeviceWriteError::IdempotencyPayloadMismatch => {
-            ApiError::conflict(
-                "IDEMPOTENCY_PAYLOAD_MISMATCH",
-                "idempotency key was reused with another payload",
-            )
-        }
+        sel_storage::postgres::DeviceWriteError::IdempotencyPayloadMismatch => ApiError::conflict(
+            "IDEMPOTENCY_PAYLOAD_MISMATCH",
+            "idempotency key was reused with another payload",
+        ),
         sel_storage::postgres::DeviceWriteError::IdentityMismatch => ApiError::conflict(
             "DEVICE_IDENTITY_CONFLICT",
             "device identity is already bound to another key or device",
@@ -1564,15 +1562,11 @@ fn device_write_error(error: sel_storage::postgres::DeviceWriteError) -> ApiErro
             ApiError::not_found("DEVICE_NOT_FOUND", "device not found")
         }
         sel_storage::postgres::DeviceWriteError::Database(error) => storage_error(error),
-        sel_storage::postgres::DeviceWriteError::StoredResponse(error) => {
-            ApiError::internal(error)
-        }
+        sel_storage::postgres::DeviceWriteError::StoredResponse(error) => ApiError::internal(error),
     }
 }
 
-fn offline_grant_write_error(
-    error: sel_storage::postgres::OfflineGrantWriteError,
-) -> ApiError {
+fn offline_grant_write_error(error: sel_storage::postgres::OfflineGrantWriteError) -> ApiError {
     match error {
         sel_storage::postgres::OfflineGrantWriteError::IdempotencyPayloadMismatch => {
             ApiError::conflict(
@@ -1591,12 +1585,10 @@ fn offline_grant_write_error(
         sel_storage::postgres::OfflineGrantWriteError::InvalidSignature => {
             ApiError::unprocessable("OFFLINE_GRANT_SIGNATURE_INVALID", "signature is invalid")
         }
-        sel_storage::postgres::OfflineGrantWriteError::UntrustedSignature => {
-            ApiError::forbidden(
-                "OFFLINE_GRANT_SIGNATURE_UNTRUSTED",
-                "signature is not trusted by the server",
-            )
-        }
+        sel_storage::postgres::OfflineGrantWriteError::UntrustedSignature => ApiError::forbidden(
+            "OFFLINE_GRANT_SIGNATURE_UNTRUSTED",
+            "signature is not trusted by the server",
+        ),
         sel_storage::postgres::OfflineGrantWriteError::Database(error) => storage_error(error),
         sel_storage::postgres::OfflineGrantWriteError::StoredResponse(error) => {
             ApiError::internal(error)
