@@ -6,19 +6,19 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `a22930a` (`fix(v2): canonicalize offline grant timestamps`)
+Commit contrôlé : `ca8859e` (`docs(v2): update final validation evidence`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — 3 novembre 2026
 
-Le jalon contrôlé sur `a22930a395a22ed4d854624fce7129ab3a9b3866` ferme plusieurs régressions détectées pendant la reprise de la PR #58 :
+Le jalon contrôlé sur `ca8859e382c8f0e95ebcdb371c18e3915983c4ad` ferme plusieurs régressions détectées pendant la reprise de la PR #58 :
 
 - la clé de grant offline exigée au démarrage doit être une vraie clé publique Ed25519 décodable ;
 - `created_at` est maintenant renseigné dans SQLite pour l’écriture et la projection d’une annulation de facture ;
 - le calcul PostgreSQL des montants échus est syntaxiquement correct et couvert par le test de persistance ;
 - les timestamps du format canonique des grants sont normalisés à la microseconde, afin que la signature reste stable après stockage PostgreSQL.
 
-La CI finale est verte : [run #41 — 41607754794](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41607754794), job `rust` `125821731552`.
+La CI finale est verte : [run #42 — 41608350791](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41608350791), job `rust` `125823711882`.
 
 ## Résumé exécutif
 
@@ -26,7 +26,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La CI GitHub #41 est verte sur le commit `a22930a` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cette exécution distante constitue la preuve actuelle ; les outils Rust locaux de ce poste n’ont pas permis une exécution indépendante complète. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : l’enrôlement de production, les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La CI GitHub #42 est verte sur le commit `ca8859e` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cette exécution distante constitue la preuve actuelle ; l’environnement Rust local de ce poste n’a pas permis une exécution indépendante complète. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : l’enrôlement de production, les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -47,14 +47,16 @@ La CI GitHub #41 est verte sur le commit `a22930a` : formatage, Clippy, tests wo
 ## Preuve décisive de convergence
 
 Test : `v2/crates/sel-local/tests/two_device_convergence.rs`
-Commande locale exécutée avec PostgreSQL réel :
+Commande exécutée par la CI avec PostgreSQL 16.4 réel :
 
 ```text
-TEST_DATABASE_URL=postgres://sel:postgres@172.17.0.2:5432/sel_v2_test
-cargo test -p sel-local --test two_device_convergence -- --ignored --nocapture
+TEST_DATABASE_URL=postgres://sel:postgres@127.0.0.1:5432/sel_v2_test
+cargo test --workspace -- --ignored
 test two_sqlite_devices_converge_through_real_postgres_and_http ... ok
 test result: ok. 1 passed; 0 failed
 ```
+
+La commande n’a pas été exécutée localement dans cet environnement : la toolchain Rust locale était incomplète. La preuve reproductible disponible est donc la CI GitHub #42 ci-dessous, et non une prétendue exécution locale.
 
 Le scénario vérifie :
 
@@ -73,21 +75,15 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 
 ## Résultats de validation
 
-### Validation locale exécutée
+### Exécution locale
 
-- `cargo test -p sel-contracts` : **PASS**, 2 tests unitaires et contrat OpenAPI.
-- `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** dans le conteneur Rust 1.85.
-- test d’intégration deux postes : **PASS** avec PostgreSQL réel, après correction de l’empreinte et des attentes de solde.
-- test API PostgreSQL réel `utility_issue_is_atomic_idempotent_and_survives_restart` : **PASS**, avec renversement `1.00` puis `2.00`, rejeu idempotent, soldes nets, audit et publications centrales.
-- test SQLite local `local_commercial_operations_are_persisted_and_offline_pending` : **PASS**, avec renversement hors ligne durable et solde local net.
-- test de synchronisation `payment_sync_is_applied_before_the_central_ack_and_is_idempotent` : **PASS**, avec événement `PAYMENT_REVERSED` accepté puis rejoué sans doublon.
-- test CLI `migration_dry_run_is_read_only_and_counts_references` : **PASS** ; compilation et Clippy de `sel-cli` : **PASS**.
-- `git diff --check` : **PASS**.
-- aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
+- Suite Rust complète locale : **NOT_EXECUTED** ; la toolchain Rust locale disponible sur ce poste était incomplète.
+- Tests et validations de ce jalon : **PASS dans la CI GitHub #42**, avec PostgreSQL 16.4 de service.
+- Relecture statique du diff et vérification `git status` : **PASS** ; aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [#41 — 41607754794](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41607754794), job `rust` `125821731552` : **SUCCESS** sur `a22930a`.
+Run [#42 — 41608350791](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41608350791), job `rust` `125823711882` : **SUCCESS** sur `ca8859e`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -144,7 +140,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #41 sur `a22930a` |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #42 sur `ca8859e` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -160,7 +156,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI #41 et les tests PostgreSQL/SQLite de la PR sont verts sur `a22930a`.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI #42 et les tests PostgreSQL/SQLite de la PR sont verts sur `ca8859e`.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
