@@ -1,143 +1,152 @@
-# SEL V2 Backend — rapport d'implémentation
+# SEL V2 Backend — rapport d’implémentation
 
-Date de contrôle : 2 novembre 2026, Africa/Lubumbashi  
-Branche : `monarque/sel-v2-backend`  
-Commits de référence : socle précédent `40a97fc`, implémentation `402fece`, rapport/documentation `88fc431288fac3ce1491965a418c096adb7c5986`, correctifs de cette reprise `ddd78bb`, `e7b2294`, `70afddd`, `a5faffa`, `f0d0f95`, `1f70302`.
-Périmètre : backend Rust/API, migrations, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
+Date de contrôle : 3 novembre 2026, Africa/Lubumbashi
+
+Branche : `monarque/sel-v2-backend`
+
+PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
+
+Commit contrôlé : `08ce31d23a53ccca017f4d1099cbf645d3f1c865`
+Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
 
-Le dépôt contient maintenant un workspace Rust autonome, les contrats JSON versionnés, un moteur de calcul Decimal pour l'électricité et l'eau, des migrations PostgreSQL/SQLite, des repositories SQLx transactionnels, des routes commerciales centrales persistantes, un journal/outbox SQLite durable, un protocole de synchronisation central idempotent, un agent local loopback, un vérificateur LiveUpdate Ed25519/SHA-256 et une commande de simulation d'import V1.
+Le backend Rust dispose maintenant d’un parcours démontré de bout en bout pour une facture eau + électricité et un paiement partiel : deux bases SQLite indépendantes créent et conservent leurs identifiants hors ligne, un serveur HTTP Rust persiste les commandes dans PostgreSQL, puis le second poste récupère les mêmes données. Le scénario comprend aussi une vente de kit solaire, son échéancier, une reprise après redémarrage et une tentative de double encaissement.
 
-### Actualisation de la reprise du 2 novembre 2026
+Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-- `ddd78bb` agrège les affectations d'un même paiement avant validation, verrouille les créances dans un ordre déterministe et couvre la concurrence PostgreSQL ainsi que la double affectation de 7 + 7 USD sur une créance de 10 USD.
-- `e7b2294` impose les identités organisation/appareil en mode commercial, refuse les jetons d'authentification absents ou trop courts et empêche les changements d'identité d'une base SQLite existante.
-- `70afddd` ajoute les opérations locales durables de création et modification client, facture eau + électricité, paiement partiel et consultation des soldes, avec journal et outbox dans la même transaction.
-- `a5faffa` ajoute le worker push/pull SQLite, le curseur central durable, les accusés persistants, la projection des clients reçus, la reprise des événements `CUSTOMER_UPDATED`, `PAYMENT_RECORDED` et `UTILITY_INVOICE_ISSUED`, ainsi que l'identité d'agent/grant hors ligne persistée.
-- `4293c3b` branche aussi `SOLAR_SALE_CREATED` et `SOLAR_CONTRACT_ACTIVATED` sur les repositories centraux transactionnels ; le test PostgreSQL réel vérifie une seule créance et un seul plan de deux échéances après synchronisation.
-- `f0d0f95` rend les identifiants de facture, créance, vente solaire, plan solaire et paiement stables dans les enveloppes de synchronisation ; les projections SQLite des factures et paiements reçus sont transactionnelles et idempotentes ; l'API locale de production exige `SEL_LOCAL_AUTH_TOKEN` et un worker push/pull périodique reprend automatiquement l'outbox après une coupure.
-- `1f70302` corrige la réconciliation des projections locales : une facture dont le snapshot financier est identique mais dont le statut passe de `LOCAL_PENDING` à `CENTRAL_ACCEPTED` est confirmée sans réécrire le snapshot ni dupliquer la créance ; les paiements existants sont confirmés et leurs allocations sont dédupliquées. La publication centrale est désormais récupérable après un commit métier suivi d'une panne avant accusé : le replay idempotent republie la modification et l'accusé dans une transaction unique, sans recréer l'opération.
-- Les tests réellement rejoués sur ce jalon sont : `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p sel-local --tests -- --nocapture` (8 tests verts, dont la réconciliation locale), et `cargo test -p sel-storage --tests -- --ignored --nocapture` contre PostgreSQL réel (6 tests verts, dont la reprise d'un paiement après commit métier avant accusé).
+La CI GitHub #22 est verte sur le commit de la PR : formatage, clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cela valide le périmètre technique couvert par les tests. Le backend reste **NO-GO pour une exploitation commerciale** : l’authentification complète/RBAC, les autorisations offline signées, l’import V1 avec écriture, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
-Les preuves locales du jalon précédent restent valides ; les nouveaux scénarios sont verts : `central_acceptance_reconciles_pending_invoice_and_payment_without_duplicates` sur SQLite, et `payment_sync_is_applied_before_the_central_ack_and_is_idempotent` sur PostgreSQL réel après pré-commit métier simulé. Le contrôle courant couvre la reprise après redémarrage, la facture utility à deux lignes avec eau à zéro, le paiement partiel idempotent, la vente solaire avec une créance et un échéancier exacts, et la synchronisation centrale avec conflit de payload durable. La campagne complète `cargo test --workspace -- --nocapture` et le workflow GitHub #15 sont également verts sur `de8c610`.
+## Corrections réalisées sur ce jalon
 
-Le verdict reste NO-GO pour la production commerciale. Les parcours centraux testés ne reposent plus sur les HashMaps quand `DATABASE_URL` est fourni, et l'agent local protège désormais son API et son worker, mais l'authentification centrale reste une garde par jeton configuré (pas encore sessions courtes, rotation et RBAC fin), les ventes solaires et corrections comptables ne sont pas encore entièrement exécutées/projetées localement, les grants offline signés restent à finaliser, et l'import V1 est actuellement un dry-run vérifié sans écriture.
+- Empreintes de factures déterministes et partagées entre SQLite, API et PostgreSQL.
+- Canonicalisation des `Decimal` à six décimales dans le snapshot versionné ; les champs financiers sont distincts des statuts `LOCAL_PENDING`/`CENTRAL_ACCEPTED`.
+- Réconciliation d’une facture locale confirmée centralement sans réécrire ses identifiants, lignes, montants ou snapshot.
+- Réconciliation idempotente des paiements et de leurs affectations, sans second paiement.
+- Validation globale des affectations par créance, verrouillage PostgreSQL déterministe et rejet d’une surallocation, y compris deux affectations répétées vers la même créance.
+- Publication centrale récupérable après commit métier avant accusé, avec outbox/replay idempotent.
+- Projections SQLite solaires : vente, lignes, créance, contrat, plan et échéances avec identifiants stables et relations conservées.
+- Entités centrales non supportées par une projection locale enregistrées comme conflits durables au lieu d’être ignorées silencieusement.
+- Facture de services toujours composée des deux lignes : électricité en kWh et eau en m³ ; `0 m³` est conservé et visible.
+- Rejet explicite des effets locaux refusés, sans suppression destructive de l’audit ou de l’outbox.
 
-## Corrections et livrables
+## Preuve décisive de convergence
 
-- `v2/crates/sel-domain` : montants `rust_decimal::Decimal`, arrondi à deux décimales, règles de non-négativité, facture utility toujours composée de `ELECTRICITY` et `WATER`, eau à `0 m³` visible sans tarif inventé, eau positive bloquée sans tarif/taxe configurés, échéancier solaire dont la somme doit égaler exactement le principal.
-- `v2/crates/sel-contracts` : DTO API, version de protocole/document, erreurs Problem Details, document-data JSON, paiements, sync et contrats solaires.
-- `v2/crates/sel-storage` : ouverture/migrations PostgreSQL et SQLite via SQLx ; PostgreSQL persiste clients, factures, lignes, créances, paiements, ventes solaires, contrats et résultats de sync dans des transactions ; SQLite active WAL et conserve journal de commandes, outbox, inbox et conflits sans supprimer le journal.
-- `v2/migrations/postgres/0001_init.sql` et `v2/migrations/sqlite/0001_init.sql` : modèle structuré clients, services, produits, tarifs, taxes, FX, ventes, factures, lignes, créances, plans, paiements, audit, idempotence et sync. Aucun champ/stockage de fichier de facture.
-- `v2/crates/sel-api` : health, capacités, clients, `If-Match`/ETag de modification, preview/issue utility, paiements et soldes de créances, document-data JSON, ventes solaires et activation d'échéancier, sync push/pull/status, métadonnées de configuration/ressources. En mode central, les routes commerciales utilisent PostgreSQL ; les écritures financières exigent `Idempotency-Key` et rejouent la réponse durable.
-- `v2/crates/sel-sync` : déduplication `(device_id,event_id)`, contrôle SHA-256 du payload, résultats `ACCEPTED`/`DUPLICATE`/`CONFLICT`, curseur central, manifeste LiveUpdate signé Ed25519, expiration, séquence anti-rollback, chemins relatifs, taille/hash des ressources, activation et rollback connu-bon.
-- `v2/crates/sel-local` : endpoints loopback `/local/v1/sync/status`, `/sync/trigger` et `/updates/status` branchés sur SQLite WAL ; le routeur de production exige un bearer local constant-time et le worker périodique pousse/tire automatiquement lorsque `SEL_CENTRAL_API_URL` et `SEL_CENTRAL_API_TOKEN` sont configurés ; les commandes locales sont atomiquement journalisées et mises en outbox.
-- `v2/crates/sel-cli` : `migrate-v1 --dry-run <sel-facturation-portable-v1.json>` vérifie le format/schema, calcule le SHA-256, compte les entités, détecte les références de paiements manquantes et garantit zéro écriture.
-- `v2/openapi/sel-v2.yaml`, `v2/deploy/compose.test.yml`, `v2/deploy/Dockerfile.test`, `.github/workflows/sel-v2-backend.yml`, `v2/README.md` et `.dockerignore`.
-
-## Résultats de tests exécutés
-
-Environnement Rust : conteneur `rust:1.85-bookworm`, toolchain compatible avec la CI.  
-Commandes :
+Test : `v2/crates/sel-local/tests/two_device_convergence.rs`
+Commande locale exécutée avec PostgreSQL réel :
 
 ```text
-docker run --rm -v "${PWD}\v2:/workspace" -w /workspace rust:1.85-bookworm cargo fmt --all -- --check
-docker run --rm -v "${PWD}\v2:/workspace" -w /workspace rust:1.85-bookworm cargo clippy --workspace --all-targets -- -D warnings
-docker run --rm -v "${PWD}\v2:/workspace" -w /workspace rust:1.85-bookworm cargo test --workspace
-python -m pytest -q
-docker compose -f v2/deploy/compose.test.yml config
-docker compose -f v2/deploy/compose.test.yml up -d --build
-Invoke-RestMethod http://127.0.0.1:18080/health/live
-docker exec deploy-postgres-1 psql -U sel_test -d sel_v2_test -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
-docker compose -f v2/deploy/compose.test.yml down -v
-docker exec -e TEST_DATABASE_URL=postgres://sel:postgres@host.docker.internal:15432/sel_v2_test sel-v2-rust-dev cargo test --workspace -- --ignored
+TEST_DATABASE_URL=postgres://sel:postgres@172.17.0.2:5432/sel_v2_test
+cargo test -p sel-local --test two_device_convergence -- --ignored --nocapture
+test two_sqlite_devices_converge_through_real_postgres_and_http ... ok
+test result: ok. 1 passed; 0 failed
 ```
 
-Résultats :
+Le scénario vérifie :
 
-- Rust : PASS, formatage vérifié ; PASS, Clippy sans warning ; PASS, `cargo test --workspace` après correction du chemin du test OpenAPI ; PASS, campagne séparée des cinq tests PostgreSQL ignorés.
-- PostgreSQL : PASS, tests réels `postgres_persistence`, `postgres_customer_api`, `postgres_commercial`, `postgres_solar` et `postgres_sync` ; les réponses d'idempotence sont relues depuis `idempotency_keys`, les compteurs SQL restent à une facture/deux lignes/une créance et un seul plan solaire, et la sync vérifie inbox/change/conflict après commit.
-- API : PASS, facture utility JSON à deux lignes avec eau zéro ; PASS, tarifs approuvés/inactifs lus côté central ; PASS, modification client protégée par révision ; PASS, paiement partiel et solde ; PASS, vente solaire et activation 400+600 ; PASS, sync retry → duplicate, conflit payload durable, pull et status central.
-- SQLite : PASS, WAL + migrations et journal/outbox survivent à une réouverture ; PASS, acknowledgement atomique conserve le journal ; PASS, facture locale et paiement local déjà présents sont réconciliés vers l'état central sans doublon ; PARTIAL, les opérations métier locales ne sont pas encore toutes exécutées par projection SQLite.
-- CLI migration : PASS, dry-run synthétique avec SHA-256, compteurs, références et zéro modification de la source.
-- LiveUpdate : PASS, signature valide ; PASS, signature falsifiée ; PASS, ressource altérée ; PASS, expiration ; PASS, downgrade ; PASS, traversal ; PASS, activation/rollback connu-bon.
-- OpenAPI : PASS, YAML parseable et aucune route PDF déclarée.
-- Compose : PASS, image release construite sans le `v2/target` local, PostgreSQL healthy, API accessible sur `127.0.0.1:18080/health/live`, migrations appliquées et 30 tables centrales visibles ; volume de test supprimé ensuite.
-- CI GitHub : le run `41529236618` / job `125564846097` est vert sur `de8c61084e54e3ab862ecf6c618ad7d7f8dcc36b`. `cargo fmt --all -- --check`, Clippy, `cargo test --workspace` et les tests PostgreSQL réels ont tous été exécutés avec succès. Le run précédent `41513829666` avait échoué uniquement sur rustfmt avant correction. L'avertissement Node.js 20 des actions GitHub est indépendant du code Rust.
-- V1 Python : `260 passed, 2 failed` sur 262. Les deux échecs sont historiques et temporellement fragiles : `tests/test_invoice_preview.py::test_invoice_confirmation_keeps_the_tariff_used_by_preview` attend le code `RESIDENTIAL-2026-10` alors que la date système est novembre 2026 ; `tests/test_ui_tariff_rules.py::test_configured_future_customer_type_can_be_billed` configure une tarification effective le mois courant puis facture octobre. Ils ne proviennent pas d'une modification V2, mais empêchent un verdict de non-régression V1 totalement vert et doivent être corrigés/confirmés séparément.
+1. client, facture combinée et paiement partiel créés sur SQLite 1 ;
+2. réouverture de SQLite 1 avant synchronisation ;
+3. serveur HTTP réel `sel-api` avec repository PostgreSQL réel ;
+4. persistance centrale puis accusé ;
+5. récupération des données sur SQLite 2 ;
+6. égalité des identifiants, lignes, totaux et empreintes ;
+7. vente solaire, une créance, un contrat et deux échéances ;
+8. rejeu idempotent des projections solaires ;
+9. deux tentatives de paiement de 70 USD sur une créance de 120 USD : une seule est acceptée, la seconde est `REJECTED`, le solde reste 50 USD ;
+10. absence de double comptabilisation dans PostgreSQL et SQLite 2.
+
+Ce test ne constitue pas encore une simulation exhaustive de panne physique à chaque instruction réseau ni une concurrence multi-processus réellement simultanée ; ces points restent marqués comme non testés ci-dessous.
+
+## Résultats de validation
+
+### Validation locale exécutée
+
+- `cargo test -p sel-contracts` : **PASS**, 2 tests unitaires et contrat OpenAPI.
+- `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** dans le conteneur Rust 1.85.
+- test d’intégration deux postes : **PASS** avec PostgreSQL réel, après correction de l’empreinte et des attentes de solde.
+- `git diff --check` : **PASS**.
+- aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
+
+### CI GitHub
+
+Run [#22 — 41587638667](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41587638667), job `rust` `125756746725` : **SUCCESS**.
+
+- `cargo fmt --all -- --check` : **PASS** ;
+- `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
+- `cargo test --workspace` : **PASS** ;
+- `cargo test --workspace -- --ignored` avec PostgreSQL 16.4 : **PASS** ;
+- test `two_sqlite_devices_converge_through_real_postgres_and_http` : **PASS** ;
+- nettoyage du conteneur PostgreSQL de CI : **PASS**.
+
+La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recette Windows, l’impression ni la validation d’un serveur SEL.
 
 ## Matrice de recette
 
-`PASS` signifie que le périmètre exact est démontré localement. `NOT_TESTED` signifie qu'un test dédié ou une intégration complète manque. `BLOCKED_EXTERNAL` signifie qu'une source, une clé, un poste, un serveur ou une décision métier réelle est nécessaire.
+`PASS` signifie que le périmètre exact est démontré. `PARTIAL` signifie qu’une partie seulement est prouvée. `NOT_TESTED` signifie qu’une preuve dédiée manque. `BLOCKED_EXTERNAL` nécessite une donnée, une clé, un serveur ou une validation externe.
 
 | ID | Statut | Preuve ou limite |
 |---|---|---|
-| API-01 | PASS | routes commerciales centrales testées via Axum + PostgreSQL réel, sans frontend |
-| API-02 | NOT_TESTED | YAML valide, mais couverture DTO/routes complète à industrialiser |
-| API-03 | PARTIAL | le central et l'agent local refusent les bearers absents/incorrects en mode production ; sessions courtes, rotation, RBAC fin et tests IDOR restent absents |
-| API-04 | NOT_TESTED | création/lecture/update testées, pagination/filtre PG absents |
-| API-05 | PASS limité | idempotence persistante testée pour facture, paiement, solaire et sync ; campagne de concurrence multi-clients reste à étendre au scénario complet de convergence |
-| API-06 | PASS | aucun endpoint PDF, JSON document-data et scan de schéma sans stockage fichier |
-| FIN-01 | PASS | test `billing_red` : 100 kWh à 0,095 + 16 % = 11,02 USD et deux lignes |
-| FIN-02 | PASS | zéro eau sans tarif accepté ; volume positif sans tarif/taxe rejeté par le domaine |
-| FIN-03 | NOT_TESTED | branche eau positive codée mais aucun scénario d'approbation tarifaire complet |
-| FIN-04 | PASS | PostgreSQL réel : paiement de 3,00 USD, retry exact et balance 8,02 |
-| FIN-05 | PASS | vente solaire persistante : une vente, une créance, un plan, deux échéances et retry sans doublon |
-| FIN-06 | NOT_TESTED | retard/échéances et affectation de paiement non implémentés complètement |
-| FIN-07 | NOT_TESTED | concurrence/reverse append-only non validés |
-| FIN-08 | NOT_TESTED | avoir/annulation/compensation non implémentés |
-| FIN-09 | NOT_TESTED | Decimal garanti ; matrice USD/CDF/EUR et conversion source non branchée |
-| FIN-10 | PARTIAL | le produit solaire actif est exigé et le tarif utility approuvé/daté est lu en central ; matrice exhaustive d'inactifs/catégories/grants expirés à compléter |
-| FIN-11 | NOT_TESTED | distinction locale/centrale prévue dans les contrats, numérotation finale non branchée |
-| FIN-12 | NOT_TESTED | validation API en mémoire ; transaction PG anti-effet partiel non démontrée |
-| SYN-01 | PASS limité | SQLite WAL, journal et outbox persistent après réouverture ; factures utility et paiements reçus sont projetés ; solaire/corrections locales restent incomplets |
-| SYN-02 | NOT_TESTED | interruption/reprise de 100 commandes non exécutée |
-| SYN-03 | PASS limité | retry PostgreSQL après commit métier avant accusé republie `central_changes` et `sync_inbox` dans une transaction de reprise ; conflit de payload écrit dans `sync_conflicts` ; la panne physique réelle entre commits reste non injectée |
-| SYN-04 | PARTIAL | pull central paginé et cursor testés ; scénario crash SQLite injecté avant commit à compléter |
-| SYN-05 | NOT_TESTED | contrainte de période dans le schéma, deux appareils réels non testés |
-| SYN-06 | NOT_TESTED | surallocation contrôlée côté API ; deux appareils offline non testés |
-| SYN-07 | NOT_TESTED | révision attendue dans l'enveloppe, conflit d'échéancier non implémenté |
-| SYN-08 | NOT_TESTED | révocation/grant offline non implémentés |
-| SYN-09 | PASS limité | `sync_once` et worker périodique push/pull testés ; reprise centrale après commit métier démontrée ; reprise réseau réelle et convergence multi-postes restent à éprouver |
-| SYN-10 | NOT_TESTED | rebootstrap multi-postes sans suppression d'outbox non démontré |
-| SYN-11 | PASS | états `LOCAL_PREVIEW`, `CENTRAL_ACCEPTED`, `DUPLICATE`, `CONFLICT` exposés dans les contrats |
-| SYN-12 | NOT_TESTED | réservation/stock kit non implémentés |
-| UPD-01 | PASS | manifeste déclaratif signé activé sans remplacement d'EXE |
-| UPD-02 | PASS | signature, hash, expiration, séquence et chemin incorrects rejetés |
-| UPD-03 | PASS | gestionnaire conserve le connu-bon et rollback testés |
-| UPD-04 | NOT_TESTED | SafeUpdate natif reste hors de ce backend |
-| UPD-05 | BLOCKED_EXTERNAL | aucune clé publique de production fournie ; comportement fail-closed requis |
-| MIG-01 | PARTIAL | dry-run portable V1 synthétique vérifié ; copie anonymisée SEL réelle manquante |
-| MIG-02 | NOT_TESTED | import PG idempotent réel non implémenté ; seul le manifeste dry-run est livré |
-| MIG-03 | BLOCKED_EXTERNAL | comparaison sur données V1 absente |
-| MIG-04 | BLOCKED_EXTERNAL | campagne d'erreur/reprise d'import absente |
-| MIG-05 | BLOCKED_EXTERNAL | sauvegarde/restauration PG non fournie |
-| FILE-01 | PASS | API/OpenAPI sans PDF et document-data JSON |
-| FILE-02 | PASS | tests de schémas PG/SQLite sans tokens de stockage de fichier |
-| FILE-03 | NOT_TESTED | inspection complète volumes/logs/backups après 100 factures non exécutée |
-| FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors périmètre backend |
-| OPS-01 | PASS | fmt, Clippy et cargo test workspace verts |
-| OPS-02 | PASS | Le run `41515293414` du commit `6f840ca` valide formatage, Clippy, workspace et PostgreSQL réel ; le compose de déploiement reste une configuration de test |
-| OPS-03 | NOT_TESTED | TLS/reverse proxy, logs PII, backup chiffrée et moindre privilège non validés |
-| OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, VPS, impression et tarifs réels non accessibles/validés |
+| API-01 | PASS | routes commerciales centrales testées via Axum + PostgreSQL réel |
+| API-02 | PARTIAL | OpenAPI valide et tests ciblés ; couverture exhaustive de tous les DTO/routes à industrialiser |
+| API-03 | PARTIAL | bearer de production exigé ; sessions courtes, rotation, RBAC fin et tests IDOR non terminés |
+| API-04 | PARTIAL | création/lecture/modification testées ; pagination et filtres centraux incomplets |
+| API-05 | PASS limité | idempotence facture, paiement, solaire et sync démontrée ; concurrence multi-processus non exhaustive |
+| API-06 | PASS | aucune route PDF ; `document-data` JSON côté client ; aucun stockage de fichier |
+| FIN-01 | PASS | facture électrique + eau, `0 m³` visible, Decimal et arrondi testés |
+| FIN-02 | PASS | eau positive refusée sans tarif/taxe validés ; eau nulle conservée |
+| FIN-03 | NOT_TESTED | scénario complet d’un tarif eau positif approuvé manque |
+| FIN-04 | PASS | paiement partiel, solde et retry sans doublon |
+| FIN-05 | PASS limité | vente solaire, créance, contrat et deux échéances persistés et projetés |
+| FIN-06 | PARTIAL | affectation à échéance et rejet de surallocation testés ; retards et recouvrement complets manquent |
+| FIN-07 | NOT_TESTED | remboursements et contre-écritures append-only non finalisés |
+| FIN-08 | NOT_TESTED | avoirs, annulations et compensations non finalisés |
+| FIN-09 | PARTIAL | Decimal et snapshot multi-store ; matrice complète USD/CDF et taux approuvés à compléter |
+| FIN-10 | PARTIAL | tarif utility approuvé/daté et produit solaire actif contrôlés ; matrice exhaustive des catégories à compléter |
+| SYN-01 | PASS | test deux SQLite + PostgreSQL réel, reprise après ouverture et projections idempotentes |
+| SYN-02 | PARTIAL | retry/replay démontré ; coupure injectée à chaque frontière réseau non exhaustive |
+| SYN-03 | PASS limité | publication et accusé récupérables après commit simulé ; panne physique réelle non injectée |
+| SYN-04 | PARTIAL | pull et curseur durable testés ; crash SQLite avant commit à compléter |
+| SYN-05 | NOT_TESTED | conflit de facture concurrente sur même période entre deux postes non démontré |
+| SYN-06 | PARTIAL | surallocation centrale protégée ; paiements réellement simultanés entre deux postes à compléter |
+| SYN-07 | NOT_TESTED | conflit de contrat/échéancier concurrent non implémenté complètement |
+| SYN-08 | NOT_TESTED | autorisations offline signées, expiration et limites non finalisées |
+| SYN-09 | PASS limité | worker push/pull et reprise de l’outbox codés ; réseau réellement intermittent non validé sur Windows |
+| SYN-10 | NOT_TESTED | rebootstrap multi-postes sans suppression d’outbox non démontré |
+| UPD-01 | PASS | manifeste LiveUpdate déclaratif signé sans remplacement natif |
+| UPD-02 | PASS | signature Ed25519, SHA-256, expiration, séquence et chemins invalides rejetés |
+| UPD-03 | PASS | activation et rollback connu-bon testés |
+| UPD-04 | NOT_TESTED | SafeUpdate natif hors périmètre de cette validation backend |
+| UPD-05 | BLOCKED_EXTERNAL | clé publique Ed25519 de production absente ; fail-closed conservé |
+| MIG-01 | PARTIAL | dry-run V1 vérifié sur format synthétique ; import avec écriture non livré |
+| MIG-02 | NOT_TESTED | import PostgreSQL idempotent réel non livré |
+| MIG-03 | BLOCKED_EXTERNAL | données V1 anonymisées de rapprochement absentes |
+| MIG-04 | BLOCKED_EXTERNAL | campagne reprise/rollback d’import non réalisée |
+| MIG-05 | BLOCKED_EXTERNAL | sauvegarde/restauration PostgreSQL de production non fournie |
+| FILE-01 | PASS | serveur/API ne déclarent ni ne stockent de PDF |
+| FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
+| FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
+| FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #22 |
+| OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
+| OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
+| OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
 
-## Décisions et limitations restantes
+## Lacunes et décisions restant à traiter
 
-1. Ne pas connecter ce backend à des données SEL réelles : les tarifs eau/taxes, les rôles et les paramètres d'organisation restent à fournir/valider.
-2. Le chemin central `DATABASE_URL` est transactionnel pour les opérations testées. Le chemin local exécute et projette les clients, factures utility et paiements ; le worker push/pull automatique est en place, mais les ventes solaires, échéanciers et corrections comptables ne sont pas encore toutes exécutées localement ni projetées après pull.
-3. Ne pas activer LiveUpdate en production tant que la clé Ed25519 publique de production n'est pas provisionnée hors dépôt et que le pipeline de publication/rotation n'est pas validé.
-4. Ne pas générer de PDF serveur : le client devra consommer `document-data` et produire le document localement avec un template validé.
-5. Le dry-run V1 ne fait encore aucune écriture centrale : l'importeur réel, la réconciliation et la reprise après échec exigent un mapping de données V1 anonymisées.
-6. Le jeton de déploiement est une barrière fail-closed minimale. Les sessions utilisateur, la rotation, les permissions par rôle/ressource et l'enrôlement appareil doivent précéder tout usage réel.
-7. Les deux tests V1 datés restent à arbitrer avant de déclarer la non-régression globale verte.
+1. Remplacer la garde par jeton de développement par utilisateurs, sessions à durée limitée, rotation/révocation, RBAC et contrôle par organisation/ressource.
+2. Finaliser les autorisations offline signées Ed25519, leur expiration, leurs plafonds d’opérations et leur enrôlement d’appareil.
+3. Étendre le local aux corrections, annulations, remboursements, contre-écritures, retards et recouvrement solaires sans supprimer l’historique.
+4. Implémenter et tester l’import V1 transactionnel avec sauvegarde, simulation, idempotence, rapprochement et reprise sur données anonymisées fournies par SEL.
+5. Documenter et exercer la sauvegarde/restauration PostgreSQL, TLS, rotation des secrets et le déploiement à privilèges minimaux.
+6. Provisionner la clé publique Ed25519 de production hors dépôt avant d’activer LiveUpdate ; aucune signature de test ne doit être promue.
+7. Réaliser la recette sur un PC Windows SEL : installation, fonctionnement hors connexion, synchronisation, impression, sauvegarde/restauration et validation métier des tarifs eau/taxes.
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** pour les parcours PostgreSQL/SQLite démontrés ; CI GitHub du commit `de8c610` **PASS**.
-- Pilote Windows/PG/offline : **NO-GO — validations externes et intégration durable manquantes**.
-- Livraison commerciale : **NO-GO**.
-- Fusion dans `main` : **non effectuée**.
-- Release/déploiement : **non effectués**.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; les tests Rust et le scénario de convergence de référence sont verts.
+- Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
+- Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
+- Fusion dans `main` : **NON EFFECTUÉE**.
+- Release, publication d’installateur et déploiement réel : **NON EFFECTUÉS**.
 
-La PR doit conserver ce rapport, les logs de CI et les preuves de test. La fermeture des statuts `NOT_TESTED`/`BLOCKED_EXTERNAL` exige une seconde phase explicitement validée, sans modifier ni contourner les protections SafeUpdate ou Windows.
+La PR #58 est prête pour revue technique sur le périmètre démontré, mais ne doit pas être annoncée comme backend de production tant que les statuts `PARTIAL`, `NOT_TESTED` et `BLOCKED_EXTERNAL` critiques ne sont pas fermés avec des preuves correspondantes.
