@@ -54,13 +54,13 @@ pub struct SetUserPasswordRequest {
     pub password: String,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct EnrollDeviceRequest {
     pub device_id: Uuid,
     pub public_key_id: String,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct CreateOfflineGrantRequest {
     pub grant_id: Uuid,
     pub user_id: Uuid,
