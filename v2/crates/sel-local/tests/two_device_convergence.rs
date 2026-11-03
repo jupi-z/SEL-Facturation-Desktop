@@ -120,7 +120,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .unwrap();
     sqlx::query(
         "INSERT INTO users (id, organization_id, role, status, identity_ref)
-         VALUES ($1, $2, 'BILLING_AGENT', 'ACTIVE', 'two-device-convergence')",
+         VALUES ($1, $2, 'SUPERVISOR', 'ACTIVE', 'two-device-convergence')",
     )
     .bind(actor_id)
     .bind(organization_id)
