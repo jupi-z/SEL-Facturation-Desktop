@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -365,6 +365,12 @@ pub fn offline_grant_canonical_bytes(
         issued_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
     }
+    let issued_at = issued_at
+        .with_nanosecond(issued_at.timestamp_subsec_micros() * 1_000)
+        .expect("microsecond timestamp is valid");
+    let expires_at = expires_at
+        .with_nanosecond(expires_at.timestamp_subsec_micros() * 1_000)
+        .expect("microsecond timestamp is valid");
     serde_json::to_vec(&Grant {
         protocol_version: PROTOCOL_VERSION,
         grant_id,
