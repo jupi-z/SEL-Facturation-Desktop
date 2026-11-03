@@ -88,6 +88,31 @@ fn forged_signature_hash_traversal_expiry_and_rollback_are_rejected() {
         ),
         Err(LiveUpdateError::PathEscape)
     );
+
+    for path in [
+        r"..\escape.json",
+        r"C:\escape.json",
+        r"\absolute\escape.json",
+        "/absolute/escape.json",
+        "config//escape.json",
+    ] {
+        let mut hostile: UpdateManifest = serde_json::from_slice(&manifest).unwrap();
+        hostile.resources[0].path = path.into();
+        let hostile_bytes = serde_json::to_vec(&hostile).unwrap();
+        let hostile_signature = signing.sign(&hostile_bytes).to_bytes();
+        assert_eq!(
+            verify_manifest(
+                &hostile_bytes,
+                &hostile_signature,
+                "test-key",
+                &keys,
+                0,
+                Utc::now()
+            ),
+            Err(LiveUpdateError::PathEscape),
+            "hostile path must be rejected: {path}"
+        );
+    }
 }
 
 #[test]
