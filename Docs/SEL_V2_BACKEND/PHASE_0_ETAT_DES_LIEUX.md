@@ -3,7 +3,7 @@
 Date : 3 novembre 2026  
 Branche : `monarque/sel-v2-backend`  
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)  
-État : **IN_PROGRESS — 65 %**
+État : **IN_PROGRESS — 73 %**
 
 Ce document consigne les preuves de cadrage et les points encore à valider. Il ne certifie ni une recette Windows SEL, ni une installation cliente, ni le choix final du framework desktop.
 
@@ -57,7 +57,56 @@ Captures observées via le connecteur Figma : dashboard, aperçu facture et fact
 
 **Drift OpenAPI confirmé par comparaison statique des routeurs :** routes existantes mais absentes du fichier `v2/openapi/sel-v2.yaml` : `POST /v1/auth/login`, `/v1/auth/refresh`, `/v1/auth/logout`, `POST /v1/users/{id}/password`, `POST /v1/invoices/{id}/void` et `POST /v1/payments/{id}/reverse`. À synchroniser avant de générer le client typé.
 
-Les écrans ne doivent pas masquer ces absences par des données de démonstration. La matrice exhaustive écran→contrat→permission→état→test reste un livrable phase 0.
+Les écrans ne doivent pas masquer ces absences par des données de démonstration. La matrice de cadrage ci-dessous couvre les 40 écrans recensés ; les noms de rôles sont les rôles attendus du cahier des charges, à confirmer avec les politiques effectivement appliquées par chaque handler.
+
+### Matrice de cadrage des 40 écrans
+
+`LOCAL` désigne l’API `/local/v1/*`; `CENTRAL` désigne `/v1/*`. La matrice indique si une route existe, pas si l’écran est déjà livré. Aucun nouvel écran n’est implémenté.
+
+| # | Écran Figma | Contrat de données attendu | Accès métier attendu | État/API ou validation restant |
+|---:|---|---|---|---|
+| 1 | Vue d’ensemble | projections clients/factures/paiements/sync | opérateur selon permissions | agrégat dashboard/reporting absent ; isoler local pending des totaux centraux |
+| 2 | Répertoire des abonnés | `GET/POST /v1/customers`, équivalents LOCAL | BILLING_AGENT, ADMIN | liste/création présents ; vérifier filtres, pagination et état vide |
+| 3 | Dossier abonné | `GET/PATCH /v1/customers/{id}`, `/statement` | BILLING_AGENT, CASHIER selon onglet | fonctions présentes ; journal complet par client et archivage non définis |
+| 4 | Nouvelle facture | `POST /billing/utility/preview`, puis `/issue` | BILLING_AGENT | deux routes locales et centrales ; test de parcours bout en bout requis côté nouveau client |
+| 5 | Prévisualisation facture | preview + données calculées par Rust | BILLING_AGENT | route de preview existe ; rendu A4 local absent du client V2 actuel |
+| 6 | Encaissement | `POST /payments`, `/payments/{id}/allocate`, relevé client | CASHIER, SUPERVISOR | écriture/allocation existent ; sélectionner et recharger créances ouvertes ; reçu local à construire |
+| 7 | Historique des factures | liste paginée, filtres, `GET /invoices/{id}` | BILLING_AGENT, AUDITOR_READONLY | lecture par ID et liste LOCAL ; liste/search CENTRAL manque |
+| 8 | Relevés de compteurs | CRUD compteur/relevé, historisation index | BILLING_AGENT | table PostgreSQL existe ; routes centrale/locale et validation de période absentes |
+| 9 | Relevé d’eau au m³ | API readings WATER, tarif applicable | BILLING_AGENT | aucun endpoint de relevé ; tarifs lisibles, mais administration absente |
+| 10 | Facture avec eau consommée | preview/issue combinées | BILLING_AGENT | moteur preview/issue existe ; recette eau>0 exige tarif et profil fiscaux approuvés |
+| 11 | Catalogue des kits solaires | `GET /catalog/products` | BILLING_AGENT, ADMIN | lecture active existe ; création/modification/activation et état stock manquent |
+| 12 | Nouvelle vente solaire | quote, `POST /solar/sales` | BILLING_AGENT | devis/vente existent ; vérifier prix produit serveur et preview/document |
+| 13 | Contrat et échéancier | create/activate contract, GET installment plan | BILLING_AGENT, SUPERVISOR | création/activation/lecture présentes ; édition avant activation et paiements liés à l’échéance à valider |
+| 14 | Suivi des créances | liste receivables + échéances/soldes | CASHIER, SUPERVISOR, AUDITOR_READONLY | lecture par ID et plans existe ; listing paginé manque |
+| 15 | Compte et situation abonné | `GET /customers/{id}/statement` | BILLING_AGENT, CASHIER, AUDITOR_READONLY | route existe ; confirmer inclusion des pending locaux et séparation central/local |
+| 16 | Journal de caisse | liste paiements, affectations, filtres et clôture | CASHIER, SUPERVISOR, AUDITOR_READONLY | liste paiements centrale/journal/agrégats manquent |
+| 17 | Corrections financières | reverse payment, credit note, void invoice | SUPERVISOR, ADMIN | handlers présents ; certaines routes manquent OpenAPI ; trace append-only à afficher |
+| 18 | Rapports financiers | API reporting avec totaux par devise/statut | SUPERVISOR, ADMIN, AUDITOR_READONLY | endpoint absent ; chiffres de démo interdits en production |
+| 19 | Édition du catalogue solaire | create/update/deactivate product | ADMIN | routes d’écriture absentes |
+| 20 | Vente solaire comptant | quote + sale, sans plan d’échéances | BILLING_AGENT | route vente existe ; distinguer cash du contrat à crédit sans doubler créance |
+| 21 | Prévisualisation solaire comptant | quote/document-data local | BILLING_AGENT | endpoint dédié de preview/document solaire non identifié ; document local requis |
+| 22 | Connexion sécurisée | `POST /auth/login`, `/refresh`, `/logout` | tous les utilisateurs actifs | routes présentes au serveur mais absentes OpenAPI ; API locale/session UI à définir |
+| 23 | Activation du poste | enroll device + créer grant signé | ADMIN/SUPERVISOR, avec agent activé | enroll/grant présents ; parcours de code d’activation/invitation et liaison organisationnelle incomplets |
+| 24 | Centre de synchronisation | push/pull/status central, status/trigger LOCAL | opérateur selon droits, ADMIN | routes présentes ; l’UI neuve devra représenter ACK, en attente, rejet et conflit |
+| 25 | Résoudre un conflit | liste de conflits, comparaison, commande de résolution | SUPERVISOR, ADMIN | push renvoie conflits, mais endpoint list/review/resolve dédié non identifié |
+| 26 | Utilisateurs et rôles | liste/création/suspension, attribution RBAC | ADMIN | login et provisionnement de mot de passe existent ; CRUD utilisateur/roles manquant |
+| 27 | Appareils et grants offline | liste/révocation, émission et statut grant | ADMIN/SUPERVISOR | enroll/revoke/create grant présents ; listing et détail d’appareil/grants manquent |
+| 28 | Tarifs et taxes approuvés | lecture catalogue et écritures historisées | ADMIN, approbation SUPERVISOR | GET produits/tarifs/taxes existe ; mutations/versionnement d’approbation absents |
+| 29 | Devises et taux de change | `GET /catalog/fx-rates`, mutation historique | ADMIN, approbation SUPERVISOR | lecture existe ; mutation et workflow d’approbation absents |
+| 30 | Journal d’audit | recherche événements append-only | AUDITOR_READONLY, ADMIN | stockage d’événements existe ; endpoint de consultation filtrée absent |
+| 31 | Mises à jour et intégrité | versions/config manifest + statut local updates | ADMIN, opérateur en lecture | routes de manifest/status existent ; le canal production et les clés restent à valider séparément |
+| 32 | Impression et documents | `GET /invoices/{id}/document-data`, templates locaux | BILLING_AGENT, CASHIER | JSON structuré existe ; PDF, aperçu, sauvegarde/impression et reçu locaux à construire |
+| 33 | Sauvegardes et diagnostics | opérations locales/serveur restreintes | ADMIN | CLI backup/restore existe selon le rapport ; API UI/états de diagnostic manquants ; restore non productif à prouver |
+| 34 | Identité officielle SEL | lecture/édition profil organisation | ADMIN | `organizations.legal_name` existe ; route et champs juridiques complets manquent |
+| 35 | À propos/éditeur | ressources locales statiques | tout utilisateur | pas de besoin API ; distinguer clairement SEL du développeur LTEX/MonarQue |
+| 36 | Paramétrage tarif eau et TVA | catalogue/règles avec version/approbation | ADMIN, approbation SUPERVISOR | lecture seule aujourd’hui ; toute taxe ou tarif non approuvé doit rester bloqué |
+| 37 | Comptes initiaux et permissions | bootstrap admin/opérateur | ADMIN initial | provisioning de comptes dans l’API incomplet ; bootstrap sécurisé à concevoir, sans compte par défaut |
+| 38 | Remise client et impression locale | document-data + génération/impression locale | agent autorisé | dépend du moteur PDF du nouveau client ; aucun fichier serveur |
+| 39 | Fiche révision tarif eau | historique des révisions et motif/approbation | ADMIN/SUPERVISOR | modèle/route de création et historique d’approbation manquants |
+| 40 | Matrice des droits initiaux | API de rôles/permissions versionnée | ADMIN | politique côté routeur existe partiellement ; endpoints de lecture/administration et tests écran à préciser |
+
+Tests backend actuellement localisés dans `v2/crates/sel-api/tests`, `v2/crates/sel-local/tests`, `v2/crates/sel-storage/tests`, `v2/crates/sel-domain/tests` et `v2/crates/sel-contracts/tests`. La matrice d’acceptation de la phase d’implémentation devra relier chaque ligne aux noms de tests précis et ajouter les tests manquants ; leur présence n’est pas assimilée à une validation de l’écran Windows.
 
 ### Identité et bootstrap du poste
 
@@ -71,7 +120,7 @@ Pré-requis bloquant observé sur cette session : installer/configurer un toolch
 
 ## Calcul de progression
 
-Progression phase 0 : **65 %**. Pondération : dépôt/PR 10 % (validé) ; CI 5 % (50 % acquis : Rust + paquet serveur passent, les 2 contrôles Windows sont en attente) ; lecture des consignes et préséance 10 % (validé) ; inventaire Figma 20 % (validé) ; cartographie écrans/API/tests 25 % (60 % acquis : gaps regroupés, matrice exhaustive restant à produire) ; identification du paquet livré 10 % (75 % acquis : dernière release publique identifiée, installation SEL inconnue) ; spike Windows 20 % (0 %, bloqué par toolchain manquant). Calcul : 10 + 2,5 + 10 + 20 + 15 + 7,5 = **65 %**. Les éléments bloqués ne sont pas comptés comme terminés.
+Progression phase 0 : **72,5 % (arrondie à 73 %)**. Pondération : dépôt/PR 10 % (validé) ; CI 5 % (50 % acquis sur le SHA courant `7bd9f51`, dont les contrôles sont encore en cours ; les 4 workflows du code SHA `79e969d` ont tous réussi) ; lecture des consignes et préséance 10 % (validé) ; inventaire Figma 20 % (validé) ; cartographie écrans/API/tests 25 % (90 % acquis : les 40 écrans sont reliés aux contrats et gaps, les permissions sont des attentes à confirmer et les tests précis restent à associer) ; identification du paquet livré 10 % (75 % acquis : dernière release publique identifiée, installation SEL inconnue) ; spike Windows 20 % (0 %, bloqué par toolchain manquant). Calcul : 10 + 2,5 + 10 + 20 + 22,5 + 7,5 = **72,5 %**. Les éléments bloqués ne sont pas comptés comme terminés.
 
 ## Actions restantes avant clôture de phase 0
 
