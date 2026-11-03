@@ -3399,11 +3399,7 @@ fn decimal_text(row: &SqliteRow, column: &str) -> Result<Decimal, sqlx::Error> {
         .map_err(|error| sqlx::Error::Protocol(format!("invalid decimal in {column}: {error}")))
 }
 
-fn parse_uuid_column(
-    row: &SqliteRow,
-    column: &str,
-    label: &str,
-) -> Result<Uuid, sqlx::Error> {
+fn parse_uuid_column(row: &SqliteRow, column: &str, label: &str) -> Result<Uuid, sqlx::Error> {
     let value: String = row.try_get(column)?;
     value
         .parse::<Uuid>()
