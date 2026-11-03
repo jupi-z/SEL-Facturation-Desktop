@@ -98,6 +98,30 @@ pub enum OfflineGrantWriteError {
     StoredResponse(#[from] serde_json::Error),
 }
 
+#[derive(Debug, Error)]
+pub enum TariffWriteError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("tariff fields are invalid")]
+    InvalidFields,
+    #[error("approval reference is required")]
+    ApprovalRefRequired,
+    #[error("tariff draft was not found")]
+    NotFound,
+    #[error("tariff is not a draft")]
+    NotDraft,
+    #[error("approved tariff periods overlap")]
+    PeriodOverlap,
+    #[error("idempotency key was reused with another payload")]
+    IdempotencyPayloadMismatch,
+}
+
+#[derive(Debug)]
+pub enum CatalogWriteOutcome {
+    Created(serde_json::Value),
+    Replay(serde_json::Value),
+}
+
 pub enum DeviceWriteOutcome {
     Created(serde_json::Value),
     Replay(serde_json::Value),
@@ -1145,6 +1169,269 @@ impl CentralStore {
                 }))
             })
             .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_tariff_draft(
+        &self,
+        service_code: &str,
+        customer_category: &str,
+        unit: &str,
+        unit_price: Decimal,
+        currency: &str,
+        effective_from: NaiveDate,
+        effective_to: Option<NaiveDate>,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<CatalogWriteOutcome, TariffWriteError> {
+        let service_code = service_code.trim().to_ascii_uppercase();
+        let customer_category = customer_category.trim().to_ascii_uppercase();
+        let unit = unit.trim().to_ascii_uppercase();
+        let currency = currency.trim().to_ascii_uppercase();
+        let expected_unit = match service_code.as_str() {
+            "ELECTRICITY" => "KWH",
+            "WATER" => "M3",
+            _ => return Err(TariffWriteError::InvalidFields),
+        };
+        let maximum_unit_price = Decimal::new(99_999_999_999_999, 0);
+        if customer_category.is_empty()
+            || customer_category.len() > 64
+            || unit != expected_unit
+            || unit_price < Decimal::ZERO
+            || unit_price > maximum_unit_price
+            || unit_price.normalize().scale() > 6
+            || !matches!(currency.as_str(), "USD" | "CDF")
+            || effective_to.is_some_and(|date| date < effective_from)
+            || idempotency_key.trim().is_empty()
+            || request_digest.trim().is_empty()
+        {
+            return Err(TariffWriteError::InvalidFields);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let lock_key = format!(
+            "idempotency:{}:{}:catalog.tariff.create:{idempotency_key}",
+            self.organization_id, actor_id
+        );
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(lock_key)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'catalog.tariff.create' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let stored_digest: String = row.try_get("request_digest")?;
+            if stored_digest != request_digest {
+                return Err(TariffWriteError::IdempotencyPayloadMismatch);
+            }
+            let response: serde_json::Value = row.try_get("response_json")?;
+            return Ok(CatalogWriteOutcome::Replay(response));
+        }
+
+        let id = Uuid::new_v4();
+        let response = json!({
+            "id": id,
+            "service_code": service_code,
+            "customer_category": customer_category,
+            "unit": unit,
+            "unit_price": unit_price.normalize().to_string(),
+            "currency": currency,
+            "effective_from": effective_from.to_string(),
+            "effective_to": effective_to.map(|date| date.to_string()),
+            "approval_ref": null,
+            "status": "DRAFT"
+        });
+        sqlx::query(
+            "INSERT INTO tariff_versions
+             (id, service_code, customer_category, unit, unit_price, currency,
+              effective_from, effective_to, approval_ref, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, 'DRAFT')",
+        )
+        .bind(id)
+        .bind(&service_code)
+        .bind(&customer_category)
+        .bind(&unit)
+        .bind(unit_price)
+        .bind(&currency)
+        .bind(effective_from)
+        .bind(effective_to)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1, $2, $3, 'TARIFF_VERSION_DRAFTED', now(), $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(id)
+        .bind(json!({"service_code": service_code, "customer_category": customer_category}))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json)
+             VALUES ($1, $2, 'catalog.tariff.create', $3, $4, 201, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&response)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(CatalogWriteOutcome::Created(response))
+    }
+
+    pub async fn approve_tariff_draft(
+        &self,
+        tariff_id: Uuid,
+        approval_ref: &str,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<CatalogWriteOutcome, TariffWriteError> {
+        let approval_ref = approval_ref.trim();
+        if approval_ref.is_empty() || approval_ref.len() > 160 {
+            return Err(TariffWriteError::ApprovalRefRequired);
+        }
+        if idempotency_key.trim().is_empty() || request_digest.trim().is_empty() {
+            return Err(TariffWriteError::InvalidFields);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let idempotency_lock_key = format!(
+            "idempotency:{}:{}:catalog.tariff.approve:{idempotency_key}",
+            self.organization_id, actor_id
+        );
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(idempotency_lock_key)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'catalog.tariff.approve' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let stored_digest: String = row.try_get("request_digest")?;
+            if stored_digest != request_digest {
+                return Err(TariffWriteError::IdempotencyPayloadMismatch);
+            }
+            let response: serde_json::Value = row.try_get("response_json")?;
+            return Ok(CatalogWriteOutcome::Replay(response));
+        }
+
+        let draft = sqlx::query(
+            "SELECT service_code, customer_category, unit, unit_price, currency,
+                    effective_from, effective_to, status
+             FROM tariff_versions WHERE id = $1 FOR UPDATE",
+        )
+        .bind(tariff_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(TariffWriteError::NotFound)?;
+        let status: String = draft.try_get("status")?;
+        if status != "DRAFT" {
+            return Err(TariffWriteError::NotDraft);
+        }
+        let service_code: String = draft.try_get("service_code")?;
+        let customer_category: String = draft.try_get("customer_category")?;
+        let unit: String = draft.try_get("unit")?;
+        let unit_price: Decimal = draft.try_get("unit_price")?;
+        let currency: String = draft.try_get("currency")?;
+        let effective_from: NaiveDate = draft.try_get("effective_from")?;
+        let effective_to: Option<NaiveDate> = draft.try_get("effective_to")?;
+
+        let lock_key = format!("tariff:{service_code}:{customer_category}");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(lock_key)
+            .execute(&mut *tx)
+            .await?;
+        let overlap = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                SELECT 1 FROM tariff_versions
+                WHERE id <> $1 AND status = 'APPROVED'
+                  AND service_code = $2 AND customer_category = $3
+                  AND ($5::date IS NULL OR effective_from <= $5)
+                  AND (effective_to IS NULL OR effective_to >= $4)
+            )",
+        )
+        .bind(tariff_id)
+        .bind(&service_code)
+        .bind(&customer_category)
+        .bind(effective_from)
+        .bind(effective_to)
+        .fetch_one(&mut *tx)
+        .await?;
+        if overlap {
+            return Err(TariffWriteError::PeriodOverlap);
+        }
+
+        sqlx::query(
+            "UPDATE tariff_versions
+             SET status = 'APPROVED', approval_ref = $2, approved_by = $3
+             WHERE id = $1 AND status = 'DRAFT'",
+        )
+        .bind(tariff_id)
+        .bind(approval_ref)
+        .bind(actor_id)
+        .execute(&mut *tx)
+        .await?;
+        let response = json!({
+            "id": tariff_id,
+            "service_code": service_code,
+            "customer_category": customer_category,
+            "unit": unit,
+            "unit_price": unit_price.normalize().to_string(),
+            "currency": currency,
+            "effective_from": effective_from.to_string(),
+            "effective_to": effective_to.map(|date| date.to_string()),
+            "status": "APPROVED",
+            "approval_ref": approval_ref
+        });
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1, $2, $3, 'TARIFF_VERSION_APPROVED', now(), $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(tariff_id)
+        .bind(json!({"approval_ref": approval_ref}))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json)
+             VALUES ($1, $2, 'catalog.tariff.approve', $3, $4, 200, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&response)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(CatalogWriteOutcome::Created(response))
     }
 
     pub async fn create_solar_quote(

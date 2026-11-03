@@ -56,6 +56,22 @@ pub struct SetUserPasswordRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct CreateTariffDraftRequest {
+    pub service_code: String,
+    pub customer_category: String,
+    pub unit: String,
+    pub unit_price: Decimal,
+    pub currency: String,
+    pub effective_from: chrono::NaiveDate,
+    pub effective_to: Option<chrono::NaiveDate>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct ApproveTariffDraftRequest {
+    pub approval_ref: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct EnrollDeviceRequest {
     pub device_id: Uuid,
     pub public_key_id: String,
@@ -166,6 +182,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/devices/enroll", post(enroll_device))
         .route("/v1/devices/:id/revoke", post(revoke_device))
         .route("/v1/offline-grants", post(create_offline_grant))
+        .route("/v1/admin/catalog/tariffs", post(create_tariff_draft))
+        .route(
+            "/v1/admin/catalog/tariffs/:id/approve",
+            post(approve_tariff_draft),
+        )
         .route("/v1/meta/capabilities", get(capabilities))
         .route("/v1/catalog/products", get(catalog_products))
         .route("/v1/catalog/tariffs", get(catalog_tariffs))
@@ -310,6 +331,11 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
         {
             return is_admin || is_supervisor;
         }
+        if path == "/v1/admin/catalog/tariffs"
+            || path_matches(path, "/v1/admin/catalog/tariffs/:id/approve")
+        {
+            return is_admin;
+        }
         if path == "/v1/sync/push" {
             return is_admin || is_supervisor || is_billing || is_cashier;
         }
@@ -442,6 +468,84 @@ async fn catalog_fx_rates(
         None => Vec::new(),
     };
     Ok(Json(serde_json::Value::Array(rates)))
+}
+
+async fn create_tariff_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateTariffDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "tariff administration requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&input)?;
+    match store
+        .create_tariff_draft(
+            &input.service_code,
+            &input.customer_category,
+            &input.unit,
+            input.unit_price,
+            &input.currency,
+            input.effective_from,
+            input.effective_to,
+            principal.user_id,
+            idempotency_key,
+            &digest,
+        )
+        .await
+        .map_err(tariff_write_error)?
+    {
+        sel_storage::postgres::CatalogWriteOutcome::Created(body) => {
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        sel_storage::postgres::CatalogWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
+async fn approve_tariff_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tariff_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ApproveTariffDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "tariff administration requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&(tariff_id, &input))?;
+    match store
+        .approve_tariff_draft(
+            tariff_id,
+            &input.approval_ref,
+            principal.user_id,
+            idempotency_key,
+            &digest,
+        )
+        .await
+        .map_err(tariff_write_error)?
+    {
+        sel_storage::postgres::CatalogWriteOutcome::Created(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+        sel_storage::postgres::CatalogWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
 }
 
 async fn auth_login(
@@ -1981,6 +2085,35 @@ fn device_write_error(error: sel_storage::postgres::DeviceWriteError) -> ApiErro
     }
 }
 
+fn tariff_write_error(error: sel_storage::postgres::TariffWriteError) -> ApiError {
+    use sel_storage::postgres::TariffWriteError;
+    match error {
+        TariffWriteError::InvalidFields => ApiError::unprocessable(
+            "TARIFF_FIELDS_INVALID",
+            "service, category, unit, price, currency, or effective period is invalid",
+        ),
+        TariffWriteError::ApprovalRefRequired => ApiError::unprocessable(
+            "TARIFF_APPROVAL_REF_REQUIRED",
+            "an approval reference is required",
+        ),
+        TariffWriteError::NotFound => {
+            ApiError::not_found("TARIFF_DRAFT_NOT_FOUND", "tariff draft was not found")
+        }
+        TariffWriteError::NotDraft => {
+            ApiError::conflict("TARIFF_NOT_DRAFT", "only a draft tariff can be approved")
+        }
+        TariffWriteError::PeriodOverlap => ApiError::conflict(
+            "TARIFF_PERIOD_OVERLAP",
+            "an approved tariff already covers part of this service category period",
+        ),
+        TariffWriteError::IdempotencyPayloadMismatch => ApiError::conflict(
+            "IDEMPOTENCY_PAYLOAD_MISMATCH",
+            "idempotency key was reused with another payload",
+        ),
+        TariffWriteError::Database(error) => storage_error(error),
+    }
+}
+
 fn offline_grant_write_error(error: sel_storage::postgres::OfflineGrantWriteError) -> ApiError {
     match error {
         sel_storage::postgres::OfflineGrantWriteError::IdempotencyPayloadMismatch => {
@@ -2374,6 +2507,7 @@ impl IntoResponse for ApiError {
 mod tests {
     use super::role_allows_request;
     use axum::http::Method;
+    use uuid::Uuid;
 
     #[test]
     fn production_role_matrix_keeps_read_access_separate_from_writes() {
@@ -2449,6 +2583,31 @@ mod tests {
             &Method::POST,
             &format!("/v1/users/{user_id}/password"),
             "SUPERVISOR"
+        ));
+    }
+
+    #[test]
+    fn only_admin_can_create_and_approve_tariff_versions() {
+        let tariff_id = Uuid::new_v4();
+        assert!(role_allows_request(
+            &Method::POST,
+            "/v1/admin/catalog/tariffs",
+            "ADMIN"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/admin/catalog/tariffs/{tariff_id}/approve"),
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/admin/catalog/tariffs",
+            "SUPERVISOR"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            &format!("/v1/admin/catalog/tariffs/{tariff_id}/approve"),
+            "BILLING_AGENT"
         ));
     }
 
