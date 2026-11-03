@@ -316,9 +316,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| {
-            entry["receivable_id"] == invoice["receivable_id"] && entry["balance"] == "7.02"
-        }));
+        .any(|entry| { entry["id"] == invoice["receivable_id"] && entry["balance"] == "7.02" }));
 
     let reversal = app
         .clone()
