@@ -98,7 +98,10 @@ async fn signed_offline_grant_is_verified_and_limits_are_enforced() {
         ))
         .await
         .unwrap();
-    assert!(matches!(accepted, SyncEventResult::Accepted { .. }));
+    assert!(
+        matches!(accepted, SyncEventResult::Accepted { .. }),
+        "accepted result: {accepted:?}"
+    );
 
     let limited = store
         .apply_sync_event(&event(
