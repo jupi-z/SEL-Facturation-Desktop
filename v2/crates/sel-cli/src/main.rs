@@ -899,6 +899,66 @@ mod tests {
         assert_eq!(counts, (1, 1, 1));
         assert!(backup.is_file(), "migration backup should be created");
 
+        let failed_organization_id = uuid::Uuid::new_v4();
+        let failed_suffix = failed_organization_id.to_string();
+        let failed_source_code = format!("MIG-FAIL-{failed_suffix}");
+        let failed_path =
+            std::env::temp_dir().join(format!("sel-v1-migration-fail-{failed_suffix}.json"));
+        let failed_backup =
+            std::env::temp_dir().join(format!("sel-v1-migration-fail-{failed_suffix}.dump"));
+        let failed_manifest = json!({
+            "format": "sel-facturation-portable",
+            "schema_version": 1,
+            "migration_approval": {"approved": true},
+            "data": {
+                "clients": [{"code": failed_source_code, "name": "Rollback fixture"}],
+                "invoices": [
+                    {
+                        "number": format!("V1-FAIL-OK-{failed_suffix}"),
+                        "client_code": failed_source_code,
+                        "currency": "USD",
+                        "billing_period": "2026-11",
+                        "issue_date": "2026-11-03",
+                        "calc_snapshot": {"kwh": "1.00", "energy": "1.00", "unit_price": "1.00", "vat": "0.16", "total": "1.16"}
+                    },
+                    {
+                        "number": format!("V1-FAIL-BAD-{failed_suffix}"),
+                        "client_code": failed_source_code,
+                        "currency": "USD",
+                        "billing_period": "2026-12",
+                        "issue_date": "not-a-date",
+                        "calc_snapshot": {"kwh": "2.00", "energy": "2.00", "unit_price": "1.00", "vat": "0.32", "total": "2.32"}
+                    }
+                ],
+                "payments": []
+            }
+        });
+        fs::write(
+            &failed_path,
+            serde_json::to_vec(&failed_manifest).expect("serialize rollback fixture"),
+        )
+        .expect("write rollback fixture");
+        std::env::set_var("SEL_ORGANIZATION_ID", failed_organization_id.to_string());
+        std::env::set_var("SEL_MIGRATION_BACKUP_PATH", &failed_backup);
+        assert!(
+            migration_apply(&failed_path).await.is_err(),
+            "a malformed later invoice must abort the complete import transaction"
+        );
+        let failed_store =
+            sel_storage::CentralStore::connect(&database_url, failed_organization_id)
+                .await
+                .expect("connect rollback organization");
+        let failed_counts: (i64, i64) = sqlx::query_as(
+            "SELECT
+               (SELECT count(*) FROM customers WHERE organization_id = $1),
+               (SELECT count(*) FROM invoices WHERE customer_id IN (SELECT id FROM customers WHERE organization_id = $1))",
+        )
+        .bind(failed_organization_id)
+        .fetch_one(&failed_store.pool)
+        .await
+        .expect("read rollback counts");
+        assert_eq!(failed_counts, (0, 0));
+
         for (key, value) in [
             ("DATABASE_URL", prior_database_url),
             ("SEL_ORGANIZATION_ID", prior_org),
@@ -913,5 +973,7 @@ mod tests {
         }
         let _ = fs::remove_file(path);
         let _ = fs::remove_file(backup);
+        let _ = fs::remove_file(failed_path);
+        let _ = fs::remove_file(failed_backup);
     }
 }
