@@ -2479,6 +2479,39 @@ async fn apply_payment_change(
                     }
                     continue;
                 }
+
+                // A local pending payment already owns a semantically identical
+                // allocation, but it may have generated a local UUID. Once the
+                // central projection supplies the durable allocation identity,
+                // reconcile that row instead of inserting a second allocation.
+                let matches = sqlx::query(
+                    "SELECT id FROM payment_allocations
+                     WHERE payment_id = $1 AND receivable_id = $2
+                       AND allocated_amount = $3 AND currency = $4
+                       AND (schedule_id = $5 OR (schedule_id IS NULL AND $5 IS NULL))
+                     LIMIT 2",
+                )
+                .bind(payment_id)
+                .bind(receivable_id)
+                .bind(allocated_amount)
+                .bind(currency)
+                .bind(schedule_id)
+                .fetch_all(&mut **tx)
+                .await?;
+                if matches.len() == 1 {
+                    let local_id: String = matches[0].try_get("id")?;
+                    sqlx::query("UPDATE payment_allocations SET id = $1 WHERE id = $2")
+                        .bind(allocation_id)
+                        .bind(local_id)
+                        .execute(&mut **tx)
+                        .await?;
+                    continue;
+                }
+                if matches.len() > 1 {
+                    return Err(sqlx::Error::Protocol(
+                        "ambiguous local payment allocation projection".into(),
+                    ));
+                }
             }
             let already_present: i64 = if let Some(allocation_id) = allocation_id {
                 sqlx::query_scalar("SELECT count(*) FROM payment_allocations WHERE id = $1")

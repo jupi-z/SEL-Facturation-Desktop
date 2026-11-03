@@ -369,6 +369,7 @@ async fn central_acceptance_reconciles_pending_invoice_and_payment_without_dupli
     let receivable_id = Uuid::new_v4();
     let payment_id = Uuid::new_v4();
     let allocation_id = Uuid::new_v4();
+    let central_allocation_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO customers
          (id, organization_id, customer_code, legal_name, contact_fields_json, status, revision, created_at)
@@ -469,7 +470,7 @@ async fn central_acceptance_reconciles_pending_invoice_and_payment_without_dupli
                     "change": {
                         "customer_id": customer_id,
                         "payment": {"payment_id":payment_id,"status":"CENTRAL_ACCEPTED","amount":"3.00","currency":"USD"},
-                        "allocations":[{"receivable_id":receivable_id,"amount":"3.00"}]
+                        "allocations":[{"allocation_id":central_allocation_id,"receivable_id":receivable_id,"amount":"3.00","currency":"USD"}]
                     }
                 })
             ],
@@ -497,6 +498,13 @@ async fn central_acceptance_reconciles_pending_invoice_and_payment_without_dupli
             .await
             .expect("count allocations");
     assert_eq!(allocation_count, 1);
+    let projected_allocation_id: String =
+        sqlx::query_scalar("SELECT id FROM payment_allocations WHERE payment_id = $1")
+            .bind(payment_id.to_string())
+            .fetch_one(&store.pool)
+            .await
+            .expect("read reconciled allocation identity");
+    assert_eq!(projected_allocation_id, central_allocation_id.to_string());
     let _ = std::fs::remove_file(path);
 }
 
