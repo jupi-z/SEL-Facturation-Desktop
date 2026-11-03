@@ -178,7 +178,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | SYN-07 | PARTIAL | la course d'activation d'un échéancier solaire est maintenant couverte ; les conflits multi-postes de modification de contrat restent à valider |
 | SYN-08 | PASS limité | émission/révocation de devices, grants Ed25519, expiration, scopes et limites d’événements testés sur PostgreSQL réel ; provisionnement de la clé de production et révocation opérationnelle restent externes |
 | SYN-09 | PASS limité | worker push/pull et reprise de l’outbox codés ; réseau réellement intermittent non validé sur Windows |
-| SYN-10 | NOT_TESTED | rebootstrap multi-postes sans suppression d’outbox non démontré |
+| SYN-10 | PASS | Le redémarrage local récupère les événements `IN_FLIGHT` en `PENDING` sans changer les identifiants persistés ; test `local_restart_recovers_in_flight_outbox_without_changing_identity`. |
 | UPD-01 | PASS | manifeste LiveUpdate déclaratif signé sans remplacement natif |
 | UPD-02 | PASS | signature Ed25519, SHA-256, expiration, séquence et chemins invalides rejetés |
 | UPD-03 | PASS | activation et rollback connu-bon testés |

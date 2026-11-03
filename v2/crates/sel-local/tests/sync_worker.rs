@@ -135,6 +135,58 @@ async fn automatic_sync_worker_retries_until_the_outbox_is_empty() {
 }
 
 #[tokio::test]
+async fn local_restart_recovers_in_flight_outbox_without_changing_identity() {
+    let path = std::env::temp_dir().join(format!("sel-v2-restart-{}.sqlite", Uuid::new_v4()));
+    let database_url = format!("sqlite://{}", path.display());
+    let organization_id = Uuid::new_v4();
+    let device_id = Uuid::new_v4();
+    let store = LocalStore::connect(&database_url, organization_id, device_id)
+        .await
+        .expect("connect local store");
+    let payload = serde_json::json!({
+        "customer_code": "RESTART-1",
+        "legal_name": "Restart fixture"
+    });
+    let event = SyncEnvelope {
+        protocol_version: 1,
+        event_id: Uuid::new_v4(),
+        device_id,
+        organization_id,
+        actor_id: Uuid::nil(),
+        command_type: "CUSTOMER_CREATED".into(),
+        aggregate_id: Uuid::new_v4(),
+        aggregate_expected_version: 0,
+        occurred_at: Utc::now(),
+        offline_grant_id: Uuid::nil(),
+        payload_sha256: payload_digest(&payload),
+        payload,
+        client_schema_version: 1,
+    };
+    store.record_command(&event).await.expect("queue event");
+
+    let claimed = store.claim_pending(1).await.expect("claim event");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].event_id, event.event_id);
+    drop(store);
+
+    let reopened = LocalStore::connect(&database_url, organization_id, device_id)
+        .await
+        .expect("reopen local store");
+    let recovered = reopened
+        .claim_pending(1)
+        .await
+        .expect("recover event after restart");
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].event_id, event.event_id);
+    assert_eq!(recovered[0].aggregate_id, event.aggregate_id);
+    assert_eq!(reopened.organization_id, organization_id);
+    assert_eq!(reopened.device_id, device_id);
+
+    drop(reopened);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn pulled_customer_changes_are_applied_with_a_durable_cursor() {
     let path = std::env::temp_dir().join(format!("sel-v2-pull-{}.sqlite", Uuid::new_v4()));
     let database_url = format!("sqlite://{}", path.display());
