@@ -6,7 +6,7 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `0dcce2f` (`feat(v2): add audited payment reversals`)
+Commit contrôlé : `1702213` (`feat(v2): add guarded V1 PostgreSQL import`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
@@ -15,7 +15,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La CI GitHub #23 était verte sur le commit précédent `1ba7ca9`; une nouvelle exécution est requise pour le commit courant. Cela valide le périmètre technique couvert par les tests précédents, tandis que les nouveaux tests ciblés sont également exécutés localement. Le backend reste **NO-GO pour une exploitation commerciale** : l’authentification complète/RBAC, les autorisations offline signées, l’import V1 avec écriture, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La CI GitHub #27 est verte sur le commit `1702213` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cela valide le périmètre technique couvert par la CI ; les nouveaux tests ciblés sont également exécutés localement. Le backend reste **NO-GO pour une exploitation commerciale** : l’authentification complète/RBAC, les autorisations offline signées, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -25,6 +25,7 @@ La CI GitHub #23 était verte sur le commit précédent `1ba7ca9`; une nouvelle 
 - Réconciliation idempotente des paiements et de leurs affectations, sans second paiement.
 - Contre-écritures de paiements append-only : renversement partiel ou total, verrouillage du paiement, somme cumulée bornée, acteur actif vérifié, audit et `central_changes` dans la même transaction.
 - Soldes PostgreSQL et SQLite calculés sur les allocations nettes après renversements, avec rejeu idempotent de l’événement `PAYMENT_REVERSED` et projection locale contrôlée.
+- Import V1 → PostgreSQL désormais implémenté derrière `migrate-v1 --apply --approved-manifest` : sauvegarde `pg_dump` obligatoire, approbation explicite, UUID v5 stables, `import_batches`, `legacy_id_map`, transaction et rejeu par checksum ; les historiques restent mono-service, sans ligne eau inventée.
 - Validation globale des affectations par créance, verrouillage PostgreSQL déterministe et rejet d’une surallocation, y compris deux affectations répétées vers la même créance.
 - Publication centrale récupérable après commit métier avant accusé, avec outbox/replay idempotent.
 - Projections SQLite solaires : vente, lignes, créance, contrat, plan et échéances avec identifiants stables et relations conservées.
@@ -69,12 +70,13 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 - test API PostgreSQL réel `utility_issue_is_atomic_idempotent_and_survives_restart` : **PASS**, avec renversement `1.00` puis `2.00`, rejeu idempotent, soldes nets, audit et publications centrales.
 - test SQLite local `local_commercial_operations_are_persisted_and_offline_pending` : **PASS**, avec renversement hors ligne durable et solde local net.
 - test de synchronisation `payment_sync_is_applied_before_the_central_ack_and_is_idempotent` : **PASS**, avec événement `PAYMENT_REVERSED` accepté puis rejoué sans doublon.
+- test CLI `migration_dry_run_is_read_only_and_counts_references` : **PASS** ; compilation et Clippy de `sel-cli` : **PASS**.
 - `git diff --check` : **PASS**.
 - aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [#23 — 41588138616](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41588138616), job `rust` `125758328489` : **SUCCESS** sur le commit précédent `1ba7ca9`. Une nouvelle exécution CI est attendue sur `0dcce2f`.
+Run [#27 — 41596680267](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41596680267), job `rust` `125785582050` : **SUCCESS** sur `1702213`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -122,8 +124,8 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | UPD-03 | PASS | activation et rollback connu-bon testés |
 | UPD-04 | NOT_TESTED | SafeUpdate natif hors périmètre de cette validation backend |
 | UPD-05 | BLOCKED_EXTERNAL | clé publique Ed25519 de production absente ; fail-closed conservé |
-| MIG-01 | PARTIAL | dry-run V1 vérifié sur format synthétique ; import avec écriture non livré |
-| MIG-02 | NOT_TESTED | import PostgreSQL idempotent réel non livré |
+| MIG-01 | PARTIAL | dry-run vérifié et chemin `--apply` transactionnel livré ; fixture PostgreSQL avec `pg_dump` n’est pas exécutée ici |
+| MIG-02 | PARTIAL | checksum `import_batches`, mapping UUID et rejeu sans écritures sont codés ; répétition réelle sur PostgreSQL reste à exécuter |
 | MIG-03 | BLOCKED_EXTERNAL | données V1 anonymisées de rapprochement absentes |
 | MIG-04 | BLOCKED_EXTERNAL | campagne reprise/rollback d’import non réalisée |
 | MIG-05 | BLOCKED_EXTERNAL | sauvegarde/restauration PostgreSQL de production non fournie |
@@ -131,7 +133,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS limité | formatage, Clippy et tests workspace verts en CI #23 sur le commit précédent ; nouveau commit en attente de CI |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #27 sur `1702213` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -141,7 +143,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 1. Remplacer la garde par jeton de développement par utilisateurs, sessions à durée limitée, rotation/révocation, RBAC et contrôle par organisation/ressource.
 2. Finaliser les autorisations offline signées Ed25519, leur expiration, leurs plafonds d’opérations et leur enrôlement d’appareil.
 3. Étendre le local aux corrections, annulations, remboursements, contre-écritures, retards et recouvrement solaires sans supprimer l’historique.
-4. Implémenter et tester l’import V1 transactionnel avec sauvegarde, simulation, idempotence, rapprochement et reprise sur données anonymisées fournies par SEL.
+4. Exécuter le nouvel import V1 sur une base PostgreSQL de test avec `pg_dump` disponible, vérifier le rapprochement et la reprise sur données anonymisées fournies par SEL.
 5. Documenter et exercer la sauvegarde/restauration PostgreSQL, TLS, rotation des secrets et le déploiement à privilèges minimaux.
 6. Provisionner la clé publique Ed25519 de production hors dépôt avant d’activer LiveUpdate ; aucune signature de test ne doit être promue.
 7. Réaliser la recette sur un PC Windows SEL : installation, fonctionnement hors connexion, synchronisation, impression, sauvegarde/restauration et validation métier des tarifs eau/taxes.
