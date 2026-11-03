@@ -81,6 +81,7 @@ paths:
   /v1/meta/capabilities:
     get:
       operationId: capabilities
+      security: [{ bearerAuth: [] }]
       responses:
         '200': { description: Protocol capabilities }
   /v1/catalog/products:
