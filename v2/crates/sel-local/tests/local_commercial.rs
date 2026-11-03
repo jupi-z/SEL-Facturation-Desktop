@@ -496,6 +496,24 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .unwrap()
         .parse::<Uuid>()
         .unwrap();
+    let plan = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/local/v1/installment-plans/{plan_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan.status(), StatusCode::OK);
+    let plan_body = json_body(plan).await;
+    assert_eq!(plan_body["principal"], "120.00");
+    assert_eq!(plan_body["paid"], "0.00");
+    assert_eq!(plan_body["remaining"], "120.00");
+    assert_eq!(plan_body["schedule"].as_array().unwrap().len(), 2);
+    assert_eq!(plan_body["schedule"][0]["status"], "OPEN");
     let counts: (i64, i64, i64) = sqlx::query_as(
         "SELECT
            (SELECT count(*) FROM sale_lines WHERE sale_id = $1),

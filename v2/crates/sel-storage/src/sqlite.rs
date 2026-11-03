@@ -953,6 +953,127 @@ impl LocalStore {
         })))
     }
 
+    pub async fn get_installment_plan(
+        &self,
+        plan_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let plan = sqlx::query(
+            "SELECT ip.id, ip.receivable_id, ip.contract_id, ip.principal_amount,
+                    ip.currency, ip.start_date, ip.status, ip.terms_snapshot_json,
+                    r.customer_id
+             FROM installment_plans ip
+             JOIN receivables r ON r.id = ip.receivable_id
+             JOIN customers c ON c.id = r.customer_id
+             WHERE ip.id = $1 AND c.organization_id = $2",
+        )
+        .bind(plan_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(plan) = plan else {
+            return Ok(None);
+        };
+        let receivable_id = plan.try_get::<String, _>("receivable_id")?;
+        let principal = decimal_text(&plan, "principal_amount")?;
+        let plan_currency: String = plan.try_get("currency")?;
+        let plan_start_date: String = plan.try_get("start_date")?;
+        let terms_json: String = plan.try_get("terms_snapshot_json")?;
+        let terms_snapshot = serde_json::from_str::<serde_json::Value>(&terms_json)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid terms snapshot: {error}")))?;
+        let today = Utc::now().date_naive();
+        let rows = sqlx::query(
+            "SELECT id, sequence, due_date, amount_due, schedule_status
+             FROM installment_schedule WHERE plan_id = $1 ORDER BY sequence",
+        )
+        .bind(plan_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut total_paid = Decimal::ZERO;
+        let mut total_overdue = Decimal::ZERO;
+        let mut schedule = Vec::with_capacity(rows.len());
+        for row in rows {
+            let schedule_id: String = row.try_get("id")?;
+            let due_date_text: String = row.try_get("due_date")?;
+            let due_date = NaiveDate::parse_from_str(&due_date_text, "%Y-%m-%d")
+                .map_err(|error| sqlx::Error::Protocol(format!("invalid due date: {error}")))?;
+            let amount_due = decimal_text(&row, "amount_due")?.round_dp(2);
+            let paid_rows = sqlx::query(
+                "SELECT pa.allocated_amount, p.amount_received,
+                        COALESCE((SELECT GROUP_CONCAT(pr.amount, ',')
+                                  FROM payment_reversals pr WHERE pr.payment_id = p.id), '')
+                         AS reversed_amounts
+                 FROM payment_allocations pa
+                 JOIN payments p ON p.id = pa.payment_id
+                 WHERE pa.schedule_id = $1
+                   AND p.status IN ('LOCAL_PENDING', 'CENTRAL_ACCEPTED')",
+            )
+            .bind(&schedule_id)
+            .fetch_all(&self.pool)
+            .await?;
+            let paid = paid_rows
+                .into_iter()
+                .try_fold(Decimal::ZERO, |total, payment_row| {
+                    let allocation = decimal_text(&payment_row, "allocated_amount")?;
+                    let received = decimal_text(&payment_row, "amount_received")?;
+                    let reversed_text: String = payment_row.try_get("reversed_amounts")?;
+                    let reversed = reversed_text
+                        .split(',')
+                        .filter(|value| !value.is_empty())
+                        .try_fold(Decimal::ZERO, |total, value| {
+                            let amount = Decimal::from_str(value).map_err(|error| {
+                                sqlx::Error::Protocol(format!("invalid reversed amount: {error}"))
+                            })?;
+                            Ok::<Decimal, sqlx::Error>(total + amount)
+                        })?;
+                    let net_received = (received - reversed).max(Decimal::ZERO);
+                    let effective = if received.is_zero() {
+                        Decimal::ZERO
+                    } else {
+                        allocation * net_received / received
+                    };
+                    Ok::<Decimal, sqlx::Error>(total + effective)
+                })?;
+            let paid = paid.round_dp(2).min(amount_due);
+            let remaining = (amount_due - paid).round_dp(2);
+            let status = if remaining <= Decimal::ZERO {
+                "PAID"
+            } else if due_date < today {
+                total_overdue += remaining;
+                "OVERDUE"
+            } else {
+                "OPEN"
+            };
+            total_paid += paid;
+            schedule.push(json!({
+                "id": schedule_id,
+                "sequence": row.try_get::<i64, _>("sequence")?,
+                "due_date": due_date_text,
+                "amount_due": format!("{amount_due:.2}"),
+                "paid": format!("{paid:.2}"),
+                "remaining": format!("{remaining:.2}"),
+                "stored_status": row.try_get::<String, _>("schedule_status")?,
+                "status": status,
+                "overdue": status == "OVERDUE"
+            }));
+        }
+        let remaining = (principal - total_paid).round_dp(2).max(Decimal::ZERO);
+        Ok(Some(json!({
+            "id": plan.try_get::<String, _>("id")?,
+            "receivable_id": receivable_id,
+            "contract_id": plan.try_get::<String, _>("contract_id")?,
+            "customer_id": plan.try_get::<String, _>("customer_id")?,
+            "principal": format!("{:.2}", principal.round_dp(2)),
+            "paid": format!("{:.2}", total_paid.round_dp(2)),
+            "remaining": format!("{remaining:.2}"),
+            "overdue_amount": format!("{:.2}", total_overdue.round_dp(2)),
+            "currency": plan_currency,
+            "start_date": plan_start_date,
+            "stored_status": plan.try_get::<String, _>("status")?,
+            "terms_snapshot": terms_snapshot,
+            "schedule": schedule
+        })))
+    }
+
     pub async fn record_payment(
         &self,
         input: &RecordPaymentRequest,
