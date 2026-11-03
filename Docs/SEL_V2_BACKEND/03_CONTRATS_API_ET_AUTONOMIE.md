@@ -65,5 +65,22 @@ Le paiement partiel laisse un solde, **sans** créer de plan d'échéances si l'
 
 ## Preuves
 - OpenAPI validée par un parseur, schémas des erreurs, commandes exemples et tests contractuels.
+
+## Contrat d'autorisation des routes (révision du 3 novembre 2026)
+
+Les routes protégées sous `/v1` sont autorisées par une matrice explicite méthode + chemin + rôle ; toute combinaison non classée est refusée. Les segments `{id}` doivent être des UUID valides. Une nouvelle route ne reçoit donc aucun droit par héritage.
+
+| Opération | Rôles autorisés |
+|---|---|
+| Lecture des routes explicitement listées dans OpenAPI (dont relevés clients, documents structurés et statut de synchronisation) | ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR, AUDITOR_READONLY |
+| Création/modification clients, aperçu/émission de facture, vente/devis/contrat solaire | ADMIN, BILLING_AGENT, SUPERVISOR |
+| Encaissement, affectation et contre-écriture de paiement | ADMIN, CASHIER, SUPERVISOR |
+| Synchronisation push | ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR ; chaque enveloppe est ensuite contrôlée pour le rôle métier de l'acteur, l'acteur actif, l'appareil actif, la signature du grant, son périmètre, son expiration et ses limites |
+| Annulation de facture, avoir/crédit, enrôlement/révocation d'appareil, émission de grant | ADMIN, SUPERVISOR |
+| Provisionnement/rotation de mot de passe d'un utilisateur | ADMIN uniquement |
+
+Les sessions sont individuelles. La rotation de mot de passe vérifie à nouveau le rôle ADMIN dans la transaction SQL, modifie le hash Argon2id, révoque les sessions actives de la cible et écrit un audit expurgé dans la même transaction. Aucun mot de passe ni hash n'est écrit dans l'audit.
+
+Le démarrage commercial exige `DATABASE_URL`, un UUID d'organisation non nul, un nom d'organisation non vide, le mode de sessions individuelles et la clé publique valide pour les grants signés. Le service local exige les UUID non nuls et persistés d'organisation et d'appareil ; aucun UUID nul ne constitue une identité valide.
 - Démarrage central + PG par `docker compose -f v2/deploy/compose.test.yml up`; un appel CLI doit pouvoir créer client, facture, plan solaire, payer en partie, lire solde et afficher les données JSON pour rendu.
 - Test serveur : recherche automatique et assertion aucun `Content-Type: application/pdf` ni voie de persistance de fichier facture; tests de contrôle d'accès à un customer_id non autorisé.

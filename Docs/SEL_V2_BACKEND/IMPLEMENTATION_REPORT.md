@@ -331,3 +331,21 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 - Release, publication d’installateur et déploiement réel : **NON EFFECTUÉS**.
 
 La PR #58 est prête pour revue technique sur le périmètre démontré, mais ne doit pas être annoncée comme backend de production tant que les statuts `PARTIAL`, `NOT_TESTED` et `BLOCKED_EXTERNAL` critiques ne sont pas fermés avec des preuves correspondantes.
+
+## Phase 1 — point de progression au 3 novembre 2026
+
+Progression actuelle de la phase contrats et sécurité : **84 %** selon les critères locaux ci-dessous. Ce pourcentage ne représente pas le degré d'achèvement de SEL V2.
+
+| Sous-critère phase 1 | Statut | Preuve actuelle |
+|---|---|---|
+| Autorisation explicite par route, méthode et rôle ; refus par défaut | COMPLETED côté code/test | `role_allows_request`; 5 tests unitaires `sel-api` passent, dont routes inconnues, méthodes non exposées, droits facture et rôle AUDITOR_READONLY |
+| Push et plafond de rôle sur commandes offline | COMPLETED côté code/test ciblé | 1 test unitaire couvre les combinaisons métier ; `device_is_authorized` contrôle rôle agent, rôle↔commande, acteur/appareil/grant actifs, signature, scope, expiration et limites |
+| Identifiants organisation/appareil/agent/grant non nuls | COMPLETED côté code/test ciblé | Parseurs central/local durcis ; tests: `production_uuid_parser_rejects_missing_or_invalid_values`, `local_identity_configuration_rejects_nil` et identité locale stable passent |
+| Configuration commerciale fail-closed | PARTIAL | sessions individuelles, grant signé, UUID non nuls et nom légal non vide requis ; le jeton legacy partagé est maintenant refusé au démarrage commercial. Provisionnement initial opérationnel à compléter |
+| Rotation de mot de passe auditable et révocation des sessions | CODED, test d'intégration compilé | Transaction SQL vérifie l'acteur ADMIN, change Argon2id, révoque les sessions de la cible et ajoute un audit expurgé ; `postgres_auth` compile, mais exécution PostgreSQL locale non réalisée faute de `TEST_DATABASE_URL`/service de test |
+| Contrats OpenAPI et documentation RBAC | PASS contrat local | Routes login/refresh/logout, mot de passe, annulation et contre-écriture décrites ; `openapi_document_is_valid_yaml_and_declares_no_pdf_route` passe |
+| Exécution PostgreSQL et CI du commit final | NOT_TESTED | aucun `TEST_DATABASE_URL` local ; CI sera vérifiée après commit/push |
+
+Commandes locales exécutées : `cargo fmt --all -- --check` (**PASS**), `cargo test -p sel-contracts openapi_document_is_valid_yaml_and_declares_no_pdf_route` (**1 passed**), `cargo test -p sel-api` (**toutes les suites exécutables passent : API 5 + 4, HTTP 2, contrats sync 2 ; les tests PostgreSQL sont ignorés faute de base de test**), `cargo test -p sel-local` (**21 passed ; convergence PostgreSQL ignorée faute de base de test**), `cargo test -p sel-storage offline_role_tests` (**1 passed**), `cargo test -p sel-api --test postgres_auth --no-run` (**compile PASS**), `cargo clippy -p sel-api -p sel-local -p sel-storage --all-targets -- -D warnings` (**PASS**). Le test PostgreSQL ignoré n'a pas été exécuté localement. Aucun merge, release, déploiement ou changement de données réelles n'a été effectué.
+
+Prochaine tranche : exécuter le validateur OpenAPI, lancer Clippy et les suites Rust ciblées, relire les permissions des handlers et du stockage, puis commit/push et vérifier la CI sur le SHA résultant. Les CRUD utilisateurs/appareils/grants, le test PostgreSQL local réel et les clés/identités commerciales SEL restent des travaux ou validations distincts.

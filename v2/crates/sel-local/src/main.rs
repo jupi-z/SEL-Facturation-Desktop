@@ -67,21 +67,35 @@ fn required_uuid(name: &str) -> Result<uuid::Uuid, std::io::Error> {
             format!("{name} must be configured; local identities are never generated implicitly"),
         )
     })?;
-    value.parse().map_err(|_| {
+    let uuid = value.parse::<uuid::Uuid>().map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("{name} must be a valid UUID"),
         )
-    })
+    })?;
+    if uuid.is_nil() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} must not be the nil UUID"),
+        ));
+    }
+    Ok(uuid)
 }
 
 fn required_value(name: &str, value: &str) -> Result<uuid::Uuid, std::io::Error> {
-    value.parse().map_err(|_| {
+    let uuid = value.parse::<uuid::Uuid>().map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("{name} must be a valid UUID"),
         )
-    })
+    })?;
+    if uuid.is_nil() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} must not be the nil UUID"),
+        ));
+    }
+    Ok(uuid)
 }
 
 fn required_token(name: &str) -> Result<String, std::io::Error> {
@@ -102,4 +116,24 @@ fn validate_token(name: &str, token: &str) -> Result<String, std::io::Error> {
         ));
     }
     Ok(token.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{required_uuid, required_value};
+    use uuid::Uuid;
+
+    #[test]
+    fn local_identity_configuration_rejects_nil_and_accepts_stable_ids() {
+        assert!(required_value("SEL_ACTOR_ID", &Uuid::nil().to_string()).is_err());
+        assert!(required_value("SEL_OFFLINE_GRANT_ID", &Uuid::nil().to_string()).is_err());
+        assert!(required_value("SEL_ACTOR_ID", &Uuid::new_v4().to_string()).is_ok());
+    }
+
+    #[test]
+    fn local_required_uuid_rejects_nil() {
+        std::env::set_var("SEL_TEST_NIL_UUID", Uuid::nil().to_string());
+        assert!(required_uuid("SEL_TEST_NIL_UUID").is_err());
+        std::env::remove_var("SEL_TEST_NIL_UUID");
+    }
 }

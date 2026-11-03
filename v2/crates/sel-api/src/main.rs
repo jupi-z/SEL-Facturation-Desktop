@@ -41,8 +41,7 @@ async fn main() -> Result<(), std::io::Error> {
                 std::io::Error::other(format!("database migration failed: {error}"))
             })?;
         let store = sel_storage::CentralStore::from_pool(pool, organization_id);
-        let legal_name = std::env::var("SEL_ORGANIZATION_NAME")
-            .unwrap_or_else(|_| "SEL V2 test organization".into());
+        let legal_name = required_organization_name()?;
         store
             .ensure_organization(&legal_name)
             .await
@@ -63,12 +62,7 @@ fn required_uuid(name: &str) -> Result<Uuid, std::io::Error> {
             format!("{name} must be configured; identities are never generated in production"),
         )
     })?;
-    value.parse().map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{name} must be a valid UUID"),
-        )
-    })
+    required_uuid_value(name, Some(value))
 }
 
 fn required_session_auth_mode() -> Result<(), std::io::Error> {
@@ -78,7 +72,29 @@ fn required_session_auth_mode() -> Result<(), std::io::Error> {
             "SEL_AUTH_MODE=session is required; the shared bearer token is test-only",
         ));
     }
+    if std::env::var("SEL_ALLOW_LEGACY_TOKEN").ok().as_deref() == Some("1") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "SEL_ALLOW_LEGACY_TOKEN is forbidden in commercial mode",
+        ));
+    }
     Ok(())
+}
+
+fn required_organization_name() -> Result<String, std::io::Error> {
+    let name = std::env::var("SEL_ORGANIZATION_NAME").map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "SEL_ORGANIZATION_NAME must be configured in commercial mode",
+        )
+    })?;
+    if name.trim().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "SEL_ORGANIZATION_NAME must not be empty in commercial mode",
+        ));
+    }
+    Ok(name.trim().to_owned())
 }
 
 fn required_offline_grant_security() -> Result<(), std::io::Error> {
@@ -102,7 +118,6 @@ fn required_offline_grant_security() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-#[cfg(test)]
 fn required_uuid_value(name: &str, value: Option<String>) -> Result<Uuid, std::io::Error> {
     let value = value.ok_or_else(|| {
         std::io::Error::new(
@@ -110,12 +125,19 @@ fn required_uuid_value(name: &str, value: Option<String>) -> Result<Uuid, std::i
             format!("{name} is missing"),
         )
     })?;
-    value.parse().map_err(|_| {
+    let uuid = value.parse::<Uuid>().map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("{name} must be a valid UUID"),
         )
-    })
+    })?;
+    if uuid.is_nil() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} must not be the nil UUID"),
+        ));
+    }
+    Ok(uuid)
 }
 
 #[cfg(test)]
@@ -126,18 +148,37 @@ mod tests {
     fn production_uuid_parser_rejects_missing_or_invalid_values() {
         assert!(required_uuid_value("SEL_ORGANIZATION_ID", None).is_err());
         assert!(required_uuid_value("SEL_ORGANIZATION_ID", Some("not-a-uuid".into())).is_err());
-        assert!(required_uuid_value("SEL_ORGANIZATION_ID", Some(Uuid::nil().to_string())).is_ok());
+        assert!(required_uuid_value("SEL_ORGANIZATION_ID", Some(Uuid::nil().to_string())).is_err());
+        assert!(
+            required_uuid_value("SEL_ORGANIZATION_ID", Some(Uuid::new_v4().to_string())).is_ok()
+        );
     }
 
     #[test]
     fn production_requires_individual_session_authentication() {
         std::env::remove_var("SEL_AUTH_MODE");
+        std::env::remove_var("SEL_ALLOW_LEGACY_TOKEN");
         assert!(required_session_auth_mode().is_err());
         std::env::set_var("SEL_AUTH_MODE", "legacy");
         assert!(required_session_auth_mode().is_err());
         std::env::set_var("SEL_AUTH_MODE", "session");
         assert!(required_session_auth_mode().is_ok());
+        std::env::set_var("SEL_ALLOW_LEGACY_TOKEN", "1");
+        assert!(required_session_auth_mode().is_err());
+        std::env::remove_var("SEL_ALLOW_LEGACY_TOKEN");
+        assert!(required_session_auth_mode().is_ok());
         std::env::remove_var("SEL_AUTH_MODE");
+    }
+
+    #[test]
+    fn commercial_mode_requires_a_nonempty_organization_name() {
+        std::env::remove_var("SEL_ORGANIZATION_NAME");
+        assert!(required_organization_name().is_err());
+        std::env::set_var("SEL_ORGANIZATION_NAME", "   ");
+        assert!(required_organization_name().is_err());
+        std::env::set_var("SEL_ORGANIZATION_NAME", " Société SEL ");
+        assert_eq!(required_organization_name().unwrap(), "Société SEL");
+        std::env::remove_var("SEL_ORGANIZATION_NAME");
     }
 
     #[test]

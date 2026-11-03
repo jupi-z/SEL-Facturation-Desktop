@@ -52,6 +52,8 @@ pub enum AuthError {
     InvalidResponse(#[from] serde_json::Error),
     #[error("user was not found or is not active")]
     UserNotFound,
+    #[error("actor is not an active administrator in this organization")]
+    ActorNotAuthorized,
 }
 
 #[derive(Debug, Error)]
@@ -383,11 +385,29 @@ impl CentralStore {
             .map_err(|error| AuthError::PasswordHash(error.to_string()))
     }
 
-    /// Provision or rotate a user's password through an explicit administrative
-    /// operation. This is intentionally a storage primitive; a future admin API
-    /// must authorize the caller before invoking it.
-    pub async fn set_user_password(&self, user_id: Uuid, password: &str) -> Result<(), AuthError> {
+    /// Provision or rotate a user's password. The actor check, password update,
+    /// session revocation, and redacted audit event commit as one transaction.
+    pub async fn set_user_password(
+        &self,
+        user_id: Uuid,
+        actor_id: Uuid,
+        password: &str,
+    ) -> Result<(), AuthError> {
         let password_hash = Self::hash_user_password(password)?;
+        let mut tx = self.pool.begin().await?;
+        let actor_role = sqlx::query_scalar::<_, String>(
+            "SELECT role FROM users
+             WHERE id = $1 AND organization_id = $2 AND status = 'ACTIVE'
+             FOR UPDATE",
+        )
+        .bind(actor_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AuthError::ActorNotAuthorized)?;
+        if actor_role != "ADMIN" {
+            return Err(AuthError::ActorNotAuthorized);
+        }
         let updated = sqlx::query(
             "UPDATE users SET password_hash = $1
              WHERE id = $2 AND organization_id = $3 AND status = 'ACTIVE'",
@@ -395,11 +415,31 @@ impl CentralStore {
         .bind(password_hash)
         .bind(user_id)
         .bind(self.organization_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if updated.rows_affected() != 1 {
             return Err(AuthError::UserNotFound);
         }
+        sqlx::query(
+            "UPDATE auth_sessions SET revoked_at = now()
+             WHERE organization_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(self.organization_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1, $2, $3, 'USER_PASSWORD_PROVISIONED', now(), $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(user_id)
+        .bind(json!({"sessions_revoked": true}))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -3943,15 +3983,17 @@ impl CentralStore {
         if !device {
             return Ok(false);
         }
-        let actor = sqlx::query(
-            "SELECT id FROM users WHERE id = $1 AND organization_id = $2 AND status = 'ACTIVE'",
+        let actor_role = sqlx::query_scalar::<_, String>(
+            "SELECT role FROM users WHERE id = $1 AND organization_id = $2 AND status = 'ACTIVE'",
         )
         .bind(event.actor_id)
         .bind(self.organization_id)
         .fetch_optional(&mut **tx)
-        .await?
-        .is_some();
-        if !actor {
+        .await?;
+        let Some(actor_role) = actor_role else {
+            return Ok(false);
+        };
+        if !offline_role_allows_command(&actor_role, &event.command_type) {
             return Ok(false);
         }
         let Some(grant) = sqlx::query(
@@ -4022,6 +4064,25 @@ impl CentralStore {
         persist_sync_result(&mut tx, self.organization_id, event, &result, None).await?;
         tx.commit().await?;
         Ok(result)
+    }
+}
+
+fn offline_role_allows_command(role: &str, command_type: &str) -> bool {
+    match command_type {
+        "CUSTOMER_CREATED"
+        | "CUSTOMER_UPDATED"
+        | "UTILITY_INVOICE_ISSUED"
+        | "SOLAR_SALE_CREATED"
+        | "SOLAR_CONTRACT_ACTIVATED" => {
+            matches!(role, "ADMIN" | "BILLING_AGENT" | "SUPERVISOR")
+        }
+        "PAYMENT_RECORDED" | "PAYMENT_ALLOCATED" | "PAYMENT_REVERSED" => {
+            matches!(role, "ADMIN" | "CASHIER" | "SUPERVISOR")
+        }
+        "INVOICE_VOIDED" | "CREDIT_NOTE_RECORDED" => {
+            matches!(role, "ADMIN" | "SUPERVISOR")
+        }
+        _ => false,
     }
 }
 
@@ -4165,4 +4226,36 @@ fn customer_from_row(row: &sqlx::postgres::PgRow) -> Result<Customer, sqlx::Erro
         status: row.try_get("status")?,
         revision: row.try_get("revision")?,
     })
+}
+
+#[cfg(test)]
+mod offline_role_tests {
+    use super::offline_role_allows_command;
+
+    #[test]
+    fn offline_grants_cannot_expand_actor_business_roles() {
+        assert!(offline_role_allows_command("CASHIER", "PAYMENT_RECORDED"));
+        assert!(offline_role_allows_command("CASHIER", "PAYMENT_ALLOCATED"));
+        assert!(!offline_role_allows_command(
+            "CASHIER",
+            "UTILITY_INVOICE_ISSUED"
+        ));
+        assert!(!offline_role_allows_command(
+            "CASHIER",
+            "CREDIT_NOTE_RECORDED"
+        ));
+        assert!(offline_role_allows_command(
+            "BILLING_AGENT",
+            "UTILITY_INVOICE_ISSUED"
+        ));
+        assert!(!offline_role_allows_command(
+            "BILLING_AGENT",
+            "PAYMENT_RECORDED"
+        ));
+        assert!(!offline_role_allows_command(
+            "AUDITOR_READONLY",
+            "CUSTOMER_UPDATED"
+        ));
+        assert!(!offline_role_allows_command("ADMIN", "UNSUPPORTED_COMMAND"));
+    }
 }

@@ -265,29 +265,109 @@ async fn production_auth_guard(
 }
 
 fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> bool {
-    if *method == axum::http::Method::GET {
-        return matches!(
-            role,
-            "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
-        );
+    use axum::http::Method;
+
+    let is_admin = role == "ADMIN";
+    let is_supervisor = role == "SUPERVISOR";
+    let is_billing = role == "BILLING_AGENT";
+    let is_cashier = role == "CASHIER";
+    let is_reader = matches!(
+        role,
+        "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
+    );
+
+    if *method == Method::GET {
+        return is_reader
+            && (matches!(
+                path,
+                "/v1/meta/capabilities"
+                    | "/v1/catalog/products"
+                    | "/v1/catalog/tariffs"
+                    | "/v1/catalog/tax-profiles"
+                    | "/v1/catalog/fx-rates"
+                    | "/v1/customers"
+                    | "/v1/sync/pull"
+                    | "/v1/sync/status"
+                    | "/v1/config/versions"
+                    | "/v1/client-resources/manifest"
+            ) || path_matches(path, "/v1/customers/:id")
+                || path_matches(path, "/v1/customers/:id/statement")
+                || path_matches(path, "/v1/invoices/:id")
+                || path_matches(path, "/v1/invoices/:id/document-data")
+                || path_matches(path, "/v1/receivables/:id")
+                || path_matches(path, "/v1/installment-plans/:id"));
     }
-    if path == "/v1/sync/pull" {
-        return matches!(
-            role,
-            "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
-        );
+
+    if *method == Method::POST {
+        if path == "/v1/auth/logout" {
+            return is_reader;
+        }
+        if path_matches(path, "/v1/users/:id/password") {
+            return is_admin;
+        }
+        if matches!(path, "/v1/devices/enroll" | "/v1/offline-grants")
+            || path_matches(path, "/v1/devices/:id/revoke")
+        {
+            return is_admin || is_supervisor;
+        }
+        if path == "/v1/sync/push" {
+            return is_admin || is_supervisor || is_billing || is_cashier;
+        }
+        if matches!(
+            path,
+            "/v1/customers"
+                | "/v1/billing/utility/preview"
+                | "/v1/billing/utility/issue"
+                | "/v1/solar/sales"
+                | "/v1/solar/quotes"
+                | "/v1/solar/contracts"
+        ) || path_matches(path, "/v1/solar/contracts/:id/activate")
+        {
+            return is_admin || is_supervisor || is_billing;
+        }
+        if path_matches(path, "/v1/customers/:id") {
+            return is_admin || is_supervisor || is_billing;
+        }
+        if path == "/v1/payments"
+            || path_matches(path, "/v1/payments/:id/allocate")
+            || path_matches(path, "/v1/payments/:id/reverse")
+        {
+            return is_admin || is_supervisor || is_cashier;
+        }
+        if path_matches(path, "/v1/invoices/:id/void")
+            || path_matches(path, "/v1/receivables/:id/credit")
+        {
+            return is_admin || is_supervisor;
+        }
     }
-    if path == "/v1/sync/push" || path.starts_with("/v1/billing/") || path.starts_with("/v1/solar/")
-    {
-        return matches!(role, "ADMIN" | "BILLING_AGENT" | "SUPERVISOR");
+
+    if *method == Method::PATCH && path_matches(path, "/v1/customers/:id") {
+        return is_admin || is_supervisor || is_billing;
     }
-    if path == "/v1/payments" || path.starts_with("/v1/payments/") {
-        return matches!(role, "ADMIN" | "CASHIER" | "SUPERVISOR");
+
+    false
+}
+
+fn path_matches(path: &str, pattern: &str) -> bool {
+    let path_segments = path.trim_matches('/').split('/');
+    let pattern_segments = pattern.trim_matches('/').split('/');
+    let mut matched = true;
+    let mut count = 0;
+    for (actual, expected) in path_segments.zip(pattern_segments) {
+        count += 1;
+        if expected == ":id" {
+            if actual.parse::<Uuid>().is_err() {
+                matched = false;
+                break;
+            }
+        } else if actual != expected {
+            matched = false;
+            break;
+        }
     }
-    if path.starts_with("/v1/customers") {
-        return matches!(role, "ADMIN" | "BILLING_AGENT" | "SUPERVISOR");
-    }
-    matches!(role, "ADMIN" | "SUPERVISOR")
+    matched
+        && count == path.trim_matches('/').split('/').count()
+        && count == pattern.trim_matches('/').split('/').count()
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
@@ -461,7 +541,7 @@ async fn set_user_password(
         ));
     };
     store
-        .set_user_password(user_id, &input.password)
+        .set_user_password(user_id, principal.user_id, &input.password)
         .await
         .map_err(auth_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -1863,6 +1943,10 @@ fn auth_error(error: sel_storage::postgres::AuthError) -> ApiError {
         sel_storage::postgres::AuthError::UserNotFound => {
             ApiError::not_found("USER_NOT_FOUND", "active user not found")
         }
+        sel_storage::postgres::AuthError::ActorNotAuthorized => ApiError::forbidden(
+            "PERMISSION_DENIED",
+            "only an active administrator can provision user passwords",
+        ),
     }
 }
 
@@ -2307,6 +2391,89 @@ mod tests {
             &Method::POST,
             "/v1/billing/utility/issue",
             "CASHIER"
+        ));
+    }
+
+    #[test]
+    fn production_role_matrix_denies_unclassified_routes_and_methods() {
+        assert!(!role_allows_request(
+            &Method::GET,
+            "/v1/unregistered-resource",
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::DELETE,
+            "/v1/customers/123",
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/unregistered-resource",
+            "SUPERVISOR"
+        ));
+    }
+
+    #[test]
+    fn cashier_can_submit_grant_checked_offline_sync_events() {
+        assert!(role_allows_request(
+            &Method::POST,
+            "/v1/sync/push",
+            "CASHIER"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/sync/push",
+            "AUDITOR_READONLY"
+        ));
+    }
+
+    #[test]
+    fn only_admin_can_provision_user_passwords() {
+        let user_id = "3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0";
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/users/{user_id}/password"),
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            &format!("/v1/users/{user_id}/password"),
+            "SUPERVISOR"
+        ));
+    }
+
+    #[test]
+    fn role_matrix_matches_only_declared_resource_routes() {
+        let customer_id = "3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0";
+        assert!(role_allows_request(
+            &Method::PATCH,
+            &format!("/v1/customers/{customer_id}"),
+            "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::GET,
+            &format!("/v1/invoices/{customer_id}/document-data"),
+            "AUDITOR_READONLY"
+        ));
+        assert!(!role_allows_request(
+            &Method::GET,
+            "/v1/invoices/not-a-uuid",
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            &format!("/v1/receivables/{customer_id}/credit"),
+            "CASHIER"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/receivables/{customer_id}/credit"),
+            "SUPERVISOR"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/auth/login",
+            "ADMIN"
         ));
     }
 }

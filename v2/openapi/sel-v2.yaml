@@ -2,7 +2,12 @@ openapi: 3.1.0
 info:
   title: SEL V2 Backend API
   version: 0.1.0
-  description: Structured SEL billing API. Invoice documents are JSON; PDF generation is client-side only.
+  description: >-
+    Structured SEL billing API. Invoice documents are JSON; PDF generation is client-side only.
+    Authenticated API requests use short-lived individual sessions. The server applies a
+    fail-closed route/method RBAC matrix for ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR,
+    and AUDITOR_READONLY. Offline sync events are additionally checked against active
+    actor/device identity, signed grant scope, expiry, and limits.
 servers:
   - url: https://api.example.invalid
 paths:
@@ -16,6 +21,63 @@ paths:
       operationId: healthReady
       responses:
         '200': { description: Service readiness }
+  /v1/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identity_ref, password]
+              properties:
+                identity_ref: { type: string, minLength: 1 }
+                password: { type: string, minLength: 1, writeOnly: true }
+      responses:
+        '200': { description: Individual session and refresh token issued }
+        '401': { $ref: '#/components/responses/Problem' }
+  /v1/auth/refresh:
+    post:
+      operationId: refreshSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string, writeOnly: true }
+      responses:
+        '200': { description: Rotated individual session tokens }
+        '401': { $ref: '#/components/responses/Problem' }
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Current session revoked }
+        '401': { $ref: '#/components/responses/Problem' }
+  /v1/users/{id}/password:
+    post:
+      operationId: provisionUserPassword
+      description: ADMIN only. Revokes the target user's active sessions and writes a redacted audit event atomically.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, minLength: 12, writeOnly: true }
+      responses:
+        '204': { description: Password provisioned; existing user sessions revoked }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
   /v1/meta/capabilities:
     get:
       operationId: capabilities
@@ -155,6 +217,18 @@ paths:
       parameters: [{ $ref: '#/components/parameters/UuidPath' }]
       responses:
         '200': { description: Client rendering data only, content: { application/json: { schema: { $ref: '#/components/schemas/DocumentData' } } } }
+  /v1/invoices/{id}/void:
+    post:
+      operationId: voidInvoice
+      description: ADMIN or SUPERVISOR only. Financial correction is append-only and audited.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: Invoice void recorded }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
   /v1/payments:
     post:
       operationId: recordPayment
@@ -186,6 +260,28 @@ paths:
       responses:
         '201': { description: Payment allocations recorded }
         '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/payments/{id}/reverse:
+    post:
+      operationId: reversePayment
+      description: ADMIN, CASHIER, or SUPERVISOR only. Reversal is append-only and audited.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, reason]
+              properties:
+                amount: { type: string, description: Positive decimal in payment currency }
+                reason: { type: string, minLength: 1 }
+      responses:
+        '201': { description: Payment reversal recorded }
+        '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
   /v1/receivables/{id}:
     get:

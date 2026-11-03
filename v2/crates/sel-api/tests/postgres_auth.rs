@@ -4,6 +4,7 @@ use http_body_util::BodyExt;
 use sel_api::{router, AppState};
 use sel_storage::{migrate_postgres, CentralStore};
 use serde_json::json;
+use sqlx::Row;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -50,6 +51,7 @@ async fn individual_session_login_rotation_and_revocation_are_enforced() {
     .await
     .expect("insert target user");
 
+    let audit_pool = store.pool.clone();
     let app = router(AppState::with_production_central_store(store));
     let login = app
         .clone()
@@ -126,6 +128,74 @@ async fn individual_session_login_rotation_and_revocation_are_enforced() {
         .await
         .unwrap();
     assert_eq!(target_login.status(), StatusCode::OK);
+    let target_login = json_body(target_login).await;
+    let target_access = target_login["access_token"].as_str().unwrap();
+
+    let rotated_password = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/users/{target_user_id}/password"))
+                .header("authorization", format!("Bearer {first_access}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "password": "new cashier fixture password"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotated_password.status(), StatusCode::NO_CONTENT);
+
+    let revoked_target_session = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/customers")
+                .header("authorization", format!("Bearer {target_access}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoked_target_session.status(), StatusCode::UNAUTHORIZED);
+    let new_password_login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "identity_ref": "cashier-fixture",
+                        "password": "new cashier fixture password"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(new_password_login.status(), StatusCode::OK);
+    let audit = sqlx::query(
+        "SELECT count(*) AS count, bool_and(actor = $1) AS actor_matches,
+                bool_and(NOT (redacted_metadata ? 'password')) AS no_password
+         FROM audit_events
+         WHERE event_type = 'USER_PASSWORD_PROVISIONED' AND subject_id = $2",
+    )
+    .bind(user_id)
+    .bind(target_user_id)
+    .fetch_one(&audit_pool)
+    .await
+    .expect("read password provision audit");
+    assert_eq!(audit.try_get::<i64, _>("count").unwrap(), 2);
+    assert!(audit.try_get::<bool, _>("actor_matches").unwrap());
+    assert!(audit.try_get::<bool, _>("no_password").unwrap());
 
     let rotated = app
         .clone()
