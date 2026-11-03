@@ -130,7 +130,7 @@ fn canonical_decimal(value: Decimal) -> String {
 pub fn utility_snapshot_sha256(
     response: &UtilityBillingResponse,
 ) -> Result<String, serde_json::Error> {
-    let lines = response
+    let mut lines: Vec<_> = response
         .lines
         .iter()
         .map(|line| CanonicalInvoiceLine {
@@ -143,6 +143,15 @@ pub fn utility_snapshot_sha256(
             total: canonical_decimal(line.total),
         })
         .collect();
+    // The line sequence is presentation-level data. Sort it in the canonical
+    // representation so local and central stores hash the same invoice even
+    // if a serializer or projection returns the two service lines in a
+    // different order.
+    lines.sort_by(|left, right| {
+        left.service_code
+            .cmp(&right.service_code)
+            .then_with(|| left.unit.cmp(&right.unit))
+    });
     let canonical = CanonicalUtilitySnapshot {
         schema_version: DOCUMENT_SCHEMA_VERSION,
         invoice_id: response.invoice_id,
@@ -239,6 +248,49 @@ mod tests {
         assert_eq!(
             utility_snapshot_sha256(&base).unwrap(),
             utility_snapshot_sha256(&scaled).unwrap()
+        );
+    }
+
+    #[test]
+    fn utility_snapshot_hash_ignores_service_line_order() {
+        let electricity = InvoiceLineResponse {
+            service_code: "ELECTRICITY".into(),
+            quantity: Decimal::new(100, 0),
+            unit: "KWH".into(),
+            unit_price: Some(Decimal::new(10, 2)),
+            subtotal: Decimal::new(10, 0),
+            tax: Decimal::ZERO,
+            total: Decimal::new(10, 0),
+        };
+        let water = InvoiceLineResponse {
+            service_code: "WATER".into(),
+            quantity: Decimal::ZERO,
+            unit: "M3".into(),
+            unit_price: None,
+            subtotal: Decimal::ZERO,
+            tax: Decimal::ZERO,
+            total: Decimal::ZERO,
+        };
+        let ordered = UtilityBillingResponse {
+            invoice_id: Uuid::new_v4(),
+            receivable_id: None,
+            invoice_number: None,
+            status: "LOCAL_PENDING".into(),
+            currency: "USD".into(),
+            lines: vec![electricity.clone(), water.clone()],
+            subtotal: Decimal::new(10, 0),
+            tax: Decimal::ZERO,
+            total: Decimal::new(10, 0),
+            snapshot_sha256: String::new(),
+        };
+        let reversed = UtilityBillingResponse {
+            lines: vec![water, electricity],
+            ..ordered.clone()
+        };
+
+        assert_eq!(
+            utility_snapshot_sha256(&ordered).unwrap(),
+            utility_snapshot_sha256(&reversed).unwrap()
         );
     }
 }
