@@ -847,6 +847,53 @@ impl LocalStore {
         .transpose()
     }
 
+    pub async fn list_invoice_responses(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT i.id, i.invoice_number, i.period, i.issued_at
+             FROM invoices i
+             JOIN customers c ON c.id = i.customer_id
+             WHERE c.organization_id = $1
+             ORDER BY i.issued_at DESC, i.id DESC
+             LIMIT $2",
+        )
+        .bind(self.organization_id.to_string())
+        .bind(i64::from(limit.clamp(1, 100)))
+        .fetch_all(&self.pool)
+        .await?;
+        let mut invoices = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id = parse_uuid_column(&row, "id", "invoice")?;
+            let Some(response) = self.get_invoice_response(id).await? else {
+                continue;
+            };
+            let mut value = serde_json::to_value(response).map_err(|error| {
+                sqlx::Error::Protocol(format!("invalid invoice response JSON: {error}"))
+            })?;
+            let object = value.as_object_mut().ok_or_else(|| {
+                sqlx::Error::Protocol("invoice response is not a JSON object".into())
+            })?;
+            object.insert(
+                "invoice_number".into(),
+                row.try_get::<Option<String>, _>("invoice_number")
+                    .map(serde_json::Value::from)?,
+            );
+            object.insert(
+                "period".into(),
+                row.try_get::<Option<String>, _>("period")
+                    .map(serde_json::Value::from)?,
+            );
+            object.insert(
+                "issued_at".into(),
+                serde_json::Value::String(row.try_get("issued_at")?),
+            );
+            invoices.push(value);
+        }
+        Ok(invoices)
+    }
+
     pub async fn get_receivable_summary(
         &self,
         id: Uuid,
@@ -1274,6 +1321,73 @@ impl LocalStore {
             event,
         ))
     }
+
+    pub async fn list_payments(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT p.id, p.customer_id, p.amount_received, p.currency,
+                    p.method, p.paid_at, p.status
+             FROM payments p
+             JOIN customers c ON c.id = p.customer_id
+             WHERE c.organization_id = $1
+             ORDER BY p.paid_at DESC, p.id DESC
+             LIMIT $2",
+        )
+        .bind(self.organization_id.to_string())
+        .bind(i64::from(limit.clamp(1, 100)))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(json!({
+                    "payment_id": parse_uuid_column(&row, "id", "payment")?,
+                    "customer_id": parse_uuid_column(&row, "customer_id", "payment customer")?,
+                    "amount_received": format!("{:.2}", decimal_text(&row, "amount_received")?.round_dp(2)),
+                    "currency": row.try_get::<String, _>("currency")?,
+                    "method": row.try_get::<String, _>("method")?,
+                    "paid_at": row.try_get::<String, _>("paid_at")?,
+                    "status": row.try_get::<String, _>("status")?
+                }))
+            })
+            .collect()
+    }
+
+    pub async fn list_solar_sales(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT s.id, s.customer_id, s.contract_id, s.currency,
+                    s.sold_at, s.sale_type, s.status, r.id AS receivable_id,
+                    r.principal_total
+             FROM sales s
+             JOIN customers c ON c.id = s.customer_id
+             LEFT JOIN receivables r ON r.source_type = 'SALE' AND r.source_id = s.id
+             WHERE c.organization_id = $1
+             ORDER BY s.sold_at DESC, s.id DESC
+             LIMIT $2",
+        )
+        .bind(self.organization_id.to_string())
+        .bind(i64::from(limit.clamp(1, 100)))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(json!({
+                    "sale_id": parse_uuid_column(&row, "id", "solar sale")?,
+                    "customer_id": parse_uuid_column(&row, "customer_id", "solar customer")?,
+                    "contract_id": row.try_get::<Option<String>, _>("contract_id")?.and_then(|value| value.parse::<Uuid>().ok()),
+                    "receivable_id": row.try_get::<Option<String>, _>("receivable_id")?.and_then(|value| value.parse::<Uuid>().ok()),
+                    "principal": format!("{:.2}", decimal_text(&row, "principal_total")?.round_dp(2)),
+                    "currency": row.try_get::<String, _>("currency")?,
+                    "sold_at": row.try_get::<String, _>("sold_at")?,
+                    "sale_type": row.try_get::<String, _>("sale_type")?,
+                    "status": row.try_get::<String, _>("status")?
+                }))
+            })
+            .collect()
 
     pub async fn allocate_payment(
         &self,
@@ -3285,6 +3399,17 @@ fn decimal_text(row: &SqliteRow, column: &str) -> Result<Decimal, sqlx::Error> {
     let value: String = row.try_get(column)?;
     Decimal::from_str(&value)
         .map_err(|error| sqlx::Error::Protocol(format!("invalid decimal in {column}: {error}")))
+}
+
+fn parse_uuid_column(
+    row: &SqliteRow,
+    column: &str,
+    label: &str,
+) -> Result<Uuid, sqlx::Error> {
+    let value: String = row.try_get(column)?;
+    value
+        .parse::<Uuid>()
+        .map_err(|error| sqlx::Error::Protocol(format!("invalid {label} id: {error}")))
 }
 
 fn sqlite_decimal_column(

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -45,6 +45,17 @@ pub struct SyncRunSummary {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct AllocatePaymentRequest {
     pub allocations: Vec<PaymentAllocationRequest>,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct ListQuery {
+    limit: Option<u32>,
+}
+
+impl ListQuery {
+    fn bounded_limit(&self) -> u32 {
+        self.limit.unwrap_or(50).clamp(1, 100)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -211,16 +222,23 @@ fn router_with_store_base(store: LocalStore) -> Router {
             "/local/v1/billing/utility/issue",
             post(issue_utility_invoice),
         )
+        .route("/local/v1/invoices", get(list_invoices))
         .route("/local/v1/invoices/:id", get(get_invoice))
         .route("/local/v1/invoices/:id/void", post(void_invoice))
         .route("/local/v1/receivables/:id", get(get_receivable))
         .route("/local/v1/customers/:id/statement", get(get_statement))
         .route("/local/v1/installment-plans/:id", get(get_installment_plan))
         .route("/local/v1/receivables/:id/credit", post(create_credit_note))
-        .route("/local/v1/payments", post(record_payment))
+        .route(
+            "/local/v1/payments",
+            get(list_payments).post(record_payment),
+        )
         .route("/local/v1/payments/:id/allocate", post(allocate_payment))
         .route("/local/v1/payments/:id/reverse", post(reverse_payment))
-        .route("/local/v1/solar/sales", post(create_solar_sale))
+        .route(
+            "/local/v1/solar/sales",
+            get(list_solar_sales).post(create_solar_sale),
+        )
         .route("/local/v1/solar/quotes", post(create_solar_quote))
         .route("/local/v1/solar/contracts", post(create_solar_contract))
         .route(
@@ -460,6 +478,19 @@ async fn get_invoice(
         .ok_or_else(|| (StatusCode::NOT_FOUND, "invoice not found".into()))
 }
 
+async fn list_invoices(
+    State(state): State<LocalAppState>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    Ok(Json(
+        state
+            .store
+            .list_invoice_responses(query.bounded_limit())
+            .await
+            .map_err(internal_error)?,
+    ))
+}
+
 async fn void_invoice(
     State(state): State<LocalAppState>,
     Path(invoice_id): Path<Uuid>,
@@ -532,6 +563,19 @@ async fn record_payment(
     Ok((StatusCode::CREATED, Json(body)))
 }
 
+async fn list_payments(
+    State(state): State<LocalAppState>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    Ok(Json(
+        state
+            .store
+            .list_payments(query.bounded_limit())
+            .await
+            .map_err(internal_error)?,
+    ))
+}
+
 async fn allocate_payment(
     State(state): State<LocalAppState>,
     Path(payment_id): Path<Uuid>,
@@ -596,6 +640,19 @@ async fn create_solar_sale(
         .await
         .map_err(local_solar_sale_error)?;
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn list_solar_sales(
+    State(state): State<LocalAppState>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    Ok(Json(
+        state
+            .store
+            .list_solar_sales(query.bounded_limit())
+            .await
+            .map_err(internal_error)?,
+    ))
 }
 
 async fn create_solar_quote(
