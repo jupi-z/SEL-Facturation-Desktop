@@ -662,6 +662,7 @@ impl CentralStore {
         Ok(DeviceWriteOutcome::Created(response))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_offline_grant(
         &self,
         grant_id: Uuid,
