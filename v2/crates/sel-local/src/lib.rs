@@ -270,13 +270,12 @@ async fn status_with_store(
     State(state): State<LocalAppState>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
     let pending = state.store.pending_count().await.map_err(internal_error)?;
-    let offline_grant = if state.store.actor_id != Uuid::nil()
-        && state.store.offline_grant_id != Uuid::nil()
-    {
-        "CONFIGURED"
-    } else {
-        "NOT_CONFIGURED"
-    };
+    let offline_grant =
+        if state.store.actor_id != Uuid::nil() && state.store.offline_grant_id != Uuid::nil() {
+            "CONFIGURED"
+        } else {
+            "NOT_CONFIGURED"
+        };
     Ok(Json(json!({
         "status": if pending == 0 { "LOCAL_READY" } else { "LOCAL_PENDING" },
         "pending": pending,
