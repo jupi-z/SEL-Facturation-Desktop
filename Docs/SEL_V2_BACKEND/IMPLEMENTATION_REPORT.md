@@ -6,8 +6,14 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `fc41cec` (`feat(v2): secure client rendering and invoice preview flow`)
-Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, LiveUpdate, shell Windows V2 et paquet serveur. Aucun merge dans `main`, aucune release et aucun déploiement réel.
+Commit de référence à la rédaction du plan : `b051eb0c48aa7c1b10d8874c3715770195145077`. Vérifier HEAD distant avant toute nouvelle décision.
+Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, LiveUpdate, client Windows V2 et exploitation. Aucune fusion ou aucun déploiement n’est effectué par cette mise à jour documentaire.
+
+## Plan de finalisation et règles de travail
+
+- [Plan complet backend + frontend](PLAN_FINALISATION_BACKEND_FRONTEND.md) : phases, critères de sortie, difficulté et conditions de fusion autorisée.
+- [Règles de travail V2](REGLES_DE_TRAVAIL_V2.md) : vérification d’état, protection métier, cycle des incréments, Git, validation et définition de terminé.
+- Le propriétaire a autorisé la fusion dans `main` lorsque le système sera jugé stable et suffisamment fonctionnel. Les conditions objectives de fusion sont décrites dans le plan ; cette autorisation ne vaut pas déploiement ni migration réelle.
 
 ## Incrément client V2 — aperçu contrôlé et rendu sûr
 
