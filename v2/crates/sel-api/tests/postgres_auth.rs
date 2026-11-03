@@ -14,6 +14,77 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
 
 #[tokio::test]
 #[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn initial_admin_bootstrap_is_atomic_one_time_and_authenticates() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    let organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .expect("connect central store");
+    migrate_postgres(&store.pool).await.expect("run migrations");
+    store
+        .ensure_organization("SEL bootstrap fixture")
+        .await
+        .expect("create fixture organization");
+
+    let concurrent_store = store.clone();
+    let (first, concurrent) = tokio::join!(
+        store.bootstrap_initial_admin("owner@bootstrap.test", "bootstrap fixture password 2026"),
+        concurrent_store
+            .bootstrap_initial_admin("attacker@example.test", "another fixture password 2026")
+    );
+    let (admin_id, winning_identity, winning_password) = match (first, concurrent) {
+        (Ok(id), Err(sel_storage::postgres::AuthError::InitialAdminAlreadyProvisioned)) => (
+            id,
+            "owner@bootstrap.test",
+            "bootstrap fixture password 2026",
+        ),
+        (Err(sel_storage::postgres::AuthError::InitialAdminAlreadyProvisioned), Ok(id)) => {
+            (id, "attacker@example.test", "another fixture password 2026")
+        }
+        result => panic!("expected one bootstrap winner and one rejection, got {result:?}"),
+    };
+    let login = store
+        .login_user(winning_identity, winning_password)
+        .await
+        .expect("initial administrator can authenticate");
+    assert_eq!(login["user_id"], admin_id.to_string());
+    assert_eq!(login["role"], "ADMIN");
+
+    let repeat = store
+        .bootstrap_initial_admin("third@example.test", "third fixture password 2026")
+        .await;
+    assert!(matches!(
+        repeat,
+        Err(sel_storage::postgres::AuthError::InitialAdminAlreadyProvisioned)
+    ));
+    let user_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE organization_id = $1")
+            .bind(organization_id)
+            .fetch_one(&store.pool)
+            .await
+            .expect("count provisioned users");
+    assert_eq!(user_count, 1);
+
+    let audit = sqlx::query(
+        "SELECT actor, subject_id, event_type, redacted_metadata
+         FROM audit_events WHERE subject_id = $1 AND event_type = 'INITIAL_ADMIN_BOOTSTRAPPED'",
+    )
+    .bind(admin_id)
+    .fetch_one(&store.pool)
+    .await
+    .expect("read initial bootstrap audit");
+    assert!(audit.try_get::<Option<Uuid>, _>("actor").unwrap().is_none());
+    assert_eq!(audit.try_get::<Uuid, _>("subject_id").unwrap(), admin_id);
+    assert!(!audit
+        .try_get::<serde_json::Value, _>("redacted_metadata")
+        .unwrap()
+        .to_string()
+        .contains("bootstrap fixture password"));
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
 async fn individual_session_login_rotation_and_revocation_are_enforced() {
     let database_url = std::env::var("TEST_DATABASE_URL")
         .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");

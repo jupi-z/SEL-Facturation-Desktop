@@ -27,6 +27,7 @@ http = "1.1"
 http-body-util = "0.1"
 jsonwebtoken = "9.3"
 rand = "0.8"
+rpassword = "7.5.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rust_decimal = { version = "1.36", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

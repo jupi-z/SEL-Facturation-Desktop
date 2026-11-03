@@ -17,6 +17,16 @@ async fn main() -> Result<()> {
     let command = args.next().unwrap_or_else(|| "help".into());
     match command.as_str() {
         "health" => println!("sel-cli v2 backend utilities ready"),
+        "bootstrap-admin" => {
+            let identity_ref = args.next().ok_or_else(|| {
+                anyhow::anyhow!("usage: sel-cli bootstrap-admin <identity-ref>")
+            })?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "usage: sel-cli bootstrap-admin <identity-ref>"
+            );
+            bootstrap_initial_admin(&identity_ref).await?;
+        }
         "migration-dry-run" => {
             let path = args.next().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -92,8 +102,42 @@ async fn main() -> Result<()> {
             let report = migration_reconcile(Path::new(&path)).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        _ => println!("usage: sel-cli <health|migrate-v1 --dry-run <portable-v1.json>|migrate-v1 --apply --approved-manifest <portable-v1.json>|backup-postgres <backup.dump>|restore-postgres <backup.dump>|reconcile <portable-v1.json>"),
+        _ => println!("usage: sel-cli <health|bootstrap-admin <identity-ref>|migrate-v1 --dry-run <portable-v1.json>|migrate-v1 --apply --approved-manifest <portable-v1.json>|backup-postgres <backup.dump>|restore-postgres <backup.dump>|reconcile <portable-v1.json>"),
     }
+    Ok(())
+}
+
+async fn bootstrap_initial_admin(identity_ref: &str) -> Result<()> {
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for bootstrap-admin"))?;
+    let organization_id = std::env::var("SEL_ORGANIZATION_ID")
+        .map_err(|_| anyhow::anyhow!("SEL_ORGANIZATION_ID is required for bootstrap-admin"))?
+        .parse::<Uuid>()?;
+    anyhow::ensure!(
+        !organization_id.is_nil(),
+        "SEL_ORGANIZATION_ID must not be nil"
+    );
+    let store = CentralStore::connect(&database_url, organization_id).await?;
+
+    let password = rpassword::prompt_password("Mot de passe administrateur (saisie masquée) : ")?;
+    let confirmation = rpassword::prompt_password("Confirmez le mot de passe (saisie masquée) : ")?;
+    anyhow::ensure!(
+        password == confirmation,
+        "password confirmation does not match"
+    );
+
+    let admin_id = store
+        .bootstrap_initial_admin(identity_ref, &password)
+        .await?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "status": "INITIAL_ADMIN_CREATED",
+            "user_id": admin_id,
+            "identity_ref": identity_ref.trim(),
+            "role": "ADMIN"
+        }))?
+    );
     Ok(())
 }
 

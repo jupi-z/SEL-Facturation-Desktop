@@ -1943,6 +1943,16 @@ fn auth_error(error: sel_storage::postgres::AuthError) -> ApiError {
         sel_storage::postgres::AuthError::UserNotFound => {
             ApiError::not_found("USER_NOT_FOUND", "active user not found")
         }
+        sel_storage::postgres::AuthError::IdentityRefRequired => {
+            ApiError::unprocessable("IDENTITY_REF_REQUIRED", "identity_ref must not be empty")
+        }
+        sel_storage::postgres::AuthError::InitialAdminAlreadyProvisioned => ApiError::conflict(
+            "INITIAL_ADMIN_ALREADY_PROVISIONED",
+            "the organization already has a user account",
+        ),
+        sel_storage::postgres::AuthError::OrganizationNotFound => {
+            ApiError::internal("organization must be initialized before administrator bootstrap")
+        }
         sel_storage::postgres::AuthError::ActorNotAuthorized => ApiError::forbidden(
             "PERMISSION_DENIED",
             "only an active administrator can provision user passwords",

@@ -52,6 +52,12 @@ pub enum AuthError {
     InvalidResponse(#[from] serde_json::Error),
     #[error("user was not found or is not active")]
     UserNotFound,
+    #[error("identity reference is required")]
+    IdentityRefRequired,
+    #[error("an initial administrator or another user is already provisioned")]
+    InitialAdminAlreadyProvisioned,
+    #[error("organization must exist before provisioning its initial administrator")]
+    OrganizationNotFound,
     #[error("actor is not an active administrator in this organization")]
     ActorNotAuthorized,
 }
@@ -368,6 +374,63 @@ impl CentralStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Creates the first administrator only when the organization has no users.
+    /// Locking the organization row serializes concurrent bootstrap attempts.
+    /// The account and its redacted audit record are committed atomically.
+    pub async fn bootstrap_initial_admin(
+        &self,
+        identity_ref: &str,
+        password: &str,
+    ) -> Result<Uuid, AuthError> {
+        let identity_ref = identity_ref.trim();
+        if identity_ref.is_empty() {
+            return Err(AuthError::IdentityRefRequired);
+        }
+        let password_hash = Self::hash_user_password(password)?;
+        let mut tx = self.pool.begin().await?;
+        let organization =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM organizations WHERE id = $1 FOR UPDATE")
+                .bind(self.organization_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if organization.is_none() {
+            return Err(AuthError::OrganizationNotFound);
+        }
+        let any_user_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE organization_id = $1)",
+        )
+        .bind(self.organization_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if any_user_exists {
+            return Err(AuthError::InitialAdminAlreadyProvisioned);
+        }
+
+        let admin_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, organization_id, role, status, identity_ref, password_hash)
+             VALUES ($1, $2, 'ADMIN', 'ACTIVE', $3, $4)",
+        )
+        .bind(admin_id)
+        .bind(self.organization_id)
+        .bind(identity_ref)
+        .bind(password_hash)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1, NULL, $2, 'INITIAL_ADMIN_BOOTSTRAPPED', now(), $3)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(admin_id)
+        .bind(json!({"role": "ADMIN"}))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(admin_id)
     }
 
     /// Hash a password using Argon2id before it is provisioned into a user row.
