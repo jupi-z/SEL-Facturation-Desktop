@@ -10,10 +10,9 @@ use sel_contracts::{
     offline_grant_canonical_bytes, solar_schedule_id, utility_snapshot_sha256,
     ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
     InvoiceVoidSyncPayload, PaymentAllocationSyncPayload, PaymentReversalSyncPayload,
-    PaymentSyncPayload, RecordPaymentRequest,
-    ReversePaymentRequest, SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload,
-    SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
-    UtilityInvoiceSyncPayload,
+    PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload,
+    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer,
+    UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -2945,8 +2944,7 @@ impl CentralStore {
                         Err(_) => {
                             let result = SyncEventResult::Rejected {
                                 code: "PAYMENT_ALLOCATION_PAYLOAD_INVALID".into(),
-                                required_action:
-                                    "send_a_valid_payment_allocation_payload".into(),
+                                required_action: "send_a_valid_payment_allocation_payload".into(),
                             };
                             persist_sync_result(
                                 &mut tx,

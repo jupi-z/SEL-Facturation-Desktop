@@ -239,9 +239,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
                 ))
                 .header("content-type", "application/json")
                 .header("idempotency-key", "local-payment-allocation-1")
-                .body(Body::from(
-                    serde_json::to_vec(&allocation_request).unwrap(),
-                ))
+                .body(Body::from(serde_json::to_vec(&allocation_request).unwrap()))
                 .unwrap(),
         )
         .await
@@ -257,9 +255,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
                 ))
                 .header("content-type", "application/json")
                 .header("idempotency-key", "local-payment-allocation-1")
-                .body(Body::from(
-                    serde_json::to_vec(&allocation_request).unwrap(),
-                ))
+                .body(Body::from(serde_json::to_vec(&allocation_request).unwrap()))
                 .unwrap(),
         )
         .await

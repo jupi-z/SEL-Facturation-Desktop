@@ -4,10 +4,9 @@ use sel_contracts::{
     solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
     CreateSolarSaleRequest, Customer, InvoiceLineResponse, InvoiceVoidSyncPayload,
     PaymentAllocationRequest, PaymentAllocationSyncPayload, PaymentReversalSyncPayload,
-    PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest,
-    SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope,
-    SyncEventResult, SyncPullResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload,
+    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse,
+    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
