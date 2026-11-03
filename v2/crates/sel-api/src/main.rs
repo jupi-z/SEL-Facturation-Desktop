@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use ed25519_dalek::VerifyingKey;
 use sel_api::{run, AppState};
 use uuid::Uuid;
 
@@ -84,7 +85,9 @@ fn required_offline_grant_security() -> Result<(), std::io::Error> {
     let valid_key = std::env::var("SEL_OFFLINE_GRANT_PUBLIC_KEY")
         .ok()
         .and_then(|value| BASE64.decode(value.trim()).ok())
-        .is_some_and(|bytes| bytes.len() == 32);
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok())
+        .is_some();
     if std::env::var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS")
         .ok()
         .as_deref()
@@ -145,7 +148,11 @@ mod tests {
         std::env::set_var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS", "1");
         std::env::set_var("SEL_OFFLINE_GRANT_PUBLIC_KEY", "fixture-key");
         assert!(required_offline_grant_security().is_err());
-        std::env::set_var("SEL_OFFLINE_GRANT_PUBLIC_KEY", BASE64.encode([7u8; 32]));
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        std::env::set_var(
+            "SEL_OFFLINE_GRANT_PUBLIC_KEY",
+            BASE64.encode(signing_key.verifying_key().to_bytes()),
+        );
         assert!(required_offline_grant_security().is_ok());
         std::env::remove_var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS");
         std::env::remove_var("SEL_OFFLINE_GRANT_PUBLIC_KEY");
