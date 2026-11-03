@@ -29,7 +29,7 @@ Le jalon contrôlé sur `d40e2a8be3acd9cf970a2e795c5db3d8356aa85d` ferme plusieu
 - la liste des clients dispose maintenant d'une pagination par curseur bornée à 100 éléments et d'un filtre de statut, tout en conservant la réponse JSON historique ;
 - un test PostgreSQL de concurrence couvre deux activations simultanées d'un échéancier solaire : une seule création est acceptée et l'autre est rejetée explicitement comme contrat déjà existant.
 
-La CI précédente est verte : [run #77 — 41624094097](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41624094097), job `rust` `125876927876`, sur `d40e2a8`. La CI du commit courant `9b9e8bf` est en cours de validation ; aucune réussite ne sera déclarée avant son résultat distant.
+La CI du commit contrôlé est verte : [run — 41626304237](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41626304237), job `rust` `125884407252`, sur `69cb758`. Les deux annotations restantes sont des avertissements d'environnement GitHub Actions (Node.js et ubuntu-latest), sans échec de compilation ni de test.
 
 ## Résumé exécutif
 
@@ -37,7 +37,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La CI GitHub #77 est verte sur le commit `d40e2a8` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Une nouvelle exécution a été déclenchée sur `9b9e8bf` pour valider la couverture de pagination, RBAC/IDOR et concurrence solaire. L’environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La CI GitHub est verte sur le commit `69cb758` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cette exécution distante valide notamment la pagination/filtre clients, le test RBAC/IDOR et la concurrence solaire ajoutés sur ce jalon. L’environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -92,14 +92,13 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 ### Exécution locale
 
 - Suite Rust complète locale : **NOT_EXECUTED** ; la compilation MSVC locale est bloquée par l'absence de `link.exe`/Build Tools.
-- Tests du commit précédent : **PASS dans la CI GitHub #77**, avec PostgreSQL 16.4 de service.
-- Tests du commit courant `9b9e8bf` : **EN ATTENTE** du workflow GitHub déclenché sur la nouvelle couverture de concurrence solaire.
+- Tests du commit contrôlé `69cb758` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
 - Vérification locale de formatage : **PASS** ; tentative locale de compilation : **BLOCKED_EXTERNAL** par l'absence de `link.exe`.
 - Relecture statique du diff et vérification `git status` : **PASS** ; aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [#77 — 41624094097](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41624094097), job `rust` `125876927876` : **SUCCESS** sur `d40e2a8`. Le run courant est suivi depuis la PR #58 et reste **IN_PROGRESS** au moment de cette mise à jour.
+Run [41626304237](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41626304237), job `rust` `125884407252` : **SUCCESS** sur `69cb758`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -161,7 +160,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #77 sur `d40e2a8` ; la validation du commit `9b9e8bf` est en cours |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI `41626304237` sur `69cb758` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
