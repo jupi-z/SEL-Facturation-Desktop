@@ -24,13 +24,16 @@ Ces règles guident les incréments backend, client Windows, migration et exploi
 
 ## Frontend
 
-- Respecter les frames Figma, leurs composants, polices, tokens et assets.
-- Garder dans le client les données et interactions ; laisser les règles métier à Rust.
+- Le frontend historique est abandonné comme base de développement : ne pas porter ses écrans, templates, navigation ou logique UI. On peut le consulter temporairement pour comprendre une API locale, jamais comme référence visuelle ni comme source de calcul métier.
+- Reconstruire le nouveau client à partir de l’inventaire et des frames Figma réconciliés ; respecter les composants, polices, tokens, assets, parcours et états spécifiés.
+- Valider le shell Windows et son installateur par un spike avant d’investir dans les écrans ; l’interface et ses ressources doivent fonctionner localement sans connexion Internet.
+- Garder dans le client les données d’affichage et interactions ; laisser les règles métier, montants, permissions et transitions d’état à Rust.
+- Passer par un adaptateur de transport typé/versionné vers l’agent Rust local. Aucun accès direct à PostgreSQL depuis le client.
 - Construire les données dynamiques via DOM sûr, sans concaténation HTML non échappée.
 - Prévoir chargement, vide, erreur, hors connexion, attente, confirmation, conflit et refus d’accès.
 - Embarquer les ressources nécessaires localement.
-- Comparer les écrans desktop aux références Figma dans WebView2.
-- Retirer le frontend V1 seulement lorsque les parcours V2 et les outils de migration/export sont couverts.
+- Comparer chaque écran desktop aux références Figma, vérifier clavier, focus, contraste et mise à l’échelle Windows.
+- Retirer les composants de l’ancien frontend sans retirer par inadvertance les utilitaires V1 de migration/export avant validation de leur remplacement.
 
 ## Cycle de livraison d’un incrément
 

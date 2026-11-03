@@ -15,6 +15,18 @@ Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, Live
 - [Règles de travail V2](REGLES_DE_TRAVAIL_V2.md) : vérification d’état, protection métier, cycle des incréments, Git, validation et définition de terminé.
 - Le propriétaire a autorisé la fusion dans `main` lorsque le système sera jugé stable et suffisamment fonctionnel. Les conditions objectives de fusion sont décrites dans le plan ; cette autorisation ne vaut pas déploiement ni migration réelle.
 
+## Revue initiale du nouveau frontend Figma — 3 novembre 2026
+
+État de cette revue : **inventaire Figma et vérification visuelle d’écrans représentatifs effectués pour préparer le plan ; aucun écran n’a été implémenté ou validé sur Windows dans cet incrément documentaire.**
+
+- Fichier examiné : « SEL V2 — Product Design · Windows - Facturation » (`EuIpbci6IR7m6ggApo5WWm`). Pages repérées : Vision, Fondations, Composants, Parcours, Opérations Windows, Solaire/finance, Administration/système, Documents A4, Livraison et États/accessibilité.
+- Captures examinées : tableau de bord, prévisualisation de facture et spécimen A4. Les maquettes sont desktop 1440×900 et les documents A4 portrait ; identité bleu nuit/bleu d’action avec accent jaune, typographie Geist, états textuels, navigation latérale et données de prototype clairement fictives.
+- La page de livraison annonce 30 écrans métier + 4 documents A4 ; l’addendum du 3 novembre annonce 10 écrans additionnels et un cinquième modèle A4. L’inventaire des frames contient aussi des variantes et écrans additionnels : la liste de livraison devra être rapprochée de tous les frames avant d’affirmer une couverture exhaustive.
+- Décision de cadrage documentée : construire un frontend neuf, sans porter l’ancienne interface. Tauri 2 + React/TypeScript est une architecture candidate, conditionnée à un spike de démarrage de l’agent local, transport UI↔Rust, dépendances WebView2 et installateur Windows. Aucun choix n’est présenté comme testé.
+- Les dépendances d’API inscrites dans Figma (dont relevés, journal de caisse, reporting, conflits, administration et sauvegardes) sont des pistes de mapping ; elles doivent être confrontées aux routes et permissions réelles du backend.
+
+Voir les sections « Relevé Figma » et « Décision de cadrage du nouveau frontend » du [plan](PLAN_FINALISATION_BACKEND_FRONTEND.md), ainsi que les règles de travail révisées. Le frontend historique n’est plus considéré comme base de réutilisation.
+
 ## Incrément client V2 — aperçu contrôlé et rendu sûr
 
 Commit : fc41cec (feat(v2): secure client rendering and invoice preview flow)
