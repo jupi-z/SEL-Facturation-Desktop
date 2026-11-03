@@ -1024,6 +1024,21 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<UtilityIssueOutcome, UtilityIssueError> {
         let mut tx = self.pool.begin().await?;
+        let outcome = self
+            .issue_utility_invoice_in_tx(&mut *tx, input, response, idempotency_key, request_digest)
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn issue_utility_invoice_in_tx(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        input: &UtilityBillingRequest,
+        response: &UtilityBillingResponse,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<UtilityIssueOutcome, UtilityIssueError> {
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
              WHERE organization_id = $1 AND principal_id = $2 AND operation = $3 AND idempotency_key = $4",
@@ -1133,7 +1148,6 @@ impl CentralStore {
         .bind(snapshot)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
         Ok(UtilityIssueOutcome::Created(response.clone()))
     }
 
@@ -2868,7 +2882,13 @@ impl CentralStore {
                 };
                 let operation_key = format!("sync-utility-{}", event.event_id);
                 let outcome = self
-                    .issue_utility_invoice(&input, &response, &operation_key, &event.payload_sha256)
+                    .issue_utility_invoice_in_tx(
+                        &mut *tx,
+                        &input,
+                        &response,
+                        &operation_key,
+                        &event.payload_sha256,
+                    )
                     .await;
                 let accepted_response = match outcome {
                     Ok(UtilityIssueOutcome::Created(response)) => response,
@@ -2883,9 +2903,8 @@ impl CentralStore {
                             .await;
                     }
                 };
-                let mut ack_tx = self.pool.begin().await?;
                 let result = persist_sync_result(
-                    &mut ack_tx,
+                    &mut tx,
                     self.organization_id,
                     event,
                     &SyncEventResult::Accepted {
@@ -2903,7 +2922,7 @@ impl CentralStore {
                     )),
                 )
                 .await?;
-                ack_tx.commit().await?;
+                tx.commit().await?;
                 Ok(result)
             }
             "SOLAR_SALE_CREATED" => {
