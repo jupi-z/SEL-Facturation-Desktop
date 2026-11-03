@@ -1006,7 +1006,7 @@ impl CentralStore {
             .receivable_id
             .expect("issued utility response must contain a receivable id");
         let snapshot = serde_json::to_value(response)?;
-        sqlx::query(
+        let invoice_insert = sqlx::query(
             "INSERT INTO invoices
              (id, customer_id, period, issued_at, currency, total, template_version, immutable_snapshot, status, version)
              VALUES ($1, $2, $3, now(), $4, $5, $6, $7, 'CENTRAL_ACCEPTED', 1)",
@@ -1019,7 +1019,16 @@ impl CentralStore {
         .bind("v2-a4-1")
         .bind(snapshot.clone())
         .execute(&mut *tx)
-        .await?;
+        .await;
+        match invoice_insert {
+            Ok(_) => {}
+            Err(sqlx::Error::Database(database))
+                if database.constraint() == Some("one_utility_invoice_period") =>
+            {
+                return Err(UtilityIssueError::InvoicePeriodExists);
+            }
+            Err(error) => return Err(error.into()),
+        }
         for line in &response.lines {
             sqlx::query(
                 "INSERT INTO invoice_lines
