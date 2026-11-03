@@ -269,6 +269,18 @@ paths:
       responses:
         '200': { description: Exact installment schedule accepted }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/installment-plans/{id}:
+    get:
+      operationId: getInstallmentPlan
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200':
+          description: Persisted installment plan with payment state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstallmentPlan' }
+        '404': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer }
@@ -462,6 +474,37 @@ components:
               sequence: { type: integer, minimum: 1 }
               due_date: { type: string, format: date }
               amount: { type: string }
+    InstallmentPlan:
+      type: object
+      required: [id, receivable_id, contract_id, customer_id, principal, paid, remaining, overdue_amount, currency, start_date, stored_status, terms_snapshot, schedule]
+      properties:
+        id: { type: string, format: uuid }
+        receivable_id: { type: string, format: uuid }
+        contract_id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        principal: { type: string }
+        paid: { type: string }
+        remaining: { type: string }
+        overdue_amount: { type: string }
+        currency: { type: string }
+        start_date: { type: string, format: date }
+        stored_status: { type: string }
+        terms_snapshot: { type: object }
+        schedule:
+          type: array
+          items:
+            type: object
+            required: [id, sequence, due_date, amount_due, paid, remaining, stored_status, status, overdue]
+            properties:
+              id: { type: string, format: uuid }
+              sequence: { type: integer }
+              due_date: { type: string, format: date }
+              amount_due: { type: string }
+              paid: { type: string }
+              remaining: { type: string }
+              stored_status: { type: string }
+              status: { type: string, enum: [OPEN, OVERDUE, PAID] }
+              overdue: { type: boolean }
     DocumentData:
       type: object
       required: [document_schema_version, template_version, document_reference, invoice, qr_internal_reference, origin]

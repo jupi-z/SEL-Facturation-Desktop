@@ -1371,6 +1371,112 @@ impl CentralStore {
         })))
     }
 
+    pub async fn get_installment_plan(
+        &self,
+        plan_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let plan = sqlx::query(
+            "SELECT ip.id, ip.receivable_id, ip.contract_id, ip.principal_amount,
+                    ip.currency, ip.start_date, ip.status, ip.terms_snapshot,
+                    r.customer_id
+             FROM installment_plans ip
+             JOIN receivables r ON r.id = ip.receivable_id
+             JOIN customers c ON c.id = r.customer_id
+             WHERE ip.id = $1 AND c.organization_id = $2",
+        )
+        .bind(plan_id)
+        .bind(self.organization_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(plan) = plan else {
+            return Ok(None);
+        };
+
+        let receivable_id: Uuid = plan.try_get("receivable_id")?;
+        let rows = sqlx::query(
+            "SELECT s.id, s.sequence, s.due_date, s.amount_due, s.schedule_status,
+                    COALESCE((
+                        SELECT SUM(
+                            pa.allocated_amount * GREATEST(
+                                p.amount_received - COALESCE((
+                                    SELECT SUM(pr.amount)
+                                    FROM payment_reversals pr
+                                    WHERE pr.payment_id = p.id
+                                ), 0),
+                                0
+                            ) / NULLIF(p.amount_received, 0)
+                        )
+                        FROM payment_allocations pa
+                        JOIN payments p ON p.id = pa.payment_id
+                        WHERE pa.schedule_id = s.id
+                          AND pa.receivable_id = $2
+                          AND p.status = 'CENTRAL_ACCEPTED'
+                    ), 0) AS paid
+             FROM installment_schedule s
+             WHERE s.plan_id = $1
+             ORDER BY s.sequence",
+        )
+        .bind(plan_id)
+        .bind(receivable_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let today = Utc::now().date_naive();
+        let mut total_paid = Decimal::ZERO;
+        let mut total_overdue = Decimal::ZERO;
+        let schedule = rows
+            .into_iter()
+            .map(|row| {
+                let due_date: NaiveDate = row.try_get("due_date")?;
+                let amount_due: Decimal = row.try_get("amount_due")?;
+                let paid: Decimal = row.try_get("paid")?;
+                let amount_due = amount_due.round_dp(2);
+                let paid = paid.round_dp(2).min(amount_due);
+                let remaining = (amount_due - paid).round_dp(2);
+                let status = if remaining <= Decimal::ZERO {
+                    "PAID"
+                } else if due_date < today {
+                    total_overdue += remaining;
+                    "OVERDUE"
+                } else {
+                    "OPEN"
+                };
+                total_paid += paid;
+                Ok::<_, sqlx::Error>(json!({
+                    "id": row.try_get::<Uuid, _>("id")?,
+                    "sequence": row.try_get::<i32, _>("sequence")?,
+                    "due_date": due_date.to_string(),
+                    "amount_due": format!("{amount_due:.2}"),
+                    "paid": format!("{paid:.2}"),
+                    "remaining": format!("{remaining:.2}"),
+                    "stored_status": row.try_get::<String, _>("schedule_status")?,
+                    "status": status,
+                    "overdue": status == "OVERDUE"
+                }))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let principal: Decimal = plan.try_get("principal_amount")?;
+        let total_paid = total_paid.round_dp(2);
+        let remaining = (principal - total_paid).round_dp(2).max(Decimal::ZERO);
+        let plan_status: String = plan.try_get("status")?;
+
+        Ok(Some(json!({
+            "id": plan.try_get::<Uuid, _>("id")?,
+            "receivable_id": receivable_id,
+            "contract_id": plan.try_get::<Uuid, _>("contract_id")?,
+            "customer_id": plan.try_get::<Uuid, _>("customer_id")?,
+            "principal": format!("{:.2}", principal.round_dp(2)),
+            "paid": format!("{total_paid:.2}"),
+            "remaining": format!("{remaining:.2}"),
+            "overdue_amount": format!("{:.2}", total_overdue.round_dp(2)),
+            "currency": plan.try_get::<String, _>("currency")?,
+            "start_date": plan.try_get::<NaiveDate, _>("start_date")?.to_string(),
+            "stored_status": plan_status,
+            "terms_snapshot": plan.try_get::<serde_json::Value, _>("terms_snapshot")?,
+            "schedule": schedule
+        })))
+    }
+
     pub async fn void_invoice(
         &self,
         invoice_id: Uuid,

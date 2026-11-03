@@ -185,6 +185,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/payments/:id/allocate", post(allocate_payment))
         .route("/v1/payments/:id/reverse", post(reverse_payment))
         .route("/v1/receivables/:id", get(get_receivable))
+        .route("/v1/installment-plans/:id", get(get_installment_plan))
         .route("/v1/receivables/:id/credit", post(create_credit_note))
         .route("/v1/customers/:id/statement", get(get_statement))
         .route("/v1/sync/push", post(sync_push))
@@ -1016,6 +1017,28 @@ async fn get_invoice(
         .get(&id)
         .map(|item| Json(item.response.clone()))
         .ok_or_else(|| ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found"))
+}
+
+async fn get_installment_plan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::not_found(
+            "INSTALLMENT_PLAN_NOT_FOUND",
+            "installment plan not found",
+        ));
+    };
+    store
+        .get_installment_plan(id)
+        .await
+        .map_err(storage_error)?
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::not_found("INSTALLMENT_PLAN_NOT_FOUND", "installment plan not found")
+        })
 }
 
 async fn get_document_data(

@@ -149,6 +149,30 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     assert_eq!(contract_retry.status(), StatusCode::OK);
     assert_eq!(json_body(contract_retry).await, contract_body);
 
+    let plan = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/installment-plans/{}",
+                    contract_body["installment_plan_id"]
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan.status(), StatusCode::OK);
+    let plan_body = json_body(plan).await;
+    assert_eq!(plan_body["id"], contract_body["installment_plan_id"]);
+    assert_eq!(plan_body["principal"], "1000.00");
+    assert_eq!(plan_body["paid"], "0.00");
+    assert_eq!(plan_body["remaining"], "1000.00");
+    assert_eq!(plan_body["schedule"].as_array().unwrap().len(), 2);
+    assert_eq!(plan_body["schedule"][0]["status"], "OPEN");
+
     let counts = sqlx::query(
         "SELECT
            (SELECT count(*) FROM sales WHERE id = $1) AS sales,
