@@ -2277,6 +2277,29 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<SolarSaleWriteOutcome, SolarSaleWriteError> {
         let mut tx = self.pool.begin().await?;
+        let outcome = self
+            .create_solar_sale_with_ids_in_tx(
+                &mut *tx,
+                input,
+                sale_id,
+                receivable_id,
+                idempotency_key,
+                request_digest,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn create_solar_sale_with_ids_in_tx(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        input: &CreateSolarSaleRequest,
+        sale_id: Uuid,
+        receivable_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<SolarSaleWriteOutcome, SolarSaleWriteError> {
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
              WHERE organization_id = $1 AND principal_id = $2 AND operation = $3 AND idempotency_key = $4",
@@ -2383,7 +2406,6 @@ impl CentralStore {
         .bind(snapshot)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
         Ok(SolarSaleWriteOutcome::Created(response))
     }
 
@@ -2413,6 +2435,29 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<SolarContractWriteOutcome, SolarContractWriteError> {
         let mut tx = self.pool.begin().await?;
+        let outcome = self
+            .activate_solar_contract_with_plan_id_in_tx(
+                &mut *tx,
+                contract_id,
+                plan_id,
+                input,
+                idempotency_key,
+                request_digest,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn activate_solar_contract_with_plan_id_in_tx(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        contract_id: Uuid,
+        plan_id: Uuid,
+        input: &ActivateSolarContractRequest,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<SolarContractWriteOutcome, SolarContractWriteError> {
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
              WHERE organization_id = $1 AND principal_id = $2 AND operation = $3 AND idempotency_key = $4",
@@ -2548,7 +2593,6 @@ impl CentralStore {
         .bind(&response)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
         Ok(SolarContractWriteOutcome::Created(response))
     }
 
@@ -2973,7 +3017,8 @@ impl CentralStore {
                 } = payload;
                 let operation_key = format!("sync-solar-sale-{}", event.event_id);
                 let outcome = self
-                    .create_solar_sale_with_ids(
+                    .create_solar_sale_with_ids_in_tx(
+                        &mut *tx,
                         &input,
                         sale_id,
                         receivable_id,
@@ -2995,9 +3040,8 @@ impl CentralStore {
                     }
                 };
                 let sale_id = response.sale_id;
-                let mut ack_tx = self.pool.begin().await?;
                 let result = persist_sync_result(
-                    &mut ack_tx,
+                    &mut tx,
                     self.organization_id,
                     event,
                     &SyncEventResult::Accepted {
@@ -3014,7 +3058,7 @@ impl CentralStore {
                     )),
                 )
                 .await?;
-                ack_tx.commit().await?;
+                tx.commit().await?;
                 Ok(result)
             }
             "SOLAR_CONTRACT_ACTIVATED" => {
@@ -3045,7 +3089,8 @@ impl CentralStore {
                 } = payload;
                 let operation_key = format!("sync-solar-contract-{}", event.event_id);
                 let outcome = self
-                    .activate_solar_contract_with_plan_id(
+                    .activate_solar_contract_with_plan_id_in_tx(
+                        &mut *tx,
                         contract_id,
                         installment_plan_id,
                         &input,
@@ -3071,9 +3116,8 @@ impl CentralStore {
                     .and_then(serde_json::Value::as_str)
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(event.aggregate_id);
-                let mut ack_tx = self.pool.begin().await?;
                 let result = persist_sync_result(
-                    &mut ack_tx,
+                    &mut tx,
                     self.organization_id,
                     event,
                     &SyncEventResult::Accepted {
@@ -3083,7 +3127,7 @@ impl CentralStore {
                     Some(("installment_plans", entity_id, 1, body)),
                 )
                 .await?;
-                ack_tx.commit().await?;
+                tx.commit().await?;
                 Ok(result)
             }
             "INVOICE_VOIDED" => {
