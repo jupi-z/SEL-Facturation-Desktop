@@ -86,8 +86,14 @@ async fn main() -> Result<()> {
                 }))?
             );
         }
-        "reconcile" => println!("{{\"status\":\"NO_SOURCE_SELECTED\",\"writes\":0}}"),
-        _ => println!("usage: sel-cli <health|migrate-v1 --dry-run <portable-v1.json>|migrate-v1 --apply --approved-manifest <portable-v1.json>|backup-postgres <backup.dump>|restore-postgres <backup.dump>|reconcile>"),
+        "reconcile" => {
+            let path = args.next().ok_or_else(|| {
+                anyhow::anyhow!("usage: sel-cli reconcile <portable-v1.json>")
+            })?;
+            let report = migration_reconcile(Path::new(&path)).await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        _ => println!("usage: sel-cli <health|migrate-v1 --dry-run <portable-v1.json>|migrate-v1 --apply --approved-manifest <portable-v1.json>|backup-postgres <backup.dump>|restore-postgres <backup.dump>|reconcile <portable-v1.json>"),
     }
     Ok(())
 }
@@ -380,6 +386,139 @@ async fn migration_apply(path: &Path) -> Result<serde_json::Value> {
         "source_file_sha256": source_file_sha256,
         "backup": backup_path.display().to_string(),
         "counts": {"clients": clients.len(), "invoices": invoices.len(), "payments": payments.len()}
+    }))
+}
+
+async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
+    let bytes = fs::read(path)?;
+    let mut digest = Sha256::new();
+    digest.update(&bytes);
+    let source_file_sha256 = hex::encode(digest.finalize());
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes)?;
+    anyhow::ensure!(
+        manifest.get("format").and_then(serde_json::Value::as_str)
+            == Some("sel-facturation-portable"),
+        "unsupported source format"
+    );
+    anyhow::ensure!(
+        manifest
+            .get("schema_version")
+            .and_then(serde_json::Value::as_i64)
+            == Some(1),
+        "unsupported portable schema version"
+    );
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for reconcile"))?;
+    let organization_id = std::env::var("SEL_ORGANIZATION_ID")
+        .map_err(|_| anyhow::anyhow!("SEL_ORGANIZATION_ID is required for reconcile"))?
+        .parse::<Uuid>()?;
+    let store = CentralStore::connect(&database_url, organization_id).await?;
+    let data = manifest
+        .get("data")
+        .ok_or_else(|| anyhow::anyhow!("portable manifest has no data object"))?;
+    let clients = array(data, "clients")?;
+    let invoices = array(data, "invoices")?;
+    let payments = array(data, "payments")?;
+
+    let mut missing_clients = 0usize;
+    for client in clients {
+        let code = required_string(client, "code")?;
+        let customer_id = stable_legacy_uuid("CLIENT", code);
+        let found: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM customers WHERE id = $1 AND organization_id = $2")
+                .bind(customer_id)
+                .bind(organization_id)
+                .fetch_optional(&store.pool)
+                .await?;
+        if found.is_none() {
+            missing_clients += 1;
+        }
+    }
+
+    let mut missing_invoices = 0usize;
+    let mut source_invoice_total = Decimal::ZERO;
+    let mut stored_invoice_total = Decimal::ZERO;
+    for invoice in invoices {
+        let number = required_string(invoice, "number")?;
+        let invoice_id = stable_legacy_uuid("INVOICE", number);
+        source_invoice_total += decimal_field(
+            invoice
+                .get("calc_snapshot")
+                .ok_or_else(|| anyhow::anyhow!("invoice {number} has no calc_snapshot"))?,
+            "total",
+        )?;
+        let found: Option<Decimal> = sqlx::query_scalar(
+            "SELECT total FROM invoices WHERE id = $1 AND customer_id IN
+             (SELECT id FROM customers WHERE organization_id = $2)",
+        )
+        .bind(invoice_id)
+        .bind(organization_id)
+        .fetch_optional(&store.pool)
+        .await?;
+        match found {
+            Some(total) => stored_invoice_total += total,
+            None => missing_invoices += 1,
+        }
+    }
+
+    let mut missing_payments = 0usize;
+    let mut source_payment_total = Decimal::ZERO;
+    let mut stored_payment_total = Decimal::ZERO;
+    for payment in payments {
+        let invoice_number = required_string(payment, "invoice_number")?;
+        let legacy_id = payment
+            .get("id")
+            .map(serde_json::Value::to_string)
+            .unwrap_or_else(|| invoice_number.to_owned());
+        let payment_id = stable_legacy_uuid("PAYMENT", &format!("{invoice_number}:{legacy_id}"));
+        let amount = payment
+            .get("amount")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("payment {legacy_id} has no amount"))?
+            .parse::<Decimal>()?;
+        source_payment_total += amount;
+        let found: Option<Decimal> = sqlx::query_scalar(
+            "SELECT amount_received FROM payments WHERE id = $1 AND customer_id IN
+             (SELECT id FROM customers WHERE organization_id = $2)",
+        )
+        .bind(payment_id)
+        .bind(organization_id)
+        .fetch_optional(&store.pool)
+        .await?;
+        match found {
+            Some(amount) => stored_payment_total += amount,
+            None => missing_payments += 1,
+        }
+    }
+
+    let invoices_match = missing_invoices == 0 && source_invoice_total == stored_invoice_total;
+    let payments_match = missing_payments == 0 && source_payment_total == stored_payment_total;
+    let status = if missing_clients == 0 && invoices_match && payments_match {
+        "MATCH"
+    } else {
+        "MISMATCH"
+    };
+    Ok(serde_json::json!({
+        "read_only": true,
+        "writes": 0,
+        "status": status,
+        "source_file": path.display().to_string(),
+        "source_file_sha256": source_file_sha256,
+        "organization_id": organization_id,
+        "counts": {
+            "clients": clients.len(),
+            "invoices": invoices.len(),
+            "payments": payments.len(),
+            "missing_clients": missing_clients,
+            "missing_invoices": missing_invoices,
+            "missing_payments": missing_payments
+        },
+        "totals": {
+            "source_invoice_total": source_invoice_total.normalize().to_string(),
+            "stored_invoice_total": stored_invoice_total.normalize().to_string(),
+            "source_payment_total": source_payment_total.normalize().to_string(),
+            "stored_payment_total": stored_payment_total.normalize().to_string()
+        }
     }))
 }
 
