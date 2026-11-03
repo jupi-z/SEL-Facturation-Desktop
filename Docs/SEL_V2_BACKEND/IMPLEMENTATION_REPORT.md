@@ -6,7 +6,7 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `1702213` (`feat(v2): add guarded V1 PostgreSQL import`)
+Commit contrôlé : `a7ccbfb` (`docs(v2): record guarded import and CI proof`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
@@ -15,7 +15,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La CI GitHub #27 est verte sur le commit `1702213` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cela valide le périmètre technique couvert par la CI ; les nouveaux tests ciblés sont également exécutés localement. Le backend reste **NO-GO pour une exploitation commerciale** : l’authentification complète/RBAC, les autorisations offline signées, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La CI GitHub #28 est verte sur le commit `a7ccbfb` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cela valide le périmètre technique couvert par la CI ; les nouveaux tests ciblés sont également exécutés localement. Le backend reste **NO-GO pour une exploitation commerciale** : l’authentification complète/RBAC, les autorisations offline signées, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -76,7 +76,7 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 
 ### CI GitHub
 
-Run [#27 — 41596680267](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41596680267), job `rust` `125785582050` : **SUCCESS** sur `1702213`.
+Run [#28 — 41597019599](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41597019599), job `rust` `125786650555` : **SUCCESS** sur `a7ccbfb`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -133,7 +133,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #27 sur `1702213` |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #28 sur `a7ccbfb` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
