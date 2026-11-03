@@ -295,6 +295,25 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert_eq!(receivable["paid"], "4.00");
     assert_eq!(receivable["balance"], "7.02");
 
+    let statement = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/customers/{}/statement",
+                    customer["id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(statement.status(), StatusCode::OK);
+    let statement = json_body(statement).await;
+    assert_eq!(statement["customer_id"], customer["id"]);
+    assert_eq!(statement["receivables"].as_array().unwrap().len(), 1);
+    assert_eq!(statement["receivables"][0]["balance"], "7.02");
+
     let reversal = app
         .clone()
         .oneshot(

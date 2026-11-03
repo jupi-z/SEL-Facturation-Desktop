@@ -214,6 +214,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route("/local/v1/invoices/:id", get(get_invoice))
         .route("/local/v1/invoices/:id/void", post(void_invoice))
         .route("/local/v1/receivables/:id", get(get_receivable))
+        .route("/local/v1/customers/:id/statement", get(get_statement))
         .route("/local/v1/installment-plans/:id", get(get_installment_plan))
         .route("/local/v1/receivables/:id/credit", post(create_credit_note))
         .route("/local/v1/payments", post(record_payment))
@@ -491,6 +492,19 @@ async fn get_receivable(
         .map_err(internal_error)?
         .map(Json)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "receivable not found".into()))
+}
+
+async fn get_statement(
+    State(state): State<LocalAppState>,
+    Path(customer_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    state
+        .store
+        .customer_statement(customer_id)
+        .await
+        .map_err(internal_error)?
+        .map(Json)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "customer not found".into()))
 }
 
 async fn get_installment_plan(

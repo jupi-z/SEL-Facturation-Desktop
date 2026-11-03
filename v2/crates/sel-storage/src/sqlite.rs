@@ -998,6 +998,46 @@ impl LocalStore {
         })))
     }
 
+    pub async fn customer_statement(
+        &self,
+        customer_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let customer_exists = sqlx::query(
+            "SELECT id FROM customers
+             WHERE id = $1 AND organization_id = $2",
+        )
+        .bind(customer_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some();
+        if !customer_exists {
+            return Ok(None);
+        }
+
+        let rows = sqlx::query(
+            "SELECT id FROM receivables
+             WHERE customer_id = $1 ORDER BY id",
+        )
+        .bind(customer_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut receivables = Vec::with_capacity(rows.len());
+        for row in rows {
+            let receivable_id: String = row.try_get("id")?;
+            let receivable_id = receivable_id.parse::<Uuid>().map_err(|error| {
+                sqlx::Error::Protocol(format!("invalid receivable id in statement: {error}"))
+            })?;
+            if let Some(summary) = self.get_receivable_summary(receivable_id).await? {
+                receivables.push(summary);
+            }
+        }
+        Ok(Some(json!({
+            "customer_id": customer_id,
+            "receivables": receivables
+        })))
+    }
+
     pub async fn get_installment_plan(
         &self,
         plan_id: Uuid,
