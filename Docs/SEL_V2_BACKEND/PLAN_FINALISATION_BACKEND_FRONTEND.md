@@ -8,6 +8,8 @@
 
 **Portée :** finaliser backend, nouveau client Windows, migration, exploitation et recette. Le frontend historique est hors cible et peut être abandonné ; ses contrats/API et outils V1 ne seront conservés que s’ils sont nécessaires à la migration ou à l’export des données.
 
+**Directive applicable :** le mandat propriétaire du 3 novembre 2026 autorisant le nouveau frontend Windows V2 et l’abandon de l’ancienne UI remplace, pour ce seul périmètre, l’interdiction de frontend figurant dans le mandat initial `CODEX_SEL_V2_BACKEND_START_HERE.md`. Les protections de V1, la conservation des données et l’interdiction de modifier les données réelles restent en vigueur.
+
 **Design de référence :** fichier Figma « SEL V2 — Product Design · Windows - Facturation », clé EuIpbci6IR7m6ggApo5WWm.
 
 ## Relevé Figma — 3 novembre 2026

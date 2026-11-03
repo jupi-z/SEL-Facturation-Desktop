@@ -24,6 +24,7 @@ Ces règles guident les incréments backend, client Windows, migration et exploi
 
 ## Frontend
 
+- Le mandat propriétaire du 3 novembre 2026 autorise le nouveau frontend Windows V2 et remplace à ce sujet l’interdiction du mandat initial V2 ; cela n’autorise ni une réécriture de V1 ni une migration destructive.
 - Le frontend historique est abandonné comme base de développement : ne pas porter ses écrans, templates, navigation ou logique UI. On peut le consulter temporairement pour comprendre une API locale, jamais comme référence visuelle ni comme source de calcul métier.
 - Reconstruire le nouveau client à partir de l’inventaire et des frames Figma réconciliés ; respecter les composants, polices, tokens, assets, parcours et états spécifiés.
 - Valider le shell Windows et son installateur par un spike avant d’investir dans les écrans ; l’interface et ses ressources doivent fonctionner localement sans connexion Internet.

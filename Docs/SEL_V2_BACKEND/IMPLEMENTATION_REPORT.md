@@ -27,6 +27,10 @@ Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, Live
 
 Voir les sections « Relevé Figma » et « Décision de cadrage du nouveau frontend » du [plan](PLAN_FINALISATION_BACKEND_FRONTEND.md), ainsi que les règles de travail révisées. Le frontend historique n’est plus considéré comme base de réutilisation.
 
+## Préparation de la phase 0
+
+Contrôle effectué le 3 novembre 2026 : le worktree était propre ; `monarque/sel-v2-backend` et son upstream pointaient sur `77d1e0983db26c0392ec12364663a299b4a81249` ; la PR #58 était ouverte vers `main`. Sur ce SHA, les workflows Rust et paquet serveur étaient réussis, tandis que le build desktop Windows et le candidat Windows étaient encore `IN_PROGRESS` au moment du contrôle. La phase 0 est donc **prête à démarrer, mais pas terminée** : le contrôle CI doit être rafraîchi, puis l’inventaire Figma complet, la matrice écran→API→droit→test, l’identification de l’artefact remis à SEL et le spike du shell Windows restent à réaliser/documenter. Aucun résultat du spike ni aucune recette Windows n’est présumé.
+
 ## Incrément client V2 — aperçu contrôlé et rendu sûr
 
 Commit : fc41cec (feat(v2): secure client rendering and invoice preview flow)
