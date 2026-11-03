@@ -1,3 +1,4 @@
+mod admin;
 pub mod postgres;
 pub mod sqlite;
 

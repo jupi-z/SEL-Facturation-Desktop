@@ -68,7 +68,7 @@ async fn admin_can_enroll_revoke_device_and_issue_signed_offline_grant() {
     let signature = BASE64.encode(signing_key.sign(&canonical).to_bytes());
 
     let store = store.with_offline_grant_verifier(signing_key.verifying_key());
-    let app = router(AppState::with_production_central_store(store));
+    let app = router(AppState::with_production_central_store(store.clone()));
     let login = app
         .clone()
         .oneshot(
@@ -144,6 +144,72 @@ async fn admin_can_enroll_revoke_device_and_issue_signed_offline_grant() {
         .unwrap();
     assert_eq!(grant.status(), StatusCode::CREATED);
     assert_eq!(json_body(grant).await["grant_id"], grant_id.to_string());
+
+    let listed_devices = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/admin/devices")
+                .header("authorization", format!("Bearer {access_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed_devices.status(), StatusCode::OK);
+    assert_eq!(json_body(listed_devices).await.as_array().unwrap().len(), 1);
+    let listed_grants = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/admin/offline-grants")
+                .header("authorization", format!("Bearer {access_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed_grants.status(), StatusCode::OK);
+    let grants = json_body(listed_grants).await;
+    assert_eq!(grants.as_array().unwrap().len(), 1);
+    assert!(grants[0].get("signature").is_none());
+
+    let revoke_grant = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/admin/offline-grants/{grant_id}/revoke"))
+                .header("authorization", format!("Bearer {access_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoke_grant.status(), StatusCode::NO_CONTENT);
+    let repeat_revoke = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/admin/offline-grants/{grant_id}/revoke"))
+                .header("authorization", format!("Bearer {access_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeat_revoke.status(), StatusCode::NO_CONTENT);
+    let revoked_at = sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+        "SELECT revoked_at FROM offline_grants WHERE id = $1",
+    )
+    .bind(grant_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert!(revoked_at.is_some());
 
     let revoke = app
         .clone()

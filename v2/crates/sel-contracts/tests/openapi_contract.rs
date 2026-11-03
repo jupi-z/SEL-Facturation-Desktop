@@ -51,4 +51,28 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .keys()
         .filter_map(serde_yaml::Value::as_str)
         .any(|path| path.to_ascii_lowercase().contains("pdf")));
+
+    for (path, method) in [
+        ("/v1/admin/users", "get"),
+        ("/v1/admin/users", "post"),
+        ("/v1/admin/users/{id}", "patch"),
+        ("/v1/admin/devices", "get"),
+        ("/v1/admin/offline-grants", "get"),
+        ("/v1/admin/offline-grants/{id}/revoke", "post"),
+    ] {
+        let operation = paths
+            .get(serde_yaml::Value::from(path))
+            .and_then(|item| item.get(method))
+            .unwrap_or_else(|| panic!("missing documented {method} {path}"));
+        assert!(
+            operation.get("security").is_some(),
+            "{method} {path} must be authenticated"
+        );
+    }
+    let schemas = document
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .unwrap();
+    assert!(schemas.get("CreateAdminUserRequest").is_some());
+    assert!(schemas.get("UpdateAdminUserRequest").is_some());
 }

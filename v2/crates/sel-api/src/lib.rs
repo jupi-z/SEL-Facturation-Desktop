@@ -5,7 +5,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use rust_decimal::Decimal;
@@ -53,6 +53,19 @@ pub struct RefreshRequest {
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct SetUserPasswordRequest {
     pub password: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct CreateAdminUserRequest {
+    pub identity_ref: String,
+    pub role: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct UpdateAdminUserRequest {
+    pub role: Option<String>,
+    pub status: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -179,6 +192,17 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/refresh", post(auth_refresh))
         .route("/v1/auth/logout", post(auth_logout))
         .route("/v1/users/:id/password", post(set_user_password))
+        .route(
+            "/v1/admin/users",
+            get(admin_list_users).post(admin_create_user),
+        )
+        .route("/v1/admin/users/:id", patch(admin_update_user))
+        .route("/v1/admin/devices", get(admin_list_devices))
+        .route("/v1/admin/offline-grants", get(admin_list_offline_grants))
+        .route(
+            "/v1/admin/offline-grants/:id/revoke",
+            post(admin_revoke_offline_grant),
+        )
         .route("/v1/devices/enroll", post(enroll_device))
         .route("/v1/devices/:id/revoke", post(revoke_device))
         .route("/v1/offline-grants", post(create_offline_grant))
@@ -298,6 +322,12 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
     );
 
     if *method == Method::GET {
+        if matches!(
+            path,
+            "/v1/admin/users" | "/v1/admin/devices" | "/v1/admin/offline-grants"
+        ) {
+            return is_admin;
+        }
         return is_reader
             && (matches!(
                 path,
@@ -317,6 +347,16 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 || path_matches(path, "/v1/invoices/:id/document-data")
                 || path_matches(path, "/v1/receivables/:id")
                 || path_matches(path, "/v1/installment-plans/:id"));
+    }
+
+    if path == "/v1/admin/users" && *method == Method::POST {
+        return is_admin;
+    }
+    if path_matches(path, "/v1/admin/users/:id") && *method == Method::PATCH {
+        return is_admin;
+    }
+    if path_matches(path, "/v1/admin/offline-grants/:id/revoke") && *method == Method::POST {
+        return is_admin;
     }
 
     if *method == Method::POST {
@@ -649,6 +689,180 @@ async fn set_user_password(
         .await
         .map_err(auth_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn admin_list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_auth(&headers)?;
+    require_admin(principal)?;
+    let store = central_store(&state)?;
+    store
+        .admin_list_users()
+        .await
+        .map(Json)
+        .map_err(storage_error)
+}
+
+async fn admin_create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateAdminUserRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_admin(principal)?;
+    if input.identity_ref.trim().is_empty() {
+        return Err(ApiError::unprocessable(
+            "IDENTITY_REF_REQUIRED",
+            "identity_ref must not be empty",
+        ));
+    }
+    if !matches!(
+        input.role.as_str(),
+        "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
+    ) {
+        return Err(ApiError::unprocessable(
+            "USER_ROLE_INVALID",
+            "role is not a supported SEL role",
+        ));
+    }
+    if input.password.chars().count() < sel_storage::postgres::MIN_PASSWORD_LENGTH {
+        return Err(ApiError::unprocessable(
+            "PASSWORD_TOO_SHORT",
+            "password must contain at least 8 characters",
+        ));
+    }
+    central_store(&state)?
+        .admin_create_user(
+            principal.user_id,
+            &input.identity_ref,
+            &input.role,
+            &input.password,
+        )
+        .await
+        .map(|body| (StatusCode::CREATED, Json(body)))
+        .map_err(admin_directory_error)
+}
+
+async fn admin_update_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<UpdateAdminUserRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let principal = require_admin(principal)?;
+    if input.role.as_deref().is_some_and(|role| {
+        !matches!(
+            role,
+            "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
+        )
+    }) {
+        return Err(ApiError::unprocessable(
+            "USER_ROLE_INVALID",
+            "role is not a supported SEL role",
+        ));
+    }
+    if input
+        .status
+        .as_deref()
+        .is_some_and(|status| !matches!(status, "ACTIVE" | "REVOKED"))
+    {
+        return Err(ApiError::unprocessable(
+            "USER_STATUS_INVALID",
+            "status must be ACTIVE or REVOKED",
+        ));
+    }
+    if input.role.is_none() && input.status.is_none() {
+        return Err(ApiError::unprocessable(
+            "USER_UPDATE_EMPTY",
+            "at least one of role or status is required",
+        ));
+    }
+    central_store(&state)?
+        .admin_update_user(
+            principal.user_id,
+            user_id,
+            input.role.as_deref(),
+            input.status.as_deref(),
+        )
+        .await
+        .map(Json)
+        .map_err(admin_directory_error)
+}
+
+async fn admin_list_devices(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_auth(&headers)?;
+    require_admin(principal)?;
+    central_store(&state)?
+        .admin_list_devices()
+        .await
+        .map(Json)
+        .map_err(storage_error)
+}
+
+async fn admin_list_offline_grants(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_auth(&headers)?;
+    require_admin(principal)?;
+    central_store(&state)?
+        .admin_list_offline_grants()
+        .await
+        .map(Json)
+        .map_err(storage_error)
+}
+
+async fn admin_revoke_offline_grant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(grant_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<StatusCode, ApiError> {
+    require_auth(&headers)?;
+    let principal = require_admin(principal)?;
+    central_store(&state)?
+        .admin_revoke_offline_grant(principal.user_id, grant_id)
+        .await
+        .map_err(admin_directory_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn require_admin(
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<sel_storage::postgres::AuthSessionPrincipal, ApiError> {
+    let Some(Extension(AuthenticatedPrincipal(principal))) = principal else {
+        return Err(ApiError::unauthorized(
+            "SESSION_REQUIRED",
+            "individual session authentication is required",
+        ));
+    };
+    if principal.role != "ADMIN" {
+        return Err(ApiError::forbidden(
+            "PERMISSION_DENIED",
+            "administrator role is required",
+        ));
+    }
+    Ok(principal)
+}
+
+fn central_store(state: &AppState) -> Result<&sel_storage::CentralStore, ApiError> {
+    state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "CENTRAL_STORE_REQUIRED",
+            "administration requires the central PostgreSQL store",
+        )
+    })
 }
 
 async fn enroll_device(
@@ -2064,6 +2278,39 @@ fn auth_error(error: sel_storage::postgres::AuthError) -> ApiError {
     }
 }
 
+fn admin_directory_error(error: sel_storage::postgres::AdminDirectoryError) -> ApiError {
+    use sel_storage::postgres::AdminDirectoryError as E;
+    match error {
+        E::Database(error) => storage_error(error),
+        E::ActorNotAuthorized => {
+            ApiError::forbidden("PERMISSION_DENIED", "an active administrator is required")
+        }
+        E::UserNotFound => {
+            ApiError::not_found("USER_NOT_FOUND", "user not found in this organization")
+        }
+        E::ResourceNotFound => ApiError::not_found(
+            "ADMIN_RESOURCE_NOT_FOUND",
+            "device or grant not found in this organization",
+        ),
+        E::LastAdministrator => ApiError::conflict(
+            "LAST_ADMINISTRATOR",
+            "the last active administrator cannot be disabled or demoted",
+        ),
+        E::SelfModification => ApiError::conflict(
+            "SELF_MODIFICATION_DENIED",
+            "an administrator cannot change their own role or status",
+        ),
+        E::IdentityConflict => ApiError::conflict(
+            "USER_IDENTITY_EXISTS",
+            "identity_ref is empty or already exists in this organization",
+        ),
+        E::InvalidFields => ApiError::unprocessable(
+            "USER_FIELDS_INVALID",
+            "identity_ref, role, status, or password is invalid",
+        ),
+    }
+}
+
 fn device_write_error(error: sel_storage::postgres::DeviceWriteError) -> ApiError {
     match error {
         sel_storage::postgres::DeviceWriteError::IdempotencyPayloadMismatch => ApiError::conflict(
@@ -2643,6 +2890,47 @@ mod tests {
             &Method::POST,
             "/v1/auth/login",
             "ADMIN"
+        ));
+    }
+
+    #[test]
+    fn user_device_and_grant_administration_is_admin_only() {
+        for path in [
+            "/v1/admin/users",
+            "/v1/admin/devices",
+            "/v1/admin/offline-grants",
+        ] {
+            assert!(role_allows_request(&Method::GET, path, "ADMIN"), "{path}");
+            for role in ["SUPERVISOR", "BILLING_AGENT", "CASHIER", "AUDITOR_READONLY"] {
+                assert!(
+                    !role_allows_request(&Method::GET, path, role),
+                    "{role} {path}"
+                );
+            }
+        }
+        let user_path = "/v1/admin/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0";
+        let grant_path = "/v1/admin/offline-grants/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke";
+        assert!(role_allows_request(
+            &Method::POST,
+            "/v1/admin/users",
+            "ADMIN"
+        ));
+        assert!(role_allows_request(&Method::PATCH, user_path, "ADMIN"));
+        assert!(role_allows_request(&Method::POST, grant_path, "ADMIN"));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/admin/users",
+            "SUPERVISOR"
+        ));
+        assert!(!role_allows_request(
+            &Method::PATCH,
+            user_path,
+            "SUPERVISOR"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            grant_path,
+            "SUPERVISOR"
         ));
     }
 }

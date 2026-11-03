@@ -65,6 +65,26 @@ pub enum AuthError {
 }
 
 #[derive(Debug, Error)]
+pub enum AdminDirectoryError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("actor is not an active administrator in this organization")]
+    ActorNotAuthorized,
+    #[error("user was not found in this organization")]
+    UserNotFound,
+    #[error("device or offline grant was not found in this organization")]
+    ResourceNotFound,
+    #[error("the last active administrator cannot be disabled or demoted")]
+    LastAdministrator,
+    #[error("an administrator cannot change their own account role or status")]
+    SelfModification,
+    #[error("identity reference already exists in this organization")]
+    IdentityConflict,
+    #[error("user fields are invalid")]
+    InvalidFields,
+}
+
+#[derive(Debug, Error)]
 pub enum DeviceWriteError {
     #[error("database operation failed: {0}")]
     Database(#[from] sqlx::Error),
@@ -540,7 +560,8 @@ impl CentralStore {
         let row = sqlx::query(
             "SELECT id, role, password_hash
              FROM users
-             WHERE organization_id = $1 AND identity_ref = $2 AND status = 'ACTIVE'",
+             WHERE organization_id = $1 AND lower(btrim(identity_ref)) = lower(btrim($2))
+               AND status = 'ACTIVE'",
         )
         .bind(self.organization_id)
         .bind(identity_ref.trim())
@@ -818,6 +839,10 @@ impl CentralStore {
             .bind(device_id)
             .execute(&mut *tx)
             .await?;
+        sqlx::query("UPDATE offline_grants SET revoked_at = now() WHERE device_id = $1 AND revoked_at IS NULL")
+            .bind(device_id)
+            .execute(&mut *tx)
+            .await?;
         let response = json!({
             "device_id": device_id,
             "organization_id": self.organization_id,
@@ -907,7 +932,7 @@ impl CentralStore {
         let context_exists = sqlx::query(
             "SELECT 1 FROM users u JOIN devices d ON d.organization_id = u.organization_id
              WHERE u.id = $1 AND u.organization_id = $2 AND u.status = 'ACTIVE'
-               AND d.id = $3 AND d.state = 'ACTIVE'",
+               AND d.id = $3 AND d.state = 'ACTIVE' FOR UPDATE OF u, d",
         )
         .bind(user_id)
         .bind(self.organization_id)
@@ -4352,7 +4377,7 @@ impl CentralStore {
             "SELECT scopes, limits, issued_at, expires_at, signature
              FROM offline_grants
              WHERE id = $1 AND user_id = $2 AND device_id = $3
-               AND issued_at <= now() AND expires_at > now()",
+               AND revoked_at IS NULL AND issued_at <= now() AND expires_at > now()",
         )
         .bind(event.offline_grant_id)
         .bind(event.actor_id)
