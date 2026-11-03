@@ -386,10 +386,16 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     payment_two.occurred_at = Utc::now();
     let (_first_payment, _) = first.record_payment(&payment_one).await.unwrap();
     let (second_payment, _) = second.record_payment(&payment_two).await.unwrap();
-    let accepted_payment = sync_once(&first, &endpoint, &token).await.unwrap();
-    assert_eq!(accepted_payment.accepted, 1);
-    let rejected_payment = sync_once(&second, &endpoint, &token).await.unwrap();
-    assert_eq!(rejected_payment.rejected, 1);
+    let (first_sync, second_sync) = tokio::join!(
+        sync_once(&first, &endpoint, &token),
+        sync_once(&second, &endpoint, &token),
+    );
+    let first_sync = first_sync.unwrap();
+    let second_sync = second_sync.unwrap();
+    assert_eq!(first_sync.accepted + second_sync.accepted, 1);
+    assert_eq!(first_sync.rejected + second_sync.rejected, 1);
+    assert_eq!(first.pending_count().await.unwrap(), 0);
+    assert_eq!(second.pending_count().await.unwrap(), 0);
     let central = CentralStore::connect(&database_url, organization_id)
         .await
         .unwrap();
