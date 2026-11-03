@@ -1388,6 +1388,7 @@ impl LocalStore {
                 }))
             })
             .collect()
+    }
 
     pub async fn allocate_payment(
         &self,
