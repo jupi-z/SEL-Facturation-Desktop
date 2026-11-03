@@ -1,4 +1,4 @@
-use axum::{routing::post, Json, Router};
+use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
 use chrono::Utc;
 use sel_contracts::{
     utility_snapshot_sha256, SyncEnvelope, SyncEventResult, SyncPullResponse, SyncPushRequest,
@@ -7,6 +7,10 @@ use sel_contracts::{
 use sel_local::{spawn_sync_worker, sync_once};
 use sel_storage::LocalStore;
 use sel_sync::payload_digest;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use uuid::Uuid;
 
 async fn accept_sync(Json(request): Json<SyncPushRequest>) -> Json<SyncPushResponse> {
@@ -27,6 +31,32 @@ async fn empty_pull() -> Json<SyncPullResponse> {
         changes: Vec::new(),
         next_cursor: 0,
     })
+}
+
+async fn malformed_then_accept(
+    State(attempts): State<Arc<AtomicUsize>>,
+    Json(request): Json<SyncPushRequest>,
+) -> axum::response::Response {
+    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+        return (
+            axum::http::StatusCode::OK,
+            "response lost before acknowledgement",
+        )
+            .into_response();
+    }
+    Json(SyncPushResponse {
+        results: request
+            .events
+            .iter()
+            .map(|event| SyncEventResult::Duplicate {
+                original: Box::new(SyncEventResult::Accepted {
+                    server_sequence: 1,
+                    server_entity_id: event.aggregate_id,
+                }),
+            })
+            .collect(),
+    })
+    .into_response()
 }
 
 #[tokio::test]
@@ -75,6 +105,69 @@ async fn sync_worker_transmits_outbox_and_persists_ack() {
     assert_eq!(summary.attempted, 1);
     assert_eq!(summary.accepted, 1);
     assert_eq!(store.pending_count().await.unwrap(), 0);
+    server.abort();
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn sync_worker_retries_after_response_loss_before_ack() {
+    let path = std::env::temp_dir().join(format!("sel-v2-ack-loss-{}.sqlite", Uuid::new_v4()));
+    let database_url = format!("sqlite://{}", path.display());
+    let store = LocalStore::connect(&database_url, Uuid::new_v4(), Uuid::new_v4())
+        .await
+        .expect("connect local store");
+    let payload = serde_json::json!({
+        "customer_code": "ACK-LOSS-1",
+        "legal_name": "Acknowledgement loss fixture"
+    });
+    let event = SyncEnvelope {
+        protocol_version: 1,
+        event_id: Uuid::new_v4(),
+        device_id: store.device_id,
+        organization_id: store.organization_id,
+        actor_id: Uuid::nil(),
+        command_type: "CUSTOMER_CREATED".into(),
+        aggregate_id: Uuid::new_v4(),
+        aggregate_expected_version: 0,
+        occurred_at: Utc::now(),
+        offline_grant_id: Uuid::nil(),
+        payload_sha256: payload_digest(&payload),
+        payload,
+        client_schema_version: 1,
+    };
+    store.record_command(&event).await.expect("queue event");
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind fake sync server");
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn({
+        let attempts = Arc::clone(&attempts);
+        async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/v1/sync/push", post(malformed_then_accept))
+                    .route("/v1/sync/pull", axum::routing::get(empty_pull))
+                    .with_state(attempts),
+            )
+            .await
+            .unwrap();
+        }
+    });
+
+    let first = sync_once(&store, &format!("http://{address}"), "local-test-token").await;
+    assert!(first.is_err(), "a lost acknowledgement must be retried");
+    assert_eq!(store.pending_count().await.unwrap(), 1);
+
+    let second = sync_once(&store, &format!("http://{address}"), "local-test-token")
+        .await
+        .expect("replay after lost acknowledgement");
+    assert_eq!(second.duplicates, 1);
+    assert_eq!(store.pending_count().await.unwrap(), 0);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+
     server.abort();
     let _ = std::fs::remove_file(path);
 }
