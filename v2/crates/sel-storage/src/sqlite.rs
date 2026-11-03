@@ -856,13 +856,21 @@ impl LocalStore {
                 Ok::<Decimal, sqlx::Error>(total + effective)
             })?;
         let credited_text: String = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount), '0') FROM credit_notes WHERE receivable_id = $1",
+            "SELECT COALESCE(GROUP_CONCAT(amount, ','), '')
+             FROM credit_notes WHERE receivable_id = $1",
         )
         .bind(id.to_string())
         .fetch_one(&self.pool)
         .await?;
-        let credited = Decimal::from_str(&credited_text)
-            .map_err(|error| sqlx::Error::Protocol(format!("invalid credit total: {error}")))?;
+        let credited = credited_text
+            .split(',')
+            .filter(|value| !value.is_empty())
+            .try_fold(Decimal::ZERO, |total, value| {
+                let amount = Decimal::from_str(value).map_err(|error| {
+                    sqlx::Error::Protocol(format!("invalid credit amount: {error}"))
+                })?;
+                Ok::<Decimal, sqlx::Error>(total + amount)
+            })?;
         let rejected = receivable_status == "REJECTED";
         let balance = if rejected {
             Decimal::ZERO
