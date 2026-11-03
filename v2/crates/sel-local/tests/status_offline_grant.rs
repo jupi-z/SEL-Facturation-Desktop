@@ -25,7 +25,7 @@ async fn sync_status_reports_configured_offline_identity() {
         .await
         .unwrap();
 
-    let response = router_with_store_and_auth(store, "test-token")
+    let response = router_with_store_and_auth(store.clone(), "test-token")
         .oneshot(
             Request::builder()
                 .uri("/local/v1/sync/status")
