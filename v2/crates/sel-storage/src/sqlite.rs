@@ -462,8 +462,8 @@ impl LocalStore {
         .execute(&mut *tx)
         .await?;
         sqlx::query(
-            "INSERT INTO invoice_voids (id, invoice_id, reason, actor_id)
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO invoice_voids (id, invoice_id, reason, actor_id, created_at)
+             VALUES ($1, $2, $3, $4, datetime('now'))",
         )
         .bind(void_id.to_string())
         .bind(invoice_id.to_string())
@@ -1791,8 +1791,8 @@ async fn apply_invoice_void_change(
     .execute(&mut **tx)
     .await?;
     sqlx::query(
-        "INSERT INTO invoice_voids (id, invoice_id, reason, actor_id)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO invoice_voids (id, invoice_id, reason, actor_id, created_at)
+         VALUES ($1, $2, $3, $4, datetime('now'))
          ON CONFLICT(invoice_id) DO NOTHING",
     )
     .bind(void_id)
