@@ -367,6 +367,58 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
     assert_eq!(stored_receivable_id, receivable_id);
     let retry = store.apply_sync_event(&event).await.unwrap();
     assert!(matches!(retry, SyncEventResult::Duplicate { .. }));
+
+    let positive_invoice_id = Uuid::new_v4();
+    let positive_receivable_id = Uuid::new_v4();
+    let positive_request = UtilityBillingRequest {
+        customer_id,
+        billing_period: "2026-11".into(),
+        electricity: UtilityServiceInput {
+            quantity: Decimal::new(100, 0),
+            unit: "KWH".into(),
+        },
+        water: UtilityServiceInput {
+            quantity: Decimal::new(2, 0),
+            unit: "M3".into(),
+        },
+        water_zero_confirmed: false,
+        currency: "USD".into(),
+        tariff_revision: "UTILITY-TEST-1".into(),
+        due_date: Some(NaiveDate::from_ymd_opt(2026, 11, 30).unwrap()),
+    };
+    let positive_payload = serde_json::json!({
+        "request": positive_request,
+        "invoice_id": positive_invoice_id,
+        "receivable_id": positive_receivable_id,
+    });
+    let positive_event = SyncEnvelope {
+        protocol_version: 1,
+        event_id: Uuid::new_v4(),
+        device_id,
+        organization_id,
+        actor_id,
+        command_type: "UTILITY_INVOICE_ISSUED".into(),
+        aggregate_id: positive_invoice_id,
+        aggregate_expected_version: 0,
+        occurred_at: Utc::now(),
+        offline_grant_id: grant_id,
+        payload_sha256: payload_digest(&positive_payload),
+        payload: positive_payload,
+        client_schema_version: 1,
+    };
+    let positive_result = store.apply_sync_event(&positive_event).await.unwrap();
+    assert!(matches!(positive_result, SyncEventResult::Accepted { .. }));
+    let positive_water: (Decimal, Decimal, Decimal) = sqlx::query_as(
+        "SELECT quantity, subtotal, total FROM invoice_lines
+         WHERE invoice_id = $1 AND service_code = 'WATER'",
+    )
+    .bind(positive_invoice_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(positive_water.0, Decimal::new(2, 0));
+    assert_eq!(positive_water.1, Decimal::new(250, 2));
+    assert_eq!(positive_water.2, Decimal::new(290, 2));
 }
 
 #[tokio::test]
