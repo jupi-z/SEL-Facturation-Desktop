@@ -6,12 +6,12 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `568c687` (`style(v2): format payment allocation sync assertions`)
+Commit contrôlé : `6128112` (`fix(v2): hold sync replay lock through processing`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — 3 novembre 2026
 
-Le jalon contrôlé sur `568c68775a3f639d1bf991e65f96580eaa2cced5` ferme plusieurs régressions détectées pendant la reprise de la PR #58 :
+Le jalon contrôlé sur `6128112709c8db99369e4ee71a56af2a7e66dc61` ferme plusieurs régressions détectées pendant la reprise de la PR #58 :
 
 - la clé de grant offline exigée au démarrage doit être une vraie clé publique Ed25519 décodable ;
 - `created_at` est maintenant renseigné dans SQLite pour l’écriture et la projection d’une annulation de facture ;
@@ -21,8 +21,11 @@ Le jalon contrôlé sur `568c68775a3f639d1bf991e65f96580eaa2cced5` ferme plusieu
 - l'affectation post-enregistrement est maintenant disponible hors ligne via `POST /local/v1/payments/{id}/allocate`, avec journal/outbox atomiques, idempotence persistante et recalcul des soldes après redémarrage ;
 - les agrégats monétaires SQLite de ce parcours sont convertis explicitement en texte avant parsing décimal, afin de neutraliser les types dynamiques `REAL`/`TEXT` ;
 - le rejeu central d'un événement `PAYMENT_ALLOCATED` est maintenant couvert par un test PostgreSQL réel, avec complément d'affectation, publication centrale unique par événement et accusé idempotent.
+- les affectations locales en attente adoptent l'identifiant central lorsqu'une projection confirmée représente la même affectation, au lieu de créer une deuxième ligne ;
+- le verrou PostgreSQL de rejeu est conservé jusqu'à l'accusé durable : deux transmissions simultanées du même événement donnent exactement un accepté et un doublon ;
+- la facturation eau positive avec tarif et taxe approuvés est maintenant exercée dans le test PostgreSQL réel, en complément du cas obligatoire à 0 m³.
 
-La CI finale de code est verte : [run #66 — 41619284512](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41619284512), job `rust` `125860552860`.
+La CI finale de code est verte : [run #76 — 41622471698](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41622471698), job `rust` `125871374954`.
 
 ## Résumé exécutif
 
@@ -30,7 +33,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La CI GitHub #66 est verte sur le commit `568c687` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cette exécution distante constitue la preuve actuelle ; l’environnement Rust local de ce poste n’a pas permis une exécution indépendante complète. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La CI GitHub #76 est verte sur le commit `6128112` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cette exécution distante constitue la preuve actuelle ; l’environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -63,7 +66,7 @@ test two_sqlite_devices_converge_through_real_postgres_and_http ... ok
 test result: ok. 1 passed; 0 failed
 ```
 
-La commande n’a pas été exécutée localement dans cet environnement : la toolchain Rust locale était incomplète. La preuve reproductible disponible est donc la CI GitHub #66 ci-dessous, et non une prétendue exécution locale.
+La commande n’a pas été exécutée localement dans cet environnement : la compilation MSVC s'arrête faute de `link.exe`. La preuve reproductible disponible est donc la CI GitHub #76 ci-dessous, et non une prétendue exécution locale.
 
 Le scénario vérifie :
 
@@ -84,19 +87,20 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 
 ### Exécution locale
 
-- Suite Rust complète locale : **NOT_EXECUTED** ; la toolchain Rust locale disponible sur ce poste était incomplète.
-- Tests et validations de ce jalon : **PASS dans la CI GitHub #66**, avec PostgreSQL 16.4 de service.
+- Suite Rust complète locale : **NOT_EXECUTED** ; la compilation MSVC locale est bloquée par l'absence de `link.exe`/Build Tools.
+- Tests et validations de ce jalon : **PASS dans la CI GitHub #76**, avec PostgreSQL 16.4 de service.
+- Vérification locale de formatage : **PASS** ; tentative locale de compilation : **BLOCKED_EXTERNAL** par l'absence de `link.exe`.
 - Relecture statique du diff et vérification `git status` : **PASS** ; aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [#66 — 41619284512](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41619284512), job `rust` `125860552860` : **SUCCESS** sur `568c687`.
+Run [#76 — 41622471698](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41622471698), job `rust` `125871374954` : **SUCCESS** sur `6128112`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
 - `cargo test --workspace` : **PASS** ;
 - `cargo test --workspace -- --ignored` avec PostgreSQL 16.4 : **PASS** ;
-- test `two_sqlite_devices_converge_through_real_postgres_and_http` : **PASS** ;
+- test `two_sqlite_devices_converge_through_real_postgres_and_http` : **PASS après correction du double comptage d'affectation** ;
 - test local `local_commercial_operations_are_persisted_and_offline_pending` avec affectation post-enregistrement et rejeu idempotent : **PASS** ;
 - test local `local_solar_sale_and_contract_are_persisted_offline` : **PASS** ;
 - test PostgreSQL `payment_sync_is_applied_before_the_central_ack_and_is_idempotent` avec événement `PAYMENT_ALLOCATED` séparé : **PASS** ;
@@ -118,7 +122,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | API-06 | PASS | aucune route PDF ; `document-data` JSON côté client ; aucun stockage de fichier |
 | FIN-01 | PASS | facture électrique + eau, `0 m³` visible, Decimal et arrondi testés |
 | FIN-02 | PASS | eau positive refusée sans tarif/taxe validés ; eau nulle conservée |
-| FIN-03 | NOT_TESTED | scénario complet d’un tarif eau positif approuvé manque |
+| FIN-03 | PASS limité | test PostgreSQL réel avec tarif eau 1,25 USD/m³, taxe approuvée, 2 m³ et ligne calculée ; la recette métier SEL du tarif reste externe |
 | FIN-04 | PASS | paiement partiel, solde et retry sans doublon |
 | FIN-05 | PASS limité | vente solaire, créance, contrat et deux échéances persistés et projetés |
 | FIN-06 | PARTIAL | affectation à échéance et rejet de surallocation testés ; retards et recouvrement complets manquent |
@@ -127,11 +131,11 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FIN-09 | PARTIAL | Decimal et snapshot multi-store ; matrice complète USD/CDF et taux approuvés à compléter |
 | FIN-10 | PARTIAL | tarif utility approuvé/daté et produit solaire actif contrôlés ; matrice exhaustive des catégories à compléter |
 | SYN-01 | PASS | test deux SQLite + PostgreSQL réel, reprise après ouverture et projections idempotentes |
-| SYN-02 | PARTIAL | retry/replay démontré ; coupure injectée à chaque frontière réseau non exhaustive |
+| SYN-02 | PARTIAL | retry/replay et rejeu concurrent du même événement démontrés ; coupure injectée à chaque frontière réseau non exhaustive |
 | SYN-03 | PASS limité | publication et accusé récupérables après commit simulé ; panne physique réelle non injectée |
 | SYN-04 | PARTIAL | pull et curseur durable testés ; crash SQLite avant commit à compléter |
 | SYN-05 | NOT_TESTED | conflit de facture concurrente sur même période entre deux postes non démontré |
-| SYN-06 | PARTIAL | surallocation centrale protégée ; paiements réellement simultanés entre deux postes à compléter |
+| SYN-06 | PARTIAL | surallocation centrale et rejeu concurrent protégés ; paiements réellement simultanés sur une même créance entre deux postes à compléter |
 | SYN-07 | NOT_TESTED | conflit de contrat/échéancier concurrent non implémenté complètement |
 | SYN-08 | PASS limité | émission/révocation de devices, grants Ed25519, expiration, scopes et limites d’événements testés sur PostgreSQL réel ; provisionnement de la clé de production et révocation opérationnelle restent externes |
 | SYN-09 | PASS limité | worker push/pull et reprise de l’outbox codés ; réseau réellement intermittent non validé sur Windows |
@@ -150,7 +154,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #66 sur `568c687` |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #76 sur `6128112` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -166,7 +170,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI #66 et les tests PostgreSQL/SQLite de la PR sont verts sur `568c687`.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI #76 et les tests PostgreSQL/SQLite de la PR sont verts sur `6128112`, après correction du double comptage et du rejeu concurrent.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
