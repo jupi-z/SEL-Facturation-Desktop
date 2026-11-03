@@ -1,0 +1,51 @@
+name: SEL V2 Windows candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'desktop_v2.py'
+      - 'tests/test_desktop_v2.py'
+      - 'v2/**'
+      - 'requirements*.txt'
+      - 'packaging/sel-facturation.ico'
+      - '.github/workflows/sel-v2-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-candidate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+      - name: Install Python build dependencies
+        run: python -m pip install -r requirements-build.txt pytest
+      - name: Test launcher contract
+        run: python -m pytest -q tests/test_desktop_v2.py
+      - name: Install WiX Toolset 4
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+          wix extension add -g WixToolset.Bal.wixext/4.0.5
+          wix extension add -g WixToolset.Util.wixext/4.0.5
+      - name: Build V2 EXE, MSI, bootstrapper and hashes
+        shell: pwsh
+        run: pwsh -File v2/packaging/build-v2.ps1 -Version 0.3.30
+      - name: Upload unsigned acceptance candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: SEL-Facturation-V2-Windows-${{ github.run_number }}
+          if-no-files-found: error
+          path: |
+            dist/SEL-Facturation-V2.exe
+            dist/installer/SEL-Facturation-V2.msi
+            dist/installer/SEL-Facturation-V2-Setup-0.3.30.exe
+            dist/installer/SHA256SUMS.txt

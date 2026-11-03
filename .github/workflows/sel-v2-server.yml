@@ -1,0 +1,32 @@
+name: SEL V2 server package
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'v2/deploy/**'
+      - 'v2/**'
+      - '.github/workflows/sel-v2-server.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production Compose interpolation without real secrets
+        env:
+          POSTGRES_DB: sel_v2_validation
+          POSTGRES_ADMIN_USER: sel_admin_validation
+          POSTGRES_ADMIN_PASSWORD: validation-only-password
+          POSTGRES_APP_USER: sel_api_validation
+          POSTGRES_APP_PASSWORD: validation-only-app-password
+          SEL_OFFLINE_GRANT_PUBLIC_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          SEL_ORGANIZATION_ID: 00000000-0000-4000-8000-000000000001
+          SEL_ORGANIZATION_NAME: SEL%20Validation
+        run: docker compose -f v2/deploy/compose.production.example.yml config --quiet
+      - name: Build central API image without secrets
+        run: docker build --file v2/deploy/Dockerfile --tag sel-v2-api:validation .

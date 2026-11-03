@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SEL Facturation V2" Manufacturer="Société d'Énergie du Lualaba" Version="$(var.ProductVersion)" UpgradeCode="D9C85B69-E1D7-4CF7-8D3D-6C5F0C1E2F10" Scope="perUser">
+    <SummaryInformation Description="SEL Facturation V2 — client local et agent Rust" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Une version plus récente de SEL Facturation V2 est déjà installée." />
+    <MediaTemplate EmbedCab="yes" />
+    <Feature Id="MainFeature" Title="SEL Facturation V2" Level="1">
+      <ComponentRef Id="ApplicationComponent" />
+    </Feature>
+  </Package>
+  <Fragment>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="SEL Facturation V2" />
+      </Directory>
+    </StandardDirectory>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ApplicationComponent" Guid="*">
+        <File Id="SelFacturationV2Exe" Source="$(var.ExePath)" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="SEL Facturation V2" Description="Facturation locale SEL eau et électricité" WorkingDirectory="INSTALLFOLDER" />
+          <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="SEL Facturation V2" Description="Facturation locale SEL eau et électricité" WorkingDirectory="INSTALLFOLDER" />
+        </File>
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

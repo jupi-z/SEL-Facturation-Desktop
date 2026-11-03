@@ -1,0 +1,84 @@
+:root {
+  --navy: #073b82;
+  --navy-dark: #052d63;
+  --blue-soft: #edf4fc;
+  --line: #d7e2ee;
+  --ink: #163451;
+  --muted: #60758c;
+  --yellow: #f4c500;
+  --green: #187c62;
+  --danger: #ae3f3f;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: var(--ink);
+  background: #f5f8fb;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 1100px; background: #f5f8fb; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+.app-shell { display: flex; min-height: 100vh; }
+.sidebar { width: 246px; flex: 0 0 246px; background: white; border-right: 1px solid var(--line); padding: 30px 18px 24px; display: flex; flex-direction: column; }
+.brand-mark { display: flex; align-items: center; gap: 9px; color: var(--navy); font-weight: 800; font-size: 22px; letter-spacing: .08em; margin: 0 10px 42px; }
+.brand-dot { width: 26px; height: 26px; border-radius: 7px 14px 7px 14px; background: linear-gradient(135deg, var(--yellow) 45%, #1284ed 45%); }
+.eyebrow { color: var(--navy); font-size: 11px; font-weight: 800; letter-spacing: .15em; margin: 0 0 10px; }
+.sidebar nav { display: grid; gap: 5px; }
+.nav-item { border: 0; background: transparent; color: var(--ink); text-align: left; border-radius: 6px; padding: 13px 12px; font-weight: 600; }
+.nav-item:hover, .nav-item.active { background: var(--blue-soft); color: var(--navy); box-shadow: inset 3px 0 var(--yellow); }
+.sidebar-foot { margin-top: auto; color: var(--muted); font-size: 12px; line-height: 1.7; padding: 12px; border-top: 1px solid var(--line); }
+.sidebar-foot strong { color: var(--navy); }
+.content { flex: 1; min-width: 0; padding: 0 42px 26px; }
+.topbar { min-height: 112px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { color: var(--navy); font-size: 30px; margin-bottom: 0; }
+h2 { color: var(--navy); font-size: 24px; margin-bottom: 8px; }
+h3 { color: var(--navy); font-size: 16px; margin-bottom: 0; }
+.muted { color: var(--muted); font-size: 14px; line-height: 1.6; }
+.connection-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); }
+.status-dot.offline { background: #c58a1a; }
+.notice { margin: 22px 0 0; padding: 13px 16px; border-left: 3px solid var(--green); background: #edf8f4; color: #175d4b; font-size: 14px; }
+.notice.error { border-color: var(--danger); background: #fff0f0; color: #862f2f; }
+.view { padding: 38px 0 0; }
+.hero-row, .section-heading, .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; }
+.hero-row { margin-bottom: 28px; }
+.section-heading { margin-bottom: 25px; }
+.currency-tag, .badge { display: inline-flex; align-items: center; background: var(--blue-soft); color: var(--navy); font-size: 12px; font-weight: 800; padding: 8px 11px; border-radius: 4px; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); background: white; margin-bottom: 28px; }
+.metric { padding: 22px; border-right: 1px solid var(--line); }
+.metric:last-child { border-right: 0; }
+.metric-label { color: var(--navy); font-size: 11px; letter-spacing: .12em; font-weight: 800; text-transform: uppercase; }
+.metric-value { color: var(--navy); font-size: 31px; font-weight: 800; margin: 12px 0 5px; }
+.metric-note { color: var(--muted); font-size: 12px; }
+.panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.panel { background: white; border: 1px solid var(--line); padding: 22px; margin-bottom: 22px; }
+.panel-heading { align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 6px; }
+.link-button { border: 0; background: transparent; color: var(--navy); font-weight: 700; font-size: 13px; }
+.list { display: grid; }
+.list-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 15px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.list-row:last-child { border-bottom: 0; }
+.list-row strong { color: var(--navy); }
+.empty-state { padding: 20px 0; color: var(--muted); font-size: 13px; }
+.form-panel { max-width: 1040px; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 22px; }
+label { display: grid; gap: 7px; color: var(--navy); font-size: 13px; font-weight: 700; }
+input, select, textarea { width: 100%; border: 1px solid #bfd0e0; border-radius: 4px; background: white; color: var(--ink); padding: 12px 13px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--navy); box-shadow: 0 0 0 3px #dbeafe; }
+.wide { grid-column: 1 / -1; }
+.checkbox-row { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 10px; background: #fffaf0; border: 1px solid #f1dc9e; padding: 13px; color: #78570b; }
+.checkbox-row input { width: 17px; height: 17px; accent-color: var(--navy); }
+.form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; padding-top: 5px; }
+.button { border: 1px solid var(--navy); border-radius: 5px; padding: 12px 18px; font-weight: 800; font-size: 13px; }
+.button.primary { background: var(--navy); color: white; }
+.button.primary:hover { background: var(--navy-dark); }
+.table-wrap { overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { color: var(--navy); background: var(--blue-soft); text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+th, td { padding: 13px 12px; border-bottom: 1px solid var(--line); }
+td strong { color: var(--navy); }
+.result-panel { border-left: 3px solid var(--green); }
+.state-card { padding: 18px; background: var(--blue-soft); margin-bottom: 18px; line-height: 1.7; }
+.state-card strong { color: var(--navy); }
+footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; text-align: right; padding: 18px 0 4px; margin-top: 48px; }
+footer strong { color: var(--navy); }
+@media (max-width: 1180px) { .content { padding: 0 26px 24px; } .sidebar { width: 220px; flex-basis: 220px; } }

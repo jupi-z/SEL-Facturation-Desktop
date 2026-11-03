@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?POSTGRES_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+    volumes:
+      - sel-v2-postgres:/var/lib/postgresql/data
+      - ./init/10-create-app-role.sh:/docker-entrypoint-initdb.d/10-create-app-role.sh:ro
+    networks: [sel-v2-private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  sel-api:
+    build:
+      context: ../..
+      dockerfile: v2/deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_APP_USER:?POSTGRES_APP_USER is required}:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      SEL_API_BIND: 0.0.0.0
+      SEL_API_PORT: 8080
+      SEL_AUTH_MODE: session
+      SEL_REQUIRE_SIGNED_OFFLINE_GRANTS: "1"
+      SEL_OFFLINE_GRANT_PUBLIC_KEY: ${SEL_OFFLINE_GRANT_PUBLIC_KEY:?production Ed25519 public key is required}
+      SEL_ORGANIZATION_ID: ${SEL_ORGANIZATION_ID:?stable organization UUID is required}
+      SEL_ORGANIZATION_NAME: ${SEL_ORGANIZATION_NAME:?organization name is required}
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [sel-v2-private]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on:
+      sel-api: { condition: service_healthy }
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [sel-v2-private]
+
+networks:
+  sel-v2-private:
+    internal: true
+
+volumes:
+  sel-v2-postgres:
+  caddy-data:
+  caddy-config:

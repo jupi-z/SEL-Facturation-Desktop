@@ -1,0 +1,9 @@
+{
+  auto_https off
+}
+
+sel.example.invalid {
+  tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
+  encode gzip
+  reverse_proxy sel-api:8080
+}
