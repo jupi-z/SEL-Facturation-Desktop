@@ -943,6 +943,8 @@ impl LocalStore {
                 "REJECTED"
             } else if paid + credited >= principal {
                 "SETTLED"
+            } else if receivable_status == "CREDITED" {
+                "CREDITED"
             } else if overdue > Decimal::ZERO {
                 "OVERDUE"
             } else {

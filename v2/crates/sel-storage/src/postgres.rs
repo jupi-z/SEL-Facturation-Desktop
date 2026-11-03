@@ -1164,7 +1164,7 @@ impl CentralStore {
         id: Uuid,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT r.id, r.customer_id, r.currency, r.principal_total,
+            "SELECT r.id, r.customer_id, r.currency, r.principal_total, r.status,
                     COALESCE((
                         SELECT SUM(
                             pa.allocated_amount * GREATEST(
@@ -1186,7 +1186,7 @@ impl CentralStore {
              FROM receivables r
              WHERE r.id = $1 AND r.customer_id IN
                  (SELECT id FROM customers WHERE organization_id = $2)
-             GROUP BY r.id, r.customer_id, r.currency, r.principal_total",
+             GROUP BY r.id, r.customer_id, r.currency, r.principal_total, r.status",
         )
         .bind(id)
         .bind(self.organization_id)
@@ -1225,8 +1225,11 @@ impl CentralStore {
         .fetch_one(&self.pool)
         .await?;
         let overdue = overdue.round_dp(2);
+        let stored_status: String = row.try_get("status")?;
         let status = if paid + credited >= principal {
             "SETTLED"
+        } else if stored_status == "CREDITED" {
+            "CREDITED"
         } else if overdue > Decimal::ZERO {
             "OVERDUE"
         } else {
