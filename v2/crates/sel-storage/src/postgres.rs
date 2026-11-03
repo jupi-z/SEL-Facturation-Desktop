@@ -1016,6 +1016,114 @@ impl CentralStore {
         })
     }
 
+    pub async fn catalog_products(&self) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, sku, product_type, label, price_reference, currency
+             FROM products
+             WHERE active = TRUE
+             ORDER BY sku",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let price: Decimal = row.try_get("price_reference")?;
+                Ok(json!({
+                    "id": row.try_get::<Uuid, _>("id")?,
+                    "sku": row.try_get::<String, _>("sku")?,
+                    "product_type": row.try_get::<String, _>("product_type")?,
+                    "label": row.try_get::<String, _>("label")?,
+                    "price_reference": price.to_string(),
+                    "currency": row.try_get::<String, _>("currency")?
+                }))
+            })
+            .collect()
+    }
+
+    pub async fn catalog_tariffs(&self) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, service_code, customer_category, unit, unit_price, currency,
+                    effective_from, effective_to, approval_ref
+             FROM tariff_versions
+             WHERE status = 'APPROVED'
+             ORDER BY service_code, customer_category, effective_from DESC, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let unit_price: Decimal = row.try_get("unit_price")?;
+                let effective_from: NaiveDate = row.try_get("effective_from")?;
+                let effective_to: Option<NaiveDate> = row.try_get("effective_to")?;
+                Ok(json!({
+                    "id": row.try_get::<Uuid, _>("id")?,
+                    "service_code": row.try_get::<String, _>("service_code")?,
+                    "customer_category": row.try_get::<String, _>("customer_category")?,
+                    "unit": row.try_get::<String, _>("unit")?,
+                    "unit_price": unit_price.to_string(),
+                    "currency": row.try_get::<String, _>("currency")?,
+                    "effective_from": effective_from.to_string(),
+                    "effective_to": effective_to.map(|date| date.to_string()),
+                    "approval_ref": row.try_get::<String, _>("approval_ref")?
+                }))
+            })
+            .collect()
+    }
+
+    pub async fn catalog_tax_profiles(&self) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, service_code, jurisdiction, base, rate, source,
+                    effective_from, effective_to
+             FROM tax_profile_versions
+             WHERE status = 'APPROVED'
+             ORDER BY service_code, jurisdiction, effective_from DESC, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let rate: Decimal = row.try_get("rate")?;
+                let effective_from: NaiveDate = row.try_get("effective_from")?;
+                let effective_to: Option<NaiveDate> = row.try_get("effective_to")?;
+                Ok(json!({
+                    "id": row.try_get::<Uuid, _>("id")?,
+                    "service_code": row.try_get::<String, _>("service_code")?,
+                    "jurisdiction": row.try_get::<String, _>("jurisdiction")?,
+                    "base": row.try_get::<String, _>("base")?,
+                    "rate": rate.to_string(),
+                    "source": row.try_get::<String, _>("source")?,
+                    "effective_from": effective_from.to_string(),
+                    "effective_to": effective_to.map(|date| date.to_string())
+                }))
+            })
+            .collect()
+    }
+
+    pub async fn catalog_fx_rates(&self) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, from_currency, to_currency, value, effective_from, source
+             FROM fx_rate_versions
+             WHERE approved = TRUE
+             ORDER BY from_currency, to_currency, effective_from DESC, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let value: Decimal = row.try_get("value")?;
+                let effective_from: NaiveDate = row.try_get("effective_from")?;
+                Ok(json!({
+                    "id": row.try_get::<Uuid, _>("id")?,
+                    "from_currency": row.try_get::<String, _>("from_currency")?,
+                    "to_currency": row.try_get::<String, _>("to_currency")?,
+                    "value": value.to_string(),
+                    "effective_from": effective_from.to_string(),
+                    "source": row.try_get::<String, _>("source")?
+                }))
+            })
+            .collect()
+    }
+
     pub async fn issue_utility_invoice(
         &self,
         input: &UtilityBillingRequest,

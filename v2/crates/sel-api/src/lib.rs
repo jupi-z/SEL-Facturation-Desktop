@@ -167,6 +167,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/devices/:id/revoke", post(revoke_device))
         .route("/v1/offline-grants", post(create_offline_grant))
         .route("/v1/meta/capabilities", get(capabilities))
+        .route("/v1/catalog/products", get(catalog_products))
+        .route("/v1/catalog/tariffs", get(catalog_tariffs))
+        .route("/v1/catalog/tax-profiles", get(catalog_tax_profiles))
+        .route("/v1/catalog/fx-rates", get(catalog_fx_rates))
         .route("/v1/customers", get(list_customers).post(create_customer))
         .route(
             "/v1/customers/:id",
@@ -307,6 +311,54 @@ async fn capabilities() -> Json<serde_json::Value> {
         "pdf_endpoint": false,
         "server_invoice_files": false
     }))
+}
+
+async fn catalog_products(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let products = match &state.central {
+        Some(store) => store.catalog_products().await.map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(products)))
+}
+
+async fn catalog_tariffs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let tariffs = match &state.central {
+        Some(store) => store.catalog_tariffs().await.map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(tariffs)))
+}
+
+async fn catalog_tax_profiles(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let profiles = match &state.central {
+        Some(store) => store.catalog_tax_profiles().await.map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(profiles)))
+}
+
+async fn catalog_fx_rates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let rates = match &state.central {
+        Some(store) => store.catalog_fx_rates().await.map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(rates)))
 }
 
 async fn auth_login(

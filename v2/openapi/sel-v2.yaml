@@ -21,6 +21,38 @@ paths:
       operationId: capabilities
       responses:
         '200': { description: Protocol capabilities }
+  /v1/catalog/products:
+    get:
+      operationId: listCatalogProducts
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Active commercial products
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogProduct' } } } }
+  /v1/catalog/tariffs:
+    get:
+      operationId: listCatalogTariffs
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Approved dated utility tariffs only
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogTariff' } } } }
+  /v1/catalog/tax-profiles:
+    get:
+      operationId: listCatalogTaxProfiles
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Approved dated tax profiles only
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogTaxProfile' } } } }
+  /v1/catalog/fx-rates:
+    get:
+      operationId: listCatalogFxRates
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Approved exchange rates only
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogFxRate' } } } }
   /v1/devices/enroll:
     post:
       operationId: enrollDevice
@@ -248,6 +280,51 @@ components:
       description: Stable problem detail
       content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetails' } } }
   schemas:
+    CatalogProduct:
+      type: object
+      required: [id, sku, product_type, label, price_reference, currency]
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string }
+        product_type: { type: string }
+        label: { type: string }
+        price_reference: { type: string }
+        currency: { type: string }
+    CatalogTariff:
+      type: object
+      required: [id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref]
+      properties:
+        id: { type: string, format: uuid }
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        customer_category: { type: string }
+        unit: { type: string, enum: [KWH, M3] }
+        unit_price: { type: string }
+        currency: { type: string }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: string }
+    CatalogTaxProfile:
+      type: object
+      required: [id, service_code, jurisdiction, base, rate, source, effective_from]
+      properties:
+        id: { type: string, format: uuid }
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        jurisdiction: { type: string }
+        base: { type: string }
+        rate: { type: string }
+        source: { type: string }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+    CatalogFxRate:
+      type: object
+      required: [id, from_currency, to_currency, value, effective_from, source]
+      properties:
+        id: { type: string, format: uuid }
+        from_currency: { type: string }
+        to_currency: { type: string }
+        value: { type: string }
+        effective_from: { type: string, format: date }
+        source: { type: string }
     Customer:
       type: object
       required: [id, organization_id, customer_code, legal_name, status, revision]
