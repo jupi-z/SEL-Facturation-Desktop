@@ -194,6 +194,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/config/versions", get(config_versions))
         .route("/v1/client-resources/manifest", get(resource_manifest))
         .route("/v1/solar/sales", post(create_solar_sale))
+        .route("/v1/solar/contracts", post(create_solar_contract))
         .route(
             "/v1/solar/contracts/:id/activate",
             post(activate_solar_contract),
@@ -1742,6 +1743,31 @@ async fn activate_solar_contract(
     Ok(Json(
         json!({"status":"CENTRAL_ACCEPTED","sale_id":input.sale_id,"receivable_id":input.receivable_id,"installment_plan_id":Uuid::new_v4(),"principal":receivable.principal,"currency":receivable.currency,"schedule":input.schedule}),
     ))
+}
+
+async fn create_solar_contract(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<sel_contracts::ActivateSolarContractRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let key = require_idempotency(&headers)?;
+    let digest = digest_json(&input)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "CENTRAL_STORE_REQUIRED",
+            "solar contract creation requires the central PostgreSQL store",
+        )
+    })?;
+    let contract_id = Uuid::new_v4();
+    match store
+        .activate_solar_contract(contract_id, &input, key, &digest)
+        .await
+        .map_err(solar_contract_write_error)?
+    {
+        sel_storage::postgres::SolarContractWriteOutcome::Created(body)
+        | sel_storage::postgres::SolarContractWriteOutcome::Replay(body) => Ok(Json(body)),
+    }
 }
 
 fn require_auth(headers: &HeaderMap) -> Result<(), ApiError> {

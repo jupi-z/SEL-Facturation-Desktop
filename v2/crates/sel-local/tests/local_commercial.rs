@@ -466,13 +466,12 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .unwrap();
     assert_eq!(sale.status(), StatusCode::CREATED);
     let sale = json_body(sale).await;
-    let contract_id = Uuid::new_v4();
     let contract = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/local/v1/solar/contracts/{contract_id}/activate"))
+                .uri("/local/v1/solar/contracts")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_vec(&json!({

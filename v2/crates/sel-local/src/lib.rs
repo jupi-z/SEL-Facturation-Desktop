@@ -220,6 +220,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route("/local/v1/payments/:id/allocate", post(allocate_payment))
         .route("/local/v1/payments/:id/reverse", post(reverse_payment))
         .route("/local/v1/solar/sales", post(create_solar_sale))
+        .route("/local/v1/solar/contracts", post(create_solar_contract))
         .route(
             "/local/v1/solar/contracts/:id/activate",
             post(activate_solar_contract),
@@ -590,6 +591,18 @@ async fn activate_solar_contract(
     let (response, _) = state
         .store
         .activate_solar_contract_offline(contract_id, &input)
+        .await
+        .map_err(internal_error)?;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn create_solar_contract(
+    State(state): State<LocalAppState>,
+    Json(input): Json<ActivateSolarContractRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let (response, _) = state
+        .store
+        .activate_solar_contract_offline(Uuid::new_v4(), &input)
         .await
         .map_err(internal_error)?;
     Ok((StatusCode::CREATED, Json(response)))

@@ -103,7 +103,6 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     assert_eq!(sale_retry.status(), StatusCode::OK);
     assert_eq!(json_body(sale_retry).await, sale_body);
 
-    let contract_id = Uuid::new_v4();
     let contract_request = json!({
         "sale_id": sale_body["sale_id"],
         "receivable_id": sale_body["receivable_id"],
@@ -119,7 +118,7 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v1/solar/contracts/{contract_id}/activate"))
+                .uri("/v1/solar/contracts")
                 .header("authorization", "Bearer test")
                 .header("Idempotency-Key", "pg-solar-contract-1")
                 .header("content-type", "application/json")
@@ -137,7 +136,7 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v1/solar/contracts/{contract_id}/activate"))
+                .uri("/v1/solar/contracts")
                 .header("authorization", "Bearer test")
                 .header("Idempotency-Key", "pg-solar-contract-1")
                 .header("content-type", "application/json")

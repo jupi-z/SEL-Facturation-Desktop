@@ -258,6 +258,15 @@ paths:
       responses:
         '201': { description: One sale and one receivable }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/solar/contracts:
+    post:
+      operationId: createSolarContract
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ActivateSolarContractRequest' } } } }
+      responses:
+        '201': { description: Persisted solar contract and exact installment schedule }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/solar/contracts/{id}/activate:
     post:
       operationId: activateSolarContract
