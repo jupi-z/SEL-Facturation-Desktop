@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const state = { customers: [], invoices: [], payments: [], sales: [], sync: null, preview: null };
+  const state = { customers: [], invoices: [], payments: [], sales: [], sync: null, preview: null, receivablesRequestId: 0 };
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -88,6 +88,53 @@
       option.appendChild(textNode(`${valueOf(customer.customer_code)} — ${valueOf(customer.legal_name)}`));
       select.appendChild(option);
     });
+  }
+
+  async function populateReceivables(customerId) {
+    const select = $("#payment-receivable");
+    const requestId = state.receivablesRequestId + 1;
+    state.receivablesRequestId = requestId;
+    clear(select);
+    select.disabled = !customerId;
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.appendChild(textNode(customerId ? "Chargement des créances…" : "Sélectionnez d’abord un client"));
+    select.appendChild(placeholder);
+    if (!customerId) return;
+    try {
+      const statement = await api(`/local/v1/customers/${encodeURIComponent(customerId)}/statement`);
+      if (requestId !== state.receivablesRequestId) return;
+      const available = (Array.isArray(statement.receivables) ? statement.receivables : []).filter((receivable) => Number.parseFloat(valueOf(receivable.balance, "0")) > 0 && ["OPEN", "OVERDUE"].includes(receivable.status));
+      clear(select);
+      if (!available.length) {
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.appendChild(textNode("Aucune créance ouverte pour ce client"));
+        select.appendChild(empty);
+        select.disabled = true;
+        return;
+      }
+      const prompt = document.createElement("option");
+      prompt.value = "";
+      prompt.appendChild(textNode("Sélectionner une créance…"));
+      select.appendChild(prompt);
+      available.forEach((receivable) => {
+        const option = document.createElement("option");
+        option.value = valueOf(receivable.id, "");
+        option.appendChild(textNode(`${valueOf(receivable.status)} · solde ${valueOf(receivable.balance)} ${valueOf(receivable.currency)}`));
+        select.appendChild(option);
+      });
+      select.disabled = false;
+    } catch (error) {
+      if (requestId !== state.receivablesRequestId) return;
+      clear(select);
+      const failed = document.createElement("option");
+      failed.value = "";
+      failed.appendChild(textNode("Créances indisponibles"));
+      select.appendChild(failed);
+      select.disabled = true;
+      showNotice(error.message || "Impossible de charger les créances.", true);
+    }
   }
 
   function renderMetrics() {
@@ -291,6 +338,7 @@
     $("#customer-form").addEventListener("submit", (event) => submitForm(event, "/local/v1/customers", (data) => Object.fromEntries(data), "Abonné enregistré localement."));
     $("#invoice-form").addEventListener("submit", previewInvoice);
     ["input", "change"].forEach((eventName) => $("#invoice-form").addEventListener(eventName, invalidatePreview));
+    $("#payment-customer").addEventListener("change", (event) => populateReceivables(event.target.value));
     $("#payment-form").addEventListener("submit", (event) => submitForm(event, "/local/v1/payments", (data) => ({ customer_id: data.get("customer_id"), received_amount: data.get("received_amount"), currency: data.get("currency"), method: data.get("method"), occurred_at: new Date().toISOString(), allocations: [{ receivable_id: data.get("receivable_id"), amount: data.get("received_amount") }] }), "Règlement enregistré localement."));
     $("#solar-form").addEventListener("submit", (event) => submitForm(event, "/local/v1/solar/sales", (data) => ({ customer_id: data.get("customer_id"), product_code: data.get("product_code"), principal: data.get("principal"), currency: data.get("currency"), terms_revision: "SEL-V2" }), "Vente solaire enregistrée localement."));
     $("#water-quantity").addEventListener("input", (event) => { $("#water-zero-confirmed").required = Number(event.target.value || 0) === 0; });

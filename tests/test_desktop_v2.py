@@ -60,3 +60,14 @@ def test_v2_client_uses_safe_dom_rendering_and_explicit_invoice_preview() -> Non
     assert "Émettre la facture" in script
     assert "invalidatePreview" in script
     assert '["input", "change"]' in script
+
+
+def test_v2_payment_form_selects_customer_receivables_from_local_statement() -> None:
+    html = desktop_v2.client_asset("index.html").read_text(encoding="utf-8")
+    script = desktop_v2.client_asset("app.js").read_text(encoding="utf-8")
+
+    assert 'id="payment-receivable"' in html
+    assert 'name="receivable_id"' in html
+    assert "/local/v1/customers/" in script
+    assert "/statement" in script
+    assert "populateReceivables" in script
