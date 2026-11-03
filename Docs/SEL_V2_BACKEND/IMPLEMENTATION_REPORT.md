@@ -6,8 +6,8 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `8340a05` (`test(v2): make concurrent payment assertions race-safe`)
-Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
+Commit contrôlé : `caf0025` (`test(v2): assert canonical customer statement ids`)
+Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, LiveUpdate et préparation du candidat Windows. Aucun merge dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — avoirs append-only
 
@@ -61,8 +61,9 @@ Les corrections cumulées pendant la reprise de la PR #58 ferment plusieurs rég
 - les tests adversariaux LiveUpdate couvrent maintenant les chemins parent, absolus POSIX/Windows, séparateurs inversés, composants vides et traversals ZIP ; les chemins non sûrs sont rejetés avant extraction, avec validation confirmée par la CI du commit contrôlé.
 - le worker local est maintenant testé lorsqu'une réponse d'accusé est perdue ou illisible après transmission : l'événement revient en attente, est rejoué sans nouvelle écriture métier et reçoit un doublon idempotent, sans perte de commande.
 - le scénario de convergence à deux postes transmet maintenant deux paiements concurrents vers la même créance depuis deux SQLite distinctes ; le résultat exige exactement une acceptation, un rejet explicite et zéro événement restant en attente, quel que soit le poste gagnant.
+- le relevé client local `GET /local/v1/customers/{id}/statement` est maintenant couvert par le parcours HTTP commercial : il retourne toutes les créances locales du client, conserve les identifiants canoniques et expose le solde après paiement/avoir sans recalcul financier côté interface.
 
-La CI du commit contrôlé est verte : [run — 41662516229](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41662516229), job `rust` `126009133769`, sur `8340a05`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris la reprise après perte d'accusé, les paiements concurrents multi-postes, les devis et le rejet des prix solaires divergents côté central et local, ainsi que les variantes adversariales Windows de LiveUpdate.
+La CI du commit contrôlé est verte : [run — 41665371957](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41665371957), job `rust` `126019130048`, sur `caf0025`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris le relevé client local, la reprise après perte d'accusé, les paiements concurrents multi-postes, les devis et le rejet des prix solaires divergents côté central et local, ainsi que les variantes adversariales Windows de LiveUpdate.
 
 ## Audit des branches GitHub
 
@@ -85,7 +86,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le correctif de canonisation (`358ba74`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La validation du correctif actuel `ab73fc0` est suivie ci-dessus. Cette exécution distante valide notamment le rapprochement V1→V2 en lecture seule, la pagination/filtre clients, les référentiels actifs/approuvés, le test RBAC/IDOR, la concurrence solaire, la lecture centrale et locale d'un échéancier persistant, le rollback atomique d'un pull SQLite, la canonicalisation de l'empreinte, les transactions de synchronisation financière, le rejet des collisions de séquence, les garde-fous de restauration, l'import V1 réel sur fixture synthétique avec rejeu idempotent, l'annulation complète d'une migration échouée, les routes de création de contrat solaire central/offline, le prix solaire dérivé du catalogue actif et l'erreur métier locale `422` pour un prix divergent. L'environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL réelle, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La validation du correctif actuel `caf0025` est suivie ci-dessus. Cette exécution distante valide notamment le rapprochement V1→V2 en lecture seule, la pagination/filtre clients, les référentiels actifs/approuvés, le test RBAC/IDOR, la concurrence solaire, la lecture centrale et locale d'un échéancier persistant, le relevé client local, le rollback atomique d'un pull SQLite, la canonicalisation de l'empreinte, les transactions de synchronisation financière, le rejet des collisions de séquence, les garde-fous de restauration, l'import V1 réel sur fixture synthétique avec rejeu idempotent, l'annulation complète d'une migration échouée, les routes de création de contrat solaire central/offline, le prix solaire dérivé du catalogue actif et l'erreur métier locale `422` pour un prix divergent. L'environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL réelle, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -120,7 +121,7 @@ test two_sqlite_devices_converge_through_real_postgres_and_http ... ok
 test result: ok. 1 passed; 0 failed
 ```
 
-La commande n’a pas été exécutée localement dans cet environnement : la compilation MSVC s'arrête faute de `link.exe`. La preuve reproductible disponible est donc la CI GitHub `41642740720` ci-dessous, et non une prétendue exécution locale.
+La commande n’a pas été exécutée localement dans cet environnement : la compilation MSVC s'arrête faute de `link.exe`. La preuve reproductible disponible est donc la CI GitHub `41665371957` ci-dessous, et non une prétendue exécution locale.
 
 Le scénario vérifie :
 
@@ -142,13 +143,13 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 ### Exécution locale
 
 - Suite Rust complète locale : **NOT_EXECUTED** ; la compilation MSVC locale est bloquée par l'absence de `link.exe`/Build Tools.
-- Tests du commit contrôlé `ab73fc0` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
+- Tests du commit contrôlé `caf0025` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
 - Vérification locale de formatage : **PASS** ; tentative locale de compilation : **BLOCKED_EXTERNAL** par l'absence de `link.exe`.
 - Relecture statique du diff et vérification `git status` : **PASS** ; aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [41656677873](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41656677873), job `rust` `125988733922` : **SUCCESS** sur `ab73fc0`.
+Run [41665371957](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41665371957), job `rust` `126019130048` : **SUCCESS** sur `caf0025`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -203,7 +204,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | UPD-01 | PASS | manifeste LiveUpdate déclaratif signé sans remplacement natif |
 | UPD-02 | PASS | signature Ed25519, SHA-256, expiration, séquence et chemins invalides rejetés |
 | UPD-03 | PASS | activation et rollback connu-bon testés |
-| UPD-04 | PASS | tests adversariaux LiveUpdate : parent, absolu POSIX/Windows, séparateurs inversés, composants vides et traversal ZIP rejetés avant extraction ; CI `41662516229` |
+| UPD-04 | PASS | tests adversariaux LiveUpdate : parent, absolu POSIX/Windows, séparateurs inversés, composants vides et traversal ZIP rejetés avant extraction ; CI `41665371957` |
 | UPD-05 | BLOCKED_EXTERNAL | clé publique Ed25519 de production absente ; fail-closed conservé |
 | MIG-01 | PASS limité | dry-run et import transactionnel vérifiés ; fixture synthétique PostgreSQL avec `pg_dump` exécutée en CI `41649126504` |
 | MIG-02 | PASS limité | checksum `import_batches`, mapping UUID, import PostgreSQL et rejeu idempotent vérifiés : second passage `ALREADY_APPLIED`, `writes: 0` ; données V1 SEL anonymisées encore absentes |
@@ -214,7 +215,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41662516229` sur `8340a05` |
+| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41665371957` sur `caf0025` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -230,7 +231,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41662516229` est verte sur `8340a05`, avec l'import V1 synthétique idempotent, son rollback transactionnel, les parcours de contrat et devis solaire, les tests PostgreSQL/SQLite, la reprise après perte d'accusé, l'arbitrage concurrent de deux paiements multi-postes, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement, le rejet des collisions de séquence et les contrôles adversariaux LiveUpdate.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41665371957` est verte sur `caf0025`, avec l'import V1 synthétique idempotent, son rollback transactionnel, les parcours de contrat et devis solaire, le relevé client local, les tests PostgreSQL/SQLite, la reprise après perte d'accusé, l'arbitrage concurrent de deux paiements multi-postes, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement, le rejet des collisions de séquence et les contrôles adversariaux LiveUpdate.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
