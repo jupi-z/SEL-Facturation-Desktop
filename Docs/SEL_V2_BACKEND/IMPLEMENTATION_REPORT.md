@@ -6,7 +6,7 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `08ce31d23a53ccca017f4d1099cbf645d3f1c865`
+Commit contrôlé : `0dcce2f` (`feat(v2): add audited payment reversals`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Résumé exécutif
@@ -15,7 +15,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La CI GitHub #22 est verte sur le commit de la PR : formatage, clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cela valide le périmètre technique couvert par les tests. Le backend reste **NO-GO pour une exploitation commerciale** : l’authentification complète/RBAC, les autorisations offline signées, l’import V1 avec écriture, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La CI GitHub #23 était verte sur le commit précédent `1ba7ca9`; une nouvelle exécution est requise pour le commit courant. Cela valide le périmètre technique couvert par les tests précédents, tandis que les nouveaux tests ciblés sont également exécutés localement. Le backend reste **NO-GO pour une exploitation commerciale** : l’authentification complète/RBAC, les autorisations offline signées, l’import V1 avec écriture, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -23,6 +23,8 @@ La CI GitHub #22 est verte sur le commit de la PR : formatage, clippy, tests wor
 - Canonicalisation des `Decimal` à six décimales dans le snapshot versionné ; les champs financiers sont distincts des statuts `LOCAL_PENDING`/`CENTRAL_ACCEPTED`.
 - Réconciliation d’une facture locale confirmée centralement sans réécrire ses identifiants, lignes, montants ou snapshot.
 - Réconciliation idempotente des paiements et de leurs affectations, sans second paiement.
+- Contre-écritures de paiements append-only : renversement partiel ou total, verrouillage du paiement, somme cumulée bornée, acteur actif vérifié, audit et `central_changes` dans la même transaction.
+- Soldes PostgreSQL et SQLite calculés sur les allocations nettes après renversements, avec rejeu idempotent de l’événement `PAYMENT_REVERSED` et projection locale contrôlée.
 - Validation globale des affectations par créance, verrouillage PostgreSQL déterministe et rejet d’une surallocation, y compris deux affectations répétées vers la même créance.
 - Publication centrale récupérable après commit métier avant accusé, avec outbox/replay idempotent.
 - Projections SQLite solaires : vente, lignes, créance, contrat, plan et échéances avec identifiants stables et relations conservées.
@@ -64,12 +66,15 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 - `cargo test -p sel-contracts` : **PASS**, 2 tests unitaires et contrat OpenAPI.
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** dans le conteneur Rust 1.85.
 - test d’intégration deux postes : **PASS** avec PostgreSQL réel, après correction de l’empreinte et des attentes de solde.
+- test API PostgreSQL réel `utility_issue_is_atomic_idempotent_and_survives_restart` : **PASS**, avec renversement `1.00` puis `2.00`, rejeu idempotent, soldes nets, audit et publications centrales.
+- test SQLite local `local_commercial_operations_are_persisted_and_offline_pending` : **PASS**, avec renversement hors ligne durable et solde local net.
+- test de synchronisation `payment_sync_is_applied_before_the_central_ack_and_is_idempotent` : **PASS**, avec événement `PAYMENT_REVERSED` accepté puis rejoué sans doublon.
 - `git diff --check` : **PASS**.
 - aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [#22 — 41587638667](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41587638667), job `rust` `125756746725` : **SUCCESS**.
+Run [#23 — 41588138616](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41588138616), job `rust` `125758328489` : **SUCCESS** sur le commit précédent `1ba7ca9`. Une nouvelle exécution CI est attendue sur `0dcce2f`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -98,7 +103,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FIN-04 | PASS | paiement partiel, solde et retry sans doublon |
 | FIN-05 | PASS limité | vente solaire, créance, contrat et deux échéances persistés et projetés |
 | FIN-06 | PARTIAL | affectation à échéance et rejet de surallocation testés ; retards et recouvrement complets manquent |
-| FIN-07 | NOT_TESTED | remboursements et contre-écritures append-only non finalisés |
+| FIN-07 | PARTIAL | contre-écritures de paiements append-only, audit, solde net et rejeu testés ; remboursements externes et leur rapprochement restent à finaliser |
 | FIN-08 | NOT_TESTED | avoirs, annulations et compensations non finalisés |
 | FIN-09 | PARTIAL | Decimal et snapshot multi-store ; matrice complète USD/CDF et taux approuvés à compléter |
 | FIN-10 | PARTIAL | tarif utility approuvé/daté et produit solaire actif contrôlés ; matrice exhaustive des catégories à compléter |
@@ -126,7 +131,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #22 |
+| OPS-01 | PASS limité | formatage, Clippy et tests workspace verts en CI #23 sur le commit précédent ; nouveau commit en attente de CI |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
