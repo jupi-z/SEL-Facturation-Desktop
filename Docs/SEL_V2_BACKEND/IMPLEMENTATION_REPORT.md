@@ -6,8 +6,32 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `aa405c9` (`test: avoid date-sensitive legacy tariff expectations`)
+Commit contrôlé : `fc41cec` (`feat(v2): secure client rendering and invoice preview flow`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, LiveUpdate, shell Windows V2 et paquet serveur. Aucun merge dans `main`, aucune release et aucun déploiement réel.
+
+## Incrément client V2 — aperçu contrôlé et rendu sûr
+
+Commit : fc41cec (feat(v2): secure client rendering and invoice preview flow)
+
+Statut de cet incrément : **COMPLETED côté code et tests locaux Python/JavaScript ; validation Rust/Windows CI en attente après publication de la branche**.
+
+- les listes clients, factures, paiements, ventes solaires, métriques, synchronisation et options sont maintenant construites par DOM (textContent/nœuds), sans interpolation innerHTML de données métier ;
+- le pont pywebview refuse les méthodes autres que GET, POST et PATCH, en plus de limiter les routes à /local/v1/ ;
+- POST /local/v1/billing/utility/preview calcule une facture combinée eau + électricité sans écrire de facture, créance ou événement d'outbox ;
+- l’écran de facturation affiche les deux lignes, y compris l’eau à 0 m³, les prix, sous-totaux, TVA et total avant confirmation explicite ;
+- l’émission définitive reste séparée sur POST /local/v1/billing/utility/issue et réutilise le même calcul Rust que l’aperçu ;
+- toute modification du formulaire après prévisualisation invalide l’aperçu afin d’empêcher la confirmation d’un calcul obsolète ;
+- le test HTTP local couvre l’aperçu à 0 m³ et vérifie l’absence d’écriture financière ; les tests Python couvrent le rendu sûr, la confirmation explicite et le filtrage du pont.
+
+Preuves exécutées localement après le commit :
+
+- py -3.12 -m pytest -q : **267 passed** en 125,25 s ;
+- py -3.12 -m pytest -q tests/test_desktop_v2.py tests/test_desktop.py : **17 passed** ;
+- node --check v2/client/app.js : **PASS** ;
+- cargo fmt --all -- --check : **PASS** ;
+- le test Rust sel-local de prévisualisation est ajouté mais non exécutable sur cette machine faute de link.exe MSVC : **BLOCKED_EXTERNAL**, à vérifier par la CI Windows.
+
+Limites encore ouvertes pour cet incrément : la validation sur un poste Windows SEL, l’impression réelle, le test WebView2 et l’exécution Rust avec PostgreSQL/SQLite réels restent distincts des tests locaux ci-dessus. Aucun calcul financier n’est effectué dans le JavaScript.
 
 ## Mise à jour livraison urgente — candidat Windows et paquet serveur
 
