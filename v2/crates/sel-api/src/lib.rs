@@ -54,6 +54,24 @@ pub struct SetUserPasswordRequest {
     pub password: String,
 }
 
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct EnrollDeviceRequest {
+    pub device_id: Uuid,
+    pub public_key_id: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct CreateOfflineGrantRequest {
+    pub grant_id: Uuid,
+    pub user_id: Uuid,
+    pub device_id: Uuid,
+    pub scopes: serde_json::Value,
+    pub limits: serde_json::Value,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub signature: String,
+}
+
 #[derive(Clone, Debug)]
 struct AuthenticatedPrincipal(sel_storage::postgres::AuthSessionPrincipal);
 
@@ -139,6 +157,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/refresh", post(auth_refresh))
         .route("/v1/auth/logout", post(auth_logout))
         .route("/v1/users/:id/password", post(set_user_password))
+        .route("/v1/devices/enroll", post(enroll_device))
+        .route("/v1/devices/:id/revoke", post(revoke_device))
+        .route("/v1/offline-grants", post(create_offline_grant))
         .route("/v1/meta/capabilities", get(capabilities))
         .route("/v1/customers", get(list_customers).post(create_customer))
         .route(
@@ -381,6 +402,114 @@ async fn set_user_password(
         .await
         .map_err(auth_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn enroll_device(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<EnrollDeviceRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let key = require_idempotency(&headers)?;
+    if input.public_key_id.trim().is_empty() {
+        return Err(ApiError::unprocessable(
+            "DEVICE_KEY_REQUIRED",
+            "public_key_id is required",
+        ));
+    }
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "DEVICE_ENROLLMENT_CENTRAL_REQUIRED",
+            "device enrollment requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&input)?;
+    match store
+        .enroll_device(
+            input.device_id,
+            input.public_key_id.trim(),
+            principal.user_id,
+            key,
+            &digest,
+        )
+        .await
+        .map_err(device_write_error)?
+    {
+        sel_storage::postgres::DeviceWriteOutcome::Created(body) => {
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        sel_storage::postgres::DeviceWriteOutcome::Replay(body) => Ok((StatusCode::OK, Json(body))),
+    }
+}
+
+async fn revoke_device(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Path(device_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let key = require_idempotency(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "DEVICE_REVOKE_CENTRAL_REQUIRED",
+            "device revocation requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_bytes(device_id.as_bytes());
+    match store
+        .revoke_device(device_id, principal.user_id, key, &digest)
+        .await
+        .map_err(device_write_error)?
+    {
+        sel_storage::postgres::DeviceWriteOutcome::Created(_)
+        | sel_storage::postgres::DeviceWriteOutcome::Replay(_) => Ok(StatusCode::NO_CONTENT),
+    }
+}
+
+async fn create_offline_grant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateOfflineGrantRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let key = require_idempotency(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "OFFLINE_GRANT_CENTRAL_REQUIRED",
+            "offline grant issuance requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&input)?;
+    match store
+        .create_offline_grant(
+            input.grant_id,
+            input.user_id,
+            input.device_id,
+            &input.scopes,
+            &input.limits,
+            input.issued_at,
+            input.expires_at,
+            &input.signature,
+            principal.user_id,
+            key,
+            &digest,
+        )
+        .await
+        .map_err(offline_grant_write_error)?
+    {
+        sel_storage::postgres::OfflineGrantWriteOutcome::Created(body) => {
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        sel_storage::postgres::OfflineGrantWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
@@ -1359,6 +1488,19 @@ fn require_auth(headers: &HeaderMap) -> Result<(), ApiError> {
     }
 }
 
+fn require_principal(
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<sel_storage::postgres::AuthSessionPrincipal, ApiError> {
+    principal
+        .map(|Extension(AuthenticatedPrincipal(principal))| principal)
+        .ok_or_else(|| {
+            ApiError::unauthorized(
+                "SESSION_REQUIRED",
+                "individual session authentication is required",
+            )
+        })
+}
+
 fn require_idempotency(headers: &HeaderMap) -> Result<&str, ApiError> {
     headers
         .get("Idempotency-Key")
@@ -1399,6 +1541,65 @@ fn auth_error(error: sel_storage::postgres::AuthError) -> ApiError {
         sel_storage::postgres::AuthError::InvalidResponse(error) => ApiError::internal(error),
         sel_storage::postgres::AuthError::UserNotFound => {
             ApiError::not_found("USER_NOT_FOUND", "active user not found")
+        }
+    }
+}
+
+fn device_write_error(error: sel_storage::postgres::DeviceWriteError) -> ApiError {
+    match error {
+        sel_storage::postgres::DeviceWriteError::IdempotencyPayloadMismatch => {
+            ApiError::conflict(
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "idempotency key was reused with another payload",
+            )
+        }
+        sel_storage::postgres::DeviceWriteError::IdentityMismatch => ApiError::conflict(
+            "DEVICE_IDENTITY_CONFLICT",
+            "device identity is already bound to another key or device",
+        ),
+        sel_storage::postgres::DeviceWriteError::AlreadyEnrolled => {
+            ApiError::conflict("DEVICE_ALREADY_ENROLLED", "device is already enrolled")
+        }
+        sel_storage::postgres::DeviceWriteError::NotFound => {
+            ApiError::not_found("DEVICE_NOT_FOUND", "device not found")
+        }
+        sel_storage::postgres::DeviceWriteError::Database(error) => storage_error(error),
+        sel_storage::postgres::DeviceWriteError::StoredResponse(error) => {
+            ApiError::internal(error)
+        }
+    }
+}
+
+fn offline_grant_write_error(
+    error: sel_storage::postgres::OfflineGrantWriteError,
+) -> ApiError {
+    match error {
+        sel_storage::postgres::OfflineGrantWriteError::IdempotencyPayloadMismatch => {
+            ApiError::conflict(
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "idempotency key was reused with another payload",
+            )
+        }
+        sel_storage::postgres::OfflineGrantWriteError::ContextInvalid => ApiError::unprocessable(
+            "OFFLINE_GRANT_CONTEXT_INVALID",
+            "user and device must be active in the same organization",
+        ),
+        sel_storage::postgres::OfflineGrantWriteError::InvalidDates => ApiError::unprocessable(
+            "OFFLINE_GRANT_DATES_INVALID",
+            "expires_at must be later than issued_at",
+        ),
+        sel_storage::postgres::OfflineGrantWriteError::InvalidSignature => {
+            ApiError::unprocessable("OFFLINE_GRANT_SIGNATURE_INVALID", "signature is invalid")
+        }
+        sel_storage::postgres::OfflineGrantWriteError::UntrustedSignature => {
+            ApiError::forbidden(
+                "OFFLINE_GRANT_SIGNATURE_UNTRUSTED",
+                "signature is not trusted by the server",
+            )
+        }
+        sel_storage::postgres::OfflineGrantWriteError::Database(error) => storage_error(error),
+        sel_storage::postgres::OfflineGrantWriteError::StoredResponse(error) => {
+            ApiError::internal(error)
         }
     }
 }

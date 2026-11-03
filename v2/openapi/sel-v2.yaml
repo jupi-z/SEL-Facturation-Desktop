@@ -21,6 +21,36 @@ paths:
       operationId: capabilities
       responses:
         '200': { description: Protocol capabilities }
+  /v1/devices/enroll:
+    post:
+      operationId: enrollDevice
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EnrollDeviceRequest' } } } }
+      responses:
+        '201': { description: Device enrolled }
+        '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/devices/{id}/revoke:
+    post:
+      operationId: revokeDevice
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '204': { description: Device revoked }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/offline-grants:
+    post:
+      operationId: createOfflineGrant
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateOfflineGrantRequest' } } } }
+      responses:
+        '201': { description: Signed offline grant issued }
+        '200': { description: Idempotent retry }
+        '403': { $ref: '#/components/responses/Problem' }
   /v1/customers:
     get:
       operationId: listCustomers
@@ -191,6 +221,24 @@ components:
         legal_name: { type: string }
         address: { type: [string, 'null'] }
         phone: { type: [string, 'null'] }
+    EnrollDeviceRequest:
+      type: object
+      required: [device_id, public_key_id]
+      properties:
+        device_id: { type: string, format: uuid }
+        public_key_id: { type: string, minLength: 1 }
+    CreateOfflineGrantRequest:
+      type: object
+      required: [grant_id, user_id, device_id, scopes, limits, issued_at, expires_at, signature]
+      properties:
+        grant_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        scopes: { type: object }
+        limits: { type: object }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        signature: { type: string, minLength: 80 }
     UpdateCustomer:
       type: object
       properties:

@@ -53,6 +53,50 @@ pub enum AuthError {
     UserNotFound,
 }
 
+#[derive(Debug, Error)]
+pub enum DeviceWriteError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("idempotency key was reused with another payload")]
+    IdempotencyPayloadMismatch,
+    #[error("device is already enrolled with another key")]
+    IdentityMismatch,
+    #[error("device is already enrolled")]
+    AlreadyEnrolled,
+    #[error("device was not found in the organization")]
+    NotFound,
+    #[error("stored idempotency response is invalid: {0}")]
+    StoredResponse(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum OfflineGrantWriteError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("idempotency key was reused with another payload")]
+    IdempotencyPayloadMismatch,
+    #[error("user or device does not belong to the organization")]
+    ContextInvalid,
+    #[error("offline grant dates are invalid")]
+    InvalidDates,
+    #[error("offline grant signature is invalid")]
+    InvalidSignature,
+    #[error("offline grant signature is not trusted")]
+    UntrustedSignature,
+    #[error("stored idempotency response is invalid: {0}")]
+    StoredResponse(#[from] serde_json::Error),
+}
+
+pub enum DeviceWriteOutcome {
+    Created(serde_json::Value),
+    Replay(serde_json::Value),
+}
+
+pub enum OfflineGrantWriteOutcome {
+    Created(serde_json::Value),
+    Replay(serde_json::Value),
+}
+
 #[derive(Clone, Debug)]
 pub enum SolarSaleWriteOutcome {
     Created(SolarSaleResponse),
@@ -445,6 +489,302 @@ impl CentralStore {
             organization_id: row.try_get("organization_id")?,
             role: row.try_get("role")?,
         })
+    }
+
+    pub async fn enroll_device(
+        &self,
+        device_id: Uuid,
+        public_key_id: &str,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceWriteError> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'device.enroll' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let original_digest: String = row.try_get("request_digest")?;
+            if original_digest != request_digest {
+                return Err(DeviceWriteError::IdempotencyPayloadMismatch);
+            }
+            let response: serde_json::Value = row.try_get("response_json")?;
+            return Ok(DeviceWriteOutcome::Replay(response));
+        }
+        let existing = sqlx::query(
+            "SELECT public_key_id, state FROM devices
+             WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+        )
+        .bind(device_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(existing) = existing {
+            let stored_key: String = existing.try_get("public_key_id")?;
+            if stored_key != public_key_id {
+                return Err(DeviceWriteError::IdentityMismatch);
+            }
+            return Err(DeviceWriteError::AlreadyEnrolled);
+        }
+        let duplicate_key = sqlx::query(
+            "SELECT id FROM devices
+             WHERE organization_id = $1 AND public_key_id = $2 FOR UPDATE",
+        )
+        .bind(self.organization_id)
+        .bind(public_key_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if duplicate_key.is_some() {
+            return Err(DeviceWriteError::IdentityMismatch);
+        }
+        let response = json!({
+            "device_id": device_id,
+            "organization_id": self.organization_id,
+            "public_key_id": public_key_id,
+            "state": "ACTIVE"
+        });
+        sqlx::query(
+            "INSERT INTO devices (id, organization_id, public_key_id, state)
+             VALUES ($1, $2, $3, 'ACTIVE')",
+        )
+        .bind(device_id)
+        .bind(self.organization_id)
+        .bind(public_key_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1, $2, $3, 'DEVICE_ENROLLED', now(), $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(device_id)
+        .bind(json!({"public_key_id": public_key_id}))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json)
+             VALUES ($1, $2, 'device.enroll', $3, $4, 201, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&response)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(DeviceWriteOutcome::Created(response))
+    }
+
+    pub async fn revoke_device(
+        &self,
+        device_id: Uuid,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceWriteError> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'device.revoke' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let original_digest: String = row.try_get("request_digest")?;
+            if original_digest != request_digest {
+                return Err(DeviceWriteError::IdempotencyPayloadMismatch);
+            }
+            let response: serde_json::Value = row.try_get("response_json")?;
+            return Ok(DeviceWriteOutcome::Replay(response));
+        }
+        let device = sqlx::query(
+            "SELECT public_key_id FROM devices
+             WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+        )
+        .bind(device_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(device) = device else {
+            return Err(DeviceWriteError::NotFound);
+        };
+        let public_key_id: String = device.try_get("public_key_id")?;
+        sqlx::query("UPDATE devices SET state = 'REVOKED' WHERE id = $1")
+            .bind(device_id)
+            .execute(&mut *tx)
+            .await?;
+        let response = json!({
+            "device_id": device_id,
+            "organization_id": self.organization_id,
+            "public_key_id": public_key_id,
+            "state": "REVOKED"
+        });
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1, $2, $3, 'DEVICE_REVOKED', now(), '{}'::jsonb)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json)
+             VALUES ($1, $2, 'device.revoke', $3, $4, 204, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&response)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(DeviceWriteOutcome::Created(response))
+    }
+
+    pub async fn create_offline_grant(
+        &self,
+        grant_id: Uuid,
+        user_id: Uuid,
+        device_id: Uuid,
+        scopes: &serde_json::Value,
+        limits: &serde_json::Value,
+        issued_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+        signature: &str,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<OfflineGrantWriteOutcome, OfflineGrantWriteError> {
+        if expires_at <= issued_at {
+            return Err(OfflineGrantWriteError::InvalidDates);
+        }
+        let signature_bytes = BASE64
+            .decode(signature)
+            .map_err(|_| OfflineGrantWriteError::InvalidSignature)?;
+        let parsed_signature = Signature::from_slice(&signature_bytes)
+            .map_err(|_| OfflineGrantWriteError::InvalidSignature)?;
+        if self.require_signed_offline_grants {
+            let Some(verifying_key) = &self.offline_grant_public_key else {
+                return Err(OfflineGrantWriteError::UntrustedSignature);
+            };
+            let canonical = offline_grant_canonical_bytes(
+                grant_id,
+                user_id,
+                device_id,
+                scopes,
+                limits,
+                issued_at,
+                expires_at,
+            )?;
+            if verifying_key.verify(&canonical, &parsed_signature).is_err() {
+                return Err(OfflineGrantWriteError::UntrustedSignature);
+            }
+        }
+        let mut tx = self.pool.begin().await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'offline_grant.create' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let original_digest: String = row.try_get("request_digest")?;
+            if original_digest != request_digest {
+                return Err(OfflineGrantWriteError::IdempotencyPayloadMismatch);
+            }
+            let response: serde_json::Value = row.try_get("response_json")?;
+            return Ok(OfflineGrantWriteOutcome::Replay(response));
+        }
+        let context_exists = sqlx::query(
+            "SELECT 1 FROM users u JOIN devices d ON d.organization_id = u.organization_id
+             WHERE u.id = $1 AND u.organization_id = $2 AND u.status = 'ACTIVE'
+               AND d.id = $3 AND d.state = 'ACTIVE'",
+        )
+        .bind(user_id)
+        .bind(self.organization_id)
+        .bind(device_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+        if !context_exists {
+            return Err(OfflineGrantWriteError::ContextInvalid);
+        }
+        let response = json!({
+            "grant_id": grant_id,
+            "user_id": user_id,
+            "device_id": device_id,
+            "scopes": scopes,
+            "limits": limits,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+            "signature": signature
+        });
+        sqlx::query(
+            "INSERT INTO offline_grants
+             (id, user_id, device_id, scopes, limits, issued_at, expires_at, signature)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(grant_id)
+        .bind(user_id)
+        .bind(device_id)
+        .bind(scopes)
+        .bind(limits)
+        .bind(issued_at)
+        .bind(expires_at)
+        .bind(signature)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1, $2, $3, 'OFFLINE_GRANT_ISSUED', now(), $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(grant_id)
+        .bind(json!({"user_id": user_id, "device_id": device_id}))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json)
+             VALUES ($1, $2, 'offline_grant.create', $3, $4, 201, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&response)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(OfflineGrantWriteOutcome::Created(response))
     }
 
     pub async fn create_customer(&self, input: &CreateCustomer) -> Result<Customer, sqlx::Error> {
