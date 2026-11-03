@@ -1392,8 +1392,8 @@ impl LocalStore {
             .map_err(|error| sqlx::Error::Protocol(format!("invalid principal: {error}")))?;
         let payment_rows = sqlx::query(
             "SELECT pa.allocated_amount, p.amount_received,
-                    COALESCE((SELECT SUM(amount) FROM payment_reversals pr
-                              WHERE pr.payment_id = p.id), '0') AS reversed
+                    COALESCE((SELECT GROUP_CONCAT(pr.amount, ',') FROM payment_reversals pr
+                              WHERE pr.payment_id = p.id), '') AS reversed_amounts
              FROM payment_allocations pa
              JOIN payments p ON p.id = pa.payment_id
              WHERE pa.receivable_id = $1
@@ -1408,20 +1408,36 @@ impl LocalStore {
                 .map_err(|error| sqlx::Error::Protocol(format!("invalid allocation: {error}")))?;
             let received = Decimal::from_str(&row.try_get::<String, _>("amount_received")?)
                 .map_err(|error| sqlx::Error::Protocol(format!("invalid payment: {error}")))?;
-            let reversed = Decimal::from_str(&row.try_get::<String, _>("reversed")?)
-                .map_err(|error| sqlx::Error::Protocol(format!("invalid reversal: {error}")))?;
+            let reversed_text: String = row.try_get("reversed_amounts")?;
+            let reversed = reversed_text
+                .split(',')
+                .filter(|value| !value.is_empty())
+                .try_fold(Decimal::ZERO, |total, value| {
+                    let amount = Decimal::from_str(value).map_err(|error| {
+                        sqlx::Error::Protocol(format!("invalid reversal: {error}"))
+                    })?;
+                    Ok::<Decimal, sqlx::Error>(total + amount)
+                })?;
             if received > Decimal::ZERO {
                 paid += allocated * ((received - reversed).max(Decimal::ZERO) / received);
             }
         }
         let credited_text: String = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount), '0') FROM credit_notes WHERE receivable_id = $1",
+            "SELECT COALESCE(GROUP_CONCAT(amount, ','), '')
+             FROM credit_notes WHERE receivable_id = $1",
         )
         .bind(receivable_id.to_string())
         .fetch_one(&mut *tx)
         .await?;
-        let credited = Decimal::from_str(&credited_text)
-            .map_err(|error| sqlx::Error::Protocol(format!("invalid credit total: {error}")))?;
+        let credited = credited_text
+            .split(',')
+            .filter(|value| !value.is_empty())
+            .try_fold(Decimal::ZERO, |total, value| {
+                let amount = Decimal::from_str(value).map_err(|error| {
+                    sqlx::Error::Protocol(format!("invalid credit amount: {error}"))
+                })?;
+                Ok::<Decimal, sqlx::Error>(total + amount)
+            })?;
         let outstanding = principal - paid - credited;
         if input.amount > outstanding {
             return Err(LocalCreditNoteError::AmountExceedsBalance);
