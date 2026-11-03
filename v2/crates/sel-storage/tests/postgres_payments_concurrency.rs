@@ -1,7 +1,13 @@
 use chrono::Utc;
 use rust_decimal::Decimal;
 use sel_contracts::{PaymentAllocationRequest, RecordPaymentRequest};
-use sel_storage::{migrate_postgres, postgres::PaymentWriteError, CentralStore};
+use sel_storage::{
+    migrate_postgres,
+    postgres::{
+        PaymentAllocationWriteError, PaymentAllocationWriteOutcome, PaymentWriteError,
+    },
+    CentralStore,
+};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -158,4 +164,130 @@ async fn concurrent_payments_cannot_both_consume_the_same_balance() {
     .await
     .expect("read allocated total");
     assert_eq!(total, Decimal::new(6, 0));
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn post_record_payment_allocation_is_atomic_idempotent_and_grouped() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    let organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .expect("connect central store");
+    migrate_postgres(&store.pool).await.expect("run migrations");
+    store
+        .ensure_organization("SEL post-payment allocation fixture")
+        .await
+        .expect("create organization");
+    let customer_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO customers (id, organization_id, customer_code, legal_name, status)
+         VALUES ($1, $2, $3, $4, 'ACTIVE')",
+    )
+    .bind(customer_id)
+    .bind(organization_id)
+    .bind(format!("ALLOC-{}", &customer_id.to_string()[..8]))
+    .bind("Post-payment allocation fixture")
+    .execute(&store.pool)
+    .await
+    .expect("fixture customer");
+    let receivable_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO receivables
+         (id, source_type, source_id, customer_id, currency, principal_total, status)
+         VALUES ($1, 'INVOICE', $2, $3, 'USD', 10.00, 'OPEN')",
+    )
+    .bind(receivable_id)
+    .bind(Uuid::new_v4())
+    .bind(customer_id)
+    .execute(&store.pool)
+    .await
+    .expect("fixture receivable");
+    let payment_id = Uuid::new_v4();
+    let actor_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO payments (id, customer_id, amount_received, currency, method, paid_at, status)
+         VALUES ($1, $2, 10.00, 'USD', 'CASH', now(), 'CENTRAL_ACCEPTED')",
+    )
+    .bind(payment_id)
+    .bind(customer_id)
+    .execute(&store.pool)
+    .await
+    .expect("fixture payment");
+
+    let first = store
+        .allocate_payment(
+            payment_id,
+            &[
+                sel_contracts::PaymentAllocationRequest {
+                    receivable_id,
+                    amount: Decimal::new(3, 0),
+                    schedule_id: None,
+                },
+                sel_contracts::PaymentAllocationRequest {
+                    receivable_id,
+                    amount: Decimal::new(2, 0),
+                    schedule_id: None,
+                },
+            ],
+            actor_id,
+            "post-allocate-key",
+            "post-allocate-digest",
+        )
+        .await
+        .expect("allocate payment");
+    assert!(matches!(first, PaymentAllocationWriteOutcome::Created(_)));
+
+    let replay = store
+        .allocate_payment(
+            payment_id,
+            &[
+                sel_contracts::PaymentAllocationRequest {
+                    receivable_id,
+                    amount: Decimal::new(3, 0),
+                    schedule_id: None,
+                },
+                sel_contracts::PaymentAllocationRequest {
+                    receivable_id,
+                    amount: Decimal::new(2, 0),
+                    schedule_id: None,
+                },
+            ],
+            actor_id,
+            "post-allocate-key",
+            "post-allocate-digest",
+        )
+        .await
+        .expect("replay allocation");
+    assert!(matches!(replay, PaymentAllocationWriteOutcome::Replay(_)));
+
+    let overallocated = store
+        .allocate_payment(
+            payment_id,
+            &[sel_contracts::PaymentAllocationRequest {
+                receivable_id,
+                amount: Decimal::new(6, 0),
+                schedule_id: None,
+            }],
+            actor_id,
+            "post-allocate-over-key",
+            "post-allocate-over-digest",
+        )
+        .await;
+    assert!(matches!(
+        overallocated,
+        Err(PaymentAllocationWriteError::AllocationExceedsPayment)
+    ));
+
+    let (allocation_count, allocated_total): (i64, Decimal) = sqlx::query_as(
+        "SELECT count(*), COALESCE(sum(allocated_amount), 0)
+         FROM payment_allocations WHERE payment_id = $1",
+    )
+    .bind(payment_id)
+    .fetch_one(&store.pool)
+    .await
+    .expect("read allocation totals");
+    assert_eq!(allocation_count, 1);
+    assert_eq!(allocated_total, Decimal::new(5, 0));
 }

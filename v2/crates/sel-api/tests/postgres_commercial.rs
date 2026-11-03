@@ -111,7 +111,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         "currency": "USD",
         "method": "CASH",
         "occurred_at": "2026-11-02T10:00:00Z",
-        "allocations": [{"receivable_id": invoice["receivable_id"], "amount": "3.00"}]
+        "allocations": [{"receivable_id": invoice["receivable_id"], "amount": "2.00"}]
     });
     let payment_request = Request::builder()
         .method("POST")
@@ -140,7 +140,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
                         "currency": "USD",
                         "method": "CASH",
                         "occurred_at": "2026-11-02T10:00:00Z",
-                        "allocations": [{"receivable_id": invoice["receivable_id"], "amount": "3.00"}]
+                        "allocations": [{"receivable_id": invoice["receivable_id"], "amount": "2.00"}]
                     }))
                     .unwrap(),
                 ))
@@ -150,6 +150,40 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .unwrap();
     assert_eq!(payment_retry.status(), StatusCode::OK);
     assert_eq!(json_body(payment_retry).await, payment);
+    let allocation_request = json!({
+        "allocations": [{"receivable_id": invoice["receivable_id"], "amount": "1.00"}]
+    });
+    let allocation_builder = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/v1/payments/{}/allocate",
+                payment["payment_id"].as_str().unwrap()
+            ))
+            .header("authorization", "Bearer test")
+            .header("X-Actor-Id", approved_by.to_string())
+            .header("Idempotency-Key", "pg-payment-allocation-key-1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&allocation_request).unwrap(),
+            ))
+            .unwrap()
+    };
+    let allocation = app
+        .clone()
+        .oneshot(allocation_builder())
+        .await
+        .unwrap();
+    assert_eq!(allocation.status(), StatusCode::CREATED);
+    let allocation = json_body(allocation).await;
+    assert_eq!(allocation["allocations"].as_array().unwrap().len(), 2);
+    let allocation_retry = app
+        .clone()
+        .oneshot(allocation_builder())
+        .await
+        .unwrap();
+    assert_eq!(allocation_retry.status(), StatusCode::OK);
+    assert_eq!(json_body(allocation_retry).await, allocation);
     let receivable = app
         .clone()
         .oneshot(

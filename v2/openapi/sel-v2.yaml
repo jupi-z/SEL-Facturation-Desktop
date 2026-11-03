@@ -124,6 +124,29 @@ paths:
       responses:
         '201': { description: Payment recorded }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/payments/{id}/allocate:
+    post:
+      operationId: allocatePayment
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [allocations]
+              properties:
+                allocations:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/PaymentAllocation' }
+      responses:
+        '201': { description: Payment allocations recorded }
+        '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
   /v1/receivables/{id}:
     get:
       operationId: getReceivable

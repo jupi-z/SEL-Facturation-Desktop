@@ -72,6 +72,11 @@ pub struct CreateOfflineGrantRequest {
     pub signature: String,
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct AllocatePaymentRequest {
+    pub allocations: Vec<PaymentAllocationRequest>,
+}
+
 #[derive(Clone, Debug)]
 struct AuthenticatedPrincipal(sel_storage::postgres::AuthSessionPrincipal);
 
@@ -172,6 +177,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/invoices/:id/document-data", get(get_document_data))
         .route("/v1/invoices/:id/void", post(void_invoice))
         .route("/v1/payments", post(record_payment))
+        .route("/v1/payments/:id/allocate", post(allocate_payment))
         .route("/v1/payments/:id/reverse", post(reverse_payment))
         .route("/v1/receivables/:id", get(get_receivable))
         .route("/v1/customers/:id/statement", get(get_statement))
@@ -1124,6 +1130,74 @@ async fn record_payment(
     Ok((StatusCode::CREATED, Json(body)))
 }
 
+async fn allocate_payment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(payment_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<AllocatePaymentRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let key = require_idempotency(&headers)?;
+    if input.allocations.is_empty()
+        || input
+            .allocations
+            .iter()
+            .any(|allocation| allocation.amount <= Decimal::ZERO)
+    {
+        return Err(ApiError::unprocessable(
+            "PAYMENT_ALLOCATION_INVALID",
+            "at least one positive allocation is required",
+        ));
+    }
+    let header_actor_id = headers
+        .get("X-Actor-Id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .parse::<Uuid>()
+                .map_err(|_| ApiError::unauthorized("ACTOR_INVALID", "X-Actor-Id must be a UUID"))
+        })
+        .transpose()?;
+    let actor_id = if let Some(Extension(AuthenticatedPrincipal(principal))) = principal {
+        if let Some(header_actor_id) = header_actor_id {
+            if header_actor_id != principal.user_id {
+                return Err(ApiError::forbidden(
+                    "ACTOR_MISMATCH",
+                    "X-Actor-Id does not match the authenticated session",
+                ));
+            }
+        }
+        principal.user_id
+    } else {
+        header_actor_id.ok_or_else(|| {
+            ApiError::unauthorized(
+                "ACTOR_REQUIRED",
+                "an authenticated actor is required for payment allocation",
+            )
+        })?
+    };
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "PAYMENT_ALLOCATION_CENTRAL_REQUIRED",
+            "audited payment allocations require a central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&input)?;
+    match store
+        .allocate_payment(payment_id, &input.allocations, actor_id, key, &digest)
+        .await
+        .map_err(payment_allocation_error)?
+    {
+        sel_storage::postgres::PaymentAllocationWriteOutcome::Created(body) => {
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        sel_storage::postgres::PaymentAllocationWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
 async fn reverse_payment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1651,6 +1725,56 @@ fn payment_write_error(error: sel_storage::postgres::PaymentWriteError) -> ApiEr
         ),
         sel_storage::postgres::PaymentWriteError::Database(error) => storage_error(error),
         sel_storage::postgres::PaymentWriteError::StoredResponse(error) => {
+            ApiError::internal(error)
+        }
+    }
+}
+
+fn payment_allocation_error(
+    error: sel_storage::postgres::PaymentAllocationWriteError,
+) -> ApiError {
+    match error {
+        sel_storage::postgres::PaymentAllocationWriteError::IdempotencyPayloadMismatch => {
+            ApiError::conflict(
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "idempotency key was reused with another payload",
+            )
+        }
+        sel_storage::postgres::PaymentAllocationWriteError::PaymentNotFound => {
+            ApiError::not_found("PAYMENT_NOT_FOUND", "payment not found")
+        }
+        sel_storage::postgres::PaymentAllocationWriteError::PaymentNotAccepted => {
+            ApiError::conflict(
+                "PAYMENT_NOT_ACCEPTED",
+                "only a centrally accepted payment can be allocated",
+            )
+        }
+        sel_storage::postgres::PaymentAllocationWriteError::InvalidAllocation => {
+            ApiError::unprocessable(
+                "PAYMENT_ALLOCATION_INVALID",
+                "allocation amounts must be strictly positive",
+            )
+        }
+        sel_storage::postgres::PaymentAllocationWriteError::AllocationExceedsPayment => {
+            ApiError::unprocessable(
+                "PAYMENT_ALLOCATION_EXCEEDS_RECEIPT",
+                "allocations exceed the payment amount",
+            )
+        }
+        sel_storage::postgres::PaymentAllocationWriteError::Overallocated => ApiError::conflict(
+            "RECEIVABLE_OVERALLOCATED",
+            "payment would exceed the receivable balance",
+        ),
+        sel_storage::postgres::PaymentAllocationWriteError::ContextInvalid => {
+            ApiError::unprocessable(
+                "PAYMENT_CONTEXT_INVALID",
+                "payment customer or currency does not match the receivable",
+            )
+        }
+        sel_storage::postgres::PaymentAllocationWriteError::Database(error) => {
+            storage_error(error)
+        }
+        sel_storage::postgres::PaymentAllocationWriteError::StoredResponse(error) => {
             ApiError::internal(error)
         }
     }

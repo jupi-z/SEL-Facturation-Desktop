@@ -190,6 +190,33 @@ pub enum PaymentWriteOutcome {
 }
 
 #[derive(Debug, Error)]
+pub enum PaymentAllocationWriteError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("idempotency key was reused with another payload")]
+    IdempotencyPayloadMismatch,
+    #[error("payment was not found in the organization")]
+    PaymentNotFound,
+    #[error("payment is not accepted centrally")]
+    PaymentNotAccepted,
+    #[error("payment allocations must be strictly positive")]
+    InvalidAllocation,
+    #[error("payment allocations exceed the received amount")]
+    AllocationExceedsPayment,
+    #[error("receivable balance would be overallocated")]
+    Overallocated,
+    #[error("payment customer or currency does not match the receivable")]
+    ContextInvalid,
+    #[error("stored idempotency response is invalid: {0}")]
+    StoredResponse(#[from] serde_json::Error),
+}
+
+pub enum PaymentAllocationWriteOutcome {
+    Created(serde_json::Value),
+    Replay(serde_json::Value),
+}
+
+#[derive(Debug, Error)]
 pub enum PaymentReverseError {
     #[error("database operation failed: {0}")]
     Database(#[from] sqlx::Error),
@@ -1476,6 +1503,221 @@ impl CentralStore {
         .await?;
         tx.commit().await?;
         Ok(PaymentWriteOutcome::Created(body))
+    }
+
+    pub async fn allocate_payment(
+        &self,
+        payment_id: Uuid,
+        allocations: &[sel_contracts::PaymentAllocationRequest],
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<PaymentAllocationWriteOutcome, PaymentAllocationWriteError> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'payment.allocate' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let original_digest: String = row.try_get("request_digest")?;
+            if original_digest != request_digest {
+                return Err(PaymentAllocationWriteError::IdempotencyPayloadMismatch);
+            }
+            let original: serde_json::Value = row.try_get("response_json")?;
+            return Ok(PaymentAllocationWriteOutcome::Replay(
+                serde_json::from_value(original)?,
+            ));
+        }
+        if allocations.is_empty() || allocations.iter().any(|item| item.amount <= Decimal::ZERO) {
+            return Err(PaymentAllocationWriteError::InvalidAllocation);
+        }
+
+        let mut grouped_allocations = BTreeMap::<Uuid, Decimal>::new();
+        let mut persisted_allocations = BTreeMap::<(Uuid, Option<Uuid>), Decimal>::new();
+        for allocation in allocations {
+            *grouped_allocations
+                .entry(allocation.receivable_id)
+                .or_insert(Decimal::ZERO) += allocation.amount;
+            *persisted_allocations
+                .entry((allocation.receivable_id, allocation.schedule_id))
+                .or_insert(Decimal::ZERO) += allocation.amount;
+        }
+        let requested_total: Decimal = grouped_allocations.values().copied().sum();
+
+        let Some(payment) = sqlx::query(
+            "SELECT p.amount_received, p.currency, p.customer_id, p.status
+             FROM payments p
+             JOIN customers c ON c.id = p.customer_id
+             WHERE p.id = $1 AND c.organization_id = $2
+             FOR UPDATE OF p",
+        )
+        .bind(payment_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(PaymentAllocationWriteError::PaymentNotFound);
+        };
+        let payment_status: String = payment.try_get("status")?;
+        if payment_status != "CENTRAL_ACCEPTED" {
+            return Err(PaymentAllocationWriteError::PaymentNotAccepted);
+        }
+        let amount_received: Decimal = payment.try_get("amount_received")?;
+        let payment_currency: String = payment.try_get("currency")?;
+        let payment_customer_id: Uuid = payment.try_get("customer_id")?;
+        let prior_payment_allocated: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(allocated_amount), 0)
+             FROM payment_allocations WHERE payment_id = $1",
+        )
+        .bind(payment_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if prior_payment_allocated + requested_total > amount_received {
+            return Err(PaymentAllocationWriteError::AllocationExceedsPayment);
+        }
+
+        for (receivable_id, allocated_amount) in &grouped_allocations {
+            let Some(receivable) = sqlx::query(
+                "SELECT r.principal_total, r.currency, r.customer_id
+                 FROM receivables r
+                 JOIN customers c ON c.id = r.customer_id
+                 WHERE r.id = $1 AND r.customer_id = $2
+                   AND c.organization_id = $3
+                 FOR UPDATE OF r",
+            )
+            .bind(receivable_id)
+            .bind(payment_customer_id)
+            .bind(self.organization_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            else {
+                return Err(PaymentAllocationWriteError::ContextInvalid);
+            };
+            let currency: String = receivable.try_get("currency")?;
+            if currency != payment_currency {
+                return Err(PaymentAllocationWriteError::ContextInvalid);
+            }
+            let principal: Decimal = receivable.try_get("principal_total")?;
+            let paid: Decimal = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(allocated_amount), 0)
+                 FROM payment_allocations WHERE receivable_id = $1",
+            )
+            .bind(receivable_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if paid + allocated_amount > principal {
+                return Err(PaymentAllocationWriteError::Overallocated);
+            }
+            for ((_, schedule_id), _) in persisted_allocations
+                .iter()
+                .filter(|((id, _), _)| id == receivable_id)
+            {
+                if let Some(schedule_id) = schedule_id {
+                    let exists = sqlx::query(
+                        "SELECT s.id FROM installment_schedule s
+                         JOIN installment_plans p ON p.id = s.plan_id
+                         WHERE s.id = $1 AND p.receivable_id = $2
+                         FOR SHARE",
+                    )
+                    .bind(schedule_id)
+                    .bind(receivable_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .is_some();
+                    if !exists {
+                        return Err(PaymentAllocationWriteError::ContextInvalid);
+                    }
+                }
+            }
+        }
+
+        for ((receivable_id, schedule_id), allocated_amount) in persisted_allocations {
+            sqlx::query(
+                "INSERT INTO payment_allocations
+                 (id, payment_id, receivable_id, schedule_id, allocated_amount, currency)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(payment_id)
+            .bind(receivable_id)
+            .bind(schedule_id)
+            .bind(allocated_amount)
+            .bind(&payment_currency)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        let allocation_rows = sqlx::query(
+            "SELECT receivable_id, schedule_id, allocated_amount
+             FROM payment_allocations WHERE payment_id = $1
+             ORDER BY receivable_id, schedule_id NULLS FIRST",
+        )
+        .bind(payment_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let all_allocations = allocation_rows
+            .iter()
+            .map(|row| {
+                Ok(json!({
+                    "receivable_id": row.try_get::<Uuid, _>("receivable_id")?,
+                    "schedule_id": row.try_get::<Option<Uuid>, _>("schedule_id")?,
+                    "amount": format!("{:.2}", row.try_get::<Decimal, _>("allocated_amount")?)
+                }))
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        let body = json!({
+            "payment_id": payment_id,
+            "customer_id": payment_customer_id,
+            "payment": {
+                "payment_id": payment_id,
+                "status": "CENTRAL_ACCEPTED",
+                "amount": format!("{:.2}", amount_received),
+                "currency": payment_currency
+            },
+            "allocations": all_allocations
+        });
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, event_type, subject_id, occurred_at, redacted_metadata)
+             VALUES ($1, $2, 'PAYMENT_ALLOCATED', $3, now(), $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(payment_id)
+        .bind(&body)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO central_changes
+             (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'payments', $2, 2, $3)",
+        )
+        .bind(self.organization_id)
+        .bind(payment_id)
+        .bind(&body)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json)
+             VALUES ($1, $2, 'payment.allocate', $3, $4, 201, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&body)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(PaymentAllocationWriteOutcome::Created(body))
     }
 
     pub async fn reverse_payment(
