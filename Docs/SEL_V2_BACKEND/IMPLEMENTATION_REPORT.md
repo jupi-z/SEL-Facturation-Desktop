@@ -6,7 +6,7 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `fb3677b` (`test(v2): canonicalize catalog decimal output`)
+Commit contrôlé : `a3063b5` (`feat(v2): add read-only migration reconciliation`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — avoirs append-only
@@ -45,12 +45,13 @@ Les corrections cumulées pendant la reprise de la PR #58 ferment plusieurs rég
 - l'application atomique d'un lot de changements SQLite est maintenant testée sous erreur au milieu du lot : la projection déjà commencée et le curseur sont annulés ensemble, puis le rejeu valide converge.
 - la canonisation de l'empreinte trie les lignes de service par clé stable ; une inversion accidentelle des lignes électricité/eau ne crée donc pas un faux conflit financier.
 - les commandes financières synchronisées utilisent maintenant le même contexte transactionnel PostgreSQL pour l'effet métier et `sync_inbox` : facture eau + électricité, paiement, affectation, vente solaire, contrat solaire, annulation, contre-écriture et avoir ; cette couverture est confirmée par la CI du commit contrôlé.
-- la CI du commit contrôlé `fb3677b` confirme le refactor transactionnel, le CLI d'exploitation, le garde-fou de collision de séquence et les routes de référentiels : formatage, Clippy `-D warnings`, tests workspace et tests PostgreSQL de persistance/concurrence sont tous verts dans le run `41641446947`.
-- le CLI expose désormais `backup-postgres` et `restore-postgres` : le restore est fail-closed sans `SEL_RESTORE_APPROVED=I_UNDERSTAND`, exige une sauvegarde pré-restauration distincte et utilise `pg_restore --single-transaction --exit-on-error` ; la CI `41641446947` valide le code et le test d'approbation, mais aucun restore réel n'est exécuté sur une base SEL.
+- la CI du commit contrôlé `a3063b5` confirme le refactor transactionnel, le CLI d'exploitation, le garde-fou de collision de séquence, les routes de référentiels et la compilation du rapprochement V1→V2 : formatage, Clippy `-D warnings`, tests workspace et tests PostgreSQL de persistance/concurrence sont tous verts dans le run `41642740720`.
+- le CLI expose désormais `backup-postgres` et `restore-postgres` : le restore est fail-closed sans `SEL_RESTORE_APPROVED=I_UNDERSTAND`, exige une sauvegarde pré-restauration distincte et utilise `pg_restore --single-transaction --exit-on-error` ; la CI `41642740720` valide le code et le test d'approbation, mais aucun restore réel n'est exécuté sur une base SEL.
 - la réception SQLite des changements centraux refuse désormais les collisions de séquence avec un contenu différent, les trous antérieurs au curseur durable et tout recul du curseur ; le lot est annulé sans modifier la projection ni le curseur, avec un test de rejeu conflictuel dédié.
 - les référentiels centraux disposent maintenant de routes de lecture protégées pour les produits actifs, les tarifs approuvés et datés, les profils fiscaux approuvés et les taux de change approuvés ; les montants sont renvoyés sous forme de chaînes décimales canoniques et un test HTTP PostgreSQL vérifie l'exclusion des brouillons, révocations et éléments inactifs.
+- `sel-cli reconcile <portable-v1.json>` compare maintenant en lecture seule les identifiants stables, la présence des clients/factures/paiements et les totaux financiers entre un export V1 et PostgreSQL ; il renvoie `MATCH` ou `MISMATCH`, `writes: 0`, l'empreinte de la source et les écarts détaillés.
 
-La CI du commit contrôlé est verte : [run — 41641446947](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41641446947), job `rust` `125935697770`, sur `fb3677b`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès.
+La CI du commit contrôlé est verte : [run — 41642740720](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41642740720), job `rust` `125940105317`, sur `a3063b5`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès.
 
 ## Audit des branches GitHub
 
@@ -73,7 +74,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le correctif de canonisation (`358ba74`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La validation du correctif actuel `fb3677b` est suivie ci-dessus. Cette exécution distante valide notamment la pagination/filtre clients, les référentiels actifs/approuvés, le test RBAC/IDOR, la concurrence solaire, le rollback atomique d'un pull SQLite, la canonicalisation de l'empreinte, les transactions de synchronisation financière, le rejet des collisions de séquence et les garde-fous de restauration. L’environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL réelle, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La validation du correctif actuel `a3063b5` est suivie ci-dessus. Cette exécution distante valide notamment le rapprochement V1→V2 en lecture seule, la pagination/filtre clients, les référentiels actifs/approuvés, le test RBAC/IDOR, la concurrence solaire, le rollback atomique d'un pull SQLite, la canonicalisation de l'empreinte, les transactions de synchronisation financière, le rejet des collisions de séquence et les garde-fous de restauration. L’environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL réelle, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -108,7 +109,7 @@ test two_sqlite_devices_converge_through_real_postgres_and_http ... ok
 test result: ok. 1 passed; 0 failed
 ```
 
-La commande n’a pas été exécutée localement dans cet environnement : la compilation MSVC s'arrête faute de `link.exe`. La preuve reproductible disponible est donc la CI GitHub `41641446947` ci-dessous, et non une prétendue exécution locale.
+La commande n’a pas été exécutée localement dans cet environnement : la compilation MSVC s'arrête faute de `link.exe`. La preuve reproductible disponible est donc la CI GitHub `41642740720` ci-dessous, et non une prétendue exécution locale.
 
 Le scénario vérifie :
 
@@ -130,13 +131,13 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 ### Exécution locale
 
 - Suite Rust complète locale : **NOT_EXECUTED** ; la compilation MSVC locale est bloquée par l'absence de `link.exe`/Build Tools.
-- Tests du commit contrôlé `fb3677b` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
+- Tests du commit contrôlé `a3063b5` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
 - Vérification locale de formatage : **PASS** ; tentative locale de compilation : **BLOCKED_EXTERNAL** par l'absence de `link.exe`.
 - Relecture statique du diff et vérification `git status` : **PASS** ; aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [41641446947](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41641446947), job `rust` `125935697770` : **SUCCESS** sur `fb3677b`.
+Run [41642740720](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41642740720), job `rust` `125940105317` : **SUCCESS** sur `a3063b5`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -191,15 +192,15 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | UPD-04 | NOT_TESTED | SafeUpdate natif hors périmètre de cette validation backend |
 | UPD-05 | BLOCKED_EXTERNAL | clé publique Ed25519 de production absente ; fail-closed conservé |
 | MIG-01 | PARTIAL | dry-run vérifié et chemin `--apply` transactionnel livré ; fixture PostgreSQL avec `pg_dump` n’est pas exécutée ici |
-| MIG-02 | PARTIAL | checksum `import_batches`, mapping UUID et rejeu sans écritures sont codés ; répétition réelle sur PostgreSQL reste à exécuter |
+| MIG-02 | PARTIAL | checksum `import_batches`, mapping UUID, rejeu sans écritures et commande de rapprochement lecture seule sont codés ; répétition réelle de l’import sur PostgreSQL reste à exécuter |
 | MIG-03 | BLOCKED_EXTERNAL | données V1 anonymisées de rapprochement absentes |
 | MIG-04 | BLOCKED_EXTERNAL | campagne reprise/rollback d’import non réalisée |
-| MIG-05 | PARTIAL | commandes de sauvegarde/restauration contrôlées et test d'approbation fail-closed livrés ; restauration réelle sur base de test/prod et rapprochement des totaux encore non exécutés |
+| MIG-05 | PARTIAL | commandes de sauvegarde/restauration contrôlées, rapprochement lecture seule et test d'approbation fail-closed livrés ; restauration réelle et exécution du rapprochement sur une base de test/prod restent à faire |
 | FILE-01 | PASS | serveur/API ne déclarent ni ne stockent de PDF |
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41641446947` sur `fb3677b` |
+| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41642740720` sur `a3063b5` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -215,7 +216,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41641446947` est verte sur `fb3677b`, avec les tests PostgreSQL/SQLite, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement et le rejet des collisions de séquence.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41642740720` est verte sur `a3063b5`, avec le rapprochement V1→V2 en lecture seule, les tests PostgreSQL/SQLite, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement et le rejet des collisions de séquence.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
