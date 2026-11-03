@@ -3,7 +3,7 @@
 Date : 3 novembre 2026  
 Branche : `monarque/sel-v2-backend`  
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)  
-État : **IN_PROGRESS — 74 %**
+État : **IN_PROGRESS — 76 %**
 
 Ce document consigne les preuves de cadrage et les points encore à valider. Il ne certifie ni une recette Windows SEL, ni une installation cliente, ni le choix final du framework desktop.
 
@@ -12,19 +12,19 @@ Ce document consigne les preuves de cadrage et les points encore à valider. Il 
 | Sujet | État | Preuve / réserve |
 |---|---|---|
 | Worktree et branche | PASS au contrôle | Worktree propre avant cette mise à jour documentaire ; branche locale synchronisée avec `origin/monarque/sel-v2-backend`. |
-| PR et référence distante | PASS | PR #58 ouverte vers `main`. SHA de référence contrôlé avant ce rapport : `79e969d0f8a48c4a2df391f5ebd99feb493f0ddc`. |
-| CI sur cette référence | PARTIAL | Rust et paquet serveur réussis ; Build Windows Desktop et candidat Windows étaient en attente au dernier contrôle. La CI du nouveau commit documentaire devra être relue. |
+| PR et référence distante | PASS | PR #58 ouverte vers `main`. SHA de code contrôlé : `ee62737ab7177bffb530681cef8d86750abc39df`. |
+| CI sur le dernier SHA de code | PASS | 4/4 workflows réussis sur `ee62737` : Rust/PostgreSQL, paquet serveur, Windows Desktop et candidat Windows V2. Un commit documentaire de suivi peut relancer la CI. |
 | Documents normatifs | PASS, avec préséance | Les exigences backend restent applicables. Le mandat propriétaire ultérieur du 3 novembre autorise le nouveau frontend V2 et remplace l’interdiction initiale de frontend pour ce périmètre seulement. V1 et ses données restent protégées. |
 | Inventaire Figma | PASS pour le comptage | 40 écrans métier + 5 modèles A4 : 30+4 annoncés dans la livraison et 10+1 ajoutés le 3 novembre. Le tableau de bord sombre est une variante du même écran. |
-| Cartographie écran/API | PARTIAL | Les familles d’écrans et les routes existantes/manquantes sont comparées ci-dessous ; les contrats par écran, droits et cas de test restent à détailler pendant la phase. |
+| Cartographie écran/API/tests | PARTIAL | Les 40 écrans sont reliés aux contrats et lacunes API ; les tests backend existants sont reliés aux parcours. Vérifier les droits exacts par handler et construire les tests UI en phase d’implémentation. |
 | Paquet déjà remis à SEL | BLOCKED_EXTERNAL | Le dépôt identifie une release publique V1, mais aucun journal d’installation, reçu de livraison ou inventaire du poste SEL ne prouve le paquet actuellement installé. |
 | Spike du shell Windows | BLOCKED_EXTERNAL | Environnement de contrôle : Windows 11 Pro x64, Node 24.21.0, npm 11.19.0, .NET SDK 8.0.426 et WebView2 Runtime 156.0.4314.58 présents ; `cargo`/`rustc` et Visual Studio C++ Build Tools non détectés. Aucun build Tauri n’a été prétendu. |
 
 ### Référence GitHub et paquet
 
-- HEAD contrôlé : `79e969d0f8a48c4a2df391f5ebd99feb493f0ddc`, branche propre et alignée avec son upstream au moment du contrôle.
+- HEAD contrôlé : `ee62737ab7177bffb530681cef8d86750abc39df`, branche propre et alignée avec son upstream au moment du contrôle.
 - La PR #58 est ouverte, base `main`, dont le SHA distant contrôlé est `09d9a244b6b243fccdf3313d0a9d1aace2daa071`.
-- Sur le SHA `79e969d`, les workflows Rust (`41703483248`) et paquet serveur (`41703483270`) ont réussi. Les workflows Build Windows Desktop (`41703483216`) et candidat Windows (`41703483340`) étaient en attente lorsque la vérification a été faite.
+- Sur le SHA de code `ee62737`, les quatre workflows sont réussis : Rust `41704810520`, serveur `41704810691`, Windows Desktop `41704810699`, candidat Windows V2 `41704810645`. La construction du candidat CI n’est ni un test d’installation sur poste SEL ni la validation du nouveau frontend Figma.
 - Dernière release V1 non brouillon trouvée : `v0.3.29`, préversion GitHub, avec `SEL-Facturation-Setup-0.3.29.exe` (SHA-256 `0db274ae2ed55845b8598b6f6f652f30d8590aac3f0fac10965bf5a4c58d2cda`), EXE autonome et MSI. `v0.3.31` est un brouillon sans assets. La version actuellement installée chez SEL demeure inconnue.
 - Le workflow candidat V2 produit encore `SEL-Facturation-V2-Setup-0.3.30.exe` via PyInstaller/pywebview ; ce n’est pas le nouveau frontend Figma et ce nom/version ne prouve pas une publication ou une remise à SEL.
 
@@ -133,12 +133,11 @@ Pré-requis bloquant observé sur cette session : installer/configurer un toolch
 
 ## Calcul de progression
 
-Progression phase 0 : **73,75 % (arrondie à 74 %)**. Pondération : dépôt/PR 10 % (validé) ; CI 5 % (50 % acquis sur le SHA de référence `7bd9f51`, dont les contrôles étaient encore en cours au dernier relevé ; les 4 workflows du code SHA `79e969d` ont tous réussi) ; lecture des consignes et préséance 10 % (validé) ; inventaire Figma 20 % (validé) ; cartographie écrans/API/tests 25 % (95 % acquis : 40 écrans reliés aux contrats et gaps, tests backend existants reliés par parcours ; permissions exactes par handler restent à vérifier) ; identification du paquet livré 10 % (75 % acquis : dernière release publique identifiée, installation SEL inconnue) ; spike Windows 20 % (0 %, bloqué par toolchain manquant). Calcul : 10 + 2,5 + 10 + 20 + 23,75 + 7,5 = **73,75 %**. Les éléments bloqués ne sont pas comptés comme terminés. La CI du nouveau commit documentaire `5c9b814` est en cours et doit être relevée avant clôture.
+Progression phase 0 : **76,25 % (arrondie à 76 %)**. Pondération : dépôt/PR 10 % (validé) ; CI 5 % (100 % acquis, 4/4 workflows verts sur le SHA de code `ee62737`) ; lecture des consignes et préséance 10 % (validé) ; inventaire Figma 20 % (validé) ; cartographie écrans/API/tests 25 % (95 % acquis : 40 écrans reliés aux contrats et gaps, tests backend reliés par parcours ; permissions exactes par handler restent à vérifier) ; identification du paquet livré 10 % (75 % acquis : dernière release publique identifiée, installation SEL inconnue) ; spike Windows 20 % (0 %, bloqué par toolchain manquant). Calcul : 10 + 5 + 10 + 20 + 23,75 + 7,5 = **76,25 %**. Les éléments bloqués ne sont pas comptés comme terminés.
 
 ## Actions restantes avant clôture de phase 0
 
-1. Rafraîchir les quatre statuts CI sur le SHA courant et examiner les résultats Windows.
-2. Établir le tableau écran par écran avec route, permission, état online/offline et test/absence.
-3. Produire un environnement Windows de développement adapté et construire/lancer le spike Tauri↔agent local ; tester l’installateur et le démarrage sans navigateur externe.
-4. Obtenir une preuve d’installation/livraison du poste SEL, ou marquer définitivement cette vérification `BLOCKED_EXTERNAL`.
-5. Émettre l’ADR final du shell et mettre à jour le plan/rapport avant d’ouvrir les phases d’implémentation.
+1. Vérifier les politiques RBAC handler par handler et figer les droits réels du tableau écran/API.
+2. Produire un environnement Windows de développement avec Rust MSVC et Build Tools, puis construire/lancer le spike Tauri↔agent local ; éprouver WebView2, installateur et démarrage. Ce point reste `BLOCKED_EXTERNAL` dans l’environnement actuel.
+3. Obtenir une preuve de la version installée/livrée au poste SEL, ou garder explicitement `BLOCKED_EXTERNAL` jusqu’à réception d’un inventaire ou d’un reçu.
+4. Finaliser l’ADR du shell à partir du résultat du spike. En attendant, Tauri 2 + React/TypeScript reste une option candidate, pas une décision validée.
