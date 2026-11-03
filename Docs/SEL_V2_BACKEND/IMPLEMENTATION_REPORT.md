@@ -6,7 +6,7 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `ab73fc0` (`fix(v2): export local solar sale error`)
+Commit contrôlé : `c16e6f6` (`test(v2): cover Windows live update path traversal`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — avoirs append-only
@@ -58,8 +58,9 @@ Les corrections cumulées pendant la reprise de la PR #58 ferment plusieurs rég
 - une fixture volontairement invalide après une première facture est maintenant vérifiée en PostgreSQL réel : la transaction est annulée et aucun client ni aucune facture partielle ne subsiste.
 - les routes obligatoires de création de contrat solaire sont maintenant exposées côté central (`POST /v1/solar/contracts`) et côté agent local (`POST /local/v1/solar/contracts`) ; elles réutilisent la validation de schedule, l'idempotence et les projections existantes, avec des tests HTTP central/offline.
 - un devis solaire central (`POST /v1/solar/quotes`) et local (`POST /local/v1/solar/quotes`) renvoie désormais le prix du catalogue actif approuvé ; une vente ne peut plus déclarer un principal différent du prix validé, avec rejet HTTP `422` et test PostgreSQL réel ; le parcours local vérifie également le devis hors connexion.
+- les tests adversariaux LiveUpdate couvrent maintenant les chemins parent, absolus POSIX/Windows, séparateurs inversés, composants vides et traversals ZIP ; les chemins non sûrs sont rejetés avant extraction, avec validation confirmée par la CI du commit contrôlé.
 
-La CI du commit contrôlé est verte : [run — 41656677873](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41656677873), job `rust` `125988733922`, sur `ab73fc0`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris les devis et le rejet des prix solaires divergents côté central et local.
+La CI du commit contrôlé est verte : [run — 41658468962](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41658468962), job `rust` `125995036857`, sur `c16e6f6`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris les devis et le rejet des prix solaires divergents côté central et local, ainsi que les variantes adversariales Windows de LiveUpdate.
 
 ## Audit des branches GitHub
 
@@ -200,7 +201,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | UPD-01 | PASS | manifeste LiveUpdate déclaratif signé sans remplacement natif |
 | UPD-02 | PASS | signature Ed25519, SHA-256, expiration, séquence et chemins invalides rejetés |
 | UPD-03 | PASS | activation et rollback connu-bon testés |
-| UPD-04 | NOT_TESTED | SafeUpdate natif hors périmètre de cette validation backend |
+| UPD-04 | PASS | tests adversariaux LiveUpdate : parent, absolu POSIX/Windows, séparateurs inversés, composants vides et traversal ZIP rejetés avant extraction ; CI `41658468962` |
 | UPD-05 | BLOCKED_EXTERNAL | clé publique Ed25519 de production absente ; fail-closed conservé |
 | MIG-01 | PASS limité | dry-run et import transactionnel vérifiés ; fixture synthétique PostgreSQL avec `pg_dump` exécutée en CI `41649126504` |
 | MIG-02 | PASS limité | checksum `import_batches`, mapping UUID, import PostgreSQL et rejeu idempotent vérifiés : second passage `ALREADY_APPLIED`, `writes: 0` ; données V1 SEL anonymisées encore absentes |
@@ -211,7 +212,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41656677873` sur `ab73fc0` |
+| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41658468962` sur `c16e6f6` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -227,7 +228,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41656677873` est verte sur `ab73fc0`, avec l'import V1 synthétique idempotent, son rollback transactionnel, les parcours de contrat et devis solaire, les tests PostgreSQL/SQLite, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement et le rejet des collisions de séquence.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41658468962` est verte sur `c16e6f6`, avec l'import V1 synthétique idempotent, son rollback transactionnel, les parcours de contrat et devis solaire, les tests PostgreSQL/SQLite, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement, le rejet des collisions de séquence et les contrôles adversariaux LiveUpdate.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
