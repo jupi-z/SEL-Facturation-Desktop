@@ -1533,6 +1533,18 @@ impl LocalStore {
     ) -> Result<(), sqlx::Error> {
         let _guard = self.write_lock.lock().await;
         let mut tx = self.pool.begin().await?;
+        let current_cursor = sqlx::query_scalar::<_, String>(
+            "SELECT value FROM sync_state WHERE key = 'central_cursor'",
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+        if response.next_cursor < current_cursor {
+            return Err(sqlx::Error::Protocol(
+                "sync pull cursor cannot move backwards".into(),
+            ));
+        }
         for change in &response.changes {
             let sequence = change
                 .get("sequence")
@@ -1554,6 +1566,38 @@ impl LocalStore {
                 .get("change")
                 .cloned()
                 .ok_or_else(|| sqlx::Error::Protocol("sync change payload is missing".into()))?;
+            if sequence <= current_cursor {
+                let existing = sqlx::query_as::<_, (String, String, i64, String)>(
+                    "SELECT entity, entity_id, revision, change_json
+                     FROM central_changes WHERE sequence = $1",
+                )
+                .bind(sequence)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let Some((existing_entity, existing_entity_id, existing_revision, existing_json)) =
+                    existing
+                else {
+                    return Err(sqlx::Error::Protocol(
+                        "sync pull contains a sequence gap before the durable cursor".into(),
+                    ));
+                };
+                let existing_change = serde_json::from_str::<serde_json::Value>(&existing_json)
+                    .map_err(|error| {
+                        sqlx::Error::Protocol(format!(
+                            "stored sync change payload is invalid: {error}"
+                        ))
+                    })?;
+                if existing_entity != entity
+                    || existing_entity_id != entity_id
+                    || existing_revision != revision
+                    || existing_change != change_json
+                {
+                    return Err(sqlx::Error::Protocol(
+                        "sync pull sequence collision has different content".into(),
+                    ));
+                }
+                continue;
+            }
             let inserted = sqlx::query(
                 "INSERT INTO central_changes (sequence, entity, entity_id, revision, change_json)
                  VALUES ($1, $2, $3, $4, $5)

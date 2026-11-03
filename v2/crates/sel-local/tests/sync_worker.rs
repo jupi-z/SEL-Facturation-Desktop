@@ -276,6 +276,65 @@ async fn pulled_changes_roll_back_projection_and_cursor_after_mid_batch_failure(
 }
 
 #[tokio::test]
+async fn pulled_sequence_collision_rolls_back_without_advancing_cursor() {
+    let path = std::env::temp_dir().join(format!(
+        "sel-v2-pull-sequence-collision-{}.sqlite",
+        Uuid::new_v4()
+    ));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("connect local store");
+    let customer_id = Uuid::new_v4();
+    let original = serde_json::json!({
+        "sequence": 21,
+        "entity": "customers",
+        "entity_id": customer_id,
+        "revision": 1,
+        "change": {"customer_code":"SEQ-ORIGINAL","legal_name":"Original","status":"ACTIVE"}
+    });
+    store
+        .apply_pulled_changes(&SyncPullResponse {
+            changes: vec![original],
+            next_cursor: 21,
+        })
+        .await
+        .expect("apply original change");
+
+    let conflicting = serde_json::json!({
+        "sequence": 21,
+        "entity": "customers",
+        "entity_id": customer_id,
+        "revision": 2,
+        "change": {"customer_code":"SEQ-CONFLICT","legal_name":"Conflicting","status":"ACTIVE"}
+    });
+    let error = store
+        .apply_pulled_changes(&SyncPullResponse {
+            changes: vec![conflicting],
+            next_cursor: 22,
+        })
+        .await
+        .expect_err("different content for an existing sequence must fail closed");
+    assert!(error
+        .to_string()
+        .contains("sync pull sequence collision has different content"));
+    assert_eq!(store.central_cursor().await.unwrap(), 21);
+    assert_eq!(
+        store
+            .get_customer(customer_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .customer_code,
+        "SEQ-ORIGINAL"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn pulled_utility_invoice_and_payment_changes_project_locally() {
     let path =
         std::env::temp_dir().join(format!("sel-v2-financial-pull-{}.sqlite", Uuid::new_v4()));
