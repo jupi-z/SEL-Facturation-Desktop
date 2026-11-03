@@ -42,6 +42,25 @@ Artefact candidat généré par la CI : SEL-Facturation-V2-Windows-5.zip, artefa
 
 Limites encore ouvertes pour cet incrément : la validation sur un poste Windows SEL, l’impression réelle, le test WebView2 et l’exécution Rust avec PostgreSQL/SQLite réels restent distincts des tests locaux ci-dessus. Aucun calcul financier n’est effectué dans le JavaScript.
 
+## Incrément paiements — sélection sûre des créances
+
+Commit : 490cc4a (feat(v2): select open receivables from customer statement)
+
+- le champ libre d’identifiant de créance est remplacé par une liste liée au client sélectionné ;
+- le client local charge GET /local/v1/customers/{id}/statement et ne présente que les créances OPEN ou OVERDUE avec un solde strictement positif ;
+- les changements rapides de client sont protégés contre le retour tardif d’une réponse obsolète ;
+- le moteur Rust reste l’autorité pour l’affectation, les montants, les soldes et l’idempotence ;
+- le test UI vérifie la présence de la sélection et du relevé local ; la suite ciblée desktop/V2 passe à 18 tests.
+
+Preuves CI du commit 490cc4a :
+
+- backend Rust : run 41692359758 — **PASS** ;
+- build Windows Desktop : run 41692359582 — **PASS** ;
+- paquet serveur : run 41692359615 — **PASS** ;
+- candidat Windows : run 41692359580 — **PASS**.
+
+Artefact candidat correspondant : SEL-Facturation-V2-Windows-7.zip, artefact GitHub 13257956654, taille 64 152 864 octets, digest ZIP sha256:ddb8d8a45a6539975e8bc8ed41ac678abc49a85e9866655fbe8b6144ff075815. Il contient SEL-Facturation-V2-Setup-0.3.30.exe, le MSI, l’EXE et SHA256SUMS.txt. Il reste non signé Authenticode et réservé aux tests.
+
 ## Mise à jour livraison urgente — candidat Windows et paquet serveur
 
 Le commit `bcb19d0` conserve le shell natif V2, les routes locales de lecture des factures/paiements/ventes solaires, le packaging Windows et le paquet de déploiement serveur. Les validations distantes suivantes sont vertes :
