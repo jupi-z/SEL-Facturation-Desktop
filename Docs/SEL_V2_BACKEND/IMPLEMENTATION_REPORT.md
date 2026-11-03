@@ -6,8 +6,25 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `caf0025` (`test(v2): assert canonical customer statement ids`)
-Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, LiveUpdate et préparation du candidat Windows. Aucun merge dans `main`, aucune release et aucun déploiement réel.
+Commit contrôlé : `aa405c9` (`test: avoid date-sensitive legacy tariff expectations`)
+Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, LiveUpdate, shell Windows V2 et paquet serveur. Aucun merge dans `main`, aucune release et aucun déploiement réel.
+
+## Mise à jour livraison urgente — candidat Windows et paquet serveur
+
+Le commit `aa405c9` ajoute le shell natif V2, les routes locales de lecture des factures/paiements/ventes solaires, le packaging Windows et le paquet de déploiement serveur. Les validations distantes suivantes sont vertes :
+
+- Rust V2 : [run 41673729959](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41673729959), job `126048622925` — fmt, Clippy, tests workspace et PostgreSQL ignoré : **PASS** ;
+- Windows V2 : [run 41673729952](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41673729952), job `126048623479` — EXE, MSI, bootstrapper WebView2, smoke test et SHA-256 : **PASS** ;
+- paquet serveur : [run 41673729876](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41673729876), job `126048624031` — interpolation Compose et build Docker sans secrets : **PASS** ;
+- chaîne Windows V1 de non-régression : [run 41673730031](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41673730031), job `126048624969` — **PASS**.
+
+Artefact Windows : `SEL-Facturation-V2-Windows-2.zip`, artefact GitHub `13249831881`, taille `64 141 759` octets, digest `sha256:c0878d163ddb4bf1dd6574a1b634f8b8d9dd2f680e0dce2ad5daf139c51d1f98`. Il contient `SEL-Facturation-V2-Setup-0.3.30.exe`, le MSI, l’EXE et `SHA256SUMS.txt`. Le candidat est non signé Authenticode et doit rester réservé aux tests.
+
+Le shell V2 conserve les identités et la base SQLite dans `%LOCALAPPDATA%\SEL Facturation V2`, utilise l’agent Rust embarqué et ne transmet pas le jeton local à l’interface. Les ressources HTML/CSS/JS sont incluses localement ; WebView2 est installé par le bootstrapper uniquement si nécessaire.
+
+Le paquet serveur est préparé dans `v2/deploy/` avec Dockerfile, Compose production, TLS Caddy, création du rôle applicatif, sauvegardes/restauration documentées et validation fail-closed. Aucun serveur SEL réel, certificat TLS, secret PostgreSQL, clé de production Ed25519 ou volume financier réel n’était accessible dans cette session. Le déploiement production reste donc **BLOCKED_EXTERNAL** et n’a pas été exécuté.
+
+**Verdict du jalon : `GO_CANDIDATE`, pas `GO_PRODUCTION`.** Le candidat Windows est techniquement assemblé et CI-validé ; la recette sur poste SEL et le déploiement central sécurisé restent obligatoires.
 
 ## Mise à jour du contrôle — avoirs append-only
 
