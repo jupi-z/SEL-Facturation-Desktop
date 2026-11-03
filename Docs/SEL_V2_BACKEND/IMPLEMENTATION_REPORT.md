@@ -11,14 +11,14 @@ Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, Live
 
 ## Mise à jour livraison urgente — candidat Windows et paquet serveur
 
-Le commit `aa405c9` ajoute le shell natif V2, les routes locales de lecture des factures/paiements/ventes solaires, le packaging Windows et le paquet de déploiement serveur. Les validations distantes suivantes sont vertes :
+Le commit `bcb19d0` conserve le shell natif V2, les routes locales de lecture des factures/paiements/ventes solaires, le packaging Windows et le paquet de déploiement serveur. Les validations distantes suivantes sont vertes :
 
-- Rust V2 : [run 41673729959](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41673729959), job `126048622925` — fmt, Clippy, tests workspace et PostgreSQL ignoré : **PASS** ;
-- Windows V2 : [run 41673729952](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41673729952), job `126048623479` — EXE, MSI, bootstrapper WebView2, smoke test et SHA-256 : **PASS** ;
-- paquet serveur : [run 41673729876](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41673729876), job `126048624031` — interpolation Compose et build Docker sans secrets : **PASS** ;
-- chaîne Windows V1 de non-régression : [run 41673730031](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41673730031), job `126048624969` — **PASS**.
+- Rust V2 : [run 41675101947](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41675101947), job `126053488345` — fmt, Clippy, tests workspace et PostgreSQL ignoré : **PASS** ;
+- Windows V2 : [run 41675101937](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41675101937), job `126053487180` — EXE, MSI, bootstrapper WebView2, smoke test et SHA-256 : **PASS** ;
+- paquet serveur : [run 41675101941](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41675101941), job `126053487163` — interpolation Compose et build Docker sans secrets : **PASS** ;
+- chaîne Windows V1 de non-régression : [run 41675101923](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41675101923), job `126053487291` — **PASS**.
 
-Artefact Windows : `SEL-Facturation-V2-Windows-2.zip`, artefact GitHub `13249831881`, taille `64 141 759` octets, digest `sha256:c0878d163ddb4bf1dd6574a1b634f8b8d9dd2f680e0dce2ad5daf139c51d1f98`. Il contient `SEL-Facturation-V2-Setup-0.3.30.exe`, le MSI, l’EXE et `SHA256SUMS.txt`. Le candidat est non signé Authenticode et doit rester réservé aux tests.
+Artefact Windows : `SEL-Facturation-V2-Windows-3.zip`, artefact GitHub `13251105341`, taille `64 145 404` octets, digest `sha256:5e7495e88bf5f3365d2766c51f3855c2ea9488ce74aa51e32408215ea2617672`. Il contient `SEL-Facturation-V2-Setup-0.3.30.exe`, le MSI, l’EXE et `SHA256SUMS.txt`. Le candidat est non signé Authenticode et doit rester réservé aux tests.
 
 Le shell V2 conserve les identités et la base SQLite dans `%LOCALAPPDATA%\SEL Facturation V2`, utilise l’agent Rust embarqué et ne transmet pas le jeton local à l’interface. Les ressources HTML/CSS/JS sont incluses localement ; WebView2 est installé par le bootstrapper uniquement si nécessaire.
 
