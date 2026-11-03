@@ -3,28 +3,28 @@
 Date : 3 novembre 2026  
 Branche : `monarque/sel-v2-backend`  
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)  
-État : **IN_PROGRESS — 76 %**
+État : **TERMINÉE POUR LE CADRAGE TECHNIQUE — 92 %**
 
-Ce document consigne les preuves de cadrage et les points encore à valider. Il ne certifie ni une recette Windows SEL, ni une installation cliente, ni le choix final du framework desktop.
+Ce document consigne les preuves de cadrage et les points encore à valider. Il ne certifie ni une recette Windows SEL ni une installation cliente. Le choix de Tauri + React/TypeScript est celui de la base de travail pour la phase 1, soumis aux vérifications de packaging complet.
 
 ## Résumé vérifiable
 
 | Sujet | État | Preuve / réserve |
 |---|---|---|
-| Worktree et branche | PASS au contrôle | Worktree propre avant cette mise à jour documentaire ; branche locale synchronisée avec `origin/monarque/sel-v2-backend`. |
-| PR et référence distante | PASS | PR #58 ouverte vers `main`. SHA de code contrôlé : `ee62737ab7177bffb530681cef8d86750abc39df`. |
-| CI sur le dernier SHA de code | PASS | 4/4 workflows réussis sur `ee62737` : Rust/PostgreSQL, paquet serveur, Windows Desktop et candidat Windows V2. Un commit documentaire de suivi peut relancer la CI. |
+| Worktree et branche | PASS au contrôle | Branche `monarque/sel-v2-backend`, HEAD `cc9665a5d034dbf5f2d889a79deee95ee48e51ca`; worktree propre avant la présente mise à jour documentaire. |
+| PR et référence distante | PASS | PR #58 ouverte vers `main`; aucun merge effectué. |
+| CI sur le commit courant | PASS | 4/4 workflows réussis sur `cc9665a`: Rust `41704848847`, serveur/test-build `41704848765`, Windows candidat `41704848862`, validation paquet `41704848779`. |
 | Documents normatifs | PASS, avec préséance | Les exigences backend restent applicables. Le mandat propriétaire ultérieur du 3 novembre autorise le nouveau frontend V2 et remplace l’interdiction initiale de frontend pour ce périmètre seulement. V1 et ses données restent protégées. |
 | Inventaire Figma | PASS pour le comptage | 40 écrans métier + 5 modèles A4 : 30+4 annoncés dans la livraison et 10+1 ajoutés le 3 novembre. Le tableau de bord sombre est une variante du même écran. |
 | Cartographie écran/API/tests | PARTIAL | Les 40 écrans sont reliés aux contrats et lacunes API ; les tests backend existants sont reliés aux parcours. Vérifier les droits exacts par handler et construire les tests UI en phase d’implémentation. |
 | Paquet déjà remis à SEL | BLOCKED_EXTERNAL | Le dépôt identifie une release publique V1, mais aucun journal d’installation, reçu de livraison ou inventaire du poste SEL ne prouve le paquet actuellement installé. |
-| Spike du shell Windows | BLOCKED_EXTERNAL | Environnement de contrôle : Windows 11 Pro x64, Node 24.21.0, npm 11.19.0, .NET SDK 8.0.426 et WebView2 Runtime 156.0.4314.58 présents ; `cargo`/`rustc` et Visual Studio C++ Build Tools non détectés. Aucun build Tauri n’a été prétendu. |
+| Spike du shell Windows | PASS pour le prototype local ; installation SEL non testée | Windows 11 Pro x64, Node/npm, .NET et WebView2 présents. Toolchain Rust MSVC et Visual Studio Build Tools ont été préparés. React/TypeScript + Tauri 2 a compilé en dev et release ; le shell a lancé `sel-local`, interrogé son endpoint authentifié via IPC Rust et affiché `LOCAL_READY`. SQLite de test persistée et processus local arrêté avec la fenêtre. MSI et NSIS construits. Voir les limites ci-dessous : prototype temporaire, sans sidecar intégré ni configuration d’organisation/grant réel. |
 
 ### Référence GitHub et paquet
 
-- HEAD contrôlé : `ee62737ab7177bffb530681cef8d86750abc39df`, branche propre et alignée avec son upstream au moment du contrôle.
+- HEAD contrôlé avant mise à jour du présent rapport : `cc9665a5d034dbf5f2d889a79deee95ee48e51ca`, branche alignée avec son upstream.
 - La PR #58 est ouverte, base `main`, dont le SHA distant contrôlé est `09d9a244b6b243fccdf3313d0a9d1aace2daa071`.
-- Sur le SHA de code `ee62737`, les quatre workflows sont réussis : Rust `41704810520`, serveur `41704810691`, Windows Desktop `41704810699`, candidat Windows V2 `41704810645`. La construction du candidat CI n’est ni un test d’installation sur poste SEL ni la validation du nouveau frontend Figma.
+- Sur le commit de référence `cc9665a`, les quatre workflows sont réussis : Rust `41704848847`, paquet serveur/test-build `41704848765`, Windows candidat `41704848862`, validation paquet `41704848779`. La construction du candidat CI n’est ni un test d’installation sur poste SEL ni la validation du nouveau frontend Figma.
 - Dernière release V1 non brouillon trouvée : `v0.3.29`, préversion GitHub, avec `SEL-Facturation-Setup-0.3.29.exe` (SHA-256 `0db274ae2ed55845b8598b6f6f652f30d8590aac3f0fac10965bf5a4c58d2cda`), EXE autonome et MSI. `v0.3.31` est un brouillon sans assets. La version actuellement installée chez SEL demeure inconnue.
 - Le workflow candidat V2 produit encore `SEL-Facturation-V2-Setup-0.3.30.exe` via PyInstaller/pywebview ; ce n’est pas le nouveau frontend Figma et ce nom/version ne prouve pas une publication ou une remise à SEL.
 
@@ -131,19 +131,23 @@ Cette protection est réelle mais grossière : tous les GET sont groupés, les s
 
 `desktop_v2.py` crée un `organization_id` et un `device_id` aléatoires lors de la création du premier fichier de config, puis les conserve. Ce choix assure une identité locale stable après le premier lancement, mais ne prouve pas l’association à l’organisation SEL centrale ni l’enrôlement par un administrateur. `sel-local` exige ces UUID comme variables d’environnement. Le nouveau flux d’activation doit lier identité, agent et appareil au central et refuser une régénération silencieuse. Le jeton du pont actuel est conservé dans la configuration locale : le futur client ne doit pas exposer un secret d’agent à JavaScript.
 
-### Décision technique proposée pour le spike
+### Résultat du spike Windows et décision de cadrage
 
-Piste à essayer : React + TypeScript empaquetés localement dans Tauri 2. Pour limiter la surface locale, le navigateur embarqué devrait appeler une interface Tauri IPC typée ; le code natif Tauri supervise `sel-local` et porte l’accès HTTP local, sans injecter le bearer local dans le JavaScript. Comparer ce montage au lancement direct de l’agent depuis Tauri, vérifier les permissions, la fermeture propre, WebView2/runtime et installateur. **Ce montage reste une proposition tant qu’un prototype n’a pas compilé et démarré sur Windows.**
+Le test local confirme que **React + TypeScript empaquetés dans Tauri 2** peuvent former le shell Windows et communiquer avec l’agent Rust par IPC. Dans le prototype, le processus Tauri supervise `sel-local`, réalise l’appel HTTP local avec le bearer gardé côté Rust, et ne révèle aucun token au JavaScript. Le bouton UI affiche le vrai état API `LOCAL_READY`; le grant est correctement `NOT_CONFIGURED`. Le démarrage et la fermeture de la fenêtre arrêtent et récupèrent l’agent attendu. Le même parcours a été vérifié dans le binaire release.
 
-Pré-requis bloquant observé sur cette session : installer/configurer un toolchain Rust MSVC et Visual Studio C++ Build Tools ou exécuter le spike sur une machine/runner Windows qui en dispose. Ne pas installer un gros toolchain sur le poste SEL comme expérience.
+**Décision de sortie de phase 0 :** retenir Tauri 2 + React/TypeScript comme base du nouveau client pour la phase 1, avec supervision native Rust et IPC typé ; ne pas réutiliser l’ancien frontend. Avant tout candidat SEL, il faudra remplacer l’injection de configuration propre au spike par le packaging officiel/contrôlé de l’agent Rust, la configuration/enrôlement stable, et les contrôles de permissions. Le spike est situé hors du dépôt, dans `%TEMP%\sel-v2-shell-phase0`, et n’est pas un produit distribuable.
+
+Le build Tauri a produit le binaire release ainsi qu’un MSI (2,00 Mo) et un installateur NSIS (1,36 Mo). Ces paquets ont été construits mais **pas installés** : le prototype dépend de variables d’environnement d’essai qui ne font pas partie d’une installation réelle, et ne bundle pas l’agent. Le PC dispose de WebView2 Runtime, ce qui ne démontre pas le comportement d’installation sur un poste dépourvu de runtime. La configuration Tauri par défaut utilise le bootstrapper WebView2 téléchargé ; la phase 1 doit choisir et vérifier explicitement la stratégie de runtime (bootstrapper intégré recommandé pour réduire les échecs réseau, ou installateur hors ligne beaucoup plus volumineux). Aucun installateur métier n’a été créé.
+
+Artefacts temporaires vérifiés (non distribuables) : EXE release `%TEMP%\sel-v2-shell-phase0\src-tauri\target\release\sel-v2-shell-phase0.exe`, SHA-256 `C9B496157F8425D25CEFF95773C29C654CF194825A016FCD6DD2CD0D96CC04F2`; MSI `...\bundle\msi\SEL Facturation Phase 0 Spike_0.1.0_x64_en-US.msi`, SHA-256 `1F8F3A73DCC30E1A7456526E9FE622AE4E22C7CEC43D46B69C247081F81F1DD6`; setup NSIS `...\bundle\nsis\SEL Facturation Phase 0 Spike_0.1.0_x64-setup.exe`, SHA-256 `754EA21C99B924CCEA947779B038302109CA16CEA82A82985A97F373414BB97C`. L’EXE release a été lancé depuis ce dossier et a retourné le même état `LOCAL_READY`; aucun paquet n’a été installé.
 
 ## Calcul de progression
 
-Progression phase 0 : **76,25 % (arrondie à 76 %)**. Pondération : dépôt/PR 10 % (validé) ; CI 5 % (100 % acquis, 4/4 workflows verts sur le SHA de code `ee62737`) ; lecture des consignes et préséance 10 % (validé) ; inventaire Figma 20 % (validé) ; cartographie écrans/API/tests 25 % (95 % acquis : 40 écrans reliés aux contrats et gaps, tests backend reliés par parcours ; permissions exactes par handler restent à vérifier) ; identification du paquet livré 10 % (75 % acquis : dernière release publique identifiée, installation SEL inconnue) ; spike Windows 20 % (0 %, bloqué par toolchain manquant). Calcul : 10 + 5 + 10 + 20 + 23,75 + 7,5 = **76,25 %**. Les éléments bloqués ne sont pas comptés comme terminés.
+Progression phase 0 : **92,25 % (arrondie à 92 %)**. Pondération conservée : dépôt/PR 10 % (validé) ; CI 5 % (4/4 verts sur `cc9665a`) ; documents et préséance 10 % (validé) ; inventaire Figma 20 % (validé) ; cartographie écrans/API/tests 25 % (95 % acquis, soit 23,75 points ; permissions exactes par handler restent à valider en phase 1) ; paquet remis 10 % (75 % acquis, soit 7,5 points ; release publique identifiée, installation SEL inconnue) ; spike Windows 20 % (80 % acquis, soit 16 points : toolchain installée, builds dev/release, IPC agent, SQLite temporaire, fermeture propre et génération MSI/NSIS validés ; installation réelle du paquet, agent sidecar et WebView2 sans runtime restent hors preuve). Calcul : 10 + 5 + 10 + 20 + 23,75 + 7,5 + 16 = **92,25 %**. La phase est déclarée terminée comme phase de cadrage et de faisabilité ; les points externes sont transférés aux phases d’implémentation/recette, ils ne sont pas déclarés validés.
 
 ## Actions restantes avant clôture de phase 0
 
-1. Vérifier les politiques RBAC handler par handler et figer les droits réels du tableau écran/API.
-2. Produire un environnement Windows de développement avec Rust MSVC et Build Tools, puis construire/lancer le spike Tauri↔agent local ; éprouver WebView2, installateur et démarrage. Ce point reste `BLOCKED_EXTERNAL` dans l’environnement actuel.
-3. Obtenir une preuve de la version installée/livrée au poste SEL, ou garder explicitement `BLOCKED_EXTERNAL` jusqu’à réception d’un inventaire ou d’un reçu.
-4. Finaliser l’ADR du shell à partir du résultat du spike. En attendant, Tauri 2 + React/TypeScript reste une option candidate, pas une décision validée.
+1. En phase 1, auditer les politiques RBAC handler par handler et figer les droits réellement implémentés pour chaque parcours d’interface.
+2. En phase 1/recette, incorporer l’agent comme composant contrôlé (sidecar/package) et tester une installation Windows propre, y compris le runtime WebView2 sur machine représentative.
+3. Obtenir une preuve de la version déjà installée/livrée au poste SEL, ou conserver `BLOCKED_EXTERNAL` jusqu’à un inventaire ou reçu fourni.
+4. Revoir cette décision au jalon d’architecture phase 1 si le packaging natif/agent révèle un risque ; aucun choix ne justifie de contourner les vérifications de sécurité.
