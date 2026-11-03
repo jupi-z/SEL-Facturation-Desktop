@@ -121,6 +121,12 @@ Les tests ci-dessous prouvent des comportements du backend ou des API ; aucun ne
 
 La matrice d’acceptation d’implémentation devra ajouter les tests manquants et lier chaque contrôle visuel/API aux noms exacts ; la présence des tests ci-dessus n’est pas assimilée à une validation de l’écran Windows. Les suites n’ont pas été relancées pendant ce cadrage : les références sont issues de l’inventaire du code et les résultats exécutés à retenir sont ceux des workflows CI par SHA.
 
+### Autorisations réellement observées
+
+Le middleware central de `v2/crates/sel-api/src/lib.rs` authentifie les jetons individuels, puis `role_allows_request` applique une matrice générale : tous les rôles actifs cités peuvent faire des GET ; les POST `billing`/`solar` et sync push sont limités à ADMIN/BILLING_AGENT/SUPERVISOR ; les POST `payments` à ADMIN/CASHIER/SUPERVISOR ; les POST clients à ADMIN/BILLING_AGENT/SUPERVISOR ; les autres écritures tombent sur ADMIN/SUPERVISOR. Les handlers de void invoice, reverse payment et credit note ajoutent des contrôles spécifiques sur acteur actif/rôle. Un test unitaire, `production_role_matrix_keeps_read_access_separate_from_writes`, vérifie quelques cas.
+
+Cette protection est réelle mais grossière : tous les GET sont groupés, les sous-actions héritent du préfixe général, et la politique n’est pas encore un catalogue de permissions configurables par ressource/action. Les rôles de la matrice d’écran demeurent donc des **rôles attendus pour le design**, tandis que la matrice effective ci-dessus est le comportement observé du routeur. La phase d’implémentation devra définir et tester les autorisations fines avant d’afficher/masquer des actions selon les droits.
+
 ### Identité et bootstrap du poste
 
 `desktop_v2.py` crée un `organization_id` et un `device_id` aléatoires lors de la création du premier fichier de config, puis les conserve. Ce choix assure une identité locale stable après le premier lancement, mais ne prouve pas l’association à l’organisation SEL centrale ni l’enrôlement par un administrateur. `sel-local` exige ces UUID comme variables d’environnement. Le nouveau flux d’activation doit lier identité, agent et appareil au central et refuser une régénération silencieuse. Le jeton du pont actuel est conservé dans la configuration locale : le futur client ne doit pas exposer un secret d’agent à JavaScript.
