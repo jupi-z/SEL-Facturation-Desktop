@@ -6,7 +6,7 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `64369df` (`test(v2): cover sync acknowledgement loss recovery`)
+Commit contrôlé : `8340a05` (`test(v2): make concurrent payment assertions race-safe`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — avoirs append-only
@@ -60,8 +60,9 @@ Les corrections cumulées pendant la reprise de la PR #58 ferment plusieurs rég
 - un devis solaire central (`POST /v1/solar/quotes`) et local (`POST /local/v1/solar/quotes`) renvoie désormais le prix du catalogue actif approuvé ; une vente ne peut plus déclarer un principal différent du prix validé, avec rejet HTTP `422` et test PostgreSQL réel ; le parcours local vérifie également le devis hors connexion.
 - les tests adversariaux LiveUpdate couvrent maintenant les chemins parent, absolus POSIX/Windows, séparateurs inversés, composants vides et traversals ZIP ; les chemins non sûrs sont rejetés avant extraction, avec validation confirmée par la CI du commit contrôlé.
 - le worker local est maintenant testé lorsqu'une réponse d'accusé est perdue ou illisible après transmission : l'événement revient en attente, est rejoué sans nouvelle écriture métier et reçoit un doublon idempotent, sans perte de commande.
+- le scénario de convergence à deux postes transmet maintenant deux paiements concurrents vers la même créance depuis deux SQLite distinctes ; le résultat exige exactement une acceptation, un rejet explicite et zéro événement restant en attente, quel que soit le poste gagnant.
 
-La CI du commit contrôlé est verte : [run — 41660110703](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41660110703), job `rust` `126000764022`, sur `64369df`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris la reprise après perte d'accusé, les devis et le rejet des prix solaires divergents côté central et local, ainsi que les variantes adversariales Windows de LiveUpdate.
+La CI du commit contrôlé est verte : [run — 41662516229](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41662516229), job `rust` `126009133769`, sur `8340a05`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris la reprise après perte d'accusé, les paiements concurrents multi-postes, les devis et le rejet des prix solaires divergents côté central et local, ainsi que les variantes adversariales Windows de LiveUpdate.
 
 ## Audit des branches GitHub
 
@@ -194,7 +195,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | SYN-03 | PASS limité | les commandes financières synchronisées et leur accusé sont regroupés dans une transaction PostgreSQL sur le code courant ; publication/récupération après commit simulé couvertes, mais panne physique réelle non injectée |
 | SYN-04 | PARTIAL | pull et curseur durable testés ; crash SQLite avant commit à compléter |
 | SYN-05 | PASS limité | deux connexions PostgreSQL concurrentes sur le même abonné/période donnent une création et un conflit `InvoicePeriodExists`, une seule ligne persistée ; scénario Windows multi-postes non réalisé |
-| SYN-06 | PARTIAL | surallocation centrale et rejeu concurrent protégés ; paiements réellement simultanés sur une même créance entre deux postes à compléter |
+| SYN-06 | PASS limité | deux paiements réellement concurrents depuis deux SQLite vers une même créance sont arbitrés par PostgreSQL : un seul accepté, un rejeté explicitement, deux événements conservés et aucun pending ; campagne Windows réelle et procédure d'excédent restent externes |
 | SYN-07 | PARTIAL | la course d'activation d'un échéancier solaire est maintenant couverte ; les conflits multi-postes de modification de contrat restent à valider |
 | SYN-08 | PASS limité | émission/révocation de devices, grants Ed25519, expiration, scopes et limites d’événements testés sur PostgreSQL réel ; provisionnement de la clé de production et révocation opérationnelle restent externes |
 | SYN-09 | PASS limité | worker push/pull et reprise de l’outbox codés ; réseau réellement intermittent non validé sur Windows |
@@ -202,7 +203,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | UPD-01 | PASS | manifeste LiveUpdate déclaratif signé sans remplacement natif |
 | UPD-02 | PASS | signature Ed25519, SHA-256, expiration, séquence et chemins invalides rejetés |
 | UPD-03 | PASS | activation et rollback connu-bon testés |
-| UPD-04 | PASS | tests adversariaux LiveUpdate : parent, absolu POSIX/Windows, séparateurs inversés, composants vides et traversal ZIP rejetés avant extraction ; CI `41658468962` |
+| UPD-04 | PASS | tests adversariaux LiveUpdate : parent, absolu POSIX/Windows, séparateurs inversés, composants vides et traversal ZIP rejetés avant extraction ; CI `41662516229` |
 | UPD-05 | BLOCKED_EXTERNAL | clé publique Ed25519 de production absente ; fail-closed conservé |
 | MIG-01 | PASS limité | dry-run et import transactionnel vérifiés ; fixture synthétique PostgreSQL avec `pg_dump` exécutée en CI `41649126504` |
 | MIG-02 | PASS limité | checksum `import_batches`, mapping UUID, import PostgreSQL et rejeu idempotent vérifiés : second passage `ALREADY_APPLIED`, `writes: 0` ; données V1 SEL anonymisées encore absentes |
@@ -213,7 +214,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41660110703` sur `64369df` |
+| OPS-01 | PASS | formatage, Clippy, tests workspace et tests PostgreSQL ignorés verts en CI `41662516229` sur `8340a05` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
@@ -229,7 +230,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41660110703` est verte sur `64369df`, avec l'import V1 synthétique idempotent, son rollback transactionnel, les parcours de contrat et devis solaire, les tests PostgreSQL/SQLite, la reprise après perte d'accusé, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement, le rejet des collisions de séquence et les contrôles adversariaux LiveUpdate.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI `41662516229` est verte sur `8340a05`, avec l'import V1 synthétique idempotent, son rollback transactionnel, les parcours de contrat et devis solaire, les tests PostgreSQL/SQLite, la reprise après perte d'accusé, l'arbitrage concurrent de deux paiements multi-postes, les référentiels actifs/approuvés, les accusés de synchronisation financiers regroupés transactionnellement, le rejet des collisions de séquence et les contrôles adversariaux LiveUpdate.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
