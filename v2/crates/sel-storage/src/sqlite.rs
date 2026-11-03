@@ -1322,10 +1322,7 @@ impl LocalStore {
         ))
     }
 
-    pub async fn list_payments(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    pub async fn list_payments(&self, limit: u32) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT p.id, p.customer_id, p.amount_received, p.currency,
                     p.method, p.paid_at, p.status
