@@ -2457,6 +2457,29 @@ async fn apply_payment_change(
             let allocation_id = allocation
                 .get("allocation_id")
                 .and_then(serde_json::Value::as_str);
+            if let Some(allocation_id) = allocation_id {
+                if let Some(existing) = sqlx::query(
+                    "SELECT payment_id, receivable_id, schedule_id, allocated_amount, currency
+                     FROM payment_allocations WHERE id = $1",
+                )
+                .bind(allocation_id)
+                .fetch_optional(&mut **tx)
+                .await?
+                {
+                    let same = existing.try_get::<String, _>("payment_id")? == payment_id
+                        && existing.try_get::<String, _>("receivable_id")? == receivable_id
+                        && existing.try_get::<Option<String>, _>("schedule_id")?
+                            == schedule_id.map(str::to_owned)
+                        && existing.try_get::<String, _>("allocated_amount")? == allocated_amount
+                        && existing.try_get::<String, _>("currency")? == currency;
+                    if !same {
+                        return Err(sqlx::Error::Protocol(
+                            "conflicting local payment allocation projection".into(),
+                        ));
+                    }
+                    continue;
+                }
+            }
             let already_present: i64 = if let Some(allocation_id) = allocation_id {
                 sqlx::query_scalar("SELECT count(*) FROM payment_allocations WHERE id = $1")
                     .bind(allocation_id)
