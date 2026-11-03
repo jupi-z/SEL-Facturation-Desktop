@@ -3041,7 +3041,7 @@ impl CentralStore {
                 let operation_key = format!("sync-utility-{}", event.event_id);
                 let outcome = self
                     .issue_utility_invoice_in_tx(
-                        &mut *tx,
+                        &mut tx,
                         &input,
                         &response,
                         &operation_key,
@@ -3112,7 +3112,7 @@ impl CentralStore {
                 let operation_key = format!("sync-solar-sale-{}", event.event_id);
                 let outcome = self
                     .create_solar_sale_with_ids_in_tx(
-                        &mut *tx,
+                        &mut tx,
                         &input,
                         sale_id,
                         receivable_id,
@@ -3184,7 +3184,7 @@ impl CentralStore {
                 let operation_key = format!("sync-solar-contract-{}", event.event_id);
                 let outcome = self
                     .activate_solar_contract_with_plan_id_in_tx(
-                        &mut *tx,
+                        &mut tx,
                         contract_id,
                         installment_plan_id,
                         &input,
@@ -3247,7 +3247,7 @@ impl CentralStore {
                     };
                 let outcome = self
                     .void_invoice_with_id_in_tx(
-                        &mut *tx,
+                        &mut tx,
                         payload.invoice_id,
                         payload.void_id,
                         payload.actor_id,
@@ -3312,7 +3312,7 @@ impl CentralStore {
                 let operation_key = format!("sync-payment-{}", event.event_id);
                 let outcome = self
                     .record_payment_with_id_in_tx(
-                        &mut *tx,
+                        &mut tx,
                         &input,
                         payment_id,
                         &operation_key,
@@ -3421,7 +3421,7 @@ impl CentralStore {
                 let operation_key = format!("sync-payment-allocation-{}", event.event_id);
                 let outcome = self
                     .allocate_payment_in_tx(
-                        &mut *tx,
+                        &mut tx,
                         payload.payment_id,
                         &payload.allocations,
                         event.actor_id,
@@ -3489,7 +3489,7 @@ impl CentralStore {
                 let operation_key = format!("sync-payment-reversal-{}", event.event_id);
                 let outcome = self
                     .reverse_payment_with_id_in_tx(
-                        &mut *tx,
+                        &mut tx,
                         payment_id,
                         &input,
                         actor_id,
@@ -3563,7 +3563,7 @@ impl CentralStore {
                 };
                 let outcome = self
                     .create_credit_note_with_id_in_tx(
-                        &mut *tx,
+                        &mut tx,
                         payload.receivable_id,
                         &input,
                         event.actor_id,
