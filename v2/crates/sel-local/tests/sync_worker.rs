@@ -169,6 +169,61 @@ async fn pulled_customer_changes_are_applied_with_a_durable_cursor() {
 }
 
 #[tokio::test]
+async fn pulled_changes_roll_back_projection_and_cursor_after_mid_batch_failure() {
+    let path = std::env::temp_dir().join(format!("sel-v2-pull-rollback-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("connect local store");
+    let customer_id = Uuid::new_v4();
+    let valid_change = serde_json::json!({
+        "sequence": 11,
+        "entity": "customers",
+        "entity_id": customer_id,
+        "revision": 1,
+        "change": {"customer_code":"ROLLBACK-1","legal_name":"Rollback fixture","status":"ACTIVE"}
+    });
+    let malformed_change = serde_json::json!({
+        "sequence": 12,
+        "entity": "customers",
+        "entity_id": Uuid::new_v4(),
+        "revision": 1
+    });
+    let error = store
+        .apply_pulled_changes(&SyncPullResponse {
+            changes: vec![valid_change.clone(), malformed_change],
+            next_cursor: 12,
+        })
+        .await
+        .expect_err("malformed change must abort the whole pull transaction");
+    assert!(error.to_string().contains("sync change payload is missing"));
+    assert_eq!(store.central_cursor().await.unwrap(), 0);
+    assert!(store.get_customer(customer_id).await.unwrap().is_none());
+
+    store
+        .apply_pulled_changes(&SyncPullResponse {
+            changes: vec![valid_change],
+            next_cursor: 11,
+        })
+        .await
+        .expect("retry valid change after rollback");
+    assert_eq!(store.central_cursor().await.unwrap(), 11);
+    assert_eq!(
+        store
+            .get_customer(customer_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .customer_code,
+        "ROLLBACK-1"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn pulled_utility_invoice_and_payment_changes_project_locally() {
     let path =
         std::env::temp_dir().join(format!("sel-v2-financial-pull-{}.sqlite", Uuid::new_v4()));
