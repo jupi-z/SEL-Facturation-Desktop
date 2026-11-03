@@ -13,7 +13,7 @@ Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, Live
 
 Commit : fc41cec (feat(v2): secure client rendering and invoice preview flow)
 
-Statut de cet incrément : **COMPLETED côté code et tests locaux Python/JavaScript ; validation Rust/Windows CI en attente après publication de la branche**.
+Statut de cet incrément : **COMPLETED côté code, tests locaux et CI Rust/Windows**. La validation sur le poste SEL reste externe.
 
 - les listes clients, factures, paiements, ventes solaires, métriques, synchronisation et options sont maintenant construites par DOM (textContent/nœuds), sans interpolation innerHTML de données métier ;
 - le pont pywebview refuse les méthodes autres que GET, POST et PATCH, en plus de limiter les routes à /local/v1/ ;
@@ -29,7 +29,16 @@ Preuves exécutées localement après le commit :
 - py -3.12 -m pytest -q tests/test_desktop_v2.py tests/test_desktop.py : **17 passed** ;
 - node --check v2/client/app.js : **PASS** ;
 - cargo fmt --all -- --check : **PASS** ;
-- le test Rust sel-local de prévisualisation est ajouté mais non exécutable sur cette machine faute de link.exe MSVC : **BLOCKED_EXTERNAL**, à vérifier par la CI Windows.
+- le test Rust sel-local de prévisualisation est ajouté ; il est **BLOCKED_EXTERNAL localement** faute de link.exe MSVC, mais la CI Windows/Rust du commit de livraison l’a exécuté avec succès.
+
+Preuves CI du commit d’intégration :
+
+- backend Rust : run 41690022185, job 126105843793 — fmt, Clippy, tests workspace et tests PostgreSQL : **PASS** ;
+- build Windows Desktop : run 41690022095, job 126105844289 — tests unitaires/HTTP, EXE, MSI, bootstrapper et contrôles de dépendances : **PASS** ;
+- candidat Windows : run 41690022151, job 126105843038 — EXE, MSI, bootstrapper, sommes SHA-256 et artefact d’acceptation : **PASS** ;
+- paquet serveur : run 41690022129, job 126105843550 — build et contrôles de configuration : **PASS**.
+
+Artefact candidat généré par la CI : SEL-Facturation-V2-Windows-5.zip, artefact GitHub 13256308078, digest du ZIP sha256:5966f31361d44ec8badc58fab124d810cadc059e9a13fb68278f18a1dfcae86a. Le paquet contient SEL-Facturation-V2-Setup-0.3.30.exe, le MSI, l’EXE et SHA256SUMS.txt. Il est non signé Authenticode et reste un candidat de test, pas une publication commerciale.
 
 Limites encore ouvertes pour cet incrément : la validation sur un poste Windows SEL, l’impression réelle, le test WebView2 et l’exécution Rust avec PostgreSQL/SQLite réels restent distincts des tests locaux ci-dessus. Aucun calcul financier n’est effectué dans le JavaScript.
 
