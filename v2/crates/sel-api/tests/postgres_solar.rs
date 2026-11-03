@@ -156,7 +156,7 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
                 .method("GET")
                 .uri(format!(
                     "/v1/installment-plans/{}",
-                    contract_body["installment_plan_id"]
+                    contract_body["installment_plan_id"].as_str().unwrap()
                 ))
                 .header("authorization", "Bearer test")
                 .body(Body::empty())
