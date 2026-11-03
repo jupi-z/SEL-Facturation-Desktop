@@ -2256,6 +2256,13 @@ impl CentralStore {
         event: &SyncEnvelope,
     ) -> Result<SyncEventResult, SyncApplyError> {
         let mut tx = self.pool.begin().await?;
+        // Serialize only concurrent submissions of the same device/event pair.
+        // Without this transaction-scoped lock, two requests can both observe
+        // an empty sync_inbox before either one commits its durable effect.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("sync-event:{}:{}", event.device_id, event.event_id))
+            .execute(&mut *tx)
+            .await?;
         if let Some(row) = sqlx::query(
             "SELECT payload_sha256, result_json FROM sync_inbox WHERE device_id = $1 AND event_id = $2",
         )
