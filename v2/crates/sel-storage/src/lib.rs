@@ -2,7 +2,7 @@ pub mod postgres;
 pub mod sqlite;
 
 pub use postgres::CentralStore;
-pub use sqlite::LocalStore;
+pub use sqlite::{LocalSolarSaleError, LocalStore};
 
 use sqlx::{PgPool, SqlitePool};
 
