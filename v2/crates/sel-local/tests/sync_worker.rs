@@ -332,13 +332,12 @@ async fn pulled_payment_allocations_keep_distinct_central_ids_even_when_amounts_
         .await
         .expect("project payment allocations");
 
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM payment_allocations WHERE payment_id = $1",
-    )
-    .bind(payment_id.to_string())
-    .fetch_one(&store.pool)
-    .await
-    .expect("count allocations");
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM payment_allocations WHERE payment_id = $1")
+            .bind(payment_id.to_string())
+            .fetch_one(&store.pool)
+            .await
+            .expect("count allocations");
     assert_eq!(count, 2);
     let total: String = sqlx::query_scalar(
         "SELECT CAST(COALESCE(SUM(CAST(allocated_amount AS REAL)), 0) AS TEXT)
