@@ -2,8 +2,8 @@ use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
     ActivateSolarContractRequest, CreateSolarSaleRequest, InstallmentRequest,
-    PaymentAllocationRequest, RecordPaymentRequest, SyncEnvelope, SyncEventResult,
-    UtilityBillingRequest, UtilityServiceInput,
+    PaymentAllocationRequest, PaymentAllocationSyncPayload, RecordPaymentRequest, SyncEnvelope,
+    SyncEventResult, UtilityBillingRequest, UtilityServiceInput,
 };
 use sel_storage::postgres::PaymentWriteOutcome;
 use sel_storage::{migrate_postgres, CentralStore};
@@ -63,7 +63,7 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
         .unwrap();
     let request = RecordPaymentRequest {
         customer_id,
-        received_amount: Decimal::new(3, 0),
+        received_amount: Decimal::new(5, 0),
         currency: "USD".into(),
         method: "CASH".into(),
         occurred_at: Utc::now(),
@@ -121,6 +121,35 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
             .await
             .unwrap();
     assert_eq!(stored_payment_id, payment_id);
+
+    let allocation_payload = serde_json::to_value(PaymentAllocationSyncPayload {
+        payment_id,
+        allocations: vec![PaymentAllocationRequest {
+            receivable_id,
+            amount: Decimal::new(2, 0),
+            schedule_id: None,
+        }],
+    })
+    .unwrap();
+    let allocation_event = SyncEnvelope {
+        protocol_version: 1,
+        event_id: Uuid::new_v4(),
+        device_id,
+        organization_id,
+        actor_id,
+        command_type: "PAYMENT_ALLOCATED".into(),
+        aggregate_id: payment_id,
+        aggregate_expected_version: 0,
+        occurred_at: Utc::now(),
+        offline_grant_id: grant_id,
+        payload_sha256: payload_digest(&allocation_payload),
+        payload: allocation_payload,
+        client_schema_version: 1,
+    };
+    let allocation_result = store.apply_sync_event(&allocation_event).await.unwrap();
+    assert!(matches!(allocation_result, SyncEventResult::Accepted { .. }));
+    let allocation_retry = store.apply_sync_event(&allocation_event).await.unwrap();
+    assert!(matches!(allocation_retry, SyncEventResult::Duplicate { .. }));
     let retry = store.apply_sync_event(&event).await.unwrap();
     assert!(matches!(retry, SyncEventResult::Duplicate { .. }));
     let reversal_id = Uuid::new_v4();
@@ -164,7 +193,7 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
     .fetch_one(&store.pool)
     .await
     .unwrap();
-    assert_eq!(allocation_total, Decimal::new(3, 0));
+    assert_eq!(allocation_total, Decimal::new(5, 0));
     let publication_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM central_changes WHERE organization_id = $1 AND entity = 'payments' AND entity_id = $2",
     )
@@ -173,7 +202,7 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
     .fetch_one(&store.pool)
     .await
     .unwrap();
-    assert_eq!(publication_count, 1);
+    assert_eq!(publication_count, 2);
     let inbox_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM sync_inbox WHERE device_id = $1 AND event_id = $2",
     )
