@@ -14,7 +14,7 @@ use sel_contracts::{
     UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
-use sel_storage::LocalStore;
+use sel_storage::{LocalSolarSaleError, LocalStore};
 use sel_sync::payload_digest;
 use serde_json::json;
 use std::{net::SocketAddr, sync::Arc};
@@ -580,7 +580,7 @@ async fn create_solar_sale(
         .store
         .create_solar_sale_offline(&input)
         .await
-        .map_err(internal_error)?;
+        .map_err(local_solar_sale_error)?;
     Ok((StatusCode::CREATED, Json(response)))
 }
 
@@ -646,6 +646,19 @@ fn internal_error(error: sqlx::Error) -> (axum::http::StatusCode, String) {
         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         error.to_string(),
     )
+}
+
+fn local_solar_sale_error(error: LocalSolarSaleError) -> (StatusCode, String) {
+    let status = match error {
+        LocalSolarSaleError::CustomerNotFound => StatusCode::NOT_FOUND,
+        LocalSolarSaleError::InvalidAmount
+        | LocalSolarSaleError::ProductNotFound
+        | LocalSolarSaleError::PriceMismatch => StatusCode::UNPROCESSABLE_ENTITY,
+        LocalSolarSaleError::Database(_)
+        | LocalSolarSaleError::InvalidProductPrice(_)
+        | LocalSolarSaleError::InvalidPayload(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, error.to_string())
 }
 
 fn local_payment_error(error: sel_storage::sqlite::LocalPaymentError) -> (StatusCode, String) {

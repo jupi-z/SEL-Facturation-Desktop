@@ -467,6 +467,28 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
     assert_eq!(quote_body["product_code"], "KIT-LOCAL-1");
     assert_eq!(quote_body["principal"], "120.00");
     assert_eq!(quote_body["status"], "QUOTED_FROM_APPROVED_CATALOG");
+    let rejected_sale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/local/v1/solar/sales")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "customer_id": customer.id,
+                        "product_code": "KIT-LOCAL-1",
+                        "principal": "119.00",
+                        "currency": "USD",
+                        "terms_revision": "solar-local-v1"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected_sale.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let sale = app
         .clone()
         .oneshot(

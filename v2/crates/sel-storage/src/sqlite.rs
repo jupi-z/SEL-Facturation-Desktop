@@ -98,6 +98,24 @@ pub enum LocalCreditNoteError {
     ReasonRequired,
 }
 
+#[derive(Debug, Error)]
+pub enum LocalSolarSaleError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("solar sale principal must be strictly positive")]
+    InvalidAmount,
+    #[error("solar sale customer is not present locally")]
+    CustomerNotFound,
+    #[error("solar product is not active in the local catalog")]
+    ProductNotFound,
+    #[error("invalid solar product price: {0}")]
+    InvalidProductPrice(String),
+    #[error("solar sale principal does not match the approved product price")]
+    PriceMismatch,
+    #[error("invalid solar sale JSON: {0}")]
+    InvalidPayload(String),
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LocalTariffSnapshot {
     pub electricity_unit_price: Option<Decimal>,
@@ -560,12 +578,10 @@ impl LocalStore {
     pub async fn create_solar_sale_offline(
         &self,
         input: &CreateSolarSaleRequest,
-    ) -> Result<(SolarSaleResponse, SyncEnvelope), sqlx::Error> {
+    ) -> Result<(SolarSaleResponse, SyncEnvelope), LocalSolarSaleError> {
         let _guard = self.write_lock.lock().await;
         if input.principal <= Decimal::ZERO {
-            return Err(sqlx::Error::Protocol(
-                "solar sale principal must be strictly positive".into(),
-            ));
+            return Err(LocalSolarSaleError::InvalidAmount);
         }
         let customer_exists: Option<String> =
             sqlx::query_scalar("SELECT id FROM customers WHERE id = $1 AND organization_id = $2")
@@ -574,9 +590,7 @@ impl LocalStore {
                 .fetch_optional(&self.pool)
                 .await?;
         if customer_exists.is_none() {
-            return Err(sqlx::Error::Protocol(
-                "solar sale customer is not present locally".into(),
-            ));
+            return Err(LocalSolarSaleError::CustomerNotFound);
         }
         let product_price_text: Option<String> = sqlx::query_scalar(
             "SELECT price_reference FROM products
@@ -587,17 +601,12 @@ impl LocalStore {
         .fetch_optional(&self.pool)
         .await?;
         let Some(product_price_text) = product_price_text else {
-            return Err(sqlx::Error::Protocol(
-                "solar product is not active in the local catalog".into(),
-            ));
+            return Err(LocalSolarSaleError::ProductNotFound);
         };
-        let product_price = Decimal::from_str(&product_price_text).map_err(|error| {
-            sqlx::Error::Protocol(format!("invalid solar product price: {error}"))
-        })?;
+        let product_price = Decimal::from_str(&product_price_text)
+            .map_err(|error| LocalSolarSaleError::InvalidProductPrice(error.to_string()))?;
         if input.principal.round_dp(2) != product_price.round_dp(2) {
-            return Err(sqlx::Error::Protocol(
-                "solar sale principal does not match the approved product price".into(),
-            ));
+            return Err(LocalSolarSaleError::PriceMismatch);
         }
         let sale_id = Uuid::new_v4();
         let receivable_id = Uuid::new_v4();
@@ -615,7 +624,7 @@ impl LocalStore {
             sale_id,
             receivable_id,
         })
-        .map_err(|error| sqlx::Error::Protocol(format!("invalid solar sale JSON: {error}")))?;
+        .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?;
         let event = local_event(self, Uuid::new_v4(), sale_id, "SOLAR_SALE_CREATED", payload)?;
         let mut tx = self.pool.begin().await?;
         sqlx::query(
