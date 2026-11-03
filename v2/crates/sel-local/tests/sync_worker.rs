@@ -258,6 +258,101 @@ async fn pulled_utility_invoice_and_payment_changes_project_locally() {
 }
 
 #[tokio::test]
+async fn pulled_payment_allocations_keep_distinct_central_ids_even_when_amounts_match() {
+    let path = std::env::temp_dir().join(format!(
+        "sel-v2-pull-payment-allocation-ids-{}.sqlite",
+        Uuid::new_v4()
+    ));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("connect local store");
+    let customer_id = Uuid::new_v4();
+    let receivable_id = Uuid::new_v4();
+    let payment_id = Uuid::new_v4();
+    let allocation_one_id = Uuid::new_v4();
+    let allocation_two_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO customers
+         (id, organization_id, customer_code, legal_name, contact_fields_json, status, revision, created_at)
+         VALUES ($1, $2, 'PULL-ALLOC-IDS', 'Payment allocation ids', '{}', 'ACTIVE', 1, datetime('now'))",
+    )
+    .bind(customer_id.to_string())
+    .bind(store.organization_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed customer");
+    sqlx::query(
+        "INSERT INTO receivables
+         (id, source_type, source_id, customer_id, currency, principal_total, status)
+         VALUES ($1, 'INVOICE', $2, $3, 'USD', '10.00', 'OPEN')",
+    )
+    .bind(receivable_id.to_string())
+    .bind(Uuid::new_v4().to_string())
+    .bind(customer_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed receivable");
+    store
+        .apply_pulled_changes(&sel_contracts::SyncPullResponse {
+            changes: vec![serde_json::json!({
+                "sequence": 1,
+                "entity": "payments",
+                "entity_id": payment_id,
+                "revision": 2,
+                "change": {
+                    "customer_id": customer_id,
+                    "payment": {
+                        "payment_id": payment_id,
+                        "status": "CENTRAL_ACCEPTED",
+                        "amount": "4.00",
+                        "currency": "USD"
+                    },
+                    "allocations": [
+                        {
+                            "allocation_id": allocation_one_id,
+                            "receivable_id": receivable_id,
+                            "amount": "2.00",
+                            "currency": "USD"
+                        },
+                        {
+                            "allocation_id": allocation_two_id,
+                            "receivable_id": receivable_id,
+                            "amount": "2.00",
+                            "currency": "USD"
+                        }
+                    ]
+                }
+            })],
+            next_cursor: 1,
+        })
+        .await
+        .expect("project payment allocations");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM payment_allocations WHERE payment_id = $1",
+    )
+    .bind(payment_id.to_string())
+    .fetch_one(&store.pool)
+    .await
+    .expect("count allocations");
+    assert_eq!(count, 2);
+    let total: String = sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(CAST(allocated_amount AS REAL)), 0) AS TEXT)
+         FROM payment_allocations WHERE payment_id = $1",
+    )
+    .bind(payment_id.to_string())
+    .fetch_one(&store.pool)
+    .await
+    .expect("sum allocations");
+    assert_eq!(total.parse::<f64>().unwrap(), 4.0);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn central_acceptance_reconciles_pending_invoice_and_payment_without_duplicates() {
     let path = std::env::temp_dir().join(format!(
         "sel-v2-reconcile-pending-{}.sqlite",
