@@ -829,9 +829,7 @@ impl LocalStore {
                             .filter(|value| !value.is_empty())
                             .try_fold(Decimal::ZERO, |total, value| {
                                 let amount = Decimal::from_str(value).map_err(|error| {
-                                    sqlx::Error::Protocol(format!(
-                                        "invalid reversed amount: {error}"
-                                    ))
+                                    sqlx::Error::Protocol(format!("invalid reversed amount: {error}"))
                                 })?;
                                 Ok::<Decimal, sqlx::Error>(total + amount)
                             })?;

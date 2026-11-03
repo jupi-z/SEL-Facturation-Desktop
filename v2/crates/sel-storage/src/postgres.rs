@@ -2201,18 +2201,24 @@ impl CentralStore {
             "INVOICE_VOIDED" => {
                 let payload: InvoiceVoidSyncPayload =
                     match serde_json::from_value(event.payload.clone()) {
-                    Ok(payload) => payload,
-                    Err(_) => {
-                        let result = SyncEventResult::Rejected {
-                            code: "INVOICE_VOID_PAYLOAD_INVALID".into(),
-                            required_action: "send_a_valid_invoice_void_payload".into(),
-                        };
-                        persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                        Ok(payload) => payload,
+                        Err(_) => {
+                            let result = SyncEventResult::Rejected {
+                                code: "INVOICE_VOID_PAYLOAD_INVALID".into(),
+                                required_action: "send_a_valid_invoice_void_payload".into(),
+                            };
+                            persist_sync_result(
+                                &mut tx,
+                                self.organization_id,
+                                event,
+                                &result,
+                                None,
+                            )
                             .await?;
-                        tx.commit().await?;
-                        return Ok(result);
-                    }
-                };
+                            tx.commit().await?;
+                            return Ok(result);
+                        }
+                    };
                 tx.rollback().await?;
                 let outcome = self
                     .void_invoice_with_id(

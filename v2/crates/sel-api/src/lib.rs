@@ -241,7 +241,8 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
             "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
         );
     }
-    if path == "/v1/sync/push" || path.starts_with("/v1/billing/") || path.starts_with("/v1/solar/") {
+    if path == "/v1/sync/push" || path.starts_with("/v1/billing/") || path.starts_with("/v1/solar/")
+    {
         return matches!(role, "ADMIN" | "BILLING_AGENT" | "SUPERVISOR");
     }
     if path == "/v1/payments" || path.starts_with("/v1/payments/") {
