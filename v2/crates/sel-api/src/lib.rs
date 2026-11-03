@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -13,7 +13,7 @@ use sel_contracts::{
     utility_snapshot_sha256, CreateCustomer, CreateSolarSaleRequest, Customer, DocumentData,
     InvoiceLineResponse, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
     ReversePaymentRequest, SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse,
-    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
+    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -37,6 +37,25 @@ pub struct AppState {
     pub sync: Arc<RwLock<SyncEngine>>,
     pub solar_sales: Arc<RwLock<HashMap<Uuid, SolarSaleResponse>>>,
 }
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct LoginRequest {
+    pub identity_ref: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct SetUserPasswordRequest {
+    pub password: String,
+}
+
+#[derive(Clone, Debug)]
+struct AuthenticatedPrincipal(sel_storage::postgres::AuthSessionPrincipal);
 
 #[derive(Clone, Default)]
 pub struct TariffBook {
@@ -116,6 +135,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
+        .route("/v1/auth/login", post(auth_login))
+        .route("/v1/auth/refresh", post(auth_refresh))
+        .route("/v1/auth/logout", post(auth_logout))
+        .route("/v1/users/:id/password", post(set_user_password))
         .route("/v1/meta/capabilities", get(capabilities))
         .route("/v1/customers", get(list_customers).post(create_customer))
         .route(
@@ -126,6 +149,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/billing/utility/issue", post(issue_utility))
         .route("/v1/invoices/:id", get(get_invoice))
         .route("/v1/invoices/:id/document-data", get(get_document_data))
+        .route("/v1/invoices/:id/void", post(void_invoice))
         .route("/v1/payments", post(record_payment))
         .route("/v1/payments/:id/reverse", post(reverse_payment))
         .route("/v1/receivables/:id", get(get_receivable))
@@ -158,10 +182,13 @@ async fn health_live() -> Json<serde_json::Value> {
 
 async fn production_auth_guard(
     State(state): State<AppState>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
     if !state.strict_auth || !request.uri().path().starts_with("/v1/") {
+        return next.run(request).await;
+    }
+    if matches!(request.uri().path(), "/v1/auth/login" | "/v1/auth/refresh") {
         return next.run(request).await;
     }
     let configured = std::env::var("SEL_API_AUTH_TOKEN").unwrap_or_default();
@@ -171,14 +198,62 @@ async fn production_auth_guard(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or_default();
-    if configured.is_empty() || !constant_time_equal(presented.as_bytes(), configured.as_bytes()) {
-        return ApiError::unauthorized(
-            "AUTH_NOT_CONFIGURED_OR_INVALID",
-            "a configured production API token is required",
-        )
-        .into_response();
+    if let Some(store) = &state.central {
+        if let Ok(principal) = store.authenticate_access_token(presented).await {
+            if !role_allows_request(request.method(), request.uri().path(), &principal.role) {
+                return ApiError::forbidden(
+                    "PERMISSION_DENIED",
+                    "the authenticated role cannot perform this operation",
+                )
+                .into_response();
+            }
+            request
+                .extensions_mut()
+                .insert(AuthenticatedPrincipal(principal));
+            return next.run(request).await;
+        }
     }
-    next.run(request).await
+    // The legacy shared token is retained only for explicit test fixtures. It
+    // is never accepted by the production binary unless this opt-in is set.
+    if std::env::var("SEL_ALLOW_LEGACY_TOKEN").ok().as_deref() == Some("1")
+        && !configured.is_empty()
+        && constant_time_equal(presented.as_bytes(), configured.as_bytes())
+    {
+        return next.run(request).await;
+    }
+    ApiError::unauthorized(
+        "AUTH_NOT_CONFIGURED_OR_INVALID",
+        "a valid individual session token is required",
+    )
+    .into_response()
+}
+
+fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> bool {
+    if *method == axum::http::Method::GET {
+        return matches!(
+            role,
+            "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
+        );
+    }
+    if path == "/v1/sync/pull" {
+        return matches!(
+            role,
+            "ADMIN" | "BILLING_AGENT" | "CASHIER" | "SUPERVISOR" | "AUDITOR_READONLY"
+        );
+    }
+    if path == "/v1/sync/push"
+        || path.starts_with("/v1/billing/")
+        || path.starts_with("/v1/solar/")
+    {
+        return matches!(role, "ADMIN" | "BILLING_AGENT" | "SUPERVISOR");
+    }
+    if path == "/v1/payments" || path.starts_with("/v1/payments/") {
+        return matches!(role, "ADMIN" | "CASHIER" | "SUPERVISOR");
+    }
+    if path.starts_with("/v1/customers") {
+        return matches!(role, "ADMIN" | "BILLING_AGENT" | "SUPERVISOR");
+    }
+    matches!(role, "ADMIN" | "SUPERVISOR")
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
@@ -205,6 +280,117 @@ async fn capabilities() -> Json<serde_json::Value> {
         "pdf_endpoint": false,
         "server_invoice_files": false
     }))
+}
+
+async fn auth_login(
+    State(state): State<AppState>,
+    Json(input): Json<LoginRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(store) = &state.central else {
+        return Err(ApiError::unauthorized(
+            "AUTH_UNAVAILABLE",
+            "individual authentication requires the central PostgreSQL store",
+        ));
+    };
+    if input.identity_ref.trim().is_empty() || input.password.is_empty() {
+        return Err(ApiError::unauthorized(
+            "INVALID_CREDENTIALS",
+            "identity_ref and password are required",
+        ));
+    }
+    store
+        .login_user(&input.identity_ref, &input.password)
+        .await
+        .map(Json)
+        .map_err(auth_error)
+}
+
+async fn auth_refresh(
+    State(state): State<AppState>,
+    Json(input): Json<RefreshRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(store) = &state.central else {
+        return Err(ApiError::unauthorized(
+            "AUTH_UNAVAILABLE",
+            "individual authentication requires the central PostgreSQL store",
+        ));
+    };
+    if input.refresh_token.trim().is_empty() {
+        return Err(ApiError::unauthorized(
+            "INVALID_SESSION",
+            "refresh_token is required",
+        ));
+    }
+    store
+        .refresh_user_session(&input.refresh_token)
+        .await
+        .map(Json)
+        .map_err(auth_error)
+}
+
+async fn auth_logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    require_auth(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unauthorized(
+            "AUTH_UNAVAILABLE",
+            "individual authentication requires the central PostgreSQL store",
+        ));
+    };
+    let token = bearer_token(&headers).ok_or_else(|| {
+        ApiError::unauthorized("AUTH_REQUIRED", "a bearer session token is required")
+    })?;
+    store.revoke_user_session(token).await.map_err(auth_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_user_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<SetUserPasswordRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_auth(&headers)?;
+    let Some(Extension(AuthenticatedPrincipal(principal))) = principal else {
+        return Err(ApiError::unauthorized(
+            "SESSION_REQUIRED",
+            "individual session authentication is required",
+        ));
+    };
+    if principal.role != "ADMIN" {
+        return Err(ApiError::forbidden(
+            "PERMISSION_DENIED",
+            "only an administrator can provision user passwords",
+        ));
+    }
+    if input.password.chars().count() < 12 {
+        return Err(ApiError::unprocessable(
+            "PASSWORD_TOO_SHORT",
+            "password must contain at least 12 characters",
+        ));
+    }
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "AUTH_UNAVAILABLE",
+            "password provisioning requires the central PostgreSQL store",
+        ));
+    };
+    store
+        .set_user_password(user_id, &input.password)
+        .await
+        .map_err(auth_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.trim().is_empty())
 }
 
 async fn list_customers(
@@ -630,6 +816,67 @@ async fn get_document_data(
     }))
 }
 
+async fn void_invoice(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(invoice_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<VoidInvoiceRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let key = require_idempotency(&headers)?;
+    let header_actor_id = headers
+        .get("X-Actor-Id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .parse::<Uuid>()
+                .map_err(|_| ApiError::unauthorized("ACTOR_INVALID", "X-Actor-Id must be a UUID"))
+        })
+        .transpose()?;
+    let actor_id = if let Some(Extension(AuthenticatedPrincipal(principal))) = principal {
+        if let Some(header_actor_id) = header_actor_id {
+            if header_actor_id != principal.user_id {
+                return Err(ApiError::forbidden(
+                    "ACTOR_MISMATCH",
+                    "X-Actor-Id does not match the authenticated session",
+                ));
+            }
+        }
+        principal.user_id
+    } else {
+        header_actor_id.ok_or_else(|| {
+            ApiError::unauthorized(
+                "ACTOR_REQUIRED",
+                "X-Actor-Id is required for an audited invoice void",
+            )
+        })?
+    };
+    if input.reason.trim().is_empty() {
+        return Err(ApiError::unprocessable(
+            "INVOICE_VOID_INVALID",
+            "a non-empty reason is required",
+        ));
+    }
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "INVOICE_VOID_CENTRAL_REQUIRED",
+            "audited invoice voids require a central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&input)?;
+    match store
+        .void_invoice(invoice_id, actor_id, &input.reason, key, &digest)
+        .await
+        .map_err(invoice_void_error)?
+    {
+        sel_storage::postgres::InvoiceVoidOutcome::Created(body)
+        | sel_storage::postgres::InvoiceVoidOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
 async fn record_payment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -754,21 +1001,38 @@ async fn reverse_payment(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(payment_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
     Json(input): Json<ReversePaymentRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_auth(&headers)?;
     let key = require_idempotency(&headers)?;
-    let actor_id = headers
+    let header_actor_id = headers
         .get("X-Actor-Id")
         .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| {
+        .map(|value| {
+            value
+                .parse::<Uuid>()
+                .map_err(|_| ApiError::unauthorized("ACTOR_INVALID", "X-Actor-Id must be a UUID"))
+        })
+        .transpose()?;
+    let actor_id = if let Some(Extension(AuthenticatedPrincipal(principal))) = principal {
+        if let Some(header_actor_id) = header_actor_id {
+            if header_actor_id != principal.user_id {
+                return Err(ApiError::forbidden(
+                    "ACTOR_MISMATCH",
+                    "X-Actor-Id does not match the authenticated session",
+                ));
+            }
+        }
+        principal.user_id
+    } else {
+        header_actor_id.ok_or_else(|| {
             ApiError::unauthorized(
                 "ACTOR_REQUIRED",
                 "X-Actor-Id is required for an audited financial reversal",
             )
         })?
-        .parse::<Uuid>()
-        .map_err(|_| ApiError::unauthorized("ACTOR_INVALID", "X-Actor-Id must be a UUID"))?;
+    };
     if input.amount <= Decimal::ZERO || input.reason.trim().is_empty() {
         return Err(ApiError::unprocessable(
             "PAYMENT_REVERSAL_INVALID",
@@ -1122,6 +1386,25 @@ fn digest_bytes(value: &[u8]) -> String {
     hex::encode(digest.finalize())
 }
 
+fn auth_error(error: sel_storage::postgres::AuthError) -> ApiError {
+    match error {
+        sel_storage::postgres::AuthError::InvalidCredentials => {
+            ApiError::unauthorized("INVALID_CREDENTIALS", "identity_ref or password is invalid")
+        }
+        sel_storage::postgres::AuthError::InvalidSession => {
+            ApiError::unauthorized("INVALID_SESSION", "session is invalid, revoked or expired")
+        }
+        sel_storage::postgres::AuthError::PasswordHash(_) => {
+            ApiError::internal("password verification failed")
+        }
+        sel_storage::postgres::AuthError::Database(error) => storage_error(error),
+        sel_storage::postgres::AuthError::InvalidResponse(error) => ApiError::internal(error),
+        sel_storage::postgres::AuthError::UserNotFound => {
+            ApiError::not_found("USER_NOT_FOUND", "active user not found")
+        }
+    }
+}
+
 fn storage_error(error: sqlx::Error) -> ApiError {
     if let sqlx::Error::Database(database) = &error {
         if database.constraint() == Some("customers_organization_id_customer_code_key") {
@@ -1221,6 +1504,40 @@ fn payment_reverse_error(error: sel_storage::postgres::PaymentReverseError) -> A
         sel_storage::postgres::PaymentReverseError::StoredResponse(error) => {
             ApiError::internal(error)
         }
+    }
+}
+
+fn invoice_void_error(error: sel_storage::postgres::InvoiceVoidError) -> ApiError {
+    match error {
+        sel_storage::postgres::InvoiceVoidError::IdempotencyPayloadMismatch => {
+            ApiError::conflict(
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "idempotency key was reused with another payload",
+            )
+        }
+        sel_storage::postgres::InvoiceVoidError::InvoiceNotFound => {
+            ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found")
+        }
+        sel_storage::postgres::InvoiceVoidError::AlreadyVoided => {
+            ApiError::conflict("INVOICE_ALREADY_VOID", "invoice is already void")
+        }
+        sel_storage::postgres::InvoiceVoidError::HasPayments => ApiError::conflict(
+            "INVOICE_HAS_PAYMENTS",
+            "an invoice with accepted payments requires a separate audited credit/refund workflow",
+        ),
+        sel_storage::postgres::InvoiceVoidError::ActorNotActive => {
+            ApiError::unauthorized("ACTOR_NOT_ACTIVE", "the actor is not active")
+        }
+        sel_storage::postgres::InvoiceVoidError::ActorNotAuthorized => ApiError::forbidden(
+            "ACTOR_NOT_AUTHORIZED",
+            "the actor role cannot void an invoice",
+        ),
+        sel_storage::postgres::InvoiceVoidError::ReasonRequired => ApiError::unprocessable(
+            "INVOICE_VOID_REASON_REQUIRED",
+            "a reason is required for an audited void",
+        ),
+        sel_storage::postgres::InvoiceVoidError::Database(error) => storage_error(error),
+        sel_storage::postgres::InvoiceVoidError::StoredResponse(error) => ApiError::internal(error),
     }
 }
 
@@ -1355,5 +1672,40 @@ impl IntoResponse for ApiError {
             HeaderValue::from_static("application/problem+json"),
         );
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::role_allows_request;
+    use axum::http::Method;
+
+    #[test]
+    fn production_role_matrix_keeps_read_access_separate_from_writes() {
+        assert!(role_allows_request(
+            &Method::GET,
+            "/v1/customers",
+            "AUDITOR_READONLY"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/customers",
+            "AUDITOR_READONLY"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            "/v1/payments",
+            "CASHIER"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/payments",
+            "BILLING_AGENT"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/billing/utility/issue",
+            "CASHIER"
+        ));
     }
 }

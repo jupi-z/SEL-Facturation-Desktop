@@ -282,6 +282,19 @@ pub struct ReversePaymentRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct VoidInvoiceRequest {
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct InvoiceVoidSyncPayload {
+    pub invoice_id: Uuid,
+    pub void_id: Uuid,
+    pub reason: String,
+    pub actor_id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PaymentSyncPayload {
     pub request: RecordPaymentRequest,
     pub payment_id: Uuid,
@@ -327,6 +340,41 @@ pub struct SyncEnvelope {
     pub payload: serde_json::Value,
     pub payload_sha256: String,
     pub client_schema_version: u32,
+}
+
+/// Canonical, versioned bytes signed by the central authority for an offline
+/// authorization grant. The exact field order is part of the protocol; never
+/// sign a database JSON rendering whose key order may vary between stores.
+pub fn offline_grant_canonical_bytes(
+    grant_id: Uuid,
+    user_id: Uuid,
+    device_id: Uuid,
+    scopes: &serde_json::Value,
+    limits: &serde_json::Value,
+    issued_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+) -> Result<Vec<u8>, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Grant<'a> {
+        protocol_version: u32,
+        grant_id: Uuid,
+        user_id: Uuid,
+        device_id: Uuid,
+        scopes: &'a serde_json::Value,
+        limits: &'a serde_json::Value,
+        issued_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    }
+    serde_json::to_vec(&Grant {
+        protocol_version: PROTOCOL_VERSION,
+        grant_id,
+        user_id,
+        device_id,
+        scopes,
+        limits,
+        issued_at,
+        expires_at,
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -2,10 +2,11 @@ use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
     solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
-    CreateSolarSaleRequest, Customer, InvoiceLineResponse, PaymentReversalSyncPayload,
-    PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload,
-    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse,
-    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    CreateSolarSaleRequest, Customer, InvoiceLineResponse, InvoiceVoidSyncPayload,
+    PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest,
+    SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope,
+    SyncEventResult, SyncPullResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -128,6 +129,16 @@ impl LocalStore {
                     .await?;
             }
         }
+        sqlx::query(
+            "INSERT INTO users (id, organization_id, role, status, identity_ref, created_at)
+             VALUES ($1, $2, 'BILLING_AGENT', 'ACTIVE', $3, datetime('now'))
+             ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(actor_id.to_string())
+        .bind(self.organization_id.to_string())
+        .bind(actor_id.to_string())
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         self.actor_id = actor_id;
         self.offline_grant_id = offline_grant_id;
@@ -378,6 +389,104 @@ impl LocalStore {
         .bind(input.customer_id.to_string())
         .bind(&response.currency)
         .bind(response.total.to_string())
+        .execute(&mut *tx)
+        .await?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        tx.commit().await?;
+        Ok(event)
+    }
+
+    pub async fn void_invoice(
+        &self,
+        invoice_id: Uuid,
+        reason: &str,
+    ) -> Result<SyncEnvelope, sqlx::Error> {
+        let _guard = self.write_lock.lock().await;
+        if reason.trim().is_empty() {
+            return Err(sqlx::Error::Protocol(
+                "invoice void reason is required".into(),
+            ));
+        }
+        let void_id = Uuid::new_v4();
+        let payload = serde_json::to_value(InvoiceVoidSyncPayload {
+            invoice_id,
+            void_id,
+            reason: reason.trim().to_owned(),
+            actor_id: self.actor_id,
+        })
+        .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice void JSON: {error}")))?;
+        let event = local_event(
+            self,
+            Uuid::new_v4(),
+            invoice_id,
+            "INVOICE_VOIDED",
+            payload,
+        )?;
+        let mut tx = self.pool.begin().await?;
+        let Some(invoice) = sqlx::query(
+            "SELECT status FROM invoices WHERE id = $1 AND customer_id IN
+             (SELECT id FROM customers WHERE organization_id = $2)",
+        )
+        .bind(invoice_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(sqlx::Error::Protocol("invoice not found".into()));
+        };
+        let status: String = invoice.try_get("status")?;
+        if status == "VOID" {
+            return Err(sqlx::Error::Protocol("invoice is already void".into()));
+        }
+        let has_paid: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM payment_allocations pa
+             JOIN payments p ON p.id = pa.payment_id
+             JOIN receivables r ON r.id = pa.receivable_id
+             WHERE r.source_type = 'INVOICE' AND r.source_id = $1
+               AND p.status IN ('LOCAL_PENDING', 'CENTRAL_ACCEPTED')
+               AND CAST(pa.allocated_amount AS NUMERIC) >
+                   CAST(COALESCE((SELECT SUM(amount) FROM payment_reversals
+                                  WHERE payment_id = p.id), '0') AS NUMERIC)",
+        )
+        .bind(invoice_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_paid > 0 {
+            return Err(sqlx::Error::Protocol(
+                "invoice has accepted payments".into(),
+            ));
+        }
+        sqlx::query("UPDATE invoices SET status = 'VOID' WHERE id = $1")
+            .bind(invoice_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE receivables SET status = 'VOID'
+             WHERE source_type = 'INVOICE' AND source_id = $1",
+        )
+        .bind(invoice_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO invoice_voids (id, invoice_id, reason, actor_id)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(void_id.to_string())
+        .bind(invoice_id.to_string())
+        .bind(reason.trim())
+        .bind(self.actor_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, device, event_type, subject_id, occurred_at, redacted_metadata_json)
+             VALUES ($1, $2, $3, 'INVOICE_VOIDED', $4, datetime('now'), $5)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(self.actor_id.to_string())
+        .bind(self.device_id.to_string())
+        .bind(invoice_id.to_string())
+        .bind(json!({"void_id": void_id, "reason": reason.trim()}).to_string())
         .execute(&mut *tx)
         .await?;
         insert_command_in_tx(&mut tx, &event).await?;
@@ -689,6 +798,57 @@ impl LocalStore {
         } else {
             principal - paid
         };
+        let overdue_schedule_rows = sqlx::query(
+            "SELECT s.id, s.amount_due
+             FROM installment_schedule s
+             JOIN installment_plans ip ON ip.id = s.plan_id
+             WHERE ip.receivable_id = $1 AND s.due_date < date('now')",
+        )
+        .bind(id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut overdue = Decimal::ZERO;
+        for schedule_row in overdue_schedule_rows {
+            let schedule_id: String = schedule_row.try_get("id")?;
+            let amount_due = decimal_text(&schedule_row, "amount_due")?;
+            let schedule_paid_rows = sqlx::query(
+                "SELECT pa.allocated_amount, p.amount_received,
+                        COALESCE((SELECT GROUP_CONCAT(pr.amount, ',')
+                                  FROM payment_reversals pr WHERE pr.payment_id = p.id), '')
+                         AS reversed_amounts
+                 FROM payment_allocations pa
+                 JOIN payments p ON p.id = pa.payment_id
+                 WHERE pa.schedule_id = $1 AND p.status IN ('LOCAL_PENDING', 'CENTRAL_ACCEPTED')",
+            )
+            .bind(schedule_id)
+            .fetch_all(&self.pool)
+            .await?;
+            let schedule_paid = schedule_paid_rows
+                .into_iter()
+                .try_fold(Decimal::ZERO, |total, payment_row| {
+                    let allocation = decimal_text(&payment_row, "allocated_amount")?;
+                    let received = decimal_text(&payment_row, "amount_received")?;
+                    let reversed_text: String = payment_row.try_get("reversed_amounts")?;
+                    let reversed = reversed_text
+                        .split(',')
+                        .filter(|value| !value.is_empty())
+                        .try_fold(Decimal::ZERO, |total, value| {
+                            let amount = Decimal::from_str(value).map_err(|error| {
+                                sqlx::Error::Protocol(format!("invalid reversed amount: {error}"))
+                            })?;
+                            Ok::<Decimal, sqlx::Error>(total + amount)
+                        })?;
+                    let net_received = (received - reversed).max(Decimal::ZERO);
+                    let effective = if received.is_zero() {
+                        Decimal::ZERO
+                    } else {
+                        allocation * net_received / received
+                    };
+                    Ok::<Decimal, sqlx::Error>(total + effective)
+                })?;
+            overdue += (amount_due - schedule_paid).max(Decimal::ZERO);
+        }
+        let overdue = overdue.round_dp(2);
         Ok(Some(json!({
             "id": row.try_get::<String, _>("id")?,
             "customer_id": row.try_get::<String, _>("customer_id")?,
@@ -696,10 +856,14 @@ impl LocalStore {
             "principal": principal,
             "paid": paid,
             "balance": balance,
+            "overdue_amount": overdue,
+            "overdue": overdue > Decimal::ZERO,
             "status": if rejected {
                 "REJECTED"
             } else if paid >= principal {
                 "SETTLED"
+            } else if overdue > Decimal::ZERO {
+                "OVERDUE"
             } else {
                 "OPEN"
             }
@@ -993,14 +1157,27 @@ impl LocalStore {
                         .await?;
                     }
                     "invoices" => {
-                        apply_invoice_change(
-                            &mut tx,
-                            self.organization_id,
-                            entity_id,
-                            revision,
-                            &change_json,
-                        )
-                        .await?;
+                        if change_json.get("status").and_then(serde_json::Value::as_str)
+                            == Some("VOID")
+                        {
+                            apply_invoice_void_change(
+                                &mut tx,
+                                self.organization_id,
+                                entity_id,
+                                revision,
+                                &change_json,
+                            )
+                            .await?;
+                        } else {
+                            apply_invoice_change(
+                                &mut tx,
+                                self.organization_id,
+                                entity_id,
+                                revision,
+                                &change_json,
+                            )
+                            .await?;
+                        }
                     }
                     "payments" => {
                         apply_payment_change(&mut tx, self.organization_id, &change_json).await?;
@@ -1555,6 +1732,78 @@ async fn apply_invoice_change(
         .execute(&mut **tx)
         .await?;
     }
+    Ok(())
+}
+
+async fn apply_invoice_void_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    entity_id: &str,
+    revision: i64,
+    change: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let invoice_id = change
+        .get("invoice_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(entity_id);
+    if invoice_id != entity_id {
+        return Err(sqlx::Error::Protocol(
+            "invoice void entity id does not match invoice id".into(),
+        ));
+    }
+    let void_id = change
+        .get("void_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("invoice void id is missing".into()))?;
+    let actor_id = change
+        .get("actor_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("invoice void actor is missing".into()))?;
+    let reason = change
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .filter(|reason| !reason.trim().is_empty())
+        .ok_or_else(|| sqlx::Error::Protocol("invoice void reason is missing".into()))?;
+    let Some(invoice) = sqlx::query(
+        "SELECT status FROM invoices WHERE id = $1 AND customer_id IN
+         (SELECT id FROM customers WHERE organization_id = $2)",
+    )
+    .bind(invoice_id)
+    .bind(organization_id.to_string())
+    .fetch_optional(&mut **tx)
+    .await?
+    else {
+        return Err(sqlx::Error::Protocol(
+            "invoice void projection has no local invoice".into(),
+        ));
+    };
+    let current_status: String = invoice.try_get("status")?;
+    if current_status == "VOID" {
+        return Ok(());
+    }
+    sqlx::query("UPDATE invoices SET status = 'VOID', version = MAX(version, $1) WHERE id = $2")
+        .bind(revision)
+        .bind(invoice_id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "UPDATE receivables SET status = 'VOID'
+         WHERE source_type = 'INVOICE' AND source_id = $1",
+    )
+    .bind(invoice_id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO invoice_voids (id, invoice_id, reason, actor_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT(invoice_id) DO NOTHING",
+    )
+    .bind(void_id)
+    .bind(invoice_id)
+    .bind(reason.trim())
+    .bind(actor_id)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

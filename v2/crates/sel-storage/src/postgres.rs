@@ -1,8 +1,15 @@
-use chrono::NaiveDate;
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rust_decimal::Decimal;
 use sel_contracts::{
-    solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
-    CreateSolarSaleRequest, Customer, PaymentReversalSyncPayload, PaymentSyncPayload,
+    offline_grant_canonical_bytes, solar_schedule_id, utility_snapshot_sha256,
+    ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
+    InvoiceVoidSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
     RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarSaleResponse,
     SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest,
     UtilityBillingResponse, UtilityInvoiceSyncPayload,
@@ -19,6 +26,31 @@ use uuid::Uuid;
 pub struct CentralStore {
     pub pool: PgPool,
     pub organization_id: Uuid,
+    require_signed_offline_grants: bool,
+    offline_grant_public_key: Option<VerifyingKey>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthSessionPrincipal {
+    pub user_id: Uuid,
+    pub organization_id: Uuid,
+    pub role: String,
+}
+
+#[derive(Debug, Error)]
+pub enum AuthError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("credentials are invalid")]
+    InvalidCredentials,
+    #[error("session is invalid or expired")]
+    InvalidSession,
+    #[error("password hashing failed: {0}")]
+    PasswordHash(String),
+    #[error("stored session response is invalid: {0}")]
+    InvalidResponse(#[from] serde_json::Error),
+    #[error("user was not found or is not active")]
+    UserNotFound,
 }
 
 #[derive(Clone, Debug)]
@@ -143,6 +175,33 @@ pub enum PaymentReverseOutcome {
 }
 
 #[derive(Debug, Error)]
+pub enum InvoiceVoidError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("idempotency key was reused with another payload")]
+    IdempotencyPayloadMismatch,
+    #[error("invoice was not found in the organization")]
+    InvoiceNotFound,
+    #[error("invoice is already void")]
+    AlreadyVoided,
+    #[error("invoice has accepted payments and cannot be voided directly")]
+    HasPayments,
+    #[error("invoice void actor is not active")]
+    ActorNotActive,
+    #[error("invoice void actor is not authorized")]
+    ActorNotAuthorized,
+    #[error("void reason is required")]
+    ReasonRequired,
+    #[error("stored idempotency response is invalid: {0}")]
+    StoredResponse(#[from] serde_json::Error),
+}
+
+pub enum InvoiceVoidOutcome {
+    Created(serde_json::Value),
+    Replay(serde_json::Value),
+}
+
+#[derive(Debug, Error)]
 pub enum SyncApplyError {
     #[error("database operation failed: {0}")]
     Database(#[from] sqlx::Error),
@@ -156,17 +215,42 @@ impl CentralStore {
             .max_connections(8)
             .connect(database_url)
             .await?;
+        let (require_signed_offline_grants, offline_grant_public_key) = Self::security_config();
         Ok(Self {
             pool,
             organization_id,
+            require_signed_offline_grants,
+            offline_grant_public_key,
         })
     }
 
     pub fn from_pool(pool: PgPool, organization_id: Uuid) -> Self {
+        let (require_signed_offline_grants, offline_grant_public_key) = Self::security_config();
         Self {
             pool,
             organization_id,
+            require_signed_offline_grants,
+            offline_grant_public_key,
         }
+    }
+
+    fn security_config() -> (bool, Option<VerifyingKey>) {
+        let require_signed_offline_grants = std::env::var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let offline_grant_public_key = std::env::var("SEL_OFFLINE_GRANT_PUBLIC_KEY")
+            .ok()
+            .and_then(|encoded| BASE64.decode(encoded).ok())
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok())
+            .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok());
+        (require_signed_offline_grants, offline_grant_public_key)
+    }
+
+    pub fn with_offline_grant_verifier(mut self, public_key: VerifyingKey) -> Self {
+        self.require_signed_offline_grants = true;
+        self.offline_grant_public_key = Some(public_key);
+        self
     }
 
     pub async fn ensure_organization(&self, legal_name: &str) -> Result<(), sqlx::Error> {
@@ -178,6 +262,189 @@ impl CentralStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Hash a password using Argon2id before it is provisioned into a user row.
+    /// The API never accepts or returns a stored password hash.
+    pub fn hash_user_password(password: &str) -> Result<String, AuthError> {
+        if password.chars().count() < 12 {
+            return Err(AuthError::PasswordHash(
+                "password must contain at least 12 characters".into(),
+            ));
+        }
+        let salt = SaltString::generate(&mut rand::rngs::OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+            .map_err(|error| AuthError::PasswordHash(error.to_string()))
+    }
+
+    /// Provision or rotate a user's password through an explicit administrative
+    /// operation. This is intentionally a storage primitive; a future admin API
+    /// must authorize the caller before invoking it.
+    pub async fn set_user_password(&self, user_id: Uuid, password: &str) -> Result<(), AuthError> {
+        let password_hash = Self::hash_user_password(password)?;
+        let updated = sqlx::query(
+            "UPDATE users SET password_hash = $1
+             WHERE id = $2 AND organization_id = $3 AND status = 'ACTIVE'",
+        )
+        .bind(password_hash)
+        .bind(user_id)
+        .bind(self.organization_id)
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() != 1 {
+            return Err(AuthError::UserNotFound);
+        }
+        Ok(())
+    }
+
+    pub async fn login_user(
+        &self,
+        identity_ref: &str,
+        password: &str,
+    ) -> Result<serde_json::Value, AuthError> {
+        let row = sqlx::query(
+            "SELECT id, role, password_hash
+             FROM users
+             WHERE organization_id = $1 AND identity_ref = $2 AND status = 'ACTIVE'",
+        )
+        .bind(self.organization_id)
+        .bind(identity_ref.trim())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AuthError::InvalidCredentials)?;
+        let user_id: Uuid = row.try_get("id")?;
+        let role: String = row.try_get("role")?;
+        let stored_hash: Option<String> = row.try_get("password_hash")?;
+        let Some(stored_hash) = stored_hash else {
+            return Err(AuthError::InvalidCredentials);
+        };
+        let parsed = PasswordHash::new(&stored_hash)
+            .map_err(|error| AuthError::PasswordHash(error.to_string()))?;
+        Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .map_err(|_| AuthError::InvalidCredentials)?;
+
+        let session_id = Uuid::new_v4();
+        let access_token = Uuid::new_v4().to_string();
+        let refresh_token = Uuid::new_v4().to_string();
+        let access_expires_at = Utc::now() + Duration::minutes(15);
+        let refresh_expires_at = Utc::now() + Duration::days(30);
+        sqlx::query(
+            "INSERT INTO auth_sessions
+             (id, organization_id, user_id, access_token_hash, refresh_token_hash,
+              access_expires_at, refresh_expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(session_id)
+        .bind(self.organization_id)
+        .bind(user_id)
+        .bind(token_digest(&access_token))
+        .bind(token_digest(&refresh_token))
+        .bind(access_expires_at)
+        .bind(refresh_expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(json!({
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "Bearer",
+            "user_id": user_id,
+            "organization_id": self.organization_id,
+            "role": role,
+            "access_expires_at": access_expires_at,
+            "refresh_expires_at": refresh_expires_at
+        }))
+    }
+
+    pub async fn refresh_user_session(
+        &self,
+        refresh_token: &str,
+    ) -> Result<serde_json::Value, AuthError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT s.id, s.user_id, u.role, s.refresh_expires_at
+             FROM auth_sessions s
+             JOIN users u ON u.id = s.user_id
+             WHERE s.organization_id = $1 AND s.refresh_token_hash = $2
+               AND s.revoked_at IS NULL AND u.status = 'ACTIVE'
+             FOR UPDATE OF s",
+        )
+        .bind(self.organization_id)
+        .bind(token_digest(refresh_token))
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AuthError::InvalidSession)?;
+        let refresh_expires_at: DateTime<Utc> = row.try_get("refresh_expires_at")?;
+        if refresh_expires_at <= Utc::now() {
+            return Err(AuthError::InvalidSession);
+        }
+        let session_id: Uuid = row.try_get("id")?;
+        let user_id: Uuid = row.try_get("user_id")?;
+        let role: String = row.try_get("role")?;
+        let access_token = Uuid::new_v4().to_string();
+        let next_refresh_token = Uuid::new_v4().to_string();
+        let access_expires_at = Utc::now() + Duration::minutes(15);
+        sqlx::query(
+            "UPDATE auth_sessions
+             SET access_token_hash = $1, refresh_token_hash = $2,
+                 access_expires_at = $3
+             WHERE id = $4",
+        )
+        .bind(token_digest(&access_token))
+        .bind(token_digest(&next_refresh_token))
+        .bind(access_expires_at)
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(json!({
+            "access_token": access_token,
+            "refresh_token": next_refresh_token,
+            "token_type": "Bearer",
+            "user_id": user_id,
+            "organization_id": self.organization_id,
+            "role": role,
+            "access_expires_at": access_expires_at,
+            "refresh_expires_at": refresh_expires_at
+        }))
+    }
+
+    pub async fn revoke_user_session(&self, access_token: &str) -> Result<(), AuthError> {
+        sqlx::query(
+            "UPDATE auth_sessions SET revoked_at = now()
+             WHERE organization_id = $1 AND access_token_hash = $2 AND revoked_at IS NULL",
+        )
+        .bind(self.organization_id)
+        .bind(token_digest(access_token))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn authenticate_access_token(
+        &self,
+        access_token: &str,
+    ) -> Result<AuthSessionPrincipal, AuthError> {
+        let row = sqlx::query(
+            "SELECT s.user_id, s.organization_id, u.role
+             FROM auth_sessions s
+             JOIN users u ON u.id = s.user_id
+             WHERE s.organization_id = $1 AND s.access_token_hash = $2
+               AND s.revoked_at IS NULL AND s.access_expires_at > now()
+               AND u.status = 'ACTIVE'",
+        )
+        .bind(self.organization_id)
+        .bind(token_digest(access_token))
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AuthError::InvalidSession)?;
+        Ok(AuthSessionPrincipal {
+            user_id: row.try_get("user_id")?,
+            organization_id: row.try_get("organization_id")?,
+            role: row.try_get("role")?,
+        })
     }
 
     pub async fn create_customer(&self, input: &CreateCustomer) -> Result<Customer, sqlx::Error> {
@@ -492,24 +759,227 @@ impl CentralStore {
         .bind(self.organization_id)
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|row| {
-            let principal: Decimal = row.try_get("principal_total")?;
-            let paid: Decimal = row.try_get("paid")?;
-            let principal = principal.round_dp(2);
-            let mut paid = paid.round_dp(2);
-            paid.rescale(2);
-            let balance = (principal - paid).round_dp(2);
-            Ok(json!({
-                "id": row.try_get::<Uuid, _>("id")?,
-                "customer_id": row.try_get::<Uuid, _>("customer_id")?,
-                "currency": row.try_get::<String, _>("currency")?,
-                "principal": format!("{principal:.2}"),
-                "paid": format!("{paid:.2}"),
-                "balance": format!("{balance:.2}"),
-                "status": if paid >= principal { "SETTLED" } else { "OPEN" }
-            }))
-        })
-        .transpose()
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let receivable_id: Uuid = row.try_get("id")?;
+        let principal: Decimal = row.try_get("principal_total")?;
+        let paid: Decimal = row.try_get("paid")?;
+        let principal = principal.round_dp(2);
+        let mut paid = paid.round_dp(2);
+        paid.rescale(2);
+        let balance = (principal - paid).round_dp(2);
+        let overdue: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(GREATEST(s.amount_due - COALESCE((
+                 SELECT SUM(pa.allocated_amount * GREATEST(
+                     p.amount_received - COALESCE(rev.reversed_amount, 0), 0
+                 ) / NULLIF(p.amount_received, 0))
+                 FROM payment_allocations pa
+                 JOIN payments p ON p.id = pa.payment_id
+                 LEFT JOIN (
+                     SELECT payment_id, SUM(amount) AS reversed_amount
+                     FROM payment_reversals GROUP BY payment_id
+                 ) rev ON rev.payment_id = p.id
+                 WHERE pa.schedule_id = s.id AND p.status = 'CENTRAL_ACCEPTED'
+             ), 0), 0), 0)
+             FROM installment_schedule s
+             JOIN installment_plans ip ON ip.id = s.plan_id
+             WHERE ip.receivable_id = $1 AND s.due_date < CURRENT_DATE",
+        )
+        .bind(receivable_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let overdue = overdue.round_dp(2);
+        let status = if paid >= principal {
+            "SETTLED"
+        } else if overdue > Decimal::ZERO {
+            "OVERDUE"
+        } else {
+            "OPEN"
+        };
+        Ok(Some(json!({
+            "id": receivable_id,
+            "customer_id": row.try_get::<Uuid, _>("customer_id")?,
+            "currency": row.try_get::<String, _>("currency")?,
+            "principal": format!("{principal:.2}"),
+            "paid": format!("{paid:.2}"),
+            "balance": format!("{balance:.2}"),
+            "overdue_amount": format!("{overdue:.2}"),
+            "overdue": overdue > Decimal::ZERO,
+            "status": status
+        })))
+    }
+
+    pub async fn void_invoice(
+        &self,
+        invoice_id: Uuid,
+        actor_id: Uuid,
+        reason: &str,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<InvoiceVoidOutcome, InvoiceVoidError> {
+        self.void_invoice_with_id(
+            invoice_id,
+            Uuid::new_v4(),
+            actor_id,
+            reason,
+            idempotency_key,
+            request_digest,
+        )
+        .await
+    }
+
+    pub async fn void_invoice_with_id(
+        &self,
+        invoice_id: Uuid,
+        void_id: Uuid,
+        actor_id: Uuid,
+        reason: &str,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<InvoiceVoidOutcome, InvoiceVoidError> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'invoice.void' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let original_digest: String = row.try_get("request_digest")?;
+            if original_digest != request_digest {
+                return Err(InvoiceVoidError::IdempotencyPayloadMismatch);
+            }
+            let response: serde_json::Value = row.try_get("response_json")?;
+            return Ok(InvoiceVoidOutcome::Replay(response));
+        }
+        if reason.trim().is_empty() {
+            return Err(InvoiceVoidError::ReasonRequired);
+        }
+        let role = sqlx::query_scalar::<_, String>(
+            "SELECT role FROM users
+             WHERE id = $1 AND organization_id = $2 AND status = 'ACTIVE'",
+        )
+        .bind(actor_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(role) = role else {
+            return Err(InvoiceVoidError::ActorNotActive);
+        };
+        if !matches!(role.as_str(), "ADMIN" | "SUPERVISOR") {
+            return Err(InvoiceVoidError::ActorNotAuthorized);
+        }
+        let Some(invoice) = sqlx::query(
+            "SELECT i.status, r.id AS receivable_id
+             FROM invoices i
+             JOIN customers c ON c.id = i.customer_id
+             LEFT JOIN receivables r ON r.source_type = 'INVOICE' AND r.source_id = i.id
+             WHERE i.id = $1 AND c.organization_id = $2
+             FOR UPDATE OF i",
+        )
+        .bind(invoice_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(InvoiceVoidError::InvoiceNotFound);
+        };
+        let status: String = invoice.try_get("status")?;
+        if status == "VOID" {
+            return Err(InvoiceVoidError::AlreadyVoided);
+        }
+        let receivable_id: Option<Uuid> = invoice.try_get("receivable_id")?;
+        if let Some(receivable_id) = receivable_id {
+            let has_paid: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM payment_allocations pa
+                    JOIN payments p ON p.id = pa.payment_id
+                    LEFT JOIN (
+                        SELECT payment_id, SUM(amount) AS reversed_amount
+                        FROM payment_reversals GROUP BY payment_id
+                    ) rev ON rev.payment_id = p.id
+                    WHERE pa.receivable_id = $1 AND p.status = 'CENTRAL_ACCEPTED'
+                      AND pa.allocated_amount * GREATEST(
+                          p.amount_received - COALESCE(rev.reversed_amount, 0), 0
+                      ) / NULLIF(p.amount_received, 0) > 0
+                )",
+            )
+            .bind(receivable_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if has_paid {
+                return Err(InvoiceVoidError::HasPayments);
+            }
+        }
+        sqlx::query("UPDATE invoices SET status = 'VOID' WHERE id = $1")
+            .bind(invoice_id)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(receivable_id) = receivable_id {
+            sqlx::query("UPDATE receivables SET status = 'VOID' WHERE id = $1")
+                .bind(receivable_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT INTO invoice_voids (id, invoice_id, reason, actor_id)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(void_id)
+        .bind(invoice_id)
+        .bind(reason.trim())
+        .bind(actor_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, event_type, subject_id, occurred_at, redacted_metadata)
+             VALUES ($1, $2, 'INVOICE_VOIDED', $3, now(), $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(invoice_id)
+        .bind(json!({"void_id": void_id, "reason": reason.trim()}))
+        .execute(&mut *tx)
+        .await?;
+        let body = json!({
+            "invoice_id": invoice_id,
+            "void_id": void_id,
+            "status": "VOID",
+            "reason": reason.trim(),
+            "actor_id": actor_id
+        });
+        sqlx::query(
+            "INSERT INTO central_changes
+             (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'invoices', $2, 2, $3)",
+        )
+        .bind(self.organization_id)
+        .bind(invoice_id)
+        .bind(&body)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json)
+             VALUES ($1, $2, 'invoice.void', $3, $4, 200, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&body)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(InvoiceVoidOutcome::Created(body))
     }
 
     pub async fn record_payment(
@@ -1728,6 +2198,60 @@ impl CentralStore {
                 ack_tx.commit().await?;
                 Ok(result)
             }
+            "INVOICE_VOIDED" => {
+                let payload: InvoiceVoidSyncPayload = match serde_json::from_value(event.payload.clone()) {
+                    Ok(payload) => payload,
+                    Err(_) => {
+                        let result = SyncEventResult::Rejected {
+                            code: "INVOICE_VOID_PAYLOAD_INVALID".into(),
+                            required_action: "send_a_valid_invoice_void_payload".into(),
+                        };
+                        persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                            .await?;
+                        tx.commit().await?;
+                        return Ok(result);
+                    }
+                };
+                tx.rollback().await?;
+                let outcome = self
+                    .void_invoice_with_id(
+                        payload.invoice_id,
+                        payload.void_id,
+                        payload.actor_id,
+                        &payload.reason,
+                        &format!("sync-invoice-void-{}", event.event_id),
+                        &event.payload_sha256,
+                    )
+                    .await;
+                let body = match outcome {
+                    Ok(InvoiceVoidOutcome::Created(body)) | Ok(InvoiceVoidOutcome::Replay(body)) => {
+                        body
+                    }
+                    Err(_) => {
+                        return self
+                            .persist_sync_rejection(
+                                event,
+                                "INVOICE_VOID_NOT_ACCEPTED",
+                                "review_invoice_status_and_actor_permissions",
+                            )
+                            .await;
+                    }
+                };
+                let mut ack_tx = self.pool.begin().await?;
+                let result = persist_sync_result(
+                    &mut ack_tx,
+                    self.organization_id,
+                    event,
+                    &SyncEventResult::Accepted {
+                        server_sequence: 0,
+                        server_entity_id: payload.invoice_id,
+                    },
+                    Some(("invoices", payload.invoice_id, 2, body)),
+                )
+                .await?;
+                ack_tx.commit().await?;
+                Ok(result)
+            }
             "PAYMENT_RECORDED" => {
                 let (input, payment_id) =
                     match serde_json::from_value::<PaymentSyncPayload>(event.payload.clone()) {
@@ -2014,16 +2538,58 @@ impl CentralStore {
         if !actor {
             return Ok(false);
         }
-        Ok(sqlx::query(
-            "SELECT id FROM offline_grants
-             WHERE id = $1 AND user_id = $2 AND device_id = $3 AND expires_at > now()",
+        let Some(grant) = sqlx::query(
+            "SELECT scopes, limits, issued_at, expires_at, signature
+             FROM offline_grants
+             WHERE id = $1 AND user_id = $2 AND device_id = $3
+               AND issued_at <= now() AND expires_at > now()",
         )
         .bind(event.offline_grant_id)
         .bind(event.actor_id)
         .bind(event.device_id)
         .fetch_optional(&mut **tx)
         .await?
-        .is_some())
+        else {
+            return Ok(false);
+        };
+        let scopes: serde_json::Value = grant.try_get("scopes")?;
+        let limits: serde_json::Value = grant.try_get("limits")?;
+        let issued_at: DateTime<Utc> = grant.try_get("issued_at")?;
+        let expires_at: DateTime<Utc> = grant.try_get("expires_at")?;
+        let signature: String = grant.try_get("signature")?;
+
+        if !scope_allows_command(&scopes, &event.command_type) {
+            return Ok(false);
+        }
+        if !limits_allow_event(tx, event, &limits).await? {
+            return Ok(false);
+        }
+        if self.require_signed_offline_grants {
+            let Some(verifying_key) = &self.offline_grant_public_key else {
+                return Ok(false);
+            };
+            let Ok(signature_bytes) = BASE64.decode(signature) else {
+                return Ok(false);
+            };
+            let Ok(signature) = Signature::from_slice(&signature_bytes) else {
+                return Ok(false);
+            };
+            let Ok(canonical) = offline_grant_canonical_bytes(
+                event.offline_grant_id,
+                event.actor_id,
+                event.device_id,
+                &scopes,
+                &limits,
+                issued_at,
+                expires_at,
+            ) else {
+                return Ok(false);
+            };
+            if verifying_key.verify(&canonical, &signature).is_err() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     async fn persist_sync_rejection(
@@ -2095,6 +2661,69 @@ fn payload_digest(payload: &serde_json::Value) -> String {
     let mut digest = Sha256::new();
     digest.update(serde_json::to_vec(payload).expect("JSON serialization cannot fail"));
     hex::encode(digest.finalize())
+}
+
+fn token_digest(token: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(token.as_bytes());
+    hex::encode(digest.finalize())
+}
+
+fn scope_allows_command(scopes: &serde_json::Value, command_type: &str) -> bool {
+    let values = scopes
+        .as_array()
+        .cloned()
+        .or_else(|| scopes.get("commands").and_then(serde_json::Value::as_array).cloned())
+        .or_else(|| {
+            scopes
+                .get("allowed_commands")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        });
+    let Some(values) = values else {
+        return scopes.as_object().map_or(true, serde_json::Map::is_empty);
+    };
+    values.iter().any(|value| {
+        value.as_str() == Some("*") || value.as_str() == Some(command_type)
+    })
+}
+
+async fn limits_allow_event(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event: &SyncEnvelope,
+    limits: &serde_json::Value,
+) -> Result<bool, sqlx::Error> {
+    let Some(limits) = limits.as_object() else {
+        return Ok(true);
+    };
+    if let Some(max_events) = limits.get("max_events").and_then(serde_json::Value::as_u64) {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sync_inbox
+             WHERE device_id = $1 AND result_json->>'status' = 'ACCEPTED'",
+        )
+        .bind(event.device_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if count as u64 >= max_events {
+            return Ok(false);
+        }
+    }
+    if let Some(max_payment) = limits
+        .get("max_payment_amount")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| value.parse::<Decimal>().ok())
+    {
+        let amount = event
+            .payload
+            .pointer("/request/received_amount")
+            .or_else(|| event.payload.get("received_amount"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.parse::<Decimal>().ok());
+        if amount.is_some_and(|amount| amount > max_payment) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn customer_from_row(row: &sqlx::postgres::PgRow) -> Result<Customer, sqlx::Error> {

@@ -18,9 +18,13 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     let database_url = format!("sqlite://{}", path.display());
     let organization_id = Uuid::new_v4();
     let device_id = Uuid::new_v4();
-    let store = LocalStore::connect(&database_url, organization_id, device_id)
+    let mut store = LocalStore::connect(&database_url, organization_id, device_id)
         .await
         .expect("connect local store");
+    store
+        .configure_offline_identity(Uuid::new_v4(), Uuid::new_v4())
+        .await
+        .expect("configure local actor identity");
     sqlx::query(
         "INSERT INTO tariff_versions (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
          VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', '2026-01-01', 'local-approved-v1', 'APPROVED'),
@@ -133,6 +137,58 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
     assert_eq!(invoice["lines"][1]["quantity"], "0");
     assert_eq!(invoice["total"], "11.02");
+
+    let void_invoice_request = json!({
+        "customer_id": customer["id"],
+        "billing_period": "2026-12",
+        "electricity": {"quantity": "100", "unit": "KWH"},
+        "water": {"quantity": "0", "unit": "M3"},
+        "water_zero_confirmed": true,
+        "currency": "USD",
+        "tariff_revision": "local-approved-v1"
+    });
+    let void_invoice = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/local/v1/billing/utility/issue")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&void_invoice_request).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(void_invoice.status(), StatusCode::CREATED);
+    let void_invoice = json_body(void_invoice).await;
+    let void_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/invoices/{}/void",
+                    void_invoice["invoice_id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"reason": "duplicate period fixture"})).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(void_response.status(), StatusCode::CREATED);
+    let void_response = json_body(void_response).await;
+    assert_eq!(void_response["status"], "LOCAL_PENDING");
+    let void_status: String = sqlx::query_scalar("SELECT status FROM invoices WHERE id = $1")
+        .bind(void_invoice["invoice_id"].as_str().unwrap())
+        .fetch_one(&store.pool)
+        .await
+        .expect("read void invoice status");
+    assert_eq!(void_status, "VOID");
 
     let payment = app
         .clone()
@@ -260,7 +316,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .await
         .expect("read invoice after restart")
         .is_some());
-    assert_eq!(reopened.pending_count().await.unwrap(), 5);
+    assert_eq!(reopened.pending_count().await.unwrap(), 7);
     let _ = std::fs::remove_file(path);
 }
 

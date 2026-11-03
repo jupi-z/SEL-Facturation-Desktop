@@ -246,6 +246,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
 
     let token = format!("convergence-token-{}", Uuid::new_v4());
     std::env::set_var("SEL_API_AUTH_TOKEN", &token);
+    std::env::set_var("SEL_ALLOW_LEGACY_TOKEN", "1");
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();
@@ -424,6 +425,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     assert_eq!(second_balance["balance"], "50.00");
     server.abort();
     std::env::remove_var("SEL_API_AUTH_TOKEN");
+    std::env::remove_var("SEL_ALLOW_LEGACY_TOKEN");
     drop(first);
     drop(second);
     let _ = std::fs::remove_file(path_one);

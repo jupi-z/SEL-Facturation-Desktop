@@ -10,7 +10,7 @@ use sel_contracts::{
     utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest,
     Customer, InvoiceLineResponse, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
     SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse,
+    UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_storage::LocalStore;
@@ -205,6 +205,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
             post(issue_utility_invoice),
         )
         .route("/local/v1/invoices/:id", get(get_invoice))
+        .route("/local/v1/invoices/:id/void", post(void_invoice))
         .route("/local/v1/receivables/:id", get(get_receivable))
         .route("/local/v1/payments", post(record_payment))
         .route("/local/v1/payments/:id/reverse", post(reverse_payment))
@@ -438,6 +439,27 @@ async fn get_invoice(
         .map_err(internal_error)?
         .map(Json)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "invoice not found".into()))
+}
+
+async fn void_invoice(
+    State(state): State<LocalAppState>,
+    Path(invoice_id): Path<Uuid>,
+    Json(input): Json<VoidInvoiceRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let event = state
+        .store
+        .void_invoice(invoice_id, &input.reason)
+        .await
+        .map_err(internal_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "invoice_id": invoice_id,
+            "status": "LOCAL_PENDING",
+            "reason": input.reason.trim(),
+            "event_id": event.event_id
+        })),
+    ))
 }
 
 async fn get_receivable(
