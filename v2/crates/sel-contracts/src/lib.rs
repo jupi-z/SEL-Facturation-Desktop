@@ -90,15 +90,36 @@ pub struct UtilityBillingResponse {
 }
 
 #[derive(Serialize)]
-struct CanonicalUtilitySnapshot<'a> {
+struct CanonicalInvoiceLine {
+    service_code: String,
+    quantity: String,
+    unit: String,
+    unit_price: Option<String>,
+    subtotal: String,
+    tax: String,
+    total: String,
+}
+
+#[derive(Serialize)]
+struct CanonicalUtilitySnapshot {
     schema_version: u32,
     invoice_id: Uuid,
     receivable_id: Option<Uuid>,
-    currency: &'a str,
-    lines: &'a [InvoiceLineResponse],
-    subtotal: Decimal,
-    tax: Decimal,
-    total: Decimal,
+    currency: String,
+    lines: Vec<CanonicalInvoiceLine>,
+    subtotal: String,
+    tax: String,
+    total: String,
+}
+
+/// Returns the canonical decimal representation used by invoice snapshots.
+///
+/// PostgreSQL `NUMERIC(20,6)` values are returned with six fractional digits,
+/// while SQLite may return the same value with the scale originally written by
+/// the caller. Six fixed digits make the hash independent of that storage
+/// detail while preserving the database precision used by both stores.
+fn canonical_decimal(value: Decimal) -> String {
+    format!("{value:.6}")
 }
 
 /// Hashes the immutable financial portion of a utility invoice.
@@ -109,15 +130,28 @@ struct CanonicalUtilitySnapshot<'a> {
 pub fn utility_snapshot_sha256(
     response: &UtilityBillingResponse,
 ) -> Result<String, serde_json::Error> {
+    let lines = response
+        .lines
+        .iter()
+        .map(|line| CanonicalInvoiceLine {
+            service_code: line.service_code.clone(),
+            quantity: canonical_decimal(line.quantity),
+            unit: line.unit.clone(),
+            unit_price: line.unit_price.map(canonical_decimal),
+            subtotal: canonical_decimal(line.subtotal),
+            tax: canonical_decimal(line.tax),
+            total: canonical_decimal(line.total),
+        })
+        .collect();
     let canonical = CanonicalUtilitySnapshot {
         schema_version: DOCUMENT_SCHEMA_VERSION,
         invoice_id: response.invoice_id,
         receivable_id: response.receivable_id,
-        currency: &response.currency,
-        lines: &response.lines,
-        subtotal: response.subtotal,
-        tax: response.tax,
-        total: response.total,
+        currency: response.currency.clone(),
+        lines,
+        subtotal: canonical_decimal(response.subtotal),
+        tax: canonical_decimal(response.tax),
+        total: canonical_decimal(response.total),
     };
     let bytes = serde_json::to_vec(&canonical)?;
     let mut digest = Sha256::new();
@@ -163,6 +197,49 @@ mod tests {
         assert_eq!(pending_hash.len(), 64);
         pending.snapshot_sha256 = pending_hash.clone();
         assert_eq!(pending.snapshot_sha256, pending_hash);
+    }
+
+    #[test]
+    fn utility_snapshot_hash_ignores_decimal_storage_scale() {
+        let base = UtilityBillingResponse {
+            invoice_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+            receivable_id: Some(Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap()),
+            invoice_number: None,
+            status: "LOCAL_PENDING".into(),
+            currency: "USD".into(),
+            lines: vec![InvoiceLineResponse {
+                service_code: "ELECTRICITY".into(),
+                quantity: Decimal::new(250, 0),
+                unit: "KWH".into(),
+                unit_price: Some(Decimal::new(95, 3)),
+                subtotal: Decimal::new(2375, 2),
+                tax: Decimal::new(38, 2),
+                total: Decimal::new(2413, 2),
+            }],
+            subtotal: Decimal::new(2375, 2),
+            tax: Decimal::new(38, 2),
+            total: Decimal::new(2413, 2),
+            snapshot_sha256: String::new(),
+        };
+        let scaled = UtilityBillingResponse {
+            lines: vec![InvoiceLineResponse {
+                quantity: Decimal::new(250000, 3),
+                unit_price: Some(Decimal::new(95000, 6)),
+                subtotal: Decimal::new(2375000, 5),
+                tax: Decimal::new(3800, 4),
+                total: Decimal::new(2413000, 5),
+                ..base.lines[0].clone()
+            }],
+            subtotal: Decimal::new(2375000, 5),
+            tax: Decimal::new(3800, 4),
+            total: Decimal::new(2413000, 5),
+            ..base.clone()
+        };
+
+        assert_eq!(
+            utility_snapshot_sha256(&base).unwrap(),
+            utility_snapshot_sha256(&scaled).unwrap()
+        );
     }
 }
 

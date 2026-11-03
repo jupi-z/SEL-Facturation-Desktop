@@ -259,24 +259,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .unwrap();
     });
     let endpoint = format!("http://{address}");
-    let first_sync = match sync_once(&first, &endpoint, &token).await {
-        Ok(summary) => summary,
-        Err(error) => {
-            let diagnostic = CentralStore::connect(&database_url, organization_id)
-                .await
-                .unwrap();
-            let changes: Vec<String> = sqlx::query_scalar(
-                "SELECT change_json::text FROM central_changes
-                 WHERE organization_id = $1 ORDER BY sequence",
-            )
-            .bind(organization_id)
-            .fetch_all(&diagnostic.pool)
-            .await
-            .unwrap();
-            eprintln!("central changes after push failure: {changes:?}");
-            panic!("first convergence sync failed: {error}");
-        }
-    };
+    let first_sync = sync_once(&first, &endpoint, &token).await.unwrap();
     assert_eq!(first_sync.accepted, 3);
     let second_sync = sync_once(&second, &endpoint, &token).await.unwrap();
     assert_eq!(second_sync.pulled, 3);
@@ -437,8 +420,8 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(second_balance["paid"], "0");
-    assert_eq!(second_balance["balance"], "120.00");
+    assert_eq!(second_balance["paid"], "70.00");
+    assert_eq!(second_balance["balance"], "50.00");
     server.abort();
     std::env::remove_var("SEL_API_AUTH_TOKEN");
     drop(first);
