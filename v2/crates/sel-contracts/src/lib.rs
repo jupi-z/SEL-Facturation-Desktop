@@ -270,10 +270,30 @@ pub struct RecordPaymentRequest {
     pub allocations: Vec<PaymentAllocationRequest>,
 }
 
+/// Append-only financial reversal for an accepted payment.
+///
+/// The actor is deliberately not part of this payload: the API resolves it
+/// from the authenticated request context and the storage layer verifies that
+/// the user is active in the same organization as the payment.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ReversePaymentRequest {
+    pub amount: Decimal,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PaymentSyncPayload {
     pub request: RecordPaymentRequest,
     pub payment_id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PaymentReversalSyncPayload {
+    pub payment_id: Uuid,
+    pub reversal_id: Uuid,
+    pub amount: Decimal,
+    pub reason: String,
+    pub actor_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

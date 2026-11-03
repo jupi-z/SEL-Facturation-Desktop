@@ -2,10 +2,10 @@ use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use sel_contracts::{
     solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
-    CreateSolarSaleRequest, Customer, PaymentSyncPayload, RecordPaymentRequest,
-    SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope,
-    SyncEventResult, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
-    UtilityInvoiceSyncPayload,
+    CreateSolarSaleRequest, Customer, PaymentReversalSyncPayload, PaymentSyncPayload,
+    RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarSaleResponse,
+    SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -109,6 +109,33 @@ pub enum PaymentWriteError {
 }
 
 pub enum PaymentWriteOutcome {
+    Created(serde_json::Value),
+    Replay(serde_json::Value),
+}
+
+#[derive(Debug, Error)]
+pub enum PaymentReverseError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("idempotency key was reused with another payload")]
+    IdempotencyPayloadMismatch,
+    #[error("payment was not found in the organization")]
+    PaymentNotFound,
+    #[error("payment is not accepted centrally")]
+    PaymentNotAccepted,
+    #[error("payment reversal actor is not active in the organization")]
+    ActorNotActive,
+    #[error("reversal amount is invalid")]
+    InvalidAmount,
+    #[error("reversal exceeds the payment amount still reversible")]
+    AmountExceedsRemaining,
+    #[error("reversal reason is required")]
+    ReasonRequired,
+    #[error("stored idempotency response is invalid: {0}")]
+    StoredResponse(#[from] serde_json::Error),
+}
+
+pub enum PaymentReverseOutcome {
     Created(serde_json::Value),
     Replay(serde_json::Value),
 }
@@ -436,9 +463,24 @@ impl CentralStore {
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let row = sqlx::query(
             "SELECT r.id, r.customer_id, r.currency, r.principal_total,
-                    COALESCE(SUM(pa.allocated_amount), 0) AS paid
+                    COALESCE((
+                        SELECT SUM(
+                            pa.allocated_amount * GREATEST(
+                                p.amount_received - COALESCE(rev.reversed_amount, 0),
+                                0
+                            ) / NULLIF(p.amount_received, 0)
+                        )
+                        FROM payment_allocations pa
+                        JOIN payments p ON p.id = pa.payment_id
+                        LEFT JOIN (
+                            SELECT payment_id, SUM(amount) AS reversed_amount
+                            FROM payment_reversals
+                            GROUP BY payment_id
+                        ) rev ON rev.payment_id = p.id
+                        WHERE pa.receivable_id = r.id
+                          AND p.status = 'CENTRAL_ACCEPTED'
+                    ), 0) AS paid
              FROM receivables r
-             LEFT JOIN payment_allocations pa ON pa.receivable_id = r.id
              WHERE r.id = $1 AND r.customer_id IN
                  (SELECT id FROM customers WHERE organization_id = $2)
              GROUP BY r.id, r.customer_id, r.currency, r.principal_total",
@@ -451,14 +493,16 @@ impl CentralStore {
             let principal: Decimal = row.try_get("principal_total")?;
             let paid: Decimal = row.try_get("paid")?;
             let principal = principal.round_dp(2);
-            let paid = paid.round_dp(2);
+            let mut paid = paid.round_dp(2);
+            paid.rescale(2);
+            let balance = (principal - paid).round_dp(2);
             Ok(json!({
                 "id": row.try_get::<Uuid, _>("id")?,
                 "customer_id": row.try_get::<Uuid, _>("customer_id")?,
                 "currency": row.try_get::<String, _>("currency")?,
-                "principal": principal,
-                "paid": paid,
-                "balance": (principal - paid).round_dp(2),
+                "principal": format!("{principal:.2}"),
+                "paid": format!("{paid:.2}"),
+                "balance": format!("{balance:.2}"),
                 "status": if paid >= principal { "SETTLED" } else { "OPEN" }
             }))
         })
@@ -626,6 +670,170 @@ impl CentralStore {
         Ok(PaymentWriteOutcome::Created(body))
     }
 
+    pub async fn reverse_payment(
+        &self,
+        payment_id: Uuid,
+        input: &ReversePaymentRequest,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<PaymentReverseOutcome, PaymentReverseError> {
+        self.reverse_payment_with_id(
+            payment_id,
+            input,
+            actor_id,
+            Uuid::new_v4(),
+            idempotency_key,
+            request_digest,
+        )
+        .await
+    }
+
+    pub async fn reverse_payment_with_id(
+        &self,
+        payment_id: Uuid,
+        input: &ReversePaymentRequest,
+        actor_id: Uuid,
+        reversal_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<PaymentReverseOutcome, PaymentReverseError> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2 AND operation = $3 AND idempotency_key = $4",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind("payment.reverse")
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let original_digest: String = row.try_get("request_digest")?;
+            if original_digest != request_digest {
+                return Err(PaymentReverseError::IdempotencyPayloadMismatch);
+            }
+            let original: serde_json::Value = row.try_get("response_json")?;
+            return Ok(PaymentReverseOutcome::Replay(serde_json::from_value(
+                original,
+            )?));
+        }
+        if input.amount <= Decimal::ZERO {
+            return Err(PaymentReverseError::InvalidAmount);
+        }
+        if input.reason.trim().is_empty() {
+            return Err(PaymentReverseError::ReasonRequired);
+        }
+        let actor_exists = sqlx::query(
+            "SELECT id FROM users
+             WHERE id = $1 AND organization_id = $2 AND status = 'ACTIVE'",
+        )
+        .bind(actor_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+        if !actor_exists {
+            return Err(PaymentReverseError::ActorNotActive);
+        }
+        let Some(payment) = sqlx::query(
+            "SELECT p.amount_received, p.status
+             FROM payments p
+             JOIN customers c ON c.id = p.customer_id
+             WHERE p.id = $1 AND c.organization_id = $2
+             FOR UPDATE OF p",
+        )
+        .bind(payment_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(PaymentReverseError::PaymentNotFound);
+        };
+        let payment_status: String = payment.try_get("status")?;
+        if payment_status != "CENTRAL_ACCEPTED" {
+            return Err(PaymentReverseError::PaymentNotAccepted);
+        }
+        let amount_received: Decimal = payment.try_get("amount_received")?;
+        let reversed: Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(amount), 0) FROM payment_reversals WHERE payment_id = $1",
+        )
+        .bind(payment_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let remaining = amount_received - reversed;
+        if input.amount > remaining {
+            return Err(PaymentReverseError::AmountExceedsRemaining);
+        }
+        sqlx::query(
+            "INSERT INTO payment_reversals (id, payment_id, amount, reason, initiated_by)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(reversal_id)
+        .bind(payment_id)
+        .bind(input.amount)
+        .bind(input.reason.trim())
+        .bind(actor_id)
+        .execute(&mut *tx)
+        .await?;
+        let remaining_after = remaining - input.amount;
+        let currency: String = sqlx::query_scalar("SELECT currency FROM payments WHERE id = $1")
+            .bind(payment_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let body = json!({
+            "reversal_id": reversal_id,
+            "payment_id": payment_id,
+            "amount": format!("{:.2}", input.amount),
+            "currency": currency,
+            "status": "CENTRAL_ACCEPTED",
+            "reversal_status": "RECORDED",
+            "remaining_reversible_amount": format!("{remaining_after:.2}"),
+            "reason": input.reason.trim(),
+            "actor_id": actor_id
+        });
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, event_type, subject_id, occurred_at, redacted_metadata)
+             VALUES ($1, $2, 'PAYMENT_REVERSED', $3, now(), $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(actor_id)
+        .bind(payment_id)
+        .bind(json!({
+            "reversal_id": reversal_id,
+            "amount": input.amount,
+            "reason": input.reason.trim()
+        }))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO central_changes
+             (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'payment_reversals', $2, 1, $3)",
+        )
+        .bind(self.organization_id)
+        .bind(reversal_id)
+        .bind(&body)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key, request_digest, response_status, response_json)
+             VALUES ($1, $2, 'payment.reverse', $3, $4, 201, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&body)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(PaymentReverseOutcome::Created(body))
+    }
+
     pub async fn customer_statement(
         &self,
         customer_id: Uuid,
@@ -642,9 +850,24 @@ impl CentralStore {
         }
         let rows = sqlx::query(
             "SELECT r.id, r.currency, r.principal_total,
-                    COALESCE(SUM(pa.allocated_amount), 0) AS paid
+                    COALESCE((
+                        SELECT SUM(
+                            pa.allocated_amount * GREATEST(
+                                p.amount_received - COALESCE(rev.reversed_amount, 0),
+                                0
+                            ) / NULLIF(p.amount_received, 0)
+                        )
+                        FROM payment_allocations pa
+                        JOIN payments p ON p.id = pa.payment_id
+                        LEFT JOIN (
+                            SELECT payment_id, SUM(amount) AS reversed_amount
+                            FROM payment_reversals
+                            GROUP BY payment_id
+                        ) rev ON rev.payment_id = p.id
+                        WHERE pa.receivable_id = r.id
+                          AND p.status = 'CENTRAL_ACCEPTED'
+                    ), 0) AS paid
              FROM receivables r
-             LEFT JOIN payment_allocations pa ON pa.receivable_id = r.id
              WHERE r.customer_id = $1
              GROUP BY r.id, r.currency, r.principal_total
              ORDER BY r.id",
@@ -658,13 +881,15 @@ impl CentralStore {
                 let principal: Decimal = row.try_get("principal_total")?;
                 let paid: Decimal = row.try_get("paid")?;
                 let principal = principal.round_dp(2);
-                let paid = paid.round_dp(2);
+                let mut paid = paid.round_dp(2);
+                paid.rescale(2);
+                let balance = (principal - paid).round_dp(2);
                 Ok(json!({
                     "receivable_id": row.try_get::<Uuid, _>("id")?,
                     "currency": row.try_get::<String, _>("currency")?,
-                    "principal": principal,
-                    "paid": paid,
-                    "balance": (principal - paid).round_dp(2)
+                    "principal": format!("{principal:.2}"),
+                    "paid": format!("{paid:.2}"),
+                    "balance": format!("{balance:.2}")
                 }))
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
@@ -1595,6 +1820,83 @@ impl CentralStore {
                             "allocations": input.allocations,
                         }),
                     )),
+                )
+                .await?;
+                ack_tx.commit().await?;
+                Ok(result)
+            }
+            "PAYMENT_REVERSED" => {
+                let payload: PaymentReversalSyncPayload =
+                    match serde_json::from_value(event.payload.clone()) {
+                        Ok(payload) => payload,
+                        Err(_) => {
+                            let result = SyncEventResult::Rejected {
+                                code: "PAYMENT_REVERSAL_PAYLOAD_INVALID".into(),
+                                required_action: "send_a_valid_payment_reversal_payload".into(),
+                            };
+                            persist_sync_result(
+                                &mut tx,
+                                self.organization_id,
+                                event,
+                                &result,
+                                None,
+                            )
+                            .await?;
+                            tx.commit().await?;
+                            return Ok(result);
+                        }
+                    };
+                let PaymentReversalSyncPayload {
+                    payment_id,
+                    reversal_id,
+                    amount,
+                    reason,
+                    actor_id,
+                } = payload;
+                tx.rollback().await?;
+                let input = ReversePaymentRequest { amount, reason };
+                let operation_key = format!("sync-payment-reversal-{}", event.event_id);
+                let outcome = self
+                    .reverse_payment_with_id(
+                        payment_id,
+                        &input,
+                        actor_id,
+                        reversal_id,
+                        &operation_key,
+                        &event.payload_sha256,
+                    )
+                    .await;
+                let body = match outcome {
+                    Ok(PaymentReverseOutcome::Created(body))
+                    | Ok(PaymentReverseOutcome::Replay(body)) => body,
+                    Err(_) => {
+                        let mut reject_tx = self.pool.begin().await?;
+                        let result = SyncEventResult::Rejected {
+                            code: "PAYMENT_REVERSAL_NOT_ACCEPTED".into(),
+                            required_action: "review_payment_reversal_and_retry".into(),
+                        };
+                        persist_sync_result(
+                            &mut reject_tx,
+                            self.organization_id,
+                            event,
+                            &result,
+                            None,
+                        )
+                        .await?;
+                        reject_tx.commit().await?;
+                        return Ok(result);
+                    }
+                };
+                let mut ack_tx = self.pool.begin().await?;
+                let result = persist_sync_result(
+                    &mut ack_tx,
+                    self.organization_id,
+                    event,
+                    &SyncEventResult::Accepted {
+                        server_sequence: 0,
+                        server_entity_id: reversal_id,
+                    },
+                    Some(("payment_reversals", reversal_id, 1, body)),
                 )
                 .await?;
                 ack_tx.commit().await?;

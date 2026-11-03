@@ -123,6 +123,40 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
     assert_eq!(stored_payment_id, payment_id);
     let retry = store.apply_sync_event(&event).await.unwrap();
     assert!(matches!(retry, SyncEventResult::Duplicate { .. }));
+    let reversal_id = Uuid::new_v4();
+    let reversal_payload = serde_json::json!({
+        "payment_id": payment_id,
+        "reversal_id": reversal_id,
+        "amount": "1.00",
+        "reason": "sync correction",
+        "actor_id": actor_id
+    });
+    let reversal_event = SyncEnvelope {
+        protocol_version: 1,
+        event_id: Uuid::new_v4(),
+        device_id,
+        organization_id,
+        actor_id,
+        command_type: "PAYMENT_REVERSED".into(),
+        aggregate_id: payment_id,
+        aggregate_expected_version: 0,
+        occurred_at: Utc::now(),
+        offline_grant_id: grant_id,
+        payload_sha256: payload_digest(&reversal_payload),
+        payload: reversal_payload,
+        client_schema_version: 1,
+    };
+    let reversal_result = store.apply_sync_event(&reversal_event).await.unwrap();
+    assert!(matches!(reversal_result, SyncEventResult::Accepted { .. }));
+    let reversal_retry = store.apply_sync_event(&reversal_event).await.unwrap();
+    assert!(matches!(reversal_retry, SyncEventResult::Duplicate { .. }));
+    let reversal_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM payment_reversals WHERE payment_id = $1")
+            .bind(payment_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(reversal_count, 1);
     let allocation_total: Decimal = sqlx::query_scalar(
         "SELECT COALESCE(SUM(allocated_amount), 0) FROM payment_allocations WHERE receivable_id = $1",
     )

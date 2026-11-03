@@ -168,6 +168,122 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     let receivable = json_body(receivable).await;
     assert_eq!(receivable["paid"], "3.00");
     assert_eq!(receivable["balance"], "8.02");
+
+    let reversal_request = json!({
+        "amount": "1.00",
+        "reason": "fixture correction"
+    });
+    let reversal_builder = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/v1/payments/{}/reverse",
+                payment["payment_id"].as_str().unwrap()
+            ))
+            .header("authorization", "Bearer test")
+            .header("X-Actor-Id", approved_by.to_string())
+            .header("Idempotency-Key", "pg-reversal-key-1")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&reversal_request).unwrap()))
+            .unwrap()
+    };
+    let reversal = app.clone().oneshot(reversal_builder()).await.unwrap();
+    assert_eq!(reversal.status(), StatusCode::CREATED);
+    let reversal = json_body(reversal).await;
+    assert_eq!(reversal["amount"], "1.00");
+    assert_eq!(reversal["remaining_reversible_amount"], "2.00");
+    let reversal_retry = app.clone().oneshot(reversal_builder()).await.unwrap();
+    assert_eq!(reversal_retry.status(), StatusCode::OK);
+    assert_eq!(json_body(reversal_retry).await, reversal);
+
+    let after_partial = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/receivables/{}",
+                    invoice["receivable_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_partial.status(), StatusCode::OK);
+    let after_partial = json_body(after_partial).await;
+    assert_eq!(after_partial["paid"], "2.00");
+    assert_eq!(after_partial["balance"], "9.02");
+
+    let final_reversal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/payments/{}/reverse",
+                    payment["payment_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .header("X-Actor-Id", approved_by.to_string())
+                .header("Idempotency-Key", "pg-reversal-key-2")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "amount": "2.00",
+                        "reason": "fixture full correction"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(final_reversal.status(), StatusCode::CREATED);
+    let final_reversal = json_body(final_reversal).await;
+    assert_eq!(final_reversal["remaining_reversible_amount"], "0.00");
+
+    let after_full = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/receivables/{}",
+                    invoice["receivable_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_full.status(), StatusCode::OK);
+    let after_full = json_body(after_full).await;
+    assert_eq!(after_full["paid"], "0.00");
+    assert_eq!(after_full["balance"], "11.02");
+    let reversal_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM payment_reversals WHERE payment_id = $1")
+            .bind(Uuid::parse_str(payment["payment_id"].as_str().unwrap()).unwrap())
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(reversal_count, 2);
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE event_type = 'PAYMENT_REVERSED' AND subject_id = $1",
+    )
+    .bind(Uuid::parse_str(payment["payment_id"].as_str().unwrap()).unwrap())
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 2);
+    let publication_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM central_changes WHERE organization_id = $1 AND entity = 'payment_reversals'",
+    )
+    .bind(organization_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(publication_count, 2);
     drop(app);
     drop(store);
 

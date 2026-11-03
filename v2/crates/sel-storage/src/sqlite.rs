@@ -2,10 +2,10 @@ use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
     solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
-    CreateSolarSaleRequest, Customer, InvoiceLineResponse, PaymentSyncPayload,
-    RecordPaymentRequest, SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload,
-    SyncEnvelope, SyncEventResult, SyncPullResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    CreateSolarSaleRequest, Customer, InvoiceLineResponse, PaymentReversalSyncPayload,
+    PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload,
+    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse,
+    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -40,6 +40,22 @@ pub enum LocalPaymentError {
     Overallocated,
     #[error("payment allocations exceed the received amount")]
     AllocationExceedsReceipt,
+}
+
+#[derive(Debug, Error)]
+pub enum LocalPaymentReverseError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("payment was not found in the local database")]
+    PaymentNotFound,
+    #[error("payment is not accepted or pending locally")]
+    PaymentNotReversible,
+    #[error("reversal amount is invalid")]
+    InvalidAmount,
+    #[error("reversal exceeds the payment amount still reversible")]
+    AmountExceedsRemaining,
+    #[error("reversal reason is required")]
+    ReasonRequired,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -633,21 +649,39 @@ impl LocalStore {
         };
         let principal = decimal_text(&row, "principal_total")?;
         let receivable_status: String = row.try_get("status")?;
-        let paid_values: Vec<String> = sqlx::query_scalar(
-            "SELECT pa.allocated_amount FROM payment_allocations pa
+        let paid_rows = sqlx::query(
+            "SELECT pa.allocated_amount, p.amount_received,
+                    COALESCE((SELECT GROUP_CONCAT(pr.amount, ',') FROM payment_reversals pr
+                              WHERE pr.payment_id = p.id), '') AS reversed_amounts
+             FROM payment_allocations pa
              JOIN payments p ON p.id = pa.payment_id
              WHERE pa.receivable_id = $1 AND p.status IN ('LOCAL_PENDING', 'CENTRAL_ACCEPTED')",
         )
         .bind(id.to_string())
         .fetch_all(&self.pool)
         .await?;
-        let paid = paid_values
+        let paid = paid_rows
             .into_iter()
-            .try_fold(Decimal::ZERO, |total, value| {
-                let amount = Decimal::from_str(&value).map_err(|error| {
-                    sqlx::Error::Protocol(format!("invalid paid amount: {error}"))
-                })?;
-                Ok::<Decimal, sqlx::Error>(total + amount)
+            .try_fold(Decimal::ZERO, |total, row| {
+                let allocation = decimal_text(&row, "allocated_amount")?;
+                let received = decimal_text(&row, "amount_received")?;
+                let reversed_text: String = row.try_get("reversed_amounts")?;
+                let reversed = reversed_text
+                    .split(',')
+                    .filter(|value| !value.is_empty())
+                    .try_fold(Decimal::ZERO, |total, value| {
+                        let amount = Decimal::from_str(value).map_err(|error| {
+                            sqlx::Error::Protocol(format!("invalid reversed amount: {error}"))
+                        })?;
+                        Ok::<Decimal, sqlx::Error>(total + amount)
+                    })?;
+                let net_received = (received - reversed).max(Decimal::ZERO);
+                let effective = if received.is_zero() {
+                    Decimal::ZERO
+                } else {
+                    allocation * net_received / received
+                };
+                Ok::<Decimal, sqlx::Error>(total + effective)
             })?;
         let rejected = receivable_status == "REJECTED";
         let balance = if rejected {
@@ -788,6 +822,107 @@ impl LocalStore {
         ))
     }
 
+    pub async fn reverse_payment(
+        &self,
+        payment_id: Uuid,
+        input: &ReversePaymentRequest,
+    ) -> Result<(serde_json::Value, SyncEnvelope), LocalPaymentReverseError> {
+        let _guard = self.write_lock.lock().await;
+        if input.amount <= Decimal::ZERO {
+            return Err(LocalPaymentReverseError::InvalidAmount);
+        }
+        if input.reason.trim().is_empty() {
+            return Err(LocalPaymentReverseError::ReasonRequired);
+        }
+        let reversal_id = Uuid::new_v4();
+        let payload = serde_json::to_value(PaymentReversalSyncPayload {
+            payment_id,
+            reversal_id,
+            amount: input.amount,
+            reason: input.reason.trim().to_owned(),
+            actor_id: self.actor_id,
+        })
+        .map_err(|error| {
+            LocalPaymentReverseError::Database(sqlx::Error::Protocol(format!(
+                "invalid payment reversal JSON: {error}"
+            )))
+        })?;
+        let event = local_event(
+            self,
+            Uuid::new_v4(),
+            payment_id,
+            "PAYMENT_REVERSED",
+            payload,
+        )?;
+        let mut tx = self.pool.begin().await?;
+        let payment = sqlx::query("SELECT amount_received, status FROM payments WHERE id = $1")
+            .bind(payment_id.to_string())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(LocalPaymentReverseError::PaymentNotFound)?;
+        let status: String = payment.try_get("status")?;
+        if status != "LOCAL_PENDING" && status != "CENTRAL_ACCEPTED" {
+            return Err(LocalPaymentReverseError::PaymentNotReversible);
+        }
+        let amount_received = decimal_text(&payment, "amount_received")?;
+        let reversed_text: String = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(amount), '0') FROM payment_reversals WHERE payment_id = $1",
+        )
+        .bind(payment_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        let reversed = Decimal::from_str(&reversed_text)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid reversed amount: {error}")))?;
+        let remaining = amount_received - reversed;
+        if input.amount > remaining {
+            return Err(LocalPaymentReverseError::AmountExceedsRemaining);
+        }
+        sqlx::query(
+            "INSERT INTO payment_reversals
+             (id, payment_id, amount, reason, initiated_by, created_at)
+             VALUES ($1, $2, $3, $4, $5, datetime('now'))",
+        )
+        .bind(reversal_id.to_string())
+        .bind(payment_id.to_string())
+        .bind(input.amount.to_string())
+        .bind(input.reason.trim())
+        .bind(self.actor_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, device, event_type, subject_id, occurred_at, redacted_metadata_json)
+             VALUES ($1, $2, $3, 'PAYMENT_REVERSED', $4, datetime('now'), $5)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(self.actor_id.to_string())
+        .bind(self.device_id.to_string())
+        .bind(payment_id.to_string())
+        .bind(
+            json!({
+                "reversal_id": reversal_id,
+                "amount": input.amount,
+                "reason": input.reason.trim()
+            })
+            .to_string(),
+        )
+        .execute(&mut *tx)
+        .await?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        tx.commit().await?;
+        Ok((
+            json!({
+                "reversal_id": reversal_id,
+                "payment_id": payment_id,
+                "amount": format!("{:.2}", input.amount),
+                "remaining_reversible_amount": format!("{:.2}", remaining - input.amount),
+                "status": "LOCAL_PENDING",
+                "reversal_status": "RECORDED"
+            }),
+            event,
+        ))
+    }
+
     pub async fn pending_count(&self) -> Result<i64, sqlx::Error> {
         sqlx::query_scalar("SELECT count(*) FROM outbox WHERE state = 'PENDING'")
             .fetch_one(&self.pool)
@@ -869,6 +1004,10 @@ impl LocalStore {
                     }
                     "payments" => {
                         apply_payment_change(&mut tx, self.organization_id, &change_json).await?;
+                    }
+                    "payment_reversals" => {
+                        apply_payment_reversal_change(&mut tx, self.organization_id, &change_json)
+                            .await?;
                     }
                     "sales" => {
                         apply_solar_sale_change(
@@ -1918,6 +2057,86 @@ async fn apply_payment_change(
         .execute(&mut **tx)
         .await?;
     }
+    Ok(())
+}
+
+async fn apply_payment_reversal_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    change: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let reversal_id = change
+        .get("reversal_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("payment reversal id is missing".into()))?;
+    let payment_id = change
+        .get("payment_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("payment reversal payment id is missing".into()))?;
+    let amount = change
+        .get("amount")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("payment reversal amount is missing".into()))?;
+    let reason = change
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("payment reversal reason is missing".into()))?;
+    let actor_id = change
+        .get("actor_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("CENTRAL");
+    let payment_exists: Option<String> = sqlx::query_scalar(
+        "SELECT p.id FROM payments p
+         JOIN customers c ON c.id = p.customer_id
+         WHERE p.id = $1 AND c.organization_id = $2",
+    )
+    .bind(payment_id)
+    .bind(organization_id.to_string())
+    .fetch_optional(&mut **tx)
+    .await?;
+    if payment_exists.is_none() {
+        return Err(sqlx::Error::Protocol(
+            "payment reversal references a payment not present locally".into(),
+        ));
+    }
+    if let Some(existing) =
+        sqlx::query("SELECT amount, reason FROM payment_reversals WHERE id = $1")
+            .bind(reversal_id)
+            .fetch_optional(&mut **tx)
+            .await?
+    {
+        let existing_amount: String = existing.try_get("amount")?;
+        let existing_reason: String = existing.try_get("reason")?;
+        if existing_amount != amount || existing_reason != reason {
+            return Err(sqlx::Error::Protocol(
+                "conflicting local payment reversal projection".into(),
+            ));
+        }
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO payment_reversals
+         (id, payment_id, amount, reason, initiated_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, datetime('now'))",
+    )
+    .bind(reversal_id)
+    .bind(payment_id)
+    .bind(amount)
+    .bind(reason)
+    .bind(actor_id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO audit_events
+         (id, actor, event_type, subject_id, occurred_at, redacted_metadata_json)
+         VALUES ($1, $2, 'PAYMENT_REVERSED', $3, datetime('now'), $4)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(actor_id)
+    .bind(payment_id)
+    .bind(change.to_string())
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

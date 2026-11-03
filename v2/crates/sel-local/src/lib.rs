@@ -8,8 +8,8 @@ use axum::{
 };
 use sel_contracts::{
     utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest,
-    Customer, InvoiceLineResponse, RecordPaymentRequest, SolarSaleResponse, SyncEventResult,
-    SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    Customer, InvoiceLineResponse, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
+    SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
     UtilityBillingResponse,
 };
 use sel_domain::billing;
@@ -207,6 +207,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route("/local/v1/invoices/:id", get(get_invoice))
         .route("/local/v1/receivables/:id", get(get_receivable))
         .route("/local/v1/payments", post(record_payment))
+        .route("/local/v1/payments/:id/reverse", post(reverse_payment))
         .route("/local/v1/solar/sales", post(create_solar_sale))
         .route(
             "/local/v1/solar/contracts/:id/activate",
@@ -464,6 +465,19 @@ async fn record_payment(
     Ok((StatusCode::CREATED, Json(body)))
 }
 
+async fn reverse_payment(
+    State(state): State<LocalAppState>,
+    Path(payment_id): Path<Uuid>,
+    Json(input): Json<ReversePaymentRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let (body, _) = state
+        .store
+        .reverse_payment(payment_id, &input)
+        .await
+        .map_err(local_payment_reverse_error)?;
+    Ok((StatusCode::CREATED, Json(body)))
+}
+
 async fn create_solar_sale(
     State(state): State<LocalAppState>,
     Json(input): Json<CreateSolarSaleRequest>,
@@ -519,6 +533,26 @@ fn local_payment_error(error: sel_storage::sqlite::LocalPaymentError) -> (Status
         sel_storage::sqlite::LocalPaymentError::ContextInvalid
         | sel_storage::sqlite::LocalPaymentError::Overallocated => StatusCode::CONFLICT,
         sel_storage::sqlite::LocalPaymentError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, error.to_string())
+}
+
+fn local_payment_reverse_error(
+    error: sel_storage::sqlite::LocalPaymentReverseError,
+) -> (StatusCode, String) {
+    let status = match error {
+        sel_storage::sqlite::LocalPaymentReverseError::PaymentNotFound => StatusCode::NOT_FOUND,
+        sel_storage::sqlite::LocalPaymentReverseError::PaymentNotReversible
+        | sel_storage::sqlite::LocalPaymentReverseError::AmountExceedsRemaining => {
+            StatusCode::CONFLICT
+        }
+        sel_storage::sqlite::LocalPaymentReverseError::InvalidAmount
+        | sel_storage::sqlite::LocalPaymentReverseError::ReasonRequired => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+        sel_storage::sqlite::LocalPaymentReverseError::Database(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     };
     (status, error.to_string())
 }

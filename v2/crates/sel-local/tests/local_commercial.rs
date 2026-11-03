@@ -164,6 +164,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         "payment body: {}",
         String::from_utf8_lossy(&payment_body)
     );
+    let payment: serde_json::Value = serde_json::from_slice(&payment_body).unwrap();
 
     let receivable = app
         .clone()
@@ -190,6 +191,65 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert_eq!(receivable["paid"], "3.00");
     assert_eq!(receivable["balance"], "8.02");
 
+    let reversal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/payments/{}/reverse",
+                    payment["payment_id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "amount": "1.00",
+                        "reason": "local correction"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let reversal_status = reversal.status();
+    let reversal_body = reversal.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        reversal_status,
+        StatusCode::CREATED,
+        "reversal body: {}",
+        String::from_utf8_lossy(&reversal_body)
+    );
+    let after_reversal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/receivables/{}",
+                    invoice["receivable_id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let after_reversal_status = after_reversal.status();
+    let after_reversal_body = after_reversal
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    assert_eq!(
+        after_reversal_status,
+        StatusCode::OK,
+        "after reversal body: {}",
+        String::from_utf8_lossy(&after_reversal_body)
+    );
+    let after_reversal: serde_json::Value = serde_json::from_slice(&after_reversal_body).unwrap();
+    assert_eq!(after_reversal["paid"], "2.00");
+    assert_eq!(after_reversal["balance"], "9.02");
+
     drop(app);
     drop(store);
     let reopened = LocalStore::connect(&database_url, organization_id, device_id)
@@ -200,7 +260,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .await
         .expect("read invoice after restart")
         .is_some());
-    assert_eq!(reopened.pending_count().await.unwrap(), 4);
+    assert_eq!(reopened.pending_count().await.unwrap(), 5);
     let _ = std::fs::remove_file(path);
 }
 

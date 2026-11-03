@@ -12,8 +12,8 @@ use rust_decimal::Decimal;
 use sel_contracts::{
     utility_snapshot_sha256, CreateCustomer, CreateSolarSaleRequest, Customer, DocumentData,
     InvoiceLineResponse, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
-    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
-    UtilityBillingRequest, UtilityBillingResponse,
+    ReversePaymentRequest, SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse,
+    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -127,6 +127,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/invoices/:id", get(get_invoice))
         .route("/v1/invoices/:id/document-data", get(get_document_data))
         .route("/v1/payments", post(record_payment))
+        .route("/v1/payments/:id/reverse", post(reverse_payment))
         .route("/v1/receivables/:id", get(get_receivable))
         .route("/v1/customers/:id/statement", get(get_statement))
         .route("/v1/sync/push", post(sync_push))
@@ -749,6 +750,52 @@ async fn record_payment(
     Ok((StatusCode::CREATED, Json(body)))
 }
 
+async fn reverse_payment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(payment_id): Path<Uuid>,
+    Json(input): Json<ReversePaymentRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let key = require_idempotency(&headers)?;
+    let actor_id = headers
+        .get("X-Actor-Id")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            ApiError::unauthorized(
+                "ACTOR_REQUIRED",
+                "X-Actor-Id is required for an audited financial reversal",
+            )
+        })?
+        .parse::<Uuid>()
+        .map_err(|_| ApiError::unauthorized("ACTOR_INVALID", "X-Actor-Id must be a UUID"))?;
+    if input.amount <= Decimal::ZERO || input.reason.trim().is_empty() {
+        return Err(ApiError::unprocessable(
+            "PAYMENT_REVERSAL_INVALID",
+            "a positive amount and a non-empty reason are required",
+        ));
+    }
+    let digest = digest_json(&input)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "PAYMENT_REVERSAL_CENTRAL_REQUIRED",
+            "audited payment reversals require a central PostgreSQL store",
+        ));
+    };
+    match store
+        .reverse_payment(payment_id, &input, actor_id, key, &digest)
+        .await
+        .map_err(payment_reverse_error)?
+    {
+        sel_storage::postgres::PaymentReverseOutcome::Created(body) => {
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        sel_storage::postgres::PaymentReverseOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
 async fn get_receivable(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1130,6 +1177,44 @@ fn payment_write_error(error: sel_storage::postgres::PaymentWriteError) -> ApiEr
         ),
         sel_storage::postgres::PaymentWriteError::Database(error) => storage_error(error),
         sel_storage::postgres::PaymentWriteError::StoredResponse(error) => {
+            ApiError::internal(error)
+        }
+    }
+}
+
+fn payment_reverse_error(error: sel_storage::postgres::PaymentReverseError) -> ApiError {
+    match error {
+        sel_storage::postgres::PaymentReverseError::IdempotencyPayloadMismatch => {
+            ApiError::conflict(
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "idempotency key was reused with another payload",
+            )
+        }
+        sel_storage::postgres::PaymentReverseError::PaymentNotFound => {
+            ApiError::not_found("PAYMENT_NOT_FOUND", "payment not found")
+        }
+        sel_storage::postgres::PaymentReverseError::PaymentNotAccepted => ApiError::conflict(
+            "PAYMENT_NOT_REVERSIBLE",
+            "only a centrally accepted payment can be reversed",
+        ),
+        sel_storage::postgres::PaymentReverseError::ActorNotActive => ApiError::unauthorized(
+            "ACTOR_NOT_ACTIVE",
+            "the reversal actor is not active in this organization",
+        ),
+        sel_storage::postgres::PaymentReverseError::InvalidAmount => ApiError::unprocessable(
+            "PAYMENT_REVERSAL_INVALID",
+            "reversal amount must be strictly positive",
+        ),
+        sel_storage::postgres::PaymentReverseError::AmountExceedsRemaining => ApiError::conflict(
+            "PAYMENT_REVERSAL_OVERALLOCATED",
+            "reversal exceeds the payment amount still reversible",
+        ),
+        sel_storage::postgres::PaymentReverseError::ReasonRequired => ApiError::unprocessable(
+            "PAYMENT_REVERSAL_REASON_REQUIRED",
+            "a reason is required for an audited reversal",
+        ),
+        sel_storage::postgres::PaymentReverseError::Database(error) => storage_error(error),
+        sel_storage::postgres::PaymentReverseError::StoredResponse(error) => {
             ApiError::internal(error)
         }
     }
