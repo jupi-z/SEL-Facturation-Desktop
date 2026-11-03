@@ -1045,7 +1045,7 @@ impl LocalStore {
         }
         let requested_total: Decimal = grouped.values().copied().sum();
         let payment = sqlx::query(
-            "SELECT customer_id, amount_received, currency, status
+            "SELECT customer_id, CAST(amount_received AS TEXT) AS amount_received, currency, status
              FROM payments WHERE id = $1",
         )
         .bind(payment_id.to_string())
@@ -1060,7 +1060,7 @@ impl LocalStore {
         let amount_received = decimal_text(&payment, "amount_received")?;
         let currency: String = payment.try_get("currency")?;
         let prior_payment_allocated_text: String = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(allocated_amount), '0')
+            "SELECT CAST(COALESCE(SUM(allocated_amount), 0) AS TEXT)
              FROM payment_allocations WHERE payment_id = $1",
         )
         .bind(payment_id.to_string())
@@ -1087,7 +1087,7 @@ impl LocalStore {
             }
             let principal = decimal_text(&row, "principal_total")?;
             let paid_text: String = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(allocated_amount), '0')
+                "SELECT CAST(COALESCE(SUM(allocated_amount), 0) AS TEXT)
                  FROM payment_allocations WHERE receivable_id = $1",
             )
             .bind(receivable_id.to_string())
