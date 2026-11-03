@@ -6,7 +6,7 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `6d0c09e` (`feat(v2): expose solar contract creation routes`)
+Commit contrôlé : `f706435` (`feat(v2): enforce approved solar prices and expose quotes`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — avoirs append-only
@@ -57,8 +57,9 @@ Les corrections cumulées pendant la reprise de la PR #58 ferment plusieurs rég
 - le test de migration réel vérifie l'import sur PostgreSQL 16.4, le dump de sauvegarde, puis le rejeu du même manifeste avec `ALREADY_APPLIED` et zéro écriture supplémentaire.
 - une fixture volontairement invalide après une première facture est maintenant vérifiée en PostgreSQL réel : la transaction est annulée et aucun client ni aucune facture partielle ne subsiste.
 - les routes obligatoires de création de contrat solaire sont maintenant exposées côté central (`POST /v1/solar/contracts`) et côté agent local (`POST /local/v1/solar/contracts`) ; elles réutilisent la validation de schedule, l'idempotence et les projections existantes, avec des tests HTTP central/offline.
+- un devis solaire central (`POST /v1/solar/quotes`) et local (`POST /local/v1/solar/quotes`) renvoie désormais le prix du catalogue actif approuvé ; une vente ne peut plus déclarer un principal différent du prix validé, avec rejet HTTP `422` et test PostgreSQL réel ; le parcours local vérifie également le devis hors connexion.
 
-La CI du commit contrôlé est verte : [run — 41652681930](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41652681930), job `rust` `125974702750`, sur `6d0c09e`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris les nouveaux parcours de contrat solaire.
+La CI du commit contrôlé est verte : [run — 41654954322](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41654954322), job `rust` `125982672650`, sur `f706435`. Les contrôles de formatage, Clippy, tests workspace et tests PostgreSQL ont tous conclu avec succès, y compris les devis et le rejet des prix solaires divergents.
 
 ## Audit des branches GitHub
 
@@ -81,7 +82,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le correctif de canonisation (`358ba74`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La validation du correctif actuel `6d0c09e` est suivie ci-dessus. Cette exécution distante valide notamment le rapprochement V1→V2 en lecture seule, la pagination/filtre clients, les référentiels actifs/approuvés, le test RBAC/IDOR, la concurrence solaire, la lecture centrale et locale d'un échéancier persistant, le rollback atomique d'un pull SQLite, la canonicalisation de l'empreinte, les transactions de synchronisation financière, le rejet des collisions de séquence, les garde-fous de restauration, l'import V1 réel sur fixture synthétique avec rejeu idempotent, l'annulation complète d'une migration échouée et les routes de création de contrat solaire central/offline. L’environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL réelle, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La validation du correctif actuel `f706435` est suivie ci-dessus. Cette exécution distante valide notamment le rapprochement V1→V2 en lecture seule, la pagination/filtre clients, les référentiels actifs/approuvés, le test RBAC/IDOR, la concurrence solaire, la lecture centrale et locale d'un échéancier persistant, le rollback atomique d'un pull SQLite, la canonicalisation de l'empreinte, les transactions de synchronisation financière, le rejet des collisions de séquence, les garde-fous de restauration, l'import V1 réel sur fixture synthétique avec rejeu idempotent, l'annulation complète d'une migration échouée, les routes de création de contrat solaire central/offline et le prix solaire dérivé du catalogue actif. L'environnement Rust local de ce poste ne dispose pas de `link.exe`, donc la compilation et l'exécution locales complètes restent non disponibles. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL réelle, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -138,18 +139,19 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 ### Exécution locale
 
 - Suite Rust complète locale : **NOT_EXECUTED** ; la compilation MSVC locale est bloquée par l'absence de `link.exe`/Build Tools.
-- Tests du commit contrôlé `6d0c09e` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
+- Tests du commit contrôlé `f706435` : **PASS dans la CI GitHub**, avec PostgreSQL 16.4 de service.
 - Vérification locale de formatage : **PASS** ; tentative locale de compilation : **BLOCKED_EXTERNAL** par l'absence de `link.exe`.
 - Relecture statique du diff et vérification `git status` : **PASS** ; aucun secret, PDF, image ou facture binaire n’a été ajouté au serveur par les changements de ce jalon.
 
 ### CI GitHub
 
-Run [41652681930](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41652681930), job `rust` `125974702750` : **SUCCESS** sur `6d0c09e`.
+Run [41654954322](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41654954322), job `rust` `125982672650` : **SUCCESS** sur `f706435`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
 - `cargo test --workspace` : **PASS** ;
 - `cargo test --workspace -- --ignored` avec PostgreSQL 16.4 : **PASS** ;
+- test HTTP de devis solaire issu du catalogue actif et rejet d'un principal divergent : **PASS** ;
 - test `two_sqlite_devices_converge_through_real_postgres_and_http` : **PASS après correction du double comptage d’affectation** ;
 - test `migration_apply_is_transactional_and_idempotent_on_postgres` : **PASS**, avec fixture V1, sauvegarde `pg_dump`, import transactionnel et rejeu sans écriture ;
 - test `concurrent_utility_invoices_same_customer_period_return_one_business_conflict` : **PASS dans la CI PostgreSQL du commit contrôlé** ;
@@ -169,7 +171,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | ID | Statut | Preuve ou limite |
 |---|---|---|
 | API-01 | PASS | routes commerciales centrales testées via Axum + PostgreSQL réel |
-| API-02 | PARTIAL | OpenAPI valide avec affectation post-enregistrement et création de contrat solaire central/offline ajoutées et testées ; couverture exhaustive de tous les DTO/routes à industrialiser |
+| API-02 | PARTIAL | OpenAPI valide avec affectation post-enregistrement, devis solaire et création de contrat solaire central/offline ajoutés et testés ; couverture exhaustive de tous les DTO/routes à industrialiser |
 | API-03 | PARTIAL | sessions Argon2id, rotation/révocation, enrôlement/révocation d'appareils, grants Ed25519 et test RBAC/IDOR ajoutés ; couverture exhaustive des ressources encore incomplète |
 | API-04 | PARTIAL | création/lecture/modification, pagination par curseur bornée et filtre de statut ajoutés et validés en CI ; autres parcours CRUD spécialisés encore incomplets |
 | API-05 | PASS limité | idempotence facture, paiement, solaire et sync démontrée ; concurrence multi-processus non exhaustive |
@@ -178,7 +180,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FIN-02 | PASS | eau positive refusée sans tarif/taxe validés ; eau nulle conservée |
 | FIN-03 | PASS limité | test PostgreSQL réel avec tarif eau 1,25 USD/m³, taxe approuvée, 2 m³ et ligne calculée ; la recette métier SEL du tarif reste externe |
 | FIN-04 | PASS | paiement partiel, solde et retry sans doublon |
-| FIN-05 | PASS limité | vente solaire, créance, contrat et deux échéances persistés et projetés |
+| FIN-05 | PASS limité | vente solaire, devis depuis produit actif, prix approuvé imposé, créance, contrat et deux échéances persistés et projetés |
 | FIN-06 | PASS limité | preuve dédiée ajoutée sur le commit contrôlé ; montant échu et statut `OVERDUE` sont vérifiés sur une échéance passée impayée, puis remis à zéro après affectation ; tableau complet de recouvrement métier reste à valider |
 | FIN-07 | PARTIAL | contre-écritures de paiements append-only et affectation post-enregistrement auditable, solde net et rejeu testés ; remboursements externes et leur rapprochement restent à finaliser |
 | FIN-08 | PARTIAL | annulation de facture existante et avoir append-only central/local avec projection idempotente sont testés ; remboursement externe et compensation inter-créances restent dépendants d'une règle métier SEL explicite |
