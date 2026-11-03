@@ -318,6 +318,40 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .iter()
         .any(|entry| { entry["id"] == invoice["receivable_id"] && entry["balance"] == "7.02" }));
 
+    let invoices = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/local/v1/invoices?limit=20")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invoices.status(), StatusCode::OK);
+    let invoices = json_body(invoices).await;
+    assert!(invoices.as_array().unwrap().iter().any(|entry| {
+        entry["invoice_id"] == invoice["invoice_id"]
+            && entry["status"] == "LOCAL_PENDING"
+            && entry["lines"].as_array().unwrap().len() == 2
+    }));
+
+    let payments = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/local/v1/payments?limit=20")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(payments.status(), StatusCode::OK);
+    let payments = json_body(payments).await;
+    assert!(payments.as_array().unwrap().iter().any(|entry| {
+        entry["payment_id"] == payment["payment_id"] && entry["amount_received"] == "4.00"
+    }));
+
     let reversal = app
         .clone()
         .oneshot(
@@ -535,6 +569,23 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .unwrap();
     assert_eq!(sale.status(), StatusCode::CREATED);
     let sale = json_body(sale).await;
+    let sales = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/local/v1/solar/sales?limit=20")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sales.status(), StatusCode::OK);
+    let sales = json_body(sales).await;
+    assert!(sales
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| { entry["sale_id"] == sale["sale_id"] && entry["principal"] == "120.00" }));
     let contract = app
         .clone()
         .oneshot(
