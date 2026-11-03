@@ -1307,6 +1307,7 @@ impl CentralStore {
         Ok(outcome)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn void_invoice_with_id_in_tx(
         &self,
         tx: &mut sqlx::PgConnection,
@@ -1922,6 +1923,7 @@ impl CentralStore {
         Ok(outcome)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn reverse_payment_with_id_in_tx(
         &self,
         tx: &mut sqlx::PgConnection,
@@ -2112,6 +2114,7 @@ impl CentralStore {
         Ok(outcome)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn create_credit_note_with_id_in_tx(
         &self,
         tx: &mut sqlx::PgConnection,
