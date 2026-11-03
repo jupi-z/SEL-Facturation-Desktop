@@ -105,8 +105,24 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
         .await
         .unwrap();
     assert!(matches!(pre_ack, PaymentWriteOutcome::Created(_)));
-    let first = store.apply_sync_event(&event).await.unwrap();
-    assert!(matches!(first, SyncEventResult::Accepted { .. }));
+    let first_store = store.clone();
+    let second_store = store.clone();
+    let first_event = event.clone();
+    let second_event = event.clone();
+    let (first, second) = tokio::join!(
+        first_store.apply_sync_event(&first_event),
+        second_store.apply_sync_event(&second_event),
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert!(
+        matches!(first, SyncEventResult::Accepted { .. })
+            || matches!(second, SyncEventResult::Accepted { .. })
+    );
+    assert!(
+        matches!(first, SyncEventResult::Duplicate { .. })
+            || matches!(second, SyncEventResult::Duplicate { .. })
+    );
     let count = sqlx::query("SELECT count(*) AS count FROM payments WHERE customer_id = $1")
         .bind(customer_id)
         .fetch_one(&store.pool)
