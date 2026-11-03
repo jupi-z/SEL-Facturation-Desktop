@@ -6,8 +6,19 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `a7ccbfb` (`docs(v2): record guarded import and CI proof`)
+Commit contrôlé : `a22930a` (`fix(v2): canonicalize offline grant timestamps`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
+
+## Mise à jour du contrôle — 3 novembre 2026
+
+Le jalon contrôlé sur `a22930a395a22ed4d854624fce7129ab3a9b3866` ferme plusieurs régressions détectées pendant la reprise de la PR #58 :
+
+- la clé de grant offline exigée au démarrage doit être une vraie clé publique Ed25519 décodable ;
+- `created_at` est maintenant renseigné dans SQLite pour l’écriture et la projection d’une annulation de facture ;
+- le calcul PostgreSQL des montants échus est syntaxiquement correct et couvert par le test de persistance ;
+- les timestamps du format canonique des grants sont normalisés à la microseconde, afin que la signature reste stable après stockage PostgreSQL.
+
+La CI finale est verte : [run #41 — 41607754794](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41607754794), job `rust` `125821731552`.
 
 ## Résumé exécutif
 
@@ -15,7 +26,7 @@ Le backend Rust dispose maintenant d’un parcours démontré de bout en bout po
 
 Le dernier correctif (`08ce31d`) unifie l’empreinte des factures. Le format canonique est versionné, exclut les statuts de synchronisation et encode les montants avec six décimales fixes, ce qui neutralise la différence d’échelle entre SQLite (`0.095`) et PostgreSQL (`0.095000`). Un test de contrat vérifie explicitement cette invariance.
 
-La CI GitHub #28 est verte sur le commit `a7ccbfb` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cela valide le périmètre technique couvert par la CI ; les nouveaux tests ciblés sont également exécutés localement. Le backend reste **NO-GO pour une exploitation commerciale** : l’authentification complète/RBAC, les autorisations offline signées, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
+La CI GitHub #41 est verte sur le commit `a22930a` : formatage, Clippy, tests workspace et tests ignorés avec un vrai PostgreSQL. Cette exécution distante constitue la preuve actuelle ; les outils Rust locaux de ce poste n’ont pas permis une exécution indépendante complète. Cela ne remplace pas une recette Windows, une restauration contrôlée ni une validation métier. Le backend reste **NO-GO pour une exploitation commerciale** : l’enrôlement de production, les contrôles IDOR/concurrence exhaustifs, la sauvegarde/restauration PostgreSQL, certaines opérations comptables et la recette sur poste SEL restent non validés ou incomplets.
 
 ## Corrections réalisées sur ce jalon
 
@@ -76,7 +87,7 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 
 ### CI GitHub
 
-Run [#28 — 41597019599](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41597019599), job `rust` `125786650555` : **SUCCESS** sur `a7ccbfb`.
+Run [#41 — 41607754794](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41607754794), job `rust` `125821731552` : **SUCCESS** sur `a22930a`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
@@ -95,7 +106,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 |---|---|---|
 | API-01 | PASS | routes commerciales centrales testées via Axum + PostgreSQL réel |
 | API-02 | PARTIAL | OpenAPI valide et tests ciblés ; couverture exhaustive de tous les DTO/routes à industrialiser |
-| API-03 | PARTIAL | bearer de production exigé ; sessions courtes, rotation, RBAC fin et tests IDOR non terminés |
+| API-03 | PARTIAL | sessions Argon2id, rotation/révocation et matrice de rôles ajoutées ; enrôlement d’appareils, contrôles IDOR et couverture RBAC complète restent à valider |
 | API-04 | PARTIAL | création/lecture/modification testées ; pagination et filtres centraux incomplets |
 | API-05 | PASS limité | idempotence facture, paiement, solaire et sync démontrée ; concurrence multi-processus non exhaustive |
 | API-06 | PASS | aucune route PDF ; `document-data` JSON côté client ; aucun stockage de fichier |
@@ -116,7 +127,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | SYN-05 | NOT_TESTED | conflit de facture concurrente sur même période entre deux postes non démontré |
 | SYN-06 | PARTIAL | surallocation centrale protégée ; paiements réellement simultanés entre deux postes à compléter |
 | SYN-07 | NOT_TESTED | conflit de contrat/échéancier concurrent non implémenté complètement |
-| SYN-08 | NOT_TESTED | autorisations offline signées, expiration et limites non finalisées |
+| SYN-08 | PASS limité | grants Ed25519, expiration, scopes et limites d’événements testés sur PostgreSQL réel ; provisionnement de la clé de production et révocation opérationnelle restent externes |
 | SYN-09 | PASS limité | worker push/pull et reprise de l’outbox codés ; réseau réellement intermittent non validé sur Windows |
 | SYN-10 | NOT_TESTED | rebootstrap multi-postes sans suppression d’outbox non démontré |
 | UPD-01 | PASS | manifeste LiveUpdate déclaratif signé sans remplacement natif |
@@ -133,24 +144,23 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #28 sur `a7ccbfb` |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #41 sur `a22930a` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
 
 ## Lacunes et décisions restant à traiter
 
-1. Remplacer la garde par jeton de développement par utilisateurs, sessions à durée limitée, rotation/révocation, RBAC et contrôle par organisation/ressource.
-2. Finaliser les autorisations offline signées Ed25519, leur expiration, leurs plafonds d’opérations et leur enrôlement d’appareil.
-3. Étendre le local aux corrections, annulations, remboursements, contre-écritures, retards et recouvrement solaires sans supprimer l’historique.
-4. Exécuter le nouvel import V1 sur une base PostgreSQL de test avec `pg_dump` disponible, vérifier le rapprochement et la reprise sur données anonymisées fournies par SEL.
-5. Documenter et exercer la sauvegarde/restauration PostgreSQL, TLS, rotation des secrets et le déploiement à privilèges minimaux.
-6. Provisionner la clé publique Ed25519 de production hors dépôt avant d’activer LiveUpdate ; aucune signature de test ne doit être promue.
-7. Réaliser la recette sur un PC Windows SEL : installation, fonctionnement hors connexion, synchronisation, impression, sauvegarde/restauration et validation métier des tarifs eau/taxes.
+1. Finaliser l’enrôlement d’appareils, la révocation des grants et les tests IDOR/RBAC/concurrence de production.
+2. Étendre le local aux remboursements, retards et recouvrement solaires sans supprimer l’historique.
+3. Exécuter le nouvel import V1 sur une base PostgreSQL de test avec `pg_dump` disponible, vérifier le rapprochement et la reprise sur données anonymisées fournies par SEL.
+4. Documenter et exercer la sauvegarde/restauration PostgreSQL, TLS, rotation des secrets et le déploiement à privilèges minimaux.
+5. Provisionner la clé publique Ed25519 de production hors dépôt avant d’activer LiveUpdate ; aucune signature de test ne doit être promue.
+6. Réaliser la recette sur un PC Windows SEL : installation, fonctionnement hors connexion, synchronisation, impression, sauvegarde/restauration et validation métier des tarifs eau/taxes.
 
 ## Verdicts
 
-- Revue technique du jalon persistance/synchronisation : **GO limité** ; les tests Rust et le scénario de convergence de référence sont verts.
+- Revue technique du jalon persistance/synchronisation : **GO limité** ; la CI #41 et les tests PostgreSQL/SQLite de la PR sont verts sur `a22930a`.
 - Pilote Windows/PostgreSQL/offline : **NO-GO** ; validation matérielle et opérationnelle non réalisée.
 - Livraison commerciale : **NO-GO** ; sécurité de production, migration, exploitation et opérations comptables restantes.
 - Fusion dans `main` : **NON EFFECTUÉE**.
