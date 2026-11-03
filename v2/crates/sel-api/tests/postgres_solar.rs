@@ -1,7 +1,11 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use chrono::NaiveDate;
 use http_body_util::BodyExt;
 use sel_api::{router, AppState};
+use sel_contracts::{
+    ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, InstallmentRequest,
+};
 use sel_storage::{migrate_postgres, CentralStore};
 use serde_json::json;
 use sqlx::Row;
@@ -162,4 +166,123 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     assert_eq!(counts.get::<i64, _>("receivables"), 1);
     assert_eq!(counts.get::<i64, _>("plans"), 1);
     assert_eq!(counts.get::<i64, _>("installments"), 2);
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn concurrent_solar_contract_activation_creates_one_schedule_and_one_conflict() {
+    let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+    let organization_id = Uuid::new_v4();
+    let first = CentralStore::connect(&database_url, organization_id)
+        .await
+        .unwrap();
+    migrate_postgres(&first.pool).await.unwrap();
+    first
+        .ensure_organization("SEL concurrent solar fixture")
+        .await
+        .unwrap();
+
+    let product_code = format!("KIT-RACE-{}", Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO products (id, sku, product_type, label, price_reference, currency, active)
+         VALUES ($1, $2, 'SOLAR_KIT', 'Concurrent solar fixture', 1000, 'USD', TRUE)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&product_code)
+    .execute(&first.pool)
+    .await
+    .unwrap();
+    let customer = first
+        .create_customer(&CreateCustomer {
+            customer_code: format!("SOL-RACE-{}", &organization_id.to_string()[..8]),
+            legal_name: "Concurrent solar fixture".into(),
+            address: None,
+            phone: None,
+        })
+        .await
+        .unwrap();
+    let sale = first
+        .create_solar_sale(
+            &CreateSolarSaleRequest {
+                customer_id: customer.id,
+                product_code,
+                principal: "1000.00".parse().unwrap(),
+                currency: "USD".into(),
+                terms_revision: "race-v1".into(),
+            },
+            "solar-race-sale",
+            "solar-race-sale-digest",
+        )
+        .await
+        .unwrap();
+    let sale = match sale {
+        sel_storage::postgres::SolarSaleWriteOutcome::Created(value)
+        | sel_storage::postgres::SolarSaleWriteOutcome::Replay(value) => value,
+    };
+    let input = ActivateSolarContractRequest {
+        sale_id: sale.sale_id,
+        receivable_id: sale.receivable_id,
+        schedule: vec![InstallmentRequest {
+            sequence: 1,
+            due_date: NaiveDate::from_ymd_opt(2026, 12, 1).unwrap(),
+            amount: "1000.00".parse().unwrap(),
+        }],
+        currency: "USD".into(),
+        approved_terms_revision: "race-v1".into(),
+    };
+    let second = first.clone();
+    let (left, right) = tokio::join!(
+        first.activate_solar_contract(
+            Uuid::new_v4(),
+            &input,
+            "solar-race-left",
+            "solar-race-left-digest",
+        ),
+        second.activate_solar_contract(
+            Uuid::new_v4(),
+            &input,
+            "solar-race-right",
+            "solar-race-right-digest",
+        ),
+    );
+    let outcomes = [left, right];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(
+                outcome,
+                Ok(sel_storage::postgres::SolarContractWriteOutcome::Created(_))
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| {
+                matches!(
+                    outcome,
+                    Err(sel_storage::postgres::SolarContractWriteError::ContractAlreadyExists)
+                )
+            })
+            .count(),
+        1
+    );
+    let plans: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM installment_plans WHERE receivable_id = $1")
+            .bind(sale.receivable_id)
+            .fetch_one(&first.pool)
+            .await
+            .unwrap();
+    assert_eq!(plans, 1);
+    let installments: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM installment_schedule s
+         JOIN installment_plans p ON p.id = s.plan_id
+         WHERE p.receivable_id = $1",
+    )
+    .bind(sale.receivable_id)
+    .fetch_one(&first.pool)
+    .await
+    .unwrap();
+    assert_eq!(installments, 1);
 }
