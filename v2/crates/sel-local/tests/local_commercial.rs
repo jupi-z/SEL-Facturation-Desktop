@@ -376,8 +376,14 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .await
         .unwrap();
     let credit_status = credit.status();
-    let credit = json_body(credit).await;
-    assert_eq!(credit_status, StatusCode::CREATED);
+    let credit_bytes = credit.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        credit_status,
+        StatusCode::CREATED,
+        "credit body: {}",
+        String::from_utf8_lossy(&credit_bytes)
+    );
+    let credit: serde_json::Value = serde_json::from_slice(&credit_bytes).unwrap();
     assert_eq!(credit["status"], "LOCAL_PENDING");
     assert_eq!(credit["remaining_balance"], "6.02");
     let credit_count: i64 =
