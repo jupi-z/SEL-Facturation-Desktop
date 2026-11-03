@@ -760,7 +760,10 @@ fn unique_values(items: &[serde_json::Value], key: &str) -> Result<HashSet<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{migration_dry_run, migration_source_path, require_restore_approval};
+    use super::{
+        migration_apply, migration_dry_run, migration_source_path, require_restore_approval,
+    };
+    use serde_json::json;
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -809,5 +812,106 @@ mod tests {
         );
         assert!(migration_source_path("--apply", Some("fixture.json"), None).is_err());
         assert!(migration_source_path("--dry-run", None, None).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL and pg_dump for a real migration fixture"]
+    async fn migration_apply_is_transactional_and_idempotent_on_postgres() {
+        let database_url = std::env::var("TEST_DATABASE_URL")
+            .expect("TEST_DATABASE_URL must be set for the migration integration fixture");
+        let organization_id = uuid::Uuid::new_v4();
+        let suffix = organization_id.to_string();
+        let source_code = format!("MIG-{suffix}");
+        let invoice_number = format!("V1-{suffix}");
+        let path = std::env::temp_dir().join(format!("sel-v1-migration-{suffix}.json"));
+        let backup = std::env::temp_dir().join(format!("sel-v1-migration-{suffix}.dump"));
+        let manifest = json!({
+            "format": "sel-facturation-portable",
+            "schema_version": 1,
+            "migration_approval": {"approved": true},
+            "data": {
+                "clients": [{"code": source_code, "name": "Migration fixture"}],
+                "invoices": [{
+                    "number": invoice_number,
+                    "client_code": source_code,
+                    "currency": "USD",
+                    "billing_period": "2026-11",
+                    "issue_date": "2026-11-03",
+                    "calc_snapshot": {
+                        "kwh": "10.00",
+                        "energy": "10.00",
+                        "unit_price": "1.00",
+                        "vat": "1.60",
+                        "total": "11.60"
+                    }
+                }],
+                "payments": [{
+                    "id": "payment-1",
+                    "invoice_number": invoice_number,
+                    "amount": "5.00",
+                    "currency": "USD",
+                    "method": "CASH",
+                    "paid_on": "2026-11-03T10:00:00Z"
+                }]
+            }
+        });
+        fs::write(
+            &path,
+            serde_json::to_vec(&manifest).expect("serialize fixture"),
+        )
+        .expect("write migration fixture");
+        let prior_database_url = std::env::var_os("DATABASE_URL");
+        let prior_org = std::env::var_os("SEL_ORGANIZATION_ID");
+        let prior_approval = std::env::var_os("SEL_MIGRATION_APPROVED");
+        let prior_backup = std::env::var_os("SEL_MIGRATION_BACKUP_PATH");
+        std::env::set_var("DATABASE_URL", &database_url);
+        std::env::set_var("SEL_ORGANIZATION_ID", organization_id.to_string());
+        std::env::set_var("SEL_MIGRATION_APPROVED", "I_UNDERSTAND");
+        std::env::set_var("SEL_MIGRATION_BACKUP_PATH", &backup);
+
+        let first = migration_apply(&path)
+            .await
+            .expect("apply migration fixture");
+        assert_eq!(first["status"], "APPLIED");
+        assert_eq!(
+            first["counts"],
+            json!({"clients": 1, "invoices": 1, "payments": 1})
+        );
+        let second = migration_apply(&path)
+            .await
+            .expect("replay migration fixture");
+        assert_eq!(second["status"], "ALREADY_APPLIED");
+        assert_eq!(second["writes"], 0);
+
+        let store = sel_storage::CentralStore::connect(&database_url, organization_id)
+            .await
+            .expect("connect imported organization");
+        let counts: (i64, i64, i64) = sqlx::query_as(
+            "SELECT
+               (SELECT count(*) FROM customers WHERE organization_id = $1),
+               (SELECT count(*) FROM invoices WHERE customer_id IN (SELECT id FROM customers WHERE organization_id = $1)),
+               (SELECT count(*) FROM payments WHERE customer_id IN (SELECT id FROM customers WHERE organization_id = $1))",
+        )
+        .bind(organization_id)
+        .fetch_one(&store.pool)
+        .await
+        .expect("read imported counts");
+        assert_eq!(counts, (1, 1, 1));
+        assert!(backup.is_file(), "migration backup should be created");
+
+        for (key, value) in [
+            ("DATABASE_URL", prior_database_url),
+            ("SEL_ORGANIZATION_ID", prior_org),
+            ("SEL_MIGRATION_APPROVED", prior_approval),
+            ("SEL_MIGRATION_BACKUP_PATH", prior_backup),
+        ] {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(backup);
     }
 }
