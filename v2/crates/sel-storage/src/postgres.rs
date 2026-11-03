@@ -2692,7 +2692,7 @@ fn scope_allows_command(scopes: &serde_json::Value, command_type: &str) -> bool 
                 .cloned()
         });
     let Some(values) = values else {
-        return scopes.as_object().map_or(true, serde_json::Map::is_empty);
+        return scopes.as_object().is_none_or(serde_json::Map::is_empty);
     };
     values
         .iter()
