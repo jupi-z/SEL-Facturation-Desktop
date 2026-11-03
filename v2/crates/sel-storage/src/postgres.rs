@@ -1625,6 +1625,29 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<PaymentAllocationWriteOutcome, PaymentAllocationWriteError> {
         let mut tx = self.pool.begin().await?;
+        let outcome = self
+            .allocate_payment_in_tx(
+                &mut *tx,
+                payment_id,
+                allocations,
+                actor_id,
+                idempotency_key,
+                request_digest,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    async fn allocate_payment_in_tx(
+        &self,
+        tx: &mut sqlx::PgConnection,
+        payment_id: Uuid,
+        allocations: &[sel_contracts::PaymentAllocationRequest],
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<PaymentAllocationWriteOutcome, PaymentAllocationWriteError> {
         if let Some(row) = sqlx::query(
             "SELECT request_digest, response_json FROM idempotency_keys
              WHERE organization_id = $1 AND principal_id = $2
@@ -1828,7 +1851,6 @@ impl CentralStore {
         .bind(&body)
         .execute(&mut *tx)
         .await?;
-        tx.commit().await?;
         Ok(PaymentAllocationWriteOutcome::Created(body))
     }
 
@@ -3326,7 +3348,8 @@ impl CentralStore {
                     };
                 let operation_key = format!("sync-payment-allocation-{}", event.event_id);
                 let outcome = self
-                    .allocate_payment(
+                    .allocate_payment_in_tx(
+                        &mut *tx,
                         payload.payment_id,
                         &payload.allocations,
                         event.actor_id,
@@ -3338,26 +3361,18 @@ impl CentralStore {
                     Ok(PaymentAllocationWriteOutcome::Created(_))
                     | Ok(PaymentAllocationWriteOutcome::Replay(_)) => {}
                     Err(_) => {
-                        let mut reject_tx = self.pool.begin().await?;
                         let result = SyncEventResult::Rejected {
                             code: "PAYMENT_ALLOCATION_NOT_ACCEPTED".into(),
                             required_action: "review_payment_allocation_and_retry".into(),
                         };
-                        persist_sync_result(
-                            &mut reject_tx,
-                            self.organization_id,
-                            event,
-                            &result,
-                            None,
-                        )
-                        .await?;
-                        reject_tx.commit().await?;
+                        persist_sync_result(&mut tx, self.organization_id, event, &result, None)
+                            .await?;
+                        tx.commit().await?;
                         return Ok(result);
                     }
                 };
-                let mut ack_tx = self.pool.begin().await?;
                 let result = persist_sync_result(
-                    &mut ack_tx,
+                    &mut tx,
                     self.organization_id,
                     event,
                     &SyncEventResult::Accepted {
@@ -3367,7 +3382,7 @@ impl CentralStore {
                     None,
                 )
                 .await?;
-                ack_tx.commit().await?;
+                tx.commit().await?;
                 Ok(result)
             }
             "PAYMENT_REVERSED" => {
