@@ -131,7 +131,10 @@ async fn customer_listing_supports_bounded_cursor_pagination_and_status_filter()
                 .oneshot(
                     Request::builder()
                         .method("PATCH")
-                        .uri(format!("/v1/customers/{}", customer["id"]))
+                        .uri(format!(
+                            "/v1/customers/{}",
+                            customer["id"].as_str().unwrap()
+                        ))
                         .header("authorization", "Bearer test")
                         .header("If-Match", "\"1\"")
                         .header("content-type", "application/json")
