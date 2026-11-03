@@ -244,7 +244,14 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         )
         .await
         .unwrap();
-    assert_eq!(allocation.status(), StatusCode::CREATED);
+    let allocation_status = allocation.status();
+    let allocation_body = allocation.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        allocation_status,
+        StatusCode::CREATED,
+        "allocation body: {}",
+        String::from_utf8_lossy(&allocation_body)
+    );
     let replay = app
         .clone()
         .oneshot(
