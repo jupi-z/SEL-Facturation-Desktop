@@ -208,7 +208,8 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
     let right_id = json_body(right).await["id"].as_str().unwrap().to_owned();
     assert_eq!(left_id, right_id);
 
-    let catalog_before_approval = get_json(&app, "/v1/catalog/tariffs").await;
+    let catalog_before_approval =
+        get_json_authenticated(&app, "/v1/catalog/tariffs", &access_token).await;
     assert!(!catalog_before_approval
         .as_array()
         .unwrap()
@@ -226,7 +227,7 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
     .await;
     assert_eq!(approve.status(), axum::http::StatusCode::OK);
     assert_eq!(json_body(approve).await["status"], "APPROVED");
-    let catalog = get_json(&app, "/v1/catalog/tariffs").await;
+    let catalog = get_json_authenticated(&app, "/v1/catalog/tariffs", &access_token).await;
     let approved = catalog
         .as_array()
         .unwrap()
@@ -404,6 +405,22 @@ async fn get_json(app: &axum::Router, path: &str) -> Value {
             Request::builder()
                 .uri(path)
                 .header("authorization", "Bearer catalog-fixture")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+async fn get_json_authenticated(app: &axum::Router, path: &str, token: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
         )
