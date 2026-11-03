@@ -23,6 +23,8 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub const MIN_PASSWORD_LENGTH: usize = 8;
+
 #[derive(Clone)]
 pub struct CentralStore {
     pub pool: PgPool,
@@ -436,9 +438,9 @@ impl CentralStore {
     /// Hash a password using Argon2id before it is provisioned into a user row.
     /// The API never accepts or returns a stored password hash.
     pub fn hash_user_password(password: &str) -> Result<String, AuthError> {
-        if password.chars().count() < 12 {
+        if password.chars().count() < MIN_PASSWORD_LENGTH {
             return Err(AuthError::PasswordHash(
-                "password must contain at least 12 characters".into(),
+                "password must contain at least 8 characters".into(),
             ));
         }
         let salt = SaltString::generate(&mut rand::rngs::OsRng);
@@ -4293,7 +4295,16 @@ fn customer_from_row(row: &sqlx::postgres::PgRow) -> Result<Customer, sqlx::Erro
 
 #[cfg(test)]
 mod offline_role_tests {
-    use super::offline_role_allows_command;
+    use super::{offline_role_allows_command, AuthError, CentralStore};
+
+    #[test]
+    fn password_policy_accepts_eight_characters_and_rejects_seven() {
+        assert!(CentralStore::hash_user_password("Eight!88").is_ok());
+        assert!(matches!(
+            CentralStore::hash_user_password("Seven!7"),
+            Err(AuthError::PasswordHash(message)) if message.contains("8 characters")
+        ));
+    }
 
     #[test]
     fn offline_grants_cannot_expand_actor_business_roles() {

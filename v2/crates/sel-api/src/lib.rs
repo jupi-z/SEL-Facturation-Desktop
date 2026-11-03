@@ -528,10 +528,10 @@ async fn set_user_password(
             "only an administrator can provision user passwords",
         ));
     }
-    if input.password.chars().count() < 12 {
+    if input.password.chars().count() < sel_storage::postgres::MIN_PASSWORD_LENGTH {
         return Err(ApiError::unprocessable(
             "PASSWORD_TOO_SHORT",
-            "password must contain at least 12 characters",
+            "password must contain at least 8 characters",
         ));
     }
     let Some(store) = &state.central else {
