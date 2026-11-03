@@ -3,7 +3,8 @@ use rust_decimal::Decimal;
 use sel_contracts::{
     solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
     CreateSolarSaleRequest, Customer, InvoiceLineResponse, InvoiceVoidSyncPayload,
-    PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest,
+    PaymentAllocationRequest, PaymentAllocationSyncPayload, PaymentReversalSyncPayload,
+    PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest,
     SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope,
     SyncEventResult, SyncPullResponse, UpdateCustomer, UtilityBillingRequest,
     UtilityBillingResponse, UtilityInvoiceSyncPayload,
@@ -41,6 +42,28 @@ pub enum LocalPaymentError {
     Overallocated,
     #[error("payment allocations exceed the received amount")]
     AllocationExceedsReceipt,
+}
+
+#[derive(Debug, Error)]
+pub enum LocalPaymentAllocationError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("idempotency key was reused with another payload")]
+    IdempotencyPayloadMismatch,
+    #[error("payment was not found in the local database")]
+    PaymentNotFound,
+    #[error("payment is not accepted or pending locally")]
+    PaymentNotAllocatable,
+    #[error("payment allocations must be strictly positive")]
+    InvalidAllocation,
+    #[error("payment allocations exceed the received amount")]
+    AllocationExceedsPayment,
+    #[error("receivable context is invalid")]
+    ContextInvalid,
+    #[error("receivable balance would be overallocated")]
+    Overallocated,
+    #[error("stored idempotency response is invalid: {0}")]
+    StoredResponse(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Error)]
@@ -981,6 +1004,187 @@ impl LocalStore {
         ))
     }
 
+    pub async fn allocate_payment(
+        &self,
+        payment_id: Uuid,
+        allocations: &[PaymentAllocationRequest],
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<serde_json::Value, LocalPaymentAllocationError> {
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'payment.allocate' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id.to_string())
+        .bind(self.actor_id.to_string())
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let original_digest: String = row.try_get("request_digest")?;
+            if original_digest != request_digest {
+                return Err(LocalPaymentAllocationError::IdempotencyPayloadMismatch);
+            }
+            let original: String = row.try_get("response_json")?;
+            return Ok(serde_json::from_str(&original)?);
+        }
+        if allocations.is_empty() || allocations.iter().any(|item| item.amount <= Decimal::ZERO) {
+            return Err(LocalPaymentAllocationError::InvalidAllocation);
+        }
+        let mut grouped = std::collections::BTreeMap::<Uuid, Decimal>::new();
+        let mut persisted = std::collections::BTreeMap::<(Uuid, Option<Uuid>), Decimal>::new();
+        for allocation in allocations {
+            *grouped
+                .entry(allocation.receivable_id)
+                .or_insert(Decimal::ZERO) += allocation.amount;
+            *persisted
+                .entry((allocation.receivable_id, allocation.schedule_id))
+                .or_insert(Decimal::ZERO) += allocation.amount;
+        }
+        let requested_total: Decimal = grouped.values().copied().sum();
+        let payment = sqlx::query(
+            "SELECT customer_id, amount_received, currency, status
+             FROM payments WHERE id = $1",
+        )
+        .bind(payment_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(LocalPaymentAllocationError::PaymentNotFound)?;
+        let status: String = payment.try_get("status")?;
+        if status != "LOCAL_PENDING" && status != "CENTRAL_ACCEPTED" {
+            return Err(LocalPaymentAllocationError::PaymentNotAllocatable);
+        }
+        let customer_id: String = payment.try_get("customer_id")?;
+        let amount_received = decimal_text(&payment, "amount_received")?;
+        let currency: String = payment.try_get("currency")?;
+        let prior_payment_allocated_text: String = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(allocated_amount), '0')
+             FROM payment_allocations WHERE payment_id = $1",
+        )
+        .bind(payment_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        let prior_payment_allocated = Decimal::from_str(&prior_payment_allocated_text)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid allocated amount: {error}")))?;
+        if prior_payment_allocated + requested_total > amount_received {
+            return Err(LocalPaymentAllocationError::AllocationExceedsPayment);
+        }
+        for (receivable_id, allocated_amount) in &grouped {
+            let row = sqlx::query(
+                "SELECT customer_id, currency, principal_total
+                 FROM receivables WHERE id = $1",
+            )
+            .bind(receivable_id.to_string())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(LocalPaymentAllocationError::ContextInvalid)?;
+            if row.try_get::<String, _>("customer_id")? != customer_id
+                || row.try_get::<String, _>("currency")? != currency
+            {
+                return Err(LocalPaymentAllocationError::ContextInvalid);
+            }
+            let principal = decimal_text(&row, "principal_total")?;
+            let paid_text: String = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(allocated_amount), '0')
+                 FROM payment_allocations WHERE receivable_id = $1",
+            )
+            .bind(receivable_id.to_string())
+            .fetch_one(&mut *tx)
+            .await?;
+            let paid = Decimal::from_str(&paid_text)
+                .map_err(|error| sqlx::Error::Protocol(format!("invalid paid amount: {error}")))?;
+            if paid + allocated_amount > principal {
+                return Err(LocalPaymentAllocationError::Overallocated);
+            }
+            for ((_, schedule_id), _) in persisted.iter().filter(|((id, _), _)| id == receivable_id)
+            {
+                if let Some(schedule_id) = schedule_id {
+                    let exists: Option<String> = sqlx::query_scalar(
+                        "SELECT s.id FROM installment_schedule s
+                         JOIN installment_plans p ON p.id = s.plan_id
+                         WHERE s.id = $1 AND p.receivable_id = $2",
+                    )
+                    .bind(schedule_id.to_string())
+                    .bind(receivable_id.to_string())
+                    .fetch_optional(&mut *tx)
+                    .await?;
+                    if exists.is_none() {
+                        return Err(LocalPaymentAllocationError::ContextInvalid);
+                    }
+                }
+            }
+        }
+        for ((receivable_id, schedule_id), allocated_amount) in &persisted {
+            sqlx::query(
+                "INSERT INTO payment_allocations
+                 (id, payment_id, receivable_id, schedule_id, allocated_amount, currency)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(payment_id.to_string())
+            .bind(receivable_id.to_string())
+            .bind(schedule_id.map(|id| id.to_string()))
+            .bind(allocated_amount.to_string())
+            .bind(&currency)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let body = json!({
+            "payment_id": payment_id,
+            "status": status,
+            "amount": format!("{:.2}", amount_received),
+            "currency": currency,
+            "allocations": allocations
+        });
+        let event = local_event(
+            self,
+            Uuid::new_v4(),
+            payment_id,
+            "PAYMENT_ALLOCATED",
+            serde_json::to_value(PaymentAllocationSyncPayload {
+                payment_id,
+                allocations: allocations.to_vec(),
+            })
+            .map_err(|error| {
+                LocalPaymentAllocationError::Database(sqlx::Error::Protocol(format!(
+                    "invalid payment allocation JSON: {error}"
+                )))
+            })?,
+        )
+        .map_err(LocalPaymentAllocationError::Database)?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, device, event_type, subject_id, occurred_at, redacted_metadata_json)
+             VALUES ($1, $2, $3, 'PAYMENT_ALLOCATED', $4, datetime('now'), $5)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(self.actor_id.to_string())
+        .bind(self.device_id.to_string())
+        .bind(payment_id.to_string())
+        .bind(body.to_string())
+        .execute(&mut *tx)
+        .await?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json, created_at)
+             VALUES ($1, $2, 'payment.allocate', $3, $4, 201, $5, datetime('now'))",
+        )
+        .bind(self.organization_id.to_string())
+        .bind(self.actor_id.to_string())
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(body.to_string())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(body)
+    }
+
     pub async fn reverse_payment(
         &self,
         payment_id: Uuid,
@@ -1356,6 +1560,15 @@ async fn mark_local_effect_rejected(
                 .bind(&aggregate_id)
                 .execute(&mut **tx)
                 .await?;
+        }
+        "PAYMENT_ALLOCATED" => {
+            sqlx::query(
+                "UPDATE payments SET status = 'CONFLICT_REQUIRES_REVIEW'
+                 WHERE id = $1 AND status = 'LOCAL_PENDING'",
+            )
+            .bind(&aggregate_id)
+            .execute(&mut **tx)
+            .await?;
         }
         "UTILITY_INVOICE_ISSUED" => {
             sqlx::query("UPDATE invoices SET status = 'REJECTED' WHERE id = $1")

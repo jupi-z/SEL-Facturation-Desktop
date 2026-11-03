@@ -200,7 +200,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
                 .body(Body::from(
                     serde_json::to_vec(&json!({
                         "customer_id": customer["id"],
-                        "received_amount": "3.00",
+                        "received_amount": "4.00",
                         "currency": "USD",
                         "method": "CASH",
                         "occurred_at": "2026-11-02T10:00:00Z",
@@ -221,6 +221,50 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         String::from_utf8_lossy(&payment_body)
     );
     let payment: serde_json::Value = serde_json::from_slice(&payment_body).unwrap();
+
+    let allocation_request = json!({
+        "allocations": [{
+            "receivable_id": invoice["receivable_id"],
+            "amount": "1.00"
+        }]
+    });
+    let allocation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/payments/{}/allocate",
+                    payment["payment_id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .header("idempotency-key", "local-payment-allocation-1")
+                .body(Body::from(
+                    serde_json::to_vec(&allocation_request).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(allocation.status(), StatusCode::CREATED);
+    let replay = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/payments/{}/allocate",
+                    payment["payment_id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .header("idempotency-key", "local-payment-allocation-1")
+                .body(Body::from(
+                    serde_json::to_vec(&allocation_request).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::CREATED);
 
     let receivable = app
         .clone()
@@ -244,8 +288,8 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         String::from_utf8_lossy(&receivable_bytes)
     );
     let receivable: serde_json::Value = serde_json::from_slice(&receivable_bytes).unwrap();
-    assert_eq!(receivable["paid"], "3.00");
-    assert_eq!(receivable["balance"], "8.02");
+    assert_eq!(receivable["paid"], "4.00");
+    assert_eq!(receivable["balance"], "7.02");
 
     let reversal = app
         .clone()
@@ -303,8 +347,8 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         String::from_utf8_lossy(&after_reversal_body)
     );
     let after_reversal: serde_json::Value = serde_json::from_slice(&after_reversal_body).unwrap();
-    assert_eq!(after_reversal["paid"], "2.00");
-    assert_eq!(after_reversal["balance"], "9.02");
+    assert_eq!(after_reversal["paid"], "3.00");
+    assert_eq!(after_reversal["balance"], "8.02");
 
     drop(app);
     drop(store);
@@ -316,7 +360,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .await
         .expect("read invoice after restart")
         .is_some());
-    assert_eq!(reopened.pending_count().await.unwrap(), 7);
+    assert_eq!(reopened.pending_count().await.unwrap(), 8);
     let _ = std::fs::remove_file(path);
 }
 

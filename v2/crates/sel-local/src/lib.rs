@@ -8,12 +8,13 @@ use axum::{
 };
 use sel_contracts::{
     utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest,
-    Customer, InvoiceLineResponse, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
-    SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, VoidInvoiceRequest,
+    Customer, InvoiceLineResponse, PaymentAllocationRequest, RecordPaymentRequest,
+    ReversePaymentRequest, SolarSaleResponse, SyncEventResult, SyncPushRequest, SyncPushResponse,
+    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_storage::LocalStore;
+use sel_sync::payload_digest;
 use serde_json::json;
 use std::{net::SocketAddr, sync::Arc};
 use uuid::Uuid;
@@ -38,6 +39,11 @@ pub struct SyncRunSummary {
     pub duplicates: usize,
     pub conflicts: usize,
     pub rejected: usize,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct AllocatePaymentRequest {
+    pub allocations: Vec<PaymentAllocationRequest>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -208,6 +214,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route("/local/v1/invoices/:id/void", post(void_invoice))
         .route("/local/v1/receivables/:id", get(get_receivable))
         .route("/local/v1/payments", post(record_payment))
+        .route("/local/v1/payments/:id/allocate", post(allocate_payment))
         .route("/local/v1/payments/:id/reverse", post(reverse_payment))
         .route("/local/v1/solar/sales", post(create_solar_sale))
         .route(
@@ -493,6 +500,34 @@ async fn record_payment(
     Ok((StatusCode::CREATED, Json(body)))
 }
 
+async fn allocate_payment(
+    State(state): State<LocalAppState>,
+    Path(payment_id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<AllocatePaymentRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let key = headers
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() >= 8)
+        .ok_or_else(|| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Idempotency-Key is required".into(),
+            )
+        })?;
+    let digest = payload_digest(
+        &serde_json::to_value(&input)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    );
+    let body = state
+        .store
+        .allocate_payment(payment_id, &input.allocations, key, &digest)
+        .await
+        .map_err(local_payment_allocation_error)?;
+    Ok((StatusCode::CREATED, Json(body)))
+}
+
 async fn reverse_payment(
     State(state): State<LocalAppState>,
     Path(payment_id): Path<Uuid>,
@@ -579,6 +614,29 @@ fn local_payment_reverse_error(
             StatusCode::UNPROCESSABLE_ENTITY
         }
         sel_storage::sqlite::LocalPaymentReverseError::Database(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    };
+    (status, error.to_string())
+}
+
+fn local_payment_allocation_error(
+    error: sel_storage::sqlite::LocalPaymentAllocationError,
+) -> (StatusCode, String) {
+    let status = match error {
+        sel_storage::sqlite::LocalPaymentAllocationError::PaymentNotFound => StatusCode::NOT_FOUND,
+        sel_storage::sqlite::LocalPaymentAllocationError::IdempotencyPayloadMismatch
+        | sel_storage::sqlite::LocalPaymentAllocationError::Overallocated
+        | sel_storage::sqlite::LocalPaymentAllocationError::PaymentNotAllocatable => {
+            StatusCode::CONFLICT
+        }
+        sel_storage::sqlite::LocalPaymentAllocationError::InvalidAllocation
+        | sel_storage::sqlite::LocalPaymentAllocationError::AllocationExceedsPayment
+        | sel_storage::sqlite::LocalPaymentAllocationError::ContextInvalid => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+        sel_storage::sqlite::LocalPaymentAllocationError::Database(_)
+        | sel_storage::sqlite::LocalPaymentAllocationError::StoredResponse(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
     };

@@ -301,6 +301,12 @@ pub struct PaymentSyncPayload {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PaymentAllocationSyncPayload {
+    pub payment_id: Uuid,
+    pub allocations: Vec<PaymentAllocationRequest>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PaymentReversalSyncPayload {
     pub payment_id: Uuid,
     pub reversal_id: Uuid,

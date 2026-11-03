@@ -9,7 +9,8 @@ use rust_decimal::Decimal;
 use sel_contracts::{
     offline_grant_canonical_bytes, solar_schedule_id, utility_snapshot_sha256,
     ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, Customer,
-    InvoiceVoidSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest,
+    InvoiceVoidSyncPayload, PaymentAllocationSyncPayload, PaymentReversalSyncPayload,
+    PaymentSyncPayload, RecordPaymentRequest,
     ReversePaymentRequest, SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload,
     SyncEnvelope, SyncEventResult, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
     UtilityInvoiceSyncPayload,
@@ -2932,6 +2933,75 @@ impl CentralStore {
                             "allocations": input.allocations,
                         }),
                     )),
+                )
+                .await?;
+                ack_tx.commit().await?;
+                Ok(result)
+            }
+            "PAYMENT_ALLOCATED" => {
+                let payload: PaymentAllocationSyncPayload =
+                    match serde_json::from_value(event.payload.clone()) {
+                        Ok(payload) => payload,
+                        Err(_) => {
+                            let result = SyncEventResult::Rejected {
+                                code: "PAYMENT_ALLOCATION_PAYLOAD_INVALID".into(),
+                                required_action:
+                                    "send_a_valid_payment_allocation_payload".into(),
+                            };
+                            persist_sync_result(
+                                &mut tx,
+                                self.organization_id,
+                                event,
+                                &result,
+                                None,
+                            )
+                            .await?;
+                            tx.commit().await?;
+                            return Ok(result);
+                        }
+                    };
+                tx.rollback().await?;
+                let operation_key = format!("sync-payment-allocation-{}", event.event_id);
+                let outcome = self
+                    .allocate_payment(
+                        payload.payment_id,
+                        &payload.allocations,
+                        event.actor_id,
+                        &operation_key,
+                        &event.payload_sha256,
+                    )
+                    .await;
+                match outcome {
+                    Ok(PaymentAllocationWriteOutcome::Created(_))
+                    | Ok(PaymentAllocationWriteOutcome::Replay(_)) => {}
+                    Err(_) => {
+                        let mut reject_tx = self.pool.begin().await?;
+                        let result = SyncEventResult::Rejected {
+                            code: "PAYMENT_ALLOCATION_NOT_ACCEPTED".into(),
+                            required_action: "review_payment_allocation_and_retry".into(),
+                        };
+                        persist_sync_result(
+                            &mut reject_tx,
+                            self.organization_id,
+                            event,
+                            &result,
+                            None,
+                        )
+                        .await?;
+                        reject_tx.commit().await?;
+                        return Ok(result);
+                    }
+                };
+                let mut ack_tx = self.pool.begin().await?;
+                let result = persist_sync_result(
+                    &mut ack_tx,
+                    self.organization_id,
+                    event,
+                    &SyncEventResult::Accepted {
+                        server_sequence: 0,
+                        server_entity_id: payload.payment_id,
+                    },
+                    None,
                 )
                 .await?;
                 ack_tx.commit().await?;
