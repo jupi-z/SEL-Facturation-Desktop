@@ -1025,7 +1025,7 @@ impl CentralStore {
     ) -> Result<UtilityIssueOutcome, UtilityIssueError> {
         let mut tx = self.pool.begin().await?;
         let outcome = self
-            .issue_utility_invoice_in_tx(&mut *tx, input, response, idempotency_key, request_digest)
+            .issue_utility_invoice_in_tx(&mut tx, input, response, idempotency_key, request_digest)
             .await?;
         tx.commit().await?;
         Ok(outcome)
@@ -1294,7 +1294,7 @@ impl CentralStore {
         let mut tx = self.pool.begin().await?;
         let outcome = self
             .void_invoice_with_id_in_tx(
-                &mut *tx,
+                &mut tx,
                 invoice_id,
                 void_id,
                 actor_id,
@@ -1479,7 +1479,7 @@ impl CentralStore {
         let mut tx = self.pool.begin().await?;
         let outcome = self
             .record_payment_with_id_in_tx(
-                &mut *tx,
+                &mut tx,
                 input,
                 payment_id,
                 idempotency_key,
@@ -1651,7 +1651,7 @@ impl CentralStore {
         let mut tx = self.pool.begin().await?;
         let outcome = self
             .allocate_payment_in_tx(
-                &mut *tx,
+                &mut tx,
                 payment_id,
                 allocations,
                 actor_id,
@@ -1909,7 +1909,7 @@ impl CentralStore {
         let mut tx = self.pool.begin().await?;
         let outcome = self
             .reverse_payment_with_id_in_tx(
-                &mut *tx,
+                &mut tx,
                 payment_id,
                 input,
                 actor_id,
@@ -2099,7 +2099,7 @@ impl CentralStore {
         let mut tx = self.pool.begin().await?;
         let outcome = self
             .create_credit_note_with_id_in_tx(
-                &mut *tx,
+                &mut tx,
                 receivable_id,
                 input,
                 actor_id,
@@ -2373,7 +2373,7 @@ impl CentralStore {
         let mut tx = self.pool.begin().await?;
         let outcome = self
             .create_solar_sale_with_ids_in_tx(
-                &mut *tx,
+                &mut tx,
                 input,
                 sale_id,
                 receivable_id,
@@ -2531,7 +2531,7 @@ impl CentralStore {
         let mut tx = self.pool.begin().await?;
         let outcome = self
             .activate_solar_contract_with_plan_id_in_tx(
-                &mut *tx,
+                &mut tx,
                 contract_id,
                 plan_id,
                 input,
