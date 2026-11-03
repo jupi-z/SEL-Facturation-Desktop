@@ -47,6 +47,21 @@ Les corrections cumulées pendant la reprise de la PR #58 ferment plusieurs rég
 
 La CI du commit contrôlé est verte : [run — 41632017706](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41632017706), job `rust` `125903719123`, sur `0539129`. Les deux annotations restantes sont des avertissements d'environnement GitHub Actions, sans échec de compilation ni de test.
 
+## Audit des branches GitHub
+
+L'inventaire distant du 3 novembre 2026 compte `main`, `monarque/sel-v2-backend` et dix branches historiques supplémentaires. Les branches ci-dessous ne sont pas supprimées automatiquement, car elles contiennent encore des modifications non intégrées à `main` ou à la V2 :
+
+| Branche | État vérifié | Décision contrôlée |
+|---|---|---|
+| `monarque/water-electricity-crud` | PR #47 ouverte, 9 commits en avance sur `main` | à préserver jusqu'à décision de fusion V1 ou d'abandon |
+| `monarque/installer-webview2-resilience` | PR #54 ouverte, 10 commits en avance sur `main` | à préserver ; dépendances Windows et installateur non repris dans cette PR backend |
+| `monarque/new-invoice-form-layout` | PR #55 ouverte, 12 commits en avance sur `main` | à préserver ; correctifs UI V1 non repris dans la V2 |
+| `monarque/combined-invoice-water-electricity` | 13 commits en avance, preuves PDF et moteur V1 | à préserver jusqu'à consolidation de la livraison V1 |
+| `monarque/sel-safeupdate-v1` | 3 commits en avance, code SafeUpdate et documentation | à préserver ; clé de production et validation native restent externes |
+| autres branches UI/CI historiques | diffs encore distincts de `main` | à archiver ou supprimer uniquement après confirmation de perte acceptable |
+
+Conclusion : aucun travail de branche n'est silencieusement considéré comme intégré. L'objectif de deux branches reste documenté, mais la suppression des branches historiques est reportée tant que leur contenu utile n'est pas consolidé et que les PR ouvertes ne sont pas explicitement clôturées.
+
 ## Résumé exécutif
 
 Le backend Rust dispose maintenant d’un parcours démontré de bout en bout pour une facture eau + électricité et un paiement partiel : deux bases SQLite indépendantes créent et conservent leurs identifiants hors ligne, un serveur HTTP Rust persiste les commandes dans PostgreSQL, puis le second poste récupère les mêmes données. Le scénario comprend aussi une vente de kit solaire, son échéancier, une reprise après redémarrage et une tentative de double encaissement.
