@@ -77,6 +77,9 @@ th { color: var(--navy); background: var(--blue-soft); text-align: left; font-si
 th, td { padding: 13px 12px; border-bottom: 1px solid var(--line); }
 td strong { color: var(--navy); }
 .result-panel { border-left: 3px solid var(--green); }
+.result-panel table { margin-top: 16px; }
+.preview-totals { display: flex; justify-content: flex-end; gap: 22px; align-items: center; flex-wrap: wrap; padding: 18px 0 4px; color: var(--muted); font-size: 13px; }
+.preview-totals strong { color: var(--navy); font-size: 16px; }
 .state-card { padding: 18px; background: var(--blue-soft); margin-bottom: 18px; line-height: 1.7; }
 .state-card strong { color: var(--navy); }
 footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; text-align: right; padding: 18px 0 4px; margin-top: 48px; }

@@ -130,6 +130,9 @@ class LocalApiBridge:
     def request(self, path: str, method: str = "GET", body: Any = None) -> dict[str, Any] | list[Any]:
         if not isinstance(path, str) or not path.startswith("/local/v1/") or "://" in path:
             raise ValueError("Seules les routes locales SEL V2 sont autorisées.")
+        method = method.upper()
+        if method not in {"GET", "POST", "PATCH"}:
+            raise ValueError("Méthode HTTP non autorisée par le pont local SEL V2.")
         encoded = None
         headers = {"Authorization": f"Bearer {self._auth_token}"}
         if body is not None:

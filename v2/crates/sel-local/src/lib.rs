@@ -222,6 +222,10 @@ fn router_with_store_base(store: LocalStore) -> Router {
             "/local/v1/billing/utility/issue",
             post(issue_utility_invoice),
         )
+        .route(
+            "/local/v1/billing/utility/preview",
+            post(preview_utility_invoice),
+        )
         .route("/local/v1/invoices", get(list_invoices))
         .route("/local/v1/invoices/:id", get(get_invoice))
         .route("/local/v1/invoices/:id/void", post(void_invoice))
@@ -384,6 +388,31 @@ async fn issue_utility_invoice(
     State(state): State<LocalAppState>,
     Json(input): Json<UtilityBillingRequest>,
 ) -> Result<(StatusCode, Json<UtilityBillingResponse>), (StatusCode, String)> {
+    let response =
+        calculate_utility_response(&state.store, &input, "LOCAL_PENDING", Some(Uuid::new_v4()))
+            .await?;
+    state
+        .store
+        .issue_utility_invoice(&input, &response)
+        .await
+        .map_err(internal_error)?;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn preview_utility_invoice(
+    State(state): State<LocalAppState>,
+    Json(input): Json<UtilityBillingRequest>,
+) -> Result<Json<UtilityBillingResponse>, (StatusCode, String)> {
+    let response = calculate_utility_response(&state.store, &input, "LOCAL_PREVIEW", None).await?;
+    Ok(Json(response))
+}
+
+async fn calculate_utility_response(
+    store: &LocalStore,
+    input: &UtilityBillingRequest,
+    status: &str,
+    receivable_id: Option<Uuid>,
+) -> Result<UtilityBillingResponse, (StatusCode, String)> {
     if input.electricity.unit != "KWH" || input.water.unit != "M3" {
         return Err((
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -396,8 +425,7 @@ async fn issue_utility_invoice(
             "zero water consumption must be confirmed".into(),
         ));
     }
-    let tariffs = state
-        .store
+    let tariffs = store
         .load_tariffs(
             &input.tariff_revision,
             &input.currency,
@@ -445,9 +473,9 @@ async fn issue_utility_invoice(
         .collect::<Vec<_>>();
     let mut response = UtilityBillingResponse {
         invoice_id: Uuid::new_v4(),
-        receivable_id: Some(Uuid::new_v4()),
+        receivable_id,
         invoice_number: None,
-        status: "LOCAL_PENDING".into(),
+        status: status.into(),
         currency: result.currency,
         lines,
         subtotal: result.subtotal,
@@ -457,12 +485,7 @@ async fn issue_utility_invoice(
     };
     response.snapshot_sha256 = utility_snapshot_sha256(&response)
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    state
-        .store
-        .issue_utility_invoice(&input, &response)
-        .await
-        .map_err(internal_error)?;
-    Ok((StatusCode::CREATED, Json(response)))
+    Ok(response)
 }
 
 async fn get_invoice(

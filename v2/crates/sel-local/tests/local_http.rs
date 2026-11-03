@@ -9,6 +9,10 @@ use serde_json::json;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+async fn json_body(response: axum::response::Response) -> serde_json::Value {
+    serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
 #[tokio::test]
 async fn local_status_reads_durable_outbox_counts() {
     let path = std::env::temp_dir().join(format!("sel-v2-local-http-{}.sqlite", Uuid::new_v4()));
@@ -101,5 +105,98 @@ async fn local_production_router_requires_the_configured_bearer_token() {
         .await
         .unwrap();
     assert_eq!(accepted.status(), axum::http::StatusCode::OK);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn utility_preview_returns_both_services_without_persisting_financial_data() {
+    let path = std::env::temp_dir().join(format!("sel-v2-local-preview-{}.sqlite", Uuid::new_v4()));
+    let database_url = format!("sqlite://{}", path.display());
+    let organization_id = Uuid::new_v4();
+    let store = LocalStore::connect(&database_url, organization_id, Uuid::new_v4())
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO tariff_versions (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
+         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', '2026-01-01', 'local-approved-v1', 'APPROVED'),
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', '1.30', 'USD', '2026-01-01', 'local-approved-v1', 'APPROVED')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status)
+         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED'),
+                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    let (customer, _) = store
+        .create_customer(&sel_contracts::CreateCustomer {
+            customer_code: "PREVIEW-001".into(),
+            legal_name: "Preview customer".into(),
+            address: None,
+            phone: None,
+        })
+        .await
+        .unwrap();
+    let before = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT
+           (SELECT count(*) FROM invoices),
+           (SELECT count(*) FROM receivables),
+           (SELECT count(*) FROM outbox)",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+
+    let response = router_with_store(store.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/local/v1/billing/utility/preview")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "customer_id": customer.id,
+                        "billing_period": "2026-11",
+                        "electricity": {"quantity": "100", "unit": "KWH"},
+                        "water": {"quantity": "0", "unit": "M3"},
+                        "water_zero_confirmed": true,
+                        "currency": "USD",
+                        "tariff_revision": "local-approved-v1"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["status"], "LOCAL_PREVIEW");
+    assert_eq!(body["receivable_id"], serde_json::Value::Null);
+    assert_eq!(body["lines"].as_array().unwrap().len(), 2);
+    assert!(body["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| { line["service_code"] == "WATER" && line["quantity"] == "0" }));
+
+    let after = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT
+           (SELECT count(*) FROM invoices),
+           (SELECT count(*) FROM receivables),
+           (SELECT count(*) FROM outbox)",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(after, before);
     let _ = std::fs::remove_file(path);
 }

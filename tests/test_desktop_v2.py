@@ -38,6 +38,8 @@ def test_local_bridge_rejects_non_local_paths() -> None:
         bridge.request("https://example.com")
     with pytest.raises(ValueError):
         bridge.request("/v1/sync/status")
+    with pytest.raises(ValueError):
+        bridge.request("/local/v1/customers", "DELETE")
 
 
 def test_packaging_smoke_does_not_require_rust_binary() -> None:
@@ -46,3 +48,15 @@ def test_packaging_smoke_does_not_require_rust_binary() -> None:
         "client_assets": 3,
         "native_binary": "deferred-to-build",
     }
+
+
+def test_v2_client_uses_safe_dom_rendering_and_explicit_invoice_preview() -> None:
+    script = desktop_v2.client_asset("app.js").read_text(encoding="utf-8")
+
+    assert "innerHTML" not in script
+    assert "textContent" in script
+    assert "/local/v1/billing/utility/preview" in script
+    assert "Aucune facture n’est encore émise." in script
+    assert "Émettre la facture" in script
+    assert "invalidatePreview" in script
+    assert '["input", "change"]' in script
