@@ -3,7 +3,7 @@
 Date : 3 novembre 2026  
 Branche : `monarque/sel-v2-backend`  
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)  
-État : **IN_PROGRESS — 73 %**
+État : **IN_PROGRESS — 74 %**
 
 Ce document consigne les preuves de cadrage et les points encore à valider. Il ne certifie ni une recette Windows SEL, ni une installation cliente, ni le choix final du framework desktop.
 
@@ -106,7 +106,20 @@ Les écrans ne doivent pas masquer ces absences par des données de démonstrati
 | 39 | Fiche révision tarif eau | historique des révisions et motif/approbation | ADMIN/SUPERVISOR | modèle/route de création et historique d’approbation manquants |
 | 40 | Matrice des droits initiaux | API de rôles/permissions versionnée | ADMIN | politique côté routeur existe partiellement ; endpoints de lecture/administration et tests écran à préciser |
 
-Tests backend actuellement localisés dans `v2/crates/sel-api/tests`, `v2/crates/sel-local/tests`, `v2/crates/sel-storage/tests`, `v2/crates/sel-domain/tests` et `v2/crates/sel-contracts/tests`. La matrice d’acceptation de la phase d’implémentation devra relier chaque ligne aux noms de tests précis et ajouter les tests manquants ; leur présence n’est pas assimilée à une validation de l’écran Windows.
+#### Tests existants reliés aux parcours
+
+Les tests ci-dessous prouvent des comportements du backend ou des API ; aucun ne valide le rendu de l’écran Windows.
+
+| Parcours couverts | Tests existants (nom exact) | Limite constatée |
+|---|---|---|
+| Facture eau + électricité, aperçu et 0 m³ | `utility_preview_returns_both_services_without_persisting_financial_data` (`sel-local/tests/local_http.rs`); `utility_invoice_always_returns_electricity_and_zero_water_as_json` (`sel-api/tests/http_contract_red.rs`); `zero_water_is_always_visible_without_inventing_a_tariff` (`sel-domain/tests/billing_red.rs`); `utility_issue_is_atomic_idempotent_and_survives_restart` (`sel-api/tests/postgres_commercial.rs`) | Aucun test du flux du nouveau frontend jusqu’à confirmation, PDF et impression. |
+| Création et consultation de clients | `local_commercial_operations_are_persisted_and_offline_pending` (`sel-local/tests/local_commercial.rs`); `customer_api_reads_from_postgres_after_new_app_state` (`sel-api/tests/postgres_customer_api.rs`); `customer_listing_supports_bounded_cursor_pagination_and_status_filter` (`sel-api/tests/http_contract_red.rs`) | Pas de validation des écrans, formulaires ni permissions précises par action UI. |
+| Paiements, allocations, concurrence et corrections | `duplicate_allocations_are_aggregated_before_balance_validation`, `concurrent_payments_cannot_both_consume_the_same_balance`, `post_record_payment_allocation_is_atomic_idempotent_and_grouped` (`sel-storage/tests/postgres_payments_concurrency.rs`); `payment_sync_is_applied_before_the_central_ack_and_is_idempotent` (`sel-storage/tests/postgres_sync_financial.rs`); `invoice_void_is_audited_and_idempotent` (`sel-api/tests/postgres_void.rs`) | L’historique UI, le reçu, les contre-écritures complètes et l’affectation depuis les créances proposées restent à valider/implémenter. |
+| Vente solaire, contrat, échéancier | `solar_sale_and_installment_contract_are_atomic_and_idempotent`, `concurrent_solar_contract_activation_creates_one_schedule_and_one_conflict` (`sel-api/tests/postgres_solar.rs`); `solar_sale_and_activation_use_one_receivable_and_exact_schedule` (`sel-api/tests/sync_and_solar_contract.rs`); `solar_sale_and_contract_projections_converge_idempotently` (`sel-local/tests/sync_worker.rs`) | Aucun parcours Windows catalogue→devis→vente→contrat→paiements→document n’est validé. |
+| Synchronisation et reprise multi-postes | `two_sqlite_devices_converge_through_real_postgres_and_http` (`sel-local/tests/two_device_convergence.rs`); `central_acceptance_reconciles_pending_invoice_and_payment_without_duplicates`, `local_restart_recovers_in_flight_outbox_without_changing_identity`, `pulled_changes_roll_back_projection_and_cursor_after_mid_batch_failure` (`sel-local/tests/sync_worker.rs`); `sync_ack_is_durable_and_only_follows_business_commit` (`sel-api/tests/postgres_sync.rs`) | Ces preuves backend ne couvrent pas les états/alertes du nouveau client. |
+| Authentification, appareil, intégrité et stockage | `individual_session_login_rotation_and_revocation_are_enforced`, `role_and_organization_boundaries_reject_write_escalation_and_idor` (`sel-api/tests/postgres_auth.rs`); `admin_can_enroll_revoke_device_and_issue_signed_offline_grant` (`sel-api/tests/postgres_device_grants.rs`); `sqlite_command_journal_and_outbox_survive_reopen` (`sel-storage/tests/sqlite_local_durability.rs`); `server_schemas_contain_no_invoice_file_storage_contract` (`sel-storage/tests/migrations_and_files.rs`); `openapi_document_is_valid_yaml_and_declares_no_pdf_route` (`sel-contracts/tests/openapi_contract.rs`) | Les rôles du tableau d’écrans restent des attentes de conception jusqu’à confirmation systématique des politiques de tous les handlers. |
+
+La matrice d’acceptation d’implémentation devra ajouter les tests manquants et lier chaque contrôle visuel/API aux noms exacts ; la présence des tests ci-dessus n’est pas assimilée à une validation de l’écran Windows. Les suites n’ont pas été relancées pendant ce cadrage : les références sont issues de l’inventaire du code et les résultats exécutés à retenir sont ceux des workflows CI par SHA.
 
 ### Identité et bootstrap du poste
 
@@ -120,7 +133,7 @@ Pré-requis bloquant observé sur cette session : installer/configurer un toolch
 
 ## Calcul de progression
 
-Progression phase 0 : **72,5 % (arrondie à 73 %)**. Pondération : dépôt/PR 10 % (validé) ; CI 5 % (50 % acquis sur le SHA courant `7bd9f51`, dont les contrôles sont encore en cours ; les 4 workflows du code SHA `79e969d` ont tous réussi) ; lecture des consignes et préséance 10 % (validé) ; inventaire Figma 20 % (validé) ; cartographie écrans/API/tests 25 % (90 % acquis : les 40 écrans sont reliés aux contrats et gaps, les permissions sont des attentes à confirmer et les tests précis restent à associer) ; identification du paquet livré 10 % (75 % acquis : dernière release publique identifiée, installation SEL inconnue) ; spike Windows 20 % (0 %, bloqué par toolchain manquant). Calcul : 10 + 2,5 + 10 + 20 + 22,5 + 7,5 = **72,5 %**. Les éléments bloqués ne sont pas comptés comme terminés.
+Progression phase 0 : **73,75 % (arrondie à 74 %)**. Pondération : dépôt/PR 10 % (validé) ; CI 5 % (50 % acquis sur le SHA de référence `7bd9f51`, dont les contrôles étaient encore en cours au dernier relevé ; les 4 workflows du code SHA `79e969d` ont tous réussi) ; lecture des consignes et préséance 10 % (validé) ; inventaire Figma 20 % (validé) ; cartographie écrans/API/tests 25 % (95 % acquis : 40 écrans reliés aux contrats et gaps, tests backend existants reliés par parcours ; permissions exactes par handler restent à vérifier) ; identification du paquet livré 10 % (75 % acquis : dernière release publique identifiée, installation SEL inconnue) ; spike Windows 20 % (0 %, bloqué par toolchain manquant). Calcul : 10 + 2,5 + 10 + 20 + 23,75 + 7,5 = **73,75 %**. Les éléments bloqués ne sont pas comptés comme terminés. La CI du nouveau commit documentaire `5c9b814` est en cours et doit être relevée avant clôture.
 
 ## Actions restantes avant clôture de phase 0
 
