@@ -384,7 +384,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     };
     let mut payment_two = payment_one.clone();
     payment_two.occurred_at = Utc::now();
-    let (_first_payment, _) = first.record_payment(&payment_one).await.unwrap();
+    let (first_payment, _) = first.record_payment(&payment_one).await.unwrap();
     let (second_payment, _) = second.record_payment(&payment_two).await.unwrap();
     let (first_sync, second_sync) = tokio::join!(
         sync_once(&first, &endpoint, &token),
@@ -409,18 +409,39 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     .await
     .unwrap();
     assert_eq!(payment_count, 1);
+    let first_payment_id: Uuid = first_payment["payment_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
     let second_payment_id: Uuid = second_payment["payment_id"]
         .as_str()
         .unwrap()
         .parse()
         .unwrap();
+    let first_status: String = sqlx::query_scalar("SELECT status FROM payments WHERE id = $1")
+        .bind(first_payment_id.to_string())
+        .fetch_one(&first.pool)
+        .await
+        .unwrap();
+    let second_status: String = sqlx::query_scalar("SELECT status FROM payments WHERE id = $1")
+        .bind(second_payment_id.to_string())
+        .fetch_one(&second.pool)
+        .await
+        .unwrap();
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT status FROM payments WHERE id = $1")
-            .bind(second_payment_id.to_string())
-            .fetch_one(&second.pool)
-            .await
-            .unwrap(),
-        "REJECTED"
+        [first_status.as_str(), second_status.as_str()]
+            .into_iter()
+            .filter(|status| *status == "CENTRAL_ACCEPTED")
+            .count(),
+        1
+    );
+    assert_eq!(
+        [first_status.as_str(), second_status.as_str()]
+            .into_iter()
+            .filter(|status| *status == "REJECTED")
+            .count(),
+        1
     );
     let second_balance = second
         .get_receivable_summary(sale.receivable_id)
