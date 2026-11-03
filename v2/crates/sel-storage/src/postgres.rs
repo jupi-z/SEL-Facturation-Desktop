@@ -781,7 +781,7 @@ impl CentralStore {
                      FROM payment_reversals GROUP BY payment_id
                  ) rev ON rev.payment_id = p.id
                  WHERE pa.schedule_id = s.id AND p.status = 'CENTRAL_ACCEPTED'
-             ), 0), 0), 0)
+             ), 0), 0)), 0)
              FROM installment_schedule s
              JOIN installment_plans ip ON ip.id = s.plan_id
              WHERE ip.receivable_id = $1 AND s.due_date < CURRENT_DATE",
