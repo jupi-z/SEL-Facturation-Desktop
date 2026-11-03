@@ -6,12 +6,12 @@ Branche : `monarque/sel-v2-backend`
 
 PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 
-Commit contrôlé : `6128112` (`fix(v2): hold sync replay lock through processing`)
+Commit contrôlé : `d40e2a8` (`test(v2): prove overdue installment balances`)
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation et LiveUpdate. Aucun nouveau frontend, aucune fusion dans `main`, aucune release et aucun déploiement réel.
 
 ## Mise à jour du contrôle — 3 novembre 2026
 
-Le jalon contrôlé sur `6128112709c8db99369e4ee71a56af2a7e66dc61` ferme plusieurs régressions détectées pendant la reprise de la PR #58 :
+Le jalon contrôlé sur `d40e2a8be3acd9cf970a2e795c5db3d8356aa85d` ferme plusieurs régressions détectées pendant la reprise de la PR #58 :
 
 - la clé de grant offline exigée au démarrage doit être une vraie clé publique Ed25519 décodable ;
 - `created_at` est maintenant renseigné dans SQLite pour l’écriture et la projection d’une annulation de facture ;
@@ -24,8 +24,10 @@ Le jalon contrôlé sur `6128112709c8db99369e4ee71a56af2a7e66dc61` ferme plusieu
 - les affectations locales en attente adoptent l'identifiant central lorsqu'une projection confirmée représente la même affectation, au lieu de créer une deuxième ligne ;
 - le verrou PostgreSQL de rejeu est conservé jusqu'à l'accusé durable : deux transmissions simultanées du même événement donnent exactement un accepté et un doublon ;
 - la facturation eau positive avec tarif et taxe approuvés est maintenant exercée dans le test PostgreSQL réel, en complément du cas obligatoire à 0 m³.
+- une course PostgreSQL de deux émissions sur le même abonné et la même période est maintenant couverte : une seule facture est créée et la seconde tentative retourne `InvoicePeriodExists` (conflit métier, pas erreur 500) ;
+- le résumé d’une créance solaire expose maintenant une preuve dédiée des échéances échues : le montant passé impayé est calculé, puis disparaît après affectation du paiement à l’échéance concernée.
 
-La CI finale de code est verte : [run #76 — 41622471698](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41622471698), job `rust` `125871374954`.
+La CI finale est verte : [run #77 — 41624094097](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41624094097), job `rust` `125876927876`, sur `d40e2a8`. Les deux annotations restantes sont des avertissements d’environnement GitHub Actions (migration Node.js 24 et ubuntu-latest), sans échec de test.
 
 ## Résumé exécutif
 
@@ -94,13 +96,15 @@ Ce test ne constitue pas encore une simulation exhaustive de panne physique à c
 
 ### CI GitHub
 
-Run [#76 — 41622471698](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41622471698), job `rust` `125871374954` : **SUCCESS** sur `6128112`.
+Run [#77 — 41624094097](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41624094097), job `rust` `125876927876` : **SUCCESS** sur `d40e2a8`.
 
 - `cargo fmt --all -- --check` : **PASS** ;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS** ;
 - `cargo test --workspace` : **PASS** ;
 - `cargo test --workspace -- --ignored` avec PostgreSQL 16.4 : **PASS** ;
-- test `two_sqlite_devices_converge_through_real_postgres_and_http` : **PASS après correction du double comptage d'affectation** ;
+- test `two_sqlite_devices_converge_through_real_postgres_and_http` : **PASS après correction du double comptage d’affectation** ;
+- test `concurrent_utility_invoices_same_customer_period_return_one_business_conflict` : **PASS dans la CI PostgreSQL du commit contrôlé** ;
+- test `receivable_summary_reports_only_unpaid_past_due_installments` : **PASS dans la CI PostgreSQL du commit contrôlé** ;
 - test local `local_commercial_operations_are_persisted_and_offline_pending` avec affectation post-enregistrement et rejeu idempotent : **PASS** ;
 - test local `local_solar_sale_and_contract_are_persisted_offline` : **PASS** ;
 - test PostgreSQL `payment_sync_is_applied_before_the_central_ack_and_is_idempotent` avec événement `PAYMENT_ALLOCATED` séparé : **PASS** ;
@@ -125,7 +129,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FIN-03 | PASS limité | test PostgreSQL réel avec tarif eau 1,25 USD/m³, taxe approuvée, 2 m³ et ligne calculée ; la recette métier SEL du tarif reste externe |
 | FIN-04 | PASS | paiement partiel, solde et retry sans doublon |
 | FIN-05 | PASS limité | vente solaire, créance, contrat et deux échéances persistés et projetés |
-| FIN-06 | PARTIAL | affectation à échéance et rejet de surallocation testés ; retards et recouvrement complets manquent |
+| FIN-06 | PASS limité | preuve dédiée ajoutée sur le commit contrôlé ; montant échu et statut `OVERDUE` sont vérifiés sur une échéance passée impayée, puis remis à zéro après affectation ; tableau complet de recouvrement métier reste à valider |
 | FIN-07 | PARTIAL | contre-écritures de paiements append-only et affectation post-enregistrement auditable, solde net et rejeu testés ; remboursements externes et leur rapprochement restent à finaliser |
 | FIN-08 | NOT_TESTED | avoirs, annulations et compensations non finalisés |
 | FIN-09 | PARTIAL | Decimal et snapshot multi-store ; matrice complète USD/CDF et taux approuvés à compléter |
@@ -134,7 +138,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | SYN-02 | PARTIAL | retry/replay et rejeu concurrent du même événement démontrés ; coupure injectée à chaque frontière réseau non exhaustive |
 | SYN-03 | PASS limité | publication et accusé récupérables après commit simulé ; panne physique réelle non injectée |
 | SYN-04 | PARTIAL | pull et curseur durable testés ; crash SQLite avant commit à compléter |
-| SYN-05 | NOT_TESTED | conflit de facture concurrente sur même période entre deux postes non démontré |
+| SYN-05 | PASS limité | deux connexions PostgreSQL concurrentes sur le même abonné/période donnent une création et un conflit `InvoicePeriodExists`, une seule ligne persistée ; scénario Windows multi-postes non réalisé |
 | SYN-06 | PARTIAL | surallocation centrale et rejeu concurrent protégés ; paiements réellement simultanés sur une même créance entre deux postes à compléter |
 | SYN-07 | NOT_TESTED | conflit de contrat/échéancier concurrent non implémenté complètement |
 | SYN-08 | PASS limité | émission/révocation de devices, grants Ed25519, expiration, scopes et limites d’événements testés sur PostgreSQL réel ; provisionnement de la clé de production et révocation opérationnelle restent externes |
@@ -154,7 +158,7 @@ La CI est une validation Linux/PostgreSQL de test. Elle ne remplace pas la recet
 | FILE-02 | PASS | schémas et tests ne contiennent pas de champ de fichier de facture |
 | FILE-03 | NOT_TESTED | audit des volumes/logs/backups après charge non réalisé |
 | FILE-04 | NOT_TESTED | générateur PDF client V2 volontairement hors backend |
-| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #76 sur `6128112` |
+| OPS-01 | PASS | formatage, Clippy et tests workspace verts en CI #77 sur `d40e2a8` |
 | OPS-02 | PASS | PostgreSQL de test en CI avec migrations et tests ignorés verts |
 | OPS-03 | NOT_TESTED | TLS, reverse proxy, PII, sauvegardes chiffrées et moindre privilège non validés |
 | OPS-04 | BLOCKED_EXTERNAL | poste Windows SEL, impression et serveur réel non accessibles pour recette |
