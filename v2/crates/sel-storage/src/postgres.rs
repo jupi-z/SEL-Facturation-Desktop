@@ -1654,9 +1654,9 @@ impl CentralStore {
         }
 
         let allocation_rows = sqlx::query(
-            "SELECT receivable_id, schedule_id, allocated_amount
+            "SELECT id, receivable_id, schedule_id, allocated_amount
              FROM payment_allocations WHERE payment_id = $1
-             ORDER BY receivable_id, schedule_id NULLS FIRST",
+             ORDER BY id",
         )
         .bind(payment_id)
         .fetch_all(&mut *tx)
@@ -1665,6 +1665,7 @@ impl CentralStore {
             .iter()
             .map(|row| {
                 Ok(json!({
+                    "allocation_id": row.try_get::<Uuid, _>("id")?,
                     "receivable_id": row.try_get::<Uuid, _>("receivable_id")?,
                     "schedule_id": row.try_get::<Option<Uuid>, _>("schedule_id")?,
                     "amount": format!("{:.2}", row.try_get::<Decimal, _>("allocated_amount")?)
@@ -2914,6 +2915,26 @@ impl CentralStore {
                 .bind(payment_id)
                 .execute(&mut *ack_tx)
                 .await?;
+                let allocation_rows = sqlx::query(
+                    "SELECT id, receivable_id, schedule_id, allocated_amount, currency
+                     FROM payment_allocations WHERE payment_id = $1
+                     ORDER BY id",
+                )
+                .bind(payment_id)
+                .fetch_all(&mut *ack_tx)
+                .await?;
+                let allocations = allocation_rows
+                    .iter()
+                    .map(|row| {
+                        Ok(json!({
+                            "allocation_id": row.try_get::<Uuid, _>("id")?,
+                            "receivable_id": row.try_get::<Uuid, _>("receivable_id")?,
+                            "schedule_id": row.try_get::<Option<Uuid>, _>("schedule_id")?,
+                            "amount": format!("{:.2}", row.try_get::<Decimal, _>("allocated_amount")?),
+                            "currency": row.try_get::<String, _>("currency")?
+                        }))
+                    })
+                    .collect::<Result<Vec<_>, sqlx::Error>>()?;
                 let result = persist_sync_result(
                     &mut ack_tx,
                     self.organization_id,
@@ -2929,7 +2950,7 @@ impl CentralStore {
                         json!({
                             "customer_id": input.customer_id,
                             "payment": body,
-                            "allocations": input.allocations,
+                            "allocations": allocations,
                         }),
                     )),
                 )

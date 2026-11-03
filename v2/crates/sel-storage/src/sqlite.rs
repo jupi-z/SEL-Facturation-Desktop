@@ -1380,7 +1380,13 @@ impl LocalStore {
                         }
                     }
                     "payments" => {
-                        apply_payment_change(&mut tx, self.organization_id, &change_json).await?;
+                        apply_payment_change(
+                            &mut tx,
+                            self.organization_id,
+                            entity_id,
+                            &change_json,
+                        )
+                        .await?;
                     }
                     "payment_reversals" => {
                         apply_payment_reversal_change(&mut tx, self.organization_id, &change_json)
@@ -2367,6 +2373,7 @@ async fn record_unsupported_pull_conflict(
 async fn apply_payment_change(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     organization_id: Uuid,
+    entity_id: &str,
     change: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     let customer_id = change
@@ -2380,6 +2387,11 @@ async fn apply_payment_change(
         .get("payment_id")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| sqlx::Error::Protocol("payment sync id is missing".into()))?;
+    if payment_id != entity_id {
+        return Err(sqlx::Error::Protocol(
+            "payment sync entity id does not match payment id".into(),
+        ));
+    }
     let amount = payment
         .get("amount")
         .and_then(serde_json::Value::as_str)
@@ -2442,25 +2454,38 @@ async fn apply_payment_change(
             let schedule_id = allocation
                 .get("schedule_id")
                 .and_then(serde_json::Value::as_str);
-            let already_present: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM payment_allocations
-                 WHERE payment_id = $1 AND receivable_id = $2 AND allocated_amount = $3
-                   AND currency = $4 AND (schedule_id = $5 OR (schedule_id IS NULL AND $5 IS NULL))",
-            )
-            .bind(payment_id)
-            .bind(receivable_id)
-            .bind(allocated_amount)
-            .bind(currency)
-            .bind(schedule_id)
-            .fetch_one(&mut **tx)
-            .await?;
+            let allocation_id = allocation
+                .get("allocation_id")
+                .and_then(serde_json::Value::as_str);
+            let already_present: i64 = if let Some(allocation_id) = allocation_id {
+                sqlx::query_scalar("SELECT count(*) FROM payment_allocations WHERE id = $1")
+                    .bind(allocation_id)
+                    .fetch_one(&mut **tx)
+                    .await?
+            } else {
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM payment_allocations
+                     WHERE payment_id = $1 AND receivable_id = $2 AND allocated_amount = $3
+                       AND currency = $4 AND (schedule_id = $5 OR (schedule_id IS NULL AND $5 IS NULL))",
+                )
+                .bind(payment_id)
+                .bind(receivable_id)
+                .bind(allocated_amount)
+                .bind(currency)
+                .bind(schedule_id)
+                .fetch_one(&mut **tx)
+                .await?
+            };
             if already_present == 0 {
+                let allocation_id = allocation_id
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| Uuid::new_v4().to_string());
                 sqlx::query(
                     "INSERT INTO payment_allocations
                      (id, payment_id, receivable_id, schedule_id, allocated_amount, currency)
                      VALUES ($1, $2, $3, $4, $5, $6)",
                 )
-                .bind(Uuid::new_v4().to_string())
+                .bind(allocation_id)
                 .bind(payment_id)
                 .bind(receivable_id)
                 .bind(schedule_id)
@@ -2501,12 +2526,17 @@ async fn apply_payment_change(
         let schedule_id = allocation
             .get("schedule_id")
             .and_then(serde_json::Value::as_str);
+        let allocation_id = allocation
+            .get("allocation_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         sqlx::query(
             "INSERT INTO payment_allocations
              (id, payment_id, receivable_id, schedule_id, allocated_amount, currency)
              VALUES ($1, $2, $3, $4, $5, $6)",
         )
-        .bind(Uuid::new_v4().to_string())
+        .bind(allocation_id)
         .bind(payment_id)
         .bind(receivable_id)
         .bind(schedule_id)
