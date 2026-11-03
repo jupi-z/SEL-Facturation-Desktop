@@ -1730,9 +1730,7 @@ fn payment_write_error(error: sel_storage::postgres::PaymentWriteError) -> ApiEr
     }
 }
 
-fn payment_allocation_error(
-    error: sel_storage::postgres::PaymentAllocationWriteError,
-) -> ApiError {
+fn payment_allocation_error(error: sel_storage::postgres::PaymentAllocationWriteError) -> ApiError {
     match error {
         sel_storage::postgres::PaymentAllocationWriteError::IdempotencyPayloadMismatch => {
             ApiError::conflict(
@@ -1771,9 +1769,7 @@ fn payment_allocation_error(
                 "payment customer or currency does not match the receivable",
             )
         }
-        sel_storage::postgres::PaymentAllocationWriteError::Database(error) => {
-            storage_error(error)
-        }
+        sel_storage::postgres::PaymentAllocationWriteError::Database(error) => storage_error(error),
         sel_storage::postgres::PaymentAllocationWriteError::StoredResponse(error) => {
             ApiError::internal(error)
         }

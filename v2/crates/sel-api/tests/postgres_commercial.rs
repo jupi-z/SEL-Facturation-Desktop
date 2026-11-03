@@ -164,24 +164,14 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
             .header("X-Actor-Id", approved_by.to_string())
             .header("Idempotency-Key", "pg-payment-allocation-key-1")
             .header("content-type", "application/json")
-            .body(Body::from(
-                serde_json::to_vec(&allocation_request).unwrap(),
-            ))
+            .body(Body::from(serde_json::to_vec(&allocation_request).unwrap()))
             .unwrap()
     };
-    let allocation = app
-        .clone()
-        .oneshot(allocation_builder())
-        .await
-        .unwrap();
+    let allocation = app.clone().oneshot(allocation_builder()).await.unwrap();
     assert_eq!(allocation.status(), StatusCode::CREATED);
     let allocation = json_body(allocation).await;
     assert_eq!(allocation["allocations"].as_array().unwrap().len(), 2);
-    let allocation_retry = app
-        .clone()
-        .oneshot(allocation_builder())
-        .await
-        .unwrap();
+    let allocation_retry = app.clone().oneshot(allocation_builder()).await.unwrap();
     assert_eq!(allocation_retry.status(), StatusCode::OK);
     assert_eq!(json_body(allocation_retry).await, allocation);
     let receivable = app

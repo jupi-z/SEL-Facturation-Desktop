@@ -3,9 +3,7 @@ use rust_decimal::Decimal;
 use sel_contracts::{PaymentAllocationRequest, RecordPaymentRequest};
 use sel_storage::{
     migrate_postgres,
-    postgres::{
-        PaymentAllocationWriteError, PaymentAllocationWriteOutcome, PaymentWriteError,
-    },
+    postgres::{PaymentAllocationWriteError, PaymentAllocationWriteOutcome, PaymentWriteError},
     CentralStore,
 };
 use uuid::Uuid;
