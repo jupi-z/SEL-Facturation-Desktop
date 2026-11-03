@@ -258,6 +258,16 @@ paths:
       responses:
         '201': { description: One sale and one receivable }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/solar/quotes:
+    post:
+      operationId: createSolarQuote
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateSolarQuoteRequest' } } } }
+      responses:
+        '200':
+          description: Price quote derived from the active approved solar catalog
+          content: { application/json: { schema: { $ref: '#/components/schemas/SolarQuoteResponse' } } }
+        '404': { $ref: '#/components/responses/Problem' }
   /v1/solar/contracts:
     post:
       operationId: createSolarContract
@@ -465,6 +475,22 @@ components:
         principal: { type: string }
         currency: { type: string }
         terms_revision: { type: string }
+    CreateSolarQuoteRequest:
+      type: object
+      required: [product_code, currency, terms_revision]
+      properties:
+        product_code: { type: string }
+        currency: { type: string }
+        terms_revision: { type: string }
+    SolarQuoteResponse:
+      type: object
+      required: [product_code, principal, currency, terms_revision, status]
+      properties:
+        product_code: { type: string }
+        principal: { type: string }
+        currency: { type: string }
+        terms_revision: { type: string }
+        status: { type: string, enum: [QUOTED_FROM_APPROVED_CATALOG] }
     ActivateSolarContractRequest:
       type: object
       required: [sale_id, receivable_id, schedule, currency, approved_terms_revision]

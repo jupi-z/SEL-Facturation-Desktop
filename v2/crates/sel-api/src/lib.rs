@@ -10,11 +10,11 @@ use axum::{
 };
 use rust_decimal::Decimal;
 use sel_contracts::{
-    utility_snapshot_sha256, CreateCustomer, CreateSolarSaleRequest, CreditNoteRequest, Customer,
-    DocumentData, InvoiceLineResponse, PaymentAllocationRequest, ProblemDetails,
-    RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse, SyncPullResponse,
-    SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, VoidInvoiceRequest,
+    utility_snapshot_sha256, CreateCustomer, CreateSolarQuoteRequest, CreateSolarSaleRequest,
+    CreditNoteRequest, Customer, DocumentData, InvoiceLineResponse, PaymentAllocationRequest,
+    ProblemDetails, RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse,
+    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
+    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -194,6 +194,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/config/versions", get(config_versions))
         .route("/v1/client-resources/manifest", get(resource_manifest))
         .route("/v1/solar/sales", post(create_solar_sale))
+        .route("/v1/solar/quotes", post(create_solar_quote))
         .route("/v1/solar/contracts", post(create_solar_contract))
         .route(
             "/v1/solar/contracts/:id/activate",
@@ -1693,6 +1694,31 @@ async fn create_solar_sale(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+async fn create_solar_quote(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateSolarQuoteRequest>,
+) -> Result<Json<SolarQuoteResponse>, ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "CENTRAL_STORE_REQUIRED",
+            "solar quotes require the central PostgreSQL store",
+        )
+    })?;
+    store
+        .create_solar_quote(&input)
+        .await
+        .map_err(storage_error)?
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "SOLAR_PRODUCT_NOT_FOUND",
+                "active solar product was not found",
+            )
+        })
+}
+
 async fn activate_solar_contract(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2126,6 +2152,10 @@ fn solar_sale_write_error(error: sel_storage::postgres::SolarSaleWriteError) -> 
         sel_storage::postgres::SolarSaleWriteError::ProductNotFound => ApiError::unprocessable(
             "SOLAR_PRODUCT_NOT_FOUND",
             "an active solar kit product is required",
+        ),
+        sel_storage::postgres::SolarSaleWriteError::PriceMismatch => ApiError::unprocessable(
+            "SOLAR_PRICE_MISMATCH",
+            "the sale principal must match the approved product price",
         ),
         sel_storage::postgres::SolarSaleWriteError::Database(error) => storage_error(error),
         sel_storage::postgres::SolarSaleWriteError::StoredResponse(error) => {

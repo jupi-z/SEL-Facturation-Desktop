@@ -8,12 +8,12 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rust_decimal::Decimal;
 use sel_contracts::{
     offline_grant_canonical_bytes, solar_schedule_id, utility_snapshot_sha256,
-    ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, CreditNoteRequest,
-    CreditNoteSyncPayload, Customer, InvoiceVoidSyncPayload, PaymentAllocationSyncPayload,
-    PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest,
-    SolarContractSyncPayload, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope,
-    SyncEventResult, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
-    UtilityInvoiceSyncPayload,
+    ActivateSolarContractRequest, CreateCustomer, CreateSolarQuoteRequest, CreateSolarSaleRequest,
+    CreditNoteRequest, CreditNoteSyncPayload, Customer, InvoiceVoidSyncPayload,
+    PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
+    RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarQuoteResponse,
+    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer,
+    UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -114,6 +114,8 @@ pub enum SolarSaleWriteError {
     CustomerNotFound,
     #[error("active solar product was not found")]
     ProductNotFound,
+    #[error("solar sale principal does not match the approved product price")]
+    PriceMismatch,
     #[error("stored idempotency response is invalid: {0}")]
     StoredResponse(#[from] serde_json::Error),
 }
@@ -1038,6 +1040,30 @@ impl CentralStore {
                 }))
             })
             .collect()
+    }
+
+    pub async fn create_solar_quote(
+        &self,
+        input: &CreateSolarQuoteRequest,
+    ) -> Result<Option<SolarQuoteResponse>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT price_reference FROM products
+             WHERE sku = $1 AND product_type = 'SOLAR_KIT'
+               AND currency = $2 AND active = TRUE",
+        )
+        .bind(input.product_code.trim())
+        .bind(&input.currency)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else { return Ok(None) };
+        let principal: Decimal = row.try_get("price_reference")?;
+        Ok(Some(SolarQuoteResponse {
+            product_code: input.product_code.trim().to_owned(),
+            principal: principal.round_dp(2),
+            currency: input.currency.clone(),
+            terms_revision: input.terms_revision.clone(),
+            status: "QUOTED_FROM_APPROVED_CATALOG".into(),
+        }))
     }
 
     pub async fn catalog_tariffs(&self) -> Result<Vec<serde_json::Value>, sqlx::Error> {
@@ -2640,23 +2666,27 @@ impl CentralStore {
         if !customer_exists {
             return Err(SolarSaleWriteError::CustomerNotFound);
         }
-        let product_exists = sqlx::query(
-            "SELECT id FROM products
+        let product_price = sqlx::query(
+            "SELECT price_reference FROM products
              WHERE sku = $1 AND product_type = 'SOLAR_KIT' AND currency = $2 AND active = TRUE",
         )
         .bind(input.product_code.trim())
         .bind(&input.currency)
         .fetch_optional(&mut *tx)
         .await?
-        .is_some();
-        if !product_exists {
+        .map(|row| row.try_get::<Decimal, _>("price_reference"))
+        .transpose()?;
+        let Some(product_price) = product_price else {
             return Err(SolarSaleWriteError::ProductNotFound);
+        };
+        if input.principal.round_dp(2) != product_price.round_dp(2) {
+            return Err(SolarSaleWriteError::PriceMismatch);
         }
         let response = SolarSaleResponse {
             sale_id,
             receivable_id,
             customer_id: input.customer_id,
-            principal: input.principal.round_dp(2),
+            principal: product_price.round_dp(2),
             currency: input.currency.clone(),
             status: "CENTRAL_ACCEPTED".into(),
             product_code: Some(input.product_code.trim().to_owned()),

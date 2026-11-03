@@ -443,6 +443,30 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .await
         .expect("create local solar customer");
     let app = router_with_store(store.clone());
+    let quote = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/local/v1/solar/quotes")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "product_code": "KIT-LOCAL-1",
+                        "currency": "USD",
+                        "terms_revision": "solar-local-v1"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(quote.status(), StatusCode::OK);
+    let quote_body = json_body(quote).await;
+    assert_eq!(quote_body["product_code"], "KIT-LOCAL-1");
+    assert_eq!(quote_body["principal"], "120.00");
+    assert_eq!(quote_body["status"], "QUOTED_FROM_APPROVED_CATALOG");
     let sale = app
         .clone()
         .oneshot(

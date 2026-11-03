@@ -7,10 +7,10 @@ use axum::{
     Json, Router,
 };
 use sel_contracts::{
-    utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest,
-    CreditNoteRequest, Customer, InvoiceLineResponse, PaymentAllocationRequest,
-    RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse, SyncEventResult,
-    SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer, CreateSolarQuoteRequest,
+    CreateSolarSaleRequest, CreditNoteRequest, Customer, InvoiceLineResponse,
+    PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
+    SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
     UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
@@ -220,6 +220,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route("/local/v1/payments/:id/allocate", post(allocate_payment))
         .route("/local/v1/payments/:id/reverse", post(reverse_payment))
         .route("/local/v1/solar/sales", post(create_solar_sale))
+        .route("/local/v1/solar/quotes", post(create_solar_quote))
         .route("/local/v1/solar/contracts", post(create_solar_contract))
         .route(
             "/local/v1/solar/contracts/:id/activate",
@@ -581,6 +582,24 @@ async fn create_solar_sale(
         .await
         .map_err(internal_error)?;
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn create_solar_quote(
+    State(state): State<LocalAppState>,
+    Json(input): Json<CreateSolarQuoteRequest>,
+) -> Result<Json<sel_contracts::SolarQuoteResponse>, (StatusCode, String)> {
+    state
+        .store
+        .create_solar_quote(&input)
+        .await
+        .map_err(internal_error)?
+        .map(Json)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                "active solar product was not found".into(),
+            )
+        })
 }
 
 async fn activate_solar_contract(

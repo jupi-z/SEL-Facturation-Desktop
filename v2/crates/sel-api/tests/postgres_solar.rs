@@ -62,6 +62,31 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         .unwrap();
     assert_eq!(customer.status(), StatusCode::CREATED);
     let customer = json_body(customer).await;
+    let quote = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/solar/quotes")
+                .header("authorization", "Bearer test")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "product_code": product_code,
+                        "currency": "USD",
+                        "terms_revision": "solar-terms-v1"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(quote.status(), StatusCode::OK);
+    let quote_body = json_body(quote).await;
+    assert_eq!(quote_body["product_code"], product_code);
+    assert_eq!(quote_body["principal"], "1000.00");
+    assert_eq!(quote_body["status"], "QUOTED_FROM_APPROVED_CATALOG");
     let sale_request = json!({
         "customer_id": customer["id"],
         "product_code": product_code,
@@ -69,6 +94,23 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         "currency": "USD",
         "terms_revision": "solar-terms-v1"
     });
+    let mut mismatched_sale = sale_request.clone();
+    mismatched_sale["principal"] = json!("999.00");
+    let rejected_sale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/solar/sales")
+                .header("authorization", "Bearer test")
+                .header("Idempotency-Key", "pg-solar-sale-price-mismatch")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&mismatched_sale).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected_sale.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let sale = app
         .clone()
         .oneshot(

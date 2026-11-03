@@ -505,6 +505,22 @@ pub struct CreateSolarSaleRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreateSolarQuoteRequest {
+    pub product_code: String,
+    pub currency: String,
+    pub terms_revision: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SolarQuoteResponse {
+    pub product_code: String,
+    pub principal: Decimal,
+    pub currency: String,
+    pub terms_revision: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SolarSaleResponse {
     pub sale_id: Uuid,
     pub receivable_id: Uuid,

@@ -2,12 +2,12 @@ use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
     solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
-    CreateSolarSaleRequest, CreditNoteRequest, CreditNoteSyncPayload, Customer,
-    InvoiceLineResponse, InvoiceVoidSyncPayload, PaymentAllocationRequest,
+    CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, CreditNoteSyncPayload,
+    Customer, InvoiceLineResponse, InvoiceVoidSyncPayload, PaymentAllocationRequest,
     PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
-    RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarSaleResponse,
-    SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse, UpdateCustomer,
-    UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarQuoteResponse,
+    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse,
+    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -578,17 +578,25 @@ impl LocalStore {
                 "solar sale customer is not present locally".into(),
             ));
         }
-        let product_exists: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM products
+        let product_price_text: Option<String> = sqlx::query_scalar(
+            "SELECT price_reference FROM products
              WHERE sku = $1 AND product_type = 'SOLAR_KIT' AND currency = $2 AND active = 1",
         )
         .bind(input.product_code.trim())
         .bind(&input.currency)
         .fetch_optional(&self.pool)
         .await?;
-        if product_exists.is_none() {
+        let Some(product_price_text) = product_price_text else {
             return Err(sqlx::Error::Protocol(
                 "solar product is not active in the local catalog".into(),
+            ));
+        };
+        let product_price = Decimal::from_str(&product_price_text).map_err(|error| {
+            sqlx::Error::Protocol(format!("invalid solar product price: {error}"))
+        })?;
+        if input.principal.round_dp(2) != product_price.round_dp(2) {
+            return Err(sqlx::Error::Protocol(
+                "solar sale principal does not match the approved product price".into(),
             ));
         }
         let sale_id = Uuid::new_v4();
@@ -597,7 +605,7 @@ impl LocalStore {
             sale_id,
             receivable_id,
             customer_id: input.customer_id,
-            principal: input.principal.round_dp(2),
+            principal: product_price.round_dp(2),
             currency: input.currency.clone(),
             status: "LOCAL_PENDING".into(),
             product_code: Some(input.product_code.trim().to_owned()),
@@ -655,6 +663,34 @@ impl LocalStore {
         insert_command_in_tx(&mut tx, &event).await?;
         tx.commit().await?;
         Ok((response, event))
+    }
+
+    pub async fn create_solar_quote(
+        &self,
+        input: &CreateSolarQuoteRequest,
+    ) -> Result<Option<SolarQuoteResponse>, sqlx::Error> {
+        let price_text: Option<String> = sqlx::query_scalar(
+            "SELECT price_reference FROM products
+             WHERE sku = $1 AND product_type = 'SOLAR_KIT'
+               AND currency = $2 AND active = 1",
+        )
+        .bind(input.product_code.trim())
+        .bind(&input.currency)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(price_text) = price_text else {
+            return Ok(None);
+        };
+        let principal = Decimal::from_str(&price_text).map_err(|error| {
+            sqlx::Error::Protocol(format!("invalid solar product price: {error}"))
+        })?;
+        Ok(Some(SolarQuoteResponse {
+            product_code: input.product_code.trim().to_owned(),
+            principal: principal.round_dp(2),
+            currency: input.currency.clone(),
+            terms_revision: input.terms_revision.clone(),
+            status: "QUOTED_FROM_APPROVED_CATALOG".into(),
+        }))
     }
 
     pub async fn activate_solar_contract_offline(
