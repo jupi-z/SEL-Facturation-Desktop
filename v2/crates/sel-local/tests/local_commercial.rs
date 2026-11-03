@@ -468,6 +468,7 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
     let sale = json_body(sale).await;
     let contract_id = Uuid::new_v4();
     let contract = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
