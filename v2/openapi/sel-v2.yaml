@@ -163,6 +163,22 @@ paths:
       responses:
         '200': { description: Receivable balance projection }
         '404': { $ref: '#/components/responses/Problem' }
+  /v1/receivables/{id}/credit:
+    post:
+      operationId: createCreditNote
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreditNoteRequest' }
+      responses:
+        '201': { description: Credit note recorded append-only }
+        '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
   /v1/customers/{id}/statement:
     get:
       operationId: getCustomerStatement
@@ -336,6 +352,12 @@ components:
         method: { type: string }
         occurred_at: { type: string, format: date-time }
         allocations: { type: array, items: { $ref: '#/components/schemas/PaymentAllocation' } }
+    CreditNoteRequest:
+      type: object
+      required: [amount, reason]
+      properties:
+        amount: { type: string, description: Positive Decimal amount in the receivable currency }
+        reason: { type: string, minLength: 1 }
     CreateSolarSaleRequest:
       type: object
       required: [customer_id, product_code, principal, currency, terms_revision]

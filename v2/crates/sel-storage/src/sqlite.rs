@@ -2,11 +2,12 @@ use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
     solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
-    CreateSolarSaleRequest, Customer, InvoiceLineResponse, InvoiceVoidSyncPayload,
-    PaymentAllocationRequest, PaymentAllocationSyncPayload, PaymentReversalSyncPayload,
-    PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload,
-    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse,
-    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    CreateSolarSaleRequest, CreditNoteRequest, CreditNoteSyncPayload, Customer,
+    InvoiceLineResponse, InvoiceVoidSyncPayload, PaymentAllocationRequest,
+    PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
+    RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarSaleResponse,
+    SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse, UpdateCustomer,
+    UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -78,6 +79,22 @@ pub enum LocalPaymentReverseError {
     #[error("reversal exceeds the payment amount still reversible")]
     AmountExceedsRemaining,
     #[error("reversal reason is required")]
+    ReasonRequired,
+}
+
+#[derive(Debug, Error)]
+pub enum LocalCreditNoteError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("receivable was not found in the local database")]
+    ReceivableNotFound,
+    #[error("receivable cannot receive a credit in its current status")]
+    ReceivableNotCreditable,
+    #[error("credit amount is invalid")]
+    InvalidAmount,
+    #[error("credit amount exceeds the outstanding receivable balance")]
+    AmountExceedsBalance,
+    #[error("credit note reason is required")]
     ReasonRequired,
 }
 
@@ -838,11 +855,19 @@ impl LocalStore {
                 };
                 Ok::<Decimal, sqlx::Error>(total + effective)
             })?;
+        let credited_text: String = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(amount), '0') FROM credit_notes WHERE receivable_id = $1",
+        )
+        .bind(id.to_string())
+        .fetch_one(&self.pool)
+        .await?;
+        let credited = Decimal::from_str(&credited_text)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid credit total: {error}")))?;
         let rejected = receivable_status == "REJECTED";
         let balance = if rejected {
             Decimal::ZERO
         } else {
-            principal - paid
+            principal - paid - credited
         };
         let overdue_schedule_rows = sqlx::query(
             "SELECT s.id, s.amount_due
@@ -902,12 +927,13 @@ impl LocalStore {
             "currency": row.try_get::<String, _>("currency")?,
             "principal": principal,
             "paid": paid,
+            "credited": credited,
             "balance": balance,
             "overdue_amount": overdue,
             "overdue": overdue > Decimal::ZERO,
             "status": if rejected {
                 "REJECTED"
-            } else if paid >= principal {
+            } else if paid + credited >= principal {
                 "SETTLED"
             } else if overdue > Decimal::ZERO {
                 "OVERDUE"
@@ -1315,6 +1341,150 @@ impl LocalStore {
         ))
     }
 
+    pub async fn create_credit_note_offline(
+        &self,
+        receivable_id: Uuid,
+        input: &CreditNoteRequest,
+    ) -> Result<(serde_json::Value, SyncEnvelope), LocalCreditNoteError> {
+        let _guard = self.write_lock.lock().await;
+        if input.amount <= Decimal::ZERO {
+            return Err(LocalCreditNoteError::InvalidAmount);
+        }
+        if input.reason.trim().is_empty() {
+            return Err(LocalCreditNoteError::ReasonRequired);
+        }
+        let credit_note_id = Uuid::new_v4();
+        let payload = serde_json::to_value(CreditNoteSyncPayload {
+            receivable_id,
+            credit_note_id,
+            amount: input.amount,
+            reason: input.reason.trim().to_owned(),
+            actor_id: self.actor_id,
+        })
+        .map_err(|error| {
+            LocalCreditNoteError::Database(sqlx::Error::Protocol(format!(
+                "invalid credit note JSON: {error}"
+            )))
+        })?;
+        let event = local_event(
+            self,
+            Uuid::new_v4(),
+            receivable_id,
+            "CREDIT_NOTE_RECORDED",
+            payload,
+        )?;
+        let mut tx = self.pool.begin().await?;
+        let Some(receivable) =
+            sqlx::query("SELECT currency, principal_total, status FROM receivables WHERE id = $1")
+                .bind(receivable_id.to_string())
+                .fetch_optional(&mut *tx)
+                .await?
+        else {
+            return Err(LocalCreditNoteError::ReceivableNotFound);
+        };
+        let status: String = receivable.try_get("status")?;
+        if matches!(status.as_str(), "VOID" | "REJECTED" | "SETTLED") {
+            return Err(LocalCreditNoteError::ReceivableNotCreditable);
+        }
+        let currency: String = receivable.try_get("currency")?;
+        let principal_text: String = receivable.try_get("principal_total")?;
+        let principal = Decimal::from_str(&principal_text)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid principal: {error}")))?;
+        let payment_rows = sqlx::query(
+            "SELECT pa.allocated_amount, p.amount_received,
+                    COALESCE((SELECT SUM(amount) FROM payment_reversals pr
+                              WHERE pr.payment_id = p.id), '0') AS reversed
+             FROM payment_allocations pa
+             JOIN payments p ON p.id = pa.payment_id
+             WHERE pa.receivable_id = $1
+               AND p.status IN ('LOCAL_PENDING', 'CENTRAL_ACCEPTED')",
+        )
+        .bind(receivable_id.to_string())
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut paid = Decimal::ZERO;
+        for row in payment_rows {
+            let allocated = Decimal::from_str(&row.try_get::<String, _>("allocated_amount")?)
+                .map_err(|error| sqlx::Error::Protocol(format!("invalid allocation: {error}")))?;
+            let received = Decimal::from_str(&row.try_get::<String, _>("amount_received")?)
+                .map_err(|error| sqlx::Error::Protocol(format!("invalid payment: {error}")))?;
+            let reversed = Decimal::from_str(&row.try_get::<String, _>("reversed")?)
+                .map_err(|error| sqlx::Error::Protocol(format!("invalid reversal: {error}")))?;
+            if received > Decimal::ZERO {
+                paid += allocated * ((received - reversed).max(Decimal::ZERO) / received);
+            }
+        }
+        let credited_text: String = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(amount), '0') FROM credit_notes WHERE receivable_id = $1",
+        )
+        .bind(receivable_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        let credited = Decimal::from_str(&credited_text)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid credit total: {error}")))?;
+        let outstanding = principal - paid - credited;
+        if input.amount > outstanding {
+            return Err(LocalCreditNoteError::AmountExceedsBalance);
+        }
+        sqlx::query(
+            "INSERT INTO credit_notes
+             (id, receivable_id, amount, reason, initiated_by, created_at)
+             VALUES ($1, $2, $3, $4, $5, datetime('now'))",
+        )
+        .bind(credit_note_id.to_string())
+        .bind(receivable_id.to_string())
+        .bind(input.amount.to_string())
+        .bind(input.reason.trim())
+        .bind(self.actor_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        let remaining = outstanding - input.amount;
+        let new_status = if remaining <= Decimal::ZERO {
+            "SETTLED"
+        } else {
+            "CREDITED"
+        };
+        sqlx::query("UPDATE receivables SET status = $1 WHERE id = $2")
+            .bind(new_status)
+            .bind(receivable_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, device, event_type, subject_id, occurred_at, redacted_metadata_json)
+             VALUES ($1, $2, $3, 'CREDIT_NOTE_RECORDED', $4, datetime('now'), $5)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(self.actor_id.to_string())
+        .bind(self.device_id.to_string())
+        .bind(receivable_id.to_string())
+        .bind(
+            json!({
+                "credit_note_id": credit_note_id,
+                "amount": input.amount,
+                "reason": input.reason.trim()
+            })
+            .to_string(),
+        )
+        .execute(&mut *tx)
+        .await?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        tx.commit().await?;
+        Ok((
+            json!({
+                "credit_note_id": credit_note_id,
+                "receivable_id": receivable_id,
+                "amount": format!("{:.2}", input.amount),
+                "currency": currency,
+                "reason": input.reason.trim(),
+                "status": "LOCAL_PENDING",
+                "receivable_status": new_status,
+                "remaining_balance": format!("{remaining:.2}")
+            }),
+            event,
+        ))
+    }
+
     pub async fn pending_count(&self) -> Result<i64, sqlx::Error> {
         sqlx::query_scalar("SELECT count(*) FROM outbox WHERE state = 'PENDING'")
             .fetch_one(&self.pool)
@@ -1421,6 +1591,16 @@ impl LocalStore {
                     "payment_reversals" => {
                         apply_payment_reversal_change(&mut tx, self.organization_id, &change_json)
                             .await?;
+                    }
+                    "credit_notes" => {
+                        apply_credit_note_change(
+                            &mut tx,
+                            self.organization_id,
+                            entity_id,
+                            revision,
+                            &change_json,
+                        )
+                        .await?;
                     }
                     "sales" => {
                         apply_solar_sale_change(
@@ -1613,6 +1793,15 @@ async fn mark_local_effect_rejected(
             sqlx::query(
                 "UPDATE receivables SET status = 'REJECTED'
                  WHERE source_type = 'INVOICE' AND source_id = $1",
+            )
+            .bind(&aggregate_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        "CREDIT_NOTE_RECORDED" => {
+            sqlx::query(
+                "UPDATE receivables SET status = 'CONFLICT_REQUIRES_REVIEW'
+                 WHERE id = $1 AND status = 'CREDITED'",
             )
             .bind(&aggregate_id)
             .execute(&mut **tx)
@@ -2708,6 +2897,108 @@ async fn apply_payment_reversal_change(
     .bind(Uuid::new_v4().to_string())
     .bind(actor_id)
     .bind(payment_id)
+    .bind(change.to_string())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn apply_credit_note_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    entity_id: &str,
+    _revision: i64,
+    change: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let credit_note_id = change
+        .get("credit_note_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("credit note id is missing".into()))?;
+    if credit_note_id != entity_id {
+        return Err(sqlx::Error::Protocol(
+            "credit note entity id does not match credit note id".into(),
+        ));
+    }
+    let receivable_id = change
+        .get("receivable_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("credit note receivable id is missing".into()))?;
+    let amount = change
+        .get("amount")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("credit note amount is missing".into()))?;
+    let reason = change
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .filter(|reason| !reason.trim().is_empty())
+        .ok_or_else(|| sqlx::Error::Protocol("credit note reason is missing".into()))?;
+    let actor_id = change
+        .get("actor_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("CENTRAL");
+    let receivable_exists: Option<String> = sqlx::query_scalar(
+        "SELECT r.id FROM receivables r
+         JOIN customers c ON c.id = r.customer_id
+         WHERE r.id = $1 AND c.organization_id = $2",
+    )
+    .bind(receivable_id)
+    .bind(organization_id.to_string())
+    .fetch_optional(&mut **tx)
+    .await?;
+    if receivable_exists.is_none() {
+        return Err(sqlx::Error::Protocol(
+            "credit note references a receivable not present locally".into(),
+        ));
+    }
+    if let Some(existing) = sqlx::query(
+        "SELECT receivable_id, amount, reason, initiated_by
+         FROM credit_notes WHERE id = $1",
+    )
+    .bind(credit_note_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        let same = existing.try_get::<String, _>("receivable_id")? == receivable_id
+            && existing.try_get::<String, _>("amount")? == amount
+            && existing.try_get::<String, _>("reason")? == reason
+            && existing.try_get::<String, _>("initiated_by")? == actor_id;
+        if !same {
+            return Err(sqlx::Error::Protocol(
+                "conflicting local credit note projection".into(),
+            ));
+        }
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO credit_notes
+         (id, receivable_id, amount, reason, initiated_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, datetime('now'))",
+    )
+    .bind(credit_note_id)
+    .bind(receivable_id)
+    .bind(amount)
+    .bind(reason)
+    .bind(actor_id)
+    .execute(&mut **tx)
+    .await?;
+    if let Some(status) = change
+        .get("receivable_status")
+        .and_then(serde_json::Value::as_str)
+    {
+        sqlx::query("UPDATE receivables SET status = $1 WHERE id = $2")
+            .bind(status)
+            .bind(receivable_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::query(
+        "INSERT INTO audit_events
+         (id, actor, event_type, subject_id, occurred_at, redacted_metadata_json)
+         VALUES ($1, $2, 'CREDIT_NOTE_RECORDED', $3, datetime('now'), $4)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(actor_id)
+    .bind(receivable_id)
     .bind(change.to_string())
     .execute(&mut **tx)
     .await?;

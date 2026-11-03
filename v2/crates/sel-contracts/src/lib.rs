@@ -333,6 +333,23 @@ pub struct ReversePaymentRequest {
     pub reason: String,
 }
 
+/// Append-only credit applied to an existing receivable. A credit reduces the
+/// balance without deleting or rewriting the original invoice or payment.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreditNoteRequest {
+    pub amount: Decimal,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreditNoteSyncPayload {
+    pub receivable_id: Uuid,
+    pub credit_note_id: Uuid,
+    pub amount: Decimal,
+    pub reason: String,
+    pub actor_id: Uuid,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct VoidInvoiceRequest {
     pub reason: String,

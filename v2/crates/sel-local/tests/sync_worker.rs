@@ -564,6 +564,83 @@ async fn central_acceptance_reconciles_pending_invoice_and_payment_without_dupli
 }
 
 #[tokio::test]
+async fn pulled_credit_note_is_idempotent_and_updates_local_balance() {
+    let path = std::env::temp_dir().join(format!("sel-v2-credit-pull-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("connect local store");
+    let customer_id = Uuid::new_v4();
+    let receivable_id = Uuid::new_v4();
+    let credit_note_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO customers
+         (id, organization_id, customer_code, legal_name, contact_fields_json, status, revision, created_at)
+         VALUES ($1, $2, 'CREDIT-1', 'Credit customer', '{}', 'ACTIVE', 1, datetime('now'))",
+    )
+    .bind(customer_id.to_string())
+    .bind(store.organization_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed credit customer");
+    sqlx::query(
+        "INSERT INTO receivables
+         (id, source_type, source_id, customer_id, currency, principal_total, status)
+         VALUES ($1, 'INVOICE', $2, $3, 'USD', '10.00', 'OPEN')",
+    )
+    .bind(receivable_id.to_string())
+    .bind(Uuid::new_v4().to_string())
+    .bind(customer_id.to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed credit receivable");
+    let pull = SyncPullResponse {
+        changes: vec![serde_json::json!({
+            "sequence": 20,
+            "entity": "credit_notes",
+            "entity_id": credit_note_id,
+            "revision": 1,
+            "change": {
+                "credit_note_id": credit_note_id,
+                "receivable_id": receivable_id,
+                "amount": "2.50",
+                "currency": "USD",
+                "reason": "central correction",
+                "actor_id": Uuid::new_v4(),
+                "receivable_status": "CREDITED"
+            }
+        })],
+        next_cursor: 20,
+    };
+    store
+        .apply_pulled_changes(&pull)
+        .await
+        .expect("apply credit projection");
+    store
+        .apply_pulled_changes(&pull)
+        .await
+        .expect("replay credit projection");
+    let credit_count: i64 = sqlx::query_scalar("SELECT count(*) FROM credit_notes WHERE id = $1")
+        .bind(credit_note_id.to_string())
+        .fetch_one(&store.pool)
+        .await
+        .expect("count projected credit note");
+    assert_eq!(credit_count, 1);
+    let summary = store
+        .get_receivable_summary(receivable_id)
+        .await
+        .expect("read projected credit summary")
+        .expect("projected receivable exists");
+    assert_eq!(summary["credited"], "2.50");
+    assert_eq!(summary["balance"], "7.50");
+    assert_eq!(summary["status"], "CREDITED");
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn unsupported_central_projection_is_audited_instead_of_dropped() {
     let path =
         std::env::temp_dir().join(format!("sel-v2-unsupported-pull-{}.sqlite", Uuid::new_v4()));

@@ -10,10 +10,11 @@ use axum::{
 };
 use rust_decimal::Decimal;
 use sel_contracts::{
-    utility_snapshot_sha256, CreateCustomer, CreateSolarSaleRequest, Customer, DocumentData,
-    InvoiceLineResponse, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
-    ReversePaymentRequest, SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse,
-    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    utility_snapshot_sha256, CreateCustomer, CreateSolarSaleRequest, CreditNoteRequest, Customer,
+    DocumentData, InvoiceLineResponse, PaymentAllocationRequest, ProblemDetails,
+    RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse, SyncPullResponse,
+    SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -180,6 +181,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/payments/:id/allocate", post(allocate_payment))
         .route("/v1/payments/:id/reverse", post(reverse_payment))
         .route("/v1/receivables/:id", get(get_receivable))
+        .route("/v1/receivables/:id/credit", post(create_credit_note))
         .route("/v1/customers/:id/statement", get(get_statement))
         .route("/v1/sync/push", post(sync_push))
         .route("/v1/sync/pull", get(sync_pull))
@@ -1316,6 +1318,69 @@ async fn reverse_payment(
     }
 }
 
+async fn create_credit_note(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(receivable_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreditNoteRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let key = require_idempotency(&headers)?;
+    let header_actor_id = headers
+        .get("X-Actor-Id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .parse::<Uuid>()
+                .map_err(|_| ApiError::unauthorized("ACTOR_INVALID", "X-Actor-Id must be a UUID"))
+        })
+        .transpose()?;
+    let actor_id = if let Some(Extension(AuthenticatedPrincipal(principal))) = principal {
+        if let Some(header_actor_id) = header_actor_id {
+            if header_actor_id != principal.user_id {
+                return Err(ApiError::forbidden(
+                    "ACTOR_MISMATCH",
+                    "X-Actor-Id does not match the authenticated session",
+                ));
+            }
+        }
+        principal.user_id
+    } else {
+        header_actor_id.ok_or_else(|| {
+            ApiError::unauthorized(
+                "ACTOR_REQUIRED",
+                "X-Actor-Id is required for an audited credit note",
+            )
+        })?
+    };
+    if input.amount <= Decimal::ZERO || input.reason.trim().is_empty() {
+        return Err(ApiError::unprocessable(
+            "CREDIT_NOTE_INVALID",
+            "a positive amount and a non-empty reason are required",
+        ));
+    }
+    let digest = digest_json(&input)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CREDIT_NOTE_CENTRAL_REQUIRED",
+            "audited credit notes require a central PostgreSQL store",
+        ));
+    };
+    match store
+        .create_credit_note(receivable_id, &input, actor_id, key, &digest)
+        .await
+        .map_err(credit_note_error)?
+    {
+        sel_storage::postgres::CreditNoteWriteOutcome::Created(body) => {
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        sel_storage::postgres::CreditNoteWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
 async fn get_receivable(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1868,6 +1933,47 @@ fn payment_reverse_error(error: sel_storage::postgres::PaymentReverseError) -> A
         ),
         sel_storage::postgres::PaymentReverseError::Database(error) => storage_error(error),
         sel_storage::postgres::PaymentReverseError::StoredResponse(error) => {
+            ApiError::internal(error)
+        }
+    }
+}
+
+fn credit_note_error(error: sel_storage::postgres::CreditNoteWriteError) -> ApiError {
+    match error {
+        sel_storage::postgres::CreditNoteWriteError::IdempotencyPayloadMismatch => {
+            ApiError::conflict(
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "idempotency key was reused with another payload",
+            )
+        }
+        sel_storage::postgres::CreditNoteWriteError::ReceivableNotFound => {
+            ApiError::not_found("RECEIVABLE_NOT_FOUND", "receivable not found")
+        }
+        sel_storage::postgres::CreditNoteWriteError::ReceivableNotCreditable => ApiError::conflict(
+            "RECEIVABLE_NOT_CREDITABLE",
+            "the receivable cannot receive a credit in its current status",
+        ),
+        sel_storage::postgres::CreditNoteWriteError::ActorNotActive => {
+            ApiError::unauthorized("ACTOR_NOT_ACTIVE", "the credit note actor is not active")
+        }
+        sel_storage::postgres::CreditNoteWriteError::ActorNotAuthorized => ApiError::forbidden(
+            "ACTOR_NOT_AUTHORIZED",
+            "the actor role cannot record a credit note",
+        ),
+        sel_storage::postgres::CreditNoteWriteError::InvalidAmount => ApiError::unprocessable(
+            "CREDIT_NOTE_INVALID",
+            "credit amount must be strictly positive",
+        ),
+        sel_storage::postgres::CreditNoteWriteError::AmountExceedsBalance => ApiError::conflict(
+            "CREDIT_NOTE_EXCEEDS_BALANCE",
+            "credit amount exceeds the outstanding receivable balance",
+        ),
+        sel_storage::postgres::CreditNoteWriteError::ReasonRequired => ApiError::unprocessable(
+            "CREDIT_NOTE_REASON_REQUIRED",
+            "a reason is required for an audited credit note",
+        ),
+        sel_storage::postgres::CreditNoteWriteError::Database(error) => storage_error(error),
+        sel_storage::postgres::CreditNoteWriteError::StoredResponse(error) => {
             ApiError::internal(error)
         }
     }

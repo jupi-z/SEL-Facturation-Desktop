@@ -290,6 +290,59 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     let after_full = json_body(after_full).await;
     assert_eq!(after_full["paid"], "0.00");
     assert_eq!(after_full["balance"], "11.02");
+
+    let credit_request = json!({
+        "amount": "2.00",
+        "reason": "approved commercial correction"
+    });
+    let credit_builder = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/v1/receivables/{}/credit",
+                invoice["receivable_id"].as_str().unwrap()
+            ))
+            .header("authorization", "Bearer test")
+            .header("X-Actor-Id", approved_by.to_string())
+            .header("Idempotency-Key", "pg-credit-note-key-1")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&credit_request).unwrap()))
+            .unwrap()
+    };
+    let credit = app.clone().oneshot(credit_builder()).await.unwrap();
+    assert_eq!(credit.status(), StatusCode::CREATED);
+    let credit = json_body(credit).await;
+    assert_eq!(credit["amount"], "2.00");
+    assert_eq!(credit["remaining_balance"], "9.02");
+    let credit_retry = app.clone().oneshot(credit_builder()).await.unwrap();
+    assert_eq!(credit_retry.status(), StatusCode::OK);
+    assert_eq!(json_body(credit_retry).await, credit);
+    let after_credit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/receivables/{}",
+                    invoice["receivable_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_credit.status(), StatusCode::OK);
+    let after_credit = json_body(after_credit).await;
+    assert_eq!(after_credit["credited"], "2.00");
+    assert_eq!(after_credit["balance"], "9.02");
+    let credit_publications: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM central_changes WHERE organization_id = $1 AND entity = 'credit_notes'",
+    )
+    .bind(organization_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(credit_publications, 1);
     let reversal_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM payment_reversals WHERE payment_id = $1")
             .bind(Uuid::parse_str(payment["payment_id"].as_str().unwrap()).unwrap())

@@ -8,9 +8,10 @@ use axum::{
 };
 use sel_contracts::{
     utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest,
-    Customer, InvoiceLineResponse, PaymentAllocationRequest, RecordPaymentRequest,
-    ReversePaymentRequest, SolarSaleResponse, SyncEventResult, SyncPushRequest, SyncPushResponse,
-    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    CreditNoteRequest, Customer, InvoiceLineResponse, PaymentAllocationRequest,
+    RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse, SyncEventResult,
+    SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_storage::LocalStore;
@@ -213,6 +214,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route("/local/v1/invoices/:id", get(get_invoice))
         .route("/local/v1/invoices/:id/void", post(void_invoice))
         .route("/local/v1/receivables/:id", get(get_receivable))
+        .route("/local/v1/receivables/:id/credit", post(create_credit_note))
         .route("/local/v1/payments", post(record_payment))
         .route("/local/v1/payments/:id/allocate", post(allocate_payment))
         .route("/local/v1/payments/:id/reverse", post(reverse_payment))
@@ -541,6 +543,19 @@ async fn reverse_payment(
     Ok((StatusCode::CREATED, Json(body)))
 }
 
+async fn create_credit_note(
+    State(state): State<LocalAppState>,
+    Path(receivable_id): Path<Uuid>,
+    Json(input): Json<CreditNoteRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let (body, _) = state
+        .store
+        .create_credit_note_offline(receivable_id, &input)
+        .await
+        .map_err(local_credit_note_error)?;
+    Ok((StatusCode::CREATED, Json(body)))
+}
+
 async fn create_solar_sale(
     State(state): State<LocalAppState>,
     Json(input): Json<CreateSolarSaleRequest>,
@@ -616,6 +631,22 @@ fn local_payment_reverse_error(
         sel_storage::sqlite::LocalPaymentReverseError::Database(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
+    };
+    (status, error.to_string())
+}
+
+fn local_credit_note_error(
+    error: sel_storage::sqlite::LocalCreditNoteError,
+) -> (StatusCode, String) {
+    let status = match error {
+        sel_storage::sqlite::LocalCreditNoteError::ReceivableNotFound => StatusCode::NOT_FOUND,
+        sel_storage::sqlite::LocalCreditNoteError::ReceivableNotCreditable
+        | sel_storage::sqlite::LocalCreditNoteError::AmountExceedsBalance => StatusCode::CONFLICT,
+        sel_storage::sqlite::LocalCreditNoteError::InvalidAmount
+        | sel_storage::sqlite::LocalCreditNoteError::ReasonRequired => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+        sel_storage::sqlite::LocalCreditNoteError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, error.to_string())
 }

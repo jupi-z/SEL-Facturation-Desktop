@@ -354,6 +354,47 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert_eq!(after_reversal["paid"], "3.00");
     assert_eq!(after_reversal["balance"], "8.02");
 
+    let credit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/receivables/{}/credit",
+                    invoice["receivable_id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "amount": "2.00",
+                        "reason": "local service correction"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let credit_status = credit.status();
+    let credit = json_body(credit).await;
+    assert_eq!(credit_status, StatusCode::CREATED);
+    assert_eq!(credit["status"], "LOCAL_PENDING");
+    assert_eq!(credit["remaining_balance"], "6.02");
+    let credit_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM credit_notes WHERE receivable_id = $1")
+            .bind(invoice["receivable_id"].as_str().unwrap())
+            .fetch_one(&store.pool)
+            .await
+            .expect("count local credit notes");
+    assert_eq!(credit_count, 1);
+    let credited_receivable = store
+        .get_receivable_summary(invoice["receivable_id"].as_str().unwrap().parse().unwrap())
+        .await
+        .expect("read credited receivable")
+        .expect("credited receivable exists");
+    assert_eq!(credited_receivable["credited"], "2.00");
+    assert_eq!(credited_receivable["balance"], "6.02");
+
     drop(app);
     drop(store);
     let reopened = LocalStore::connect(&database_url, organization_id, device_id)
@@ -364,7 +405,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .await
         .expect("read invoice after restart")
         .is_some());
-    assert_eq!(reopened.pending_count().await.unwrap(), 8);
+    assert_eq!(reopened.pending_count().await.unwrap(), 9);
     let _ = std::fs::remove_file(path);
 }
 
