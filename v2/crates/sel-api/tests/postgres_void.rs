@@ -36,12 +36,15 @@ async fn invoice_void_is_audited_and_idempotent() {
     .execute(&store.pool)
     .await
     .expect("insert actor");
+    // Integration test binaries share the disposable CI database. Use a
+    // historical effective period so unrelated tariff/tax fixtures created
+    // by earlier tests cannot make the legacy tax lookup ambiguous.
     sqlx::query(
         "INSERT INTO tariff_versions
          (id, service_code, customer_category, unit, unit_price, currency,
           effective_from, approval_ref, approved_by, status)
          VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', 0.095, 'USD',
-                 '2026-01-01', 'void-fixture-v1', $2, 'APPROVED')",
+                 '2000-01-01', 'void-fixture-v1', $2, 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .bind(actor_id)
@@ -52,7 +55,7 @@ async fn invoice_void_is_audited_and_idempotent() {
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
          VALUES ($1, 'ELECTRICITY', 'FIXTURE', 'SUBTOTAL', 0.16, 'fixture',
-                 '2026-01-01', 'APPROVED')",
+                 '2000-01-01', 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .execute(&store.pool)
@@ -93,7 +96,7 @@ async fn invoice_void_is_audited_and_idempotent() {
                 .body(Body::from(
                     serde_json::to_vec(&json!({
                         "customer_id": customer["id"],
-                        "billing_period": "2026-12",
+                        "billing_period": "2000-12",
                         "electricity": {"quantity": "100", "unit": "KWH"},
                         "water": {"quantity": "0", "unit": "M3"},
                         "water_zero_confirmed": true,
@@ -106,8 +109,14 @@ async fn invoice_void_is_audited_and_idempotent() {
         )
         .await
         .unwrap();
-    assert_eq!(issue.status(), StatusCode::CREATED);
-    let invoice = json_body(issue).await;
+    let issue_status = issue.status();
+    let issue_payload = json_body(issue).await;
+    assert_eq!(
+        issue_status,
+        StatusCode::CREATED,
+        "utility issue failed: {issue_payload}"
+    );
+    let invoice = issue_payload;
     let void_request = || {
         Request::builder()
             .method("POST")
