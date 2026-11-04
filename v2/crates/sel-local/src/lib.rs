@@ -1064,13 +1064,13 @@ async fn list_solar_sales(
 
 async fn list_solar_products(
     State(state): State<LocalAppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
     let products = state
         .store
         .list_active_solar_products()
         .await
-        .map_err(storage_error)?;
-    Ok(Json(serde_json::Value::Array(products)))
+        .map_err(internal_error)?;
+    Ok(Json(products))
 }
 
 async fn create_solar_quote(

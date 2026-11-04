@@ -161,17 +161,20 @@ fn validate_request(path: &str, method: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn request_local(agent: &LocalAgent, path: &str, method: &str, body: Option<Value>) -> Result<LocalResponse, String> {
+fn request_local(agent: &LocalAgent, path: &str, method: &str, body: Option<Value>, if_match: Option<i64>) -> Result<LocalResponse, String> {
     validate_request(path, method)?;
+    if if_match.is_some_and(|revision| revision < 1) {
+        return Err("La révision If-Match doit être positive.".into());
+    }
     let payload = body.map(|value| serde_json::to_vec(&value)).transpose().map_err(|error| error.to_string())?.unwrap_or_default();
     let mut stream = TcpStream::connect_timeout(&agent.address, Duration::from_secs(3))
         .map_err(|error| format!("service local indisponible: {error}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(15))).map_err(|error| error.to_string())?;
     stream.set_write_timeout(Some(Duration::from_secs(5))).map_err(|error| error.to_string())?;
+    let revision_header = if_match.map(|revision| format!("If-Match: {revision}\r\n")).unwrap_or_default();
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        agent.token,
-        payload.len()
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\n{revision_header}Accept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        agent.token, payload.len()
     );
     stream.write_all(request.as_bytes()).and_then(|_| stream.write_all(&payload)).map_err(|error| error.to_string())?;
     let mut raw = Vec::new();
@@ -208,9 +211,9 @@ fn decode_chunks(mut bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
-async fn local_request(state: State<'_, DesktopState>, path: String, method: String, body: Option<Value>) -> Result<LocalResponse, String> {
+async fn local_request(state: State<'_, DesktopState>, path: String, method: String, body: Option<Value>, if_match: Option<i64>) -> Result<LocalResponse, String> {
     let agent = state.agent.as_ref().cloned().ok_or("Ce poste doit être activé et enrôlé avant d’accéder au service local.")?;
-    tauri::async_runtime::spawn_blocking(move || request_local(&agent, &path, &method.to_ascii_uppercase(), body))
+    tauri::async_runtime::spawn_blocking(move || request_local(&agent, &path, &method.to_ascii_uppercase(), body, if_match))
         .await
         .map_err(|error| format!("requête locale interrompue: {error}"))?
 }
@@ -218,7 +221,7 @@ async fn local_request(state: State<'_, DesktopState>, path: String, method: Str
 #[tauri::command]
 async fn local_status(state: State<'_, DesktopState>) -> Result<Value, String> {
     match state.agent.as_ref().cloned() {
-        Some(agent) => tauri::async_runtime::spawn_blocking(move || request_local(&agent, "/local/v1/sync/status", "GET", None).map(|response| response.body))
+        Some(agent) => tauri::async_runtime::spawn_blocking(move || request_local(&agent, "/local/v1/sync/status", "GET", None, None).map(|response| response.body))
             .await
             .map_err(|error| format!("lecture de l’état local interrompue: {error}"))?,
         None => Ok(json!({"status":"ACTIVATION_REQUIRED","message":"Ce poste doit être activé et enrôlé par un administrateur SEL."})),

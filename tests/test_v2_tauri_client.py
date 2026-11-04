@@ -77,6 +77,25 @@ def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
     assert "<NavIcon" in app
 
 
+def test_solar_catalog_route_uses_local_api_error_contract() -> None:
+    local_api = (ROOT / "v2" / "crates" / "sel-local" / "src" / "lib.rs").read_text(encoding="utf-8")
+    handler = local_api.split("async fn list_solar_products(", 1)[1].split("\n}\n", 1)[0]
+
+    assert "Result<Json<Vec<serde_json::Value>>, (StatusCode, String)>" in handler
+    assert ".map_err(internal_error)?" in handler
+    assert "ApiError" not in handler
+    assert "storage_error" not in handler
+
+
+def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    history_view = app.split("{selectedInvoice &&", 1)[1].split("</>}", 1)[0]
+
+    assert "<Preview data={selectedInvoice}" in history_view
+    assert "onConfirm=" not in history_view
+    assert "{onConfirm &&" in app
+
+
 def test_tauri_bridge_fails_closed_and_offloads_local_http() -> None:
     native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
 

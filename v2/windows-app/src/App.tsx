@@ -80,11 +80,14 @@ export default function App() {
   const [notice, setNotice] = useState<Notice>(null);
   const [loading, setLoading] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState("");
+  const [selectedCustomerData, setSelectedCustomerData] = useState<Row | null>(null);
   const [statement, setStatement] = useState<Row | null>(null);
   const [preview, setPreview] = useState<Row | null>(null);
   const [invoiceDraft, setInvoiceDraft] = useState<Row | null>(null);
+  const [selectedInvoice, setSelectedInvoice] = useState<Row | null>(null);
   const [zeroConfirmed, setZeroConfirmed] = useState(false);
   const [invoiceFilter, setInvoiceFilter] = useState("");
+  const [customerFilter, setCustomerFilter] = useState("");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -133,6 +136,11 @@ export default function App() {
     return !query || [invoice.invoice_number, invoice.invoice_id, invoice.customer_name, invoice.period]
       .some((value) => text(value, "").toLocaleLowerCase("fr").includes(query));
   }), [invoices, invoiceFilter]);
+  const filteredCustomers = useMemo(() => customers.filter((customer) => {
+    const query = customerFilter.trim().toLocaleLowerCase("fr");
+    return !query || [customer.customer_code, customer.legal_name, customer.address, customer.phone]
+      .some((value) => text(value, "").toLocaleLowerCase("fr").includes(query));
+  }), [customers, customerFilter]);
 
   async function submit(event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) {
     event.preventDefault();
@@ -177,6 +185,32 @@ export default function App() {
       await localRequest("/local/v1/billing/utility/issue", "POST", invoiceDraft);
       setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
       setNotice({ message: "Facture émise et enregistrée sur ce poste." });
+      await refresh();
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  async function openInvoice(invoice: Row) {
+    const id = text(invoice.invoice_id ?? invoice.id, "");
+    if (!id) return;
+    try {
+      const details = await localRequest<Row>(`/local/v1/invoices/${encodeURIComponent(id)}`);
+      setSelectedInvoice(details);
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  async function updateCustomer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedCustomerData) return;
+    const form = new FormData(event.currentTarget);
+    const payload = {
+      legal_name: String(form.get("legal_name") ?? "").trim(),
+      address: String(form.get("address") ?? "").trim() || null,
+      phone: String(form.get("phone") ?? "").trim() || null,
+    };
+    try {
+      const updated = await localRequest<Row>(`/local/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", payload, Number(selectedCustomerData.revision));
+      setSelectedCustomerData(updated);
+      setNotice({ message: "Dossier abonné modifié. La révision locale a été vérifiée." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
@@ -266,14 +300,25 @@ export default function App() {
       {view === "customers" && <>
         <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier, le consulter et enregistrer un nouvel abonné." />
         <div className="columns customer-layout">
-          <Panel title="Abonnés enregistrés"><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné disponible sur ce poste." data={customers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => setSelectedCustomer(text(row.customer_id ?? row.id, ""))}>Ouvrir le dossier →</button>])} /></Panel>
+          <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné disponible sur ce poste." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); }}>Ouvrir le dossier →</button>])} /></Panel>
           <Panel title="Nouvel abonné"><form className="form-grid" onSubmit={(event) => submit(event, "/local/v1/customers", Object.fromEntries(new FormData(event.currentTarget)) as Row, "Abonné enregistré localement.")}>
             <label>Code abonné<input name="customer_code" required /></label><label>Nom / raison sociale<input name="legal_name" required /></label>
             <label className="span-two">Adresse<input name="address" /></label><label>Téléphone<input name="phone" /></label><label>NIF client<input name="tax_id" /></label>
             <div className="form-actions span-two"><Button primary type="submit">Enregistrer l’abonné</Button></div>
           </form></Panel>
         </div>
-        {selectedCustomer && <CustomerStatement customerId={selectedCustomer} statement={statement} />}
+        {selectedCustomer && <>
+          <Panel title={`Fiche abonné · ${text(selectedCustomerData?.customer_code)}`}>
+            {selectedCustomerData ? <form className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
+              <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required /></label>
+              <label>Révision locale<input value={text(selectedCustomerData.revision)} readOnly /></label>
+              <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} /></label>
+              <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} /></label>
+              <div className="form-actions span-two"><Button primary type="submit">Enregistrer les modifications</Button></div>
+            </form> : <div className="empty-state">Chargement du dossier abonné…</div>}
+          </Panel>
+          <CustomerStatement customerId={selectedCustomer} statement={statement} />
+        </>}
       </>}
 
       {view === "invoices" && <>
@@ -291,8 +336,12 @@ export default function App() {
         </Panel>
         {preview && <Preview data={preview} onConfirm={() => void confirmInvoice()} />}
         <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
-          <Table headers={["Référence", "Abonné", "Période", "État", "Action"]} empty="Aucune facture locale." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <button className="text-button" onClick={() => setNotice({ message: "Les données structurées de cette facture sont conservées localement." })}>Consulter</button>])} />
+          <Table headers={["Référence", "Abonné", "Période", "État", "Action"]} empty="Aucune facture locale." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <button className="text-button" onClick={() => void openInvoice(row)}>Consulter</button>])} />
         </Panel>
+        {selectedInvoice && <>
+          <p className="muted">Période {text(selectedInvoice.billing_period)} · Échéance {text(selectedInvoice.due_date)} · <Status value={selectedInvoice.status} /></p>
+          <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />
+        </>}
       </>}
 
       {view === "payments" && <>
@@ -365,12 +414,12 @@ function Status({ value }: { value: unknown }) {
   return <span className={`status-badge ${state}`}>{normalized}</span>;
 }
 
-function Preview({ data, onConfirm }: { data: Row; onConfirm: () => void }) {
+function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rust", action }: { data: Row; onConfirm?: () => void; title?: string; action?: ReactNode }) {
   const lines = rows<Row>(data.lines);
-  return <Panel title="Prévisualisation calculée par Rust"><p className="help">Vérifiez les deux services, les taxes et le total. Cette prévisualisation ne crée pas de facture.</p>
+  return <Panel title={title} action={action}>{onConfirm && <p className="help">Vérifiez les deux services, les taxes et le total. Cette prévisualisation ne crée pas de facture.</p>}
     <Table headers={["Service", "Quantité", "Prix unitaire", "Sous-total", "Taxe", "Total"]} empty="Le moteur n’a retourné aucune ligne." data={lines.map((line) => [text(line.service_code), `${text(line.quantity)} ${text(line.unit)}`, text(line.unit_price, "0"), text(line.subtotal), text(line.tax), `${text(line.total)} ${text(data.currency)}`])} />
     <div className="totals"><span>Sous-total <strong>{text(data.subtotal)} {text(data.currency)}</strong></span><span>Taxes <strong>{text(data.tax)} {text(data.currency)}</strong></span><span>Total <strong>{text(data.total)} {text(data.currency)}</strong></span></div>
-    <div className="form-actions"><Button primary onClick={onConfirm}>Émettre cette facture</Button></div>
+    {onConfirm && <div className="form-actions"><Button primary onClick={onConfirm}>Émettre cette facture</Button></div>}
   </Panel>;
 }
 
@@ -398,7 +447,7 @@ function PaymentForm({ customers, onSubmit }: { customers: Row[]; onSubmit: (eve
 }
 
 function CustomerStatement({ customerId, statement }: { customerId: string; statement: Row | null }) {
-  return <Panel title={`Dossier abonné · ${customerId}`}>
+  return <Panel title={`Situation du compte · ${customerId}`}>
     {statement ? <div className="columns"><div><p><strong>Factures</strong></p><Table headers={["Référence", "Période", "État"]} empty="Aucune facture dans le relevé." data={rows<Row>(statement.invoices).map((item) => [text(item.invoice_number ?? item.invoice_id), text(item.period ?? item.billing_period), text(item.status)])} /></div><div><p><strong>Créances</strong></p><Table headers={["Référence", "Solde", "Situation"]} empty="Aucune créance dans le relevé." data={rows<Row>(statement.receivables).map((item) => [text(item.id ?? item.receivable_id), `${text(item.balance)} ${text(item.currency)}`, text(item.status)])} /></div></div> : <div className="empty-state">Chargement du relevé abonné…</div>}
   </Panel>;
 }
