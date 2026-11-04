@@ -93,6 +93,17 @@ def test_dashboard_uses_recent_local_operations_without_demo_financial_data() ->
     assert "1 124,20" not in app
 
 
+def test_financial_amounts_are_formatted_without_client_side_calculation() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    formatter = app.split("function formatMoney(", 1)[1].split("\n}\n", 1)[0]
+
+    assert "padEnd(2, \"0\")" in formatter
+    assert "replace(/\\B(?=(\\d{3})+(?!\\d))/g" in formatter
+    assert "Number(" not in formatter
+    assert "formatMoney(data.total, data.currency)" in app
+    assert "formatMoney(row.balance, row.currency)" in app
+
+
 def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     local_api = (ROOT / "v2" / "crates" / "sel-local" / "src" / "lib.rs").read_text(encoding="utf-8")

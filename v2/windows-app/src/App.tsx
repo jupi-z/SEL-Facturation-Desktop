@@ -32,6 +32,15 @@ function text(value: unknown, fallback = "—"): string {
   return value === undefined || value === null || String(value) === "" ? fallback : String(value);
 }
 
+function formatMoney(value: unknown, currency: unknown): string {
+  const raw = text(value, "").trim();
+  const match = /^(-?)(\d+)(?:[.,](\d+))?$/.exec(raw);
+  if (!match) return raw ? `${raw} ${text(currency, "")}`.trim() : "—";
+  const [, sign, integer, fraction = ""] = match;
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, "\u202f");
+  return `${sign}${grouped},${fraction.padEnd(2, "0")} ${text(currency, "")}`.trim();
+}
+
 function rows<T extends Row>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
@@ -303,7 +312,7 @@ export default function App() {
           <Metric label="À synchroniser" value={pending} note={pending ? "En attente de confirmation centrale" : "État renvoyé par l’agent local"} />
         </div>
         <Panel title="Dossiers / activité récente" action={link("sync", "État de synchronisation →")}>
-          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune opération enregistrée sur ce poste." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, amount === "—" ? amount : `${amount} ${text(row.currency)}`, <Status value={row.status} />])} />
+          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune opération enregistrée sur ce poste." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, formatMoney(amount, row.currency), <Status value={row.status} />])} />
         </Panel>
       </>}
 
@@ -359,32 +368,32 @@ export default function App() {
         <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
         <div className="columns customer-layout">
           <Panel title="Nouvel encaissement"><PaymentForm customers={customers} onSubmit={submit} /></Panel>
-          <Panel title="Encaissements enregistrés"><Table headers={["Référence", "Date", "Montant", "Mode", "État"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong>{text(row.payment_id)}</strong>, text(row.paid_at ?? row.occurred_at), `${text(row.amount_received)} ${text(row.currency)}`, text(row.method), <Status value={row.status} />])} /></Panel>
+          <Panel title="Encaissements enregistrés"><Table headers={["Référence", "Date", "Montant", "Mode", "État"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong>{text(row.payment_id)}</strong>, text(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), text(row.method), <Status value={row.status} />])} /></Panel>
         </div>
       </>}
 
       {view === "solar" && <>
         <PageHeading eyebrow="FINANCE / SOLAIRE" title="Catalogue et ventes solaires" description="Les produits et prix affichés proviennent du dernier catalogue validé et disponible localement." />
         <Panel title="Catalogue approuvé">
-          <div className="product-grid">{solarProducts.map((product) => <article className="product-card" key={text(product.id)}><p className="eyebrow">{text(product.sku)}</p><h3>{text(product.label)}</h3><p>{text(product.price_reference)} {text(product.currency)}</p><span className="product-meta">Valide depuis le {text(product.effective_from)} · {text(product.approval_ref)}</span></article>)}</div>
+          <div className="product-grid">{solarProducts.map((product) => <article className="product-card" key={text(product.id)}><p className="eyebrow">{text(product.sku)}</p><h3>{text(product.label)}</h3><p>{formatMoney(product.price_reference, product.currency)}</p><span className="product-meta">Valide depuis le {text(product.effective_from)} · {text(product.approval_ref)}</span></article>)}</div>
           {!solarProducts.length && <div className="empty-state">Aucun produit solaire approuvé et applicable n’est disponible sur ce poste.</div>}
         </Panel>
         <Panel title="Nouvelle vente solaire"><form className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
           <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-          <label>Produit approuvé<select name="product_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {text(product.price_reference)} {text(product.currency)}</option>)}</select></label>
+          <label>Produit approuvé<select name="product_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
           <label>Devise du catalogue<select name="currency" defaultValue={text(solarProducts[0]?.currency, "USD")} required>{[...new Set(solarProducts.map((product) => text(product.currency, "")))].filter(Boolean).map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label>
           <label className="span-two">Révision des conditions approuvées<input name="terms_revision" required /></label>
           <p className="help span-two">Le prix est relu et vérifié par le moteur Rust avant l’émission. La vente crée une créance ; enregistrez tout règlement dans le journal de caisse.</p>
           <div className="form-actions span-two"><Button primary type="submit">Vérifier le devis</Button></div>
         </form></Panel>
-        {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{text(solarQuote.principal)} {text(solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
-        <Panel title="Ventes locales"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, text(row.customer_id), text(row.product_code), `${text(row.principal)} ${text(row.currency)}`, <Status value={row.status} />])} /></Panel>
+        {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
+        <Panel title="Ventes locales"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, text(row.customer_id), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />])} /></Panel>
       </>}
 
       {view === "receivables" && <>
         <PageHeading eyebrow="FINANCE / SOLDES" title="Suivi des créances" description="Soldes et obligations renvoyés par l’agent local, sans recalcul dans l’interface." />
         <Panel title="Situation d’un abonné"><label className="customer-picker">Abonné<select value={selectedCustomer} onChange={(event) => setSelectedCustomer(event.target.value)}><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-          {statement ? <Table headers={["Référence", "Nature", "Devise", "Solde", "Situation"]} empty="Aucune créance associée." data={rows<Row>(statement.receivables).map((row) => [<strong>{text(row.receivable_id ?? row.id)}</strong>, text(row.source_type), text(row.currency), text(row.balance), <Status value={row.status} />])} /> : <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
+          {statement ? <Table headers={["Référence", "Nature", "Solde", "Situation"]} empty="Aucune créance associée." data={rows<Row>(statement.receivables).map((row) => [<strong>{text(row.receivable_id ?? row.id)}</strong>, text(row.source_type), formatMoney(row.balance, row.currency), <Status value={row.status} />])} /> : <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
         </Panel>
       </>}
 
@@ -428,8 +437,8 @@ function Status({ value }: { value: unknown }) {
 function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rust", action }: { data: Row; onConfirm?: () => void; title?: string; action?: ReactNode }) {
   const lines = rows<Row>(data.lines);
   return <Panel title={title} action={action}>{onConfirm && <p className="help">Vérifiez les deux services, les taxes et le total. Cette prévisualisation ne crée pas de facture.</p>}
-    <Table headers={["Service", "Quantité", "Prix unitaire", "Sous-total", "Taxe", "Total"]} empty="Le moteur n’a retourné aucune ligne." data={lines.map((line) => [text(line.service_code), `${text(line.quantity)} ${text(line.unit)}`, text(line.unit_price, "0"), text(line.subtotal), text(line.tax), `${text(line.total)} ${text(data.currency)}`])} />
-    <div className="totals"><span>Sous-total <strong>{text(data.subtotal)} {text(data.currency)}</strong></span><span>Taxes <strong>{text(data.tax)} {text(data.currency)}</strong></span><span>Total <strong>{text(data.total)} {text(data.currency)}</strong></span></div>
+    <Table headers={["Service", "Quantité", "Prix unitaire", "Sous-total", "Taxe", "Total"]} empty="Le moteur n’a retourné aucune ligne." data={lines.map((line) => [text(line.service_code), `${text(line.quantity)} ${text(line.unit)}`, formatMoney(line.unit_price, data.currency), formatMoney(line.subtotal, data.currency), formatMoney(line.tax, data.currency), formatMoney(line.total, data.currency)])} />
+      <div className="totals"><span>Sous-total <strong>{formatMoney(data.subtotal, data.currency)}</strong></span><span>Taxes <strong>{formatMoney(data.tax, data.currency)}</strong></span><span>Total <strong>{formatMoney(data.total, data.currency)}</strong></span></div>
     {onConfirm && <div className="form-actions"><Button primary onClick={onConfirm}>Émettre cette facture</Button></div>}
   </Panel>;
 }
@@ -452,14 +461,14 @@ function PaymentForm({ customers, onSubmit }: { customers: Row[]; onSubmit: (eve
     <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => setCustomerId(event.target.value)} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
     <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" required /></label><label>Devise<input name="currency" defaultValue="USD" required /></label>
     <label>Mode<select name="method"><option value="CASH">Espèces</option><option value="BANK">Banque</option><option value="MOBILE_MONEY">Mobile Money</option><option value="OTHER">Autre</option></select></label>
-    <label>Créance à affecter<select name="receivable_id" required disabled={!customerId || !receivables.length}><option value="">{customerId ? "Sélectionner une créance" : "Sélectionnez d’abord un abonné"}</option>{receivables.map((item) => <option key={text(item.receivable_id ?? item.id)} value={text(item.receivable_id ?? item.id)}>{text(item.status)} · {text(item.balance)} {text(item.currency)}</option>)}</select></label>
+    <label>Créance à affecter<select name="receivable_id" required disabled={!customerId || !receivables.length}><option value="">{customerId ? "Sélectionner une créance" : "Sélectionnez d’abord un abonné"}</option>{receivables.map((item) => <option key={text(item.receivable_id ?? item.id)} value={text(item.receivable_id ?? item.id)}>{text(item.status)} · {formatMoney(item.balance, item.currency)}</option>)}</select></label>
     <div className="form-actions span-two"><Button primary type="submit">Enregistrer le règlement</Button></div>
   </form>;
 }
 
 function CustomerStatement({ customerId, statement }: { customerId: string; statement: Row | null }) {
   return <Panel title={`Situation du compte · ${customerId}`}>
-    {statement ? <div className="columns"><div><p><strong>Factures</strong></p><Table headers={["Référence", "Période", "État"]} empty="Aucune facture dans le relevé." data={rows<Row>(statement.invoices).map((item) => [text(item.invoice_number ?? item.invoice_id), text(item.period ?? item.billing_period), text(item.status)])} /></div><div><p><strong>Créances</strong></p><Table headers={["Référence", "Solde", "Situation"]} empty="Aucune créance dans le relevé." data={rows<Row>(statement.receivables).map((item) => [text(item.id ?? item.receivable_id), `${text(item.balance)} ${text(item.currency)}`, text(item.status)])} /></div></div> : <div className="empty-state">Chargement du relevé abonné…</div>}
+    {statement ? <div className="columns"><div><p><strong>Factures</strong></p><Table headers={["Référence", "Période", "État"]} empty="Aucune facture dans le relevé." data={rows<Row>(statement.invoices).map((item) => [text(item.invoice_number ?? item.invoice_id), text(item.period ?? item.billing_period), text(item.status)])} /></div><div><p><strong>Créances</strong></p><Table headers={["Référence", "Solde", "Situation"]} empty="Aucune créance dans le relevé." data={rows<Row>(statement.receivables).map((item) => [text(item.id ?? item.receivable_id), formatMoney(item.balance, item.currency), text(item.status)])} /></div></div> : <div className="empty-state">Chargement du relevé abonné…</div>}
   </Panel>;
 }
 
