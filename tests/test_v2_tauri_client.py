@@ -133,3 +133,10 @@ def test_tauri_bridge_fails_closed_and_offloads_local_http() -> None:
     assert "https://monarquegrp.com" in native
     assert "open_monarque_site" in native
     assert "open_monarque_site" in (APP / "src" / "api.ts").read_text(encoding="utf-8")
+
+
+def test_tauri_windows_bundle_creates_sidecar_resource_directory() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "sel-v2-tauri-windows.yml").read_text(encoding="utf-8")
+
+    assert "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination)" in workflow
+    assert "Copy-Item -LiteralPath $source -Destination $destination -Force" in workflow

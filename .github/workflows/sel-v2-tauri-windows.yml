@@ -53,6 +53,7 @@ jobs:
           $source = Join-Path $PWD 'v2/target/x86_64-pc-windows-msvc/release/sel-local.exe'
           $destination = Join-Path $PWD 'v2/windows-app/src-tauri/resources/sel-local.exe'
           if (-not (Test-Path -LiteralPath $source)) { throw 'The Windows sel-local binary was not produced.' }
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
           Copy-Item -LiteralPath $source -Destination $destination -Force
 
       - name: Build the React client
