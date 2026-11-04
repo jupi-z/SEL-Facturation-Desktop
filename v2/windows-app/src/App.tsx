@@ -543,33 +543,34 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   const [meters, setMeters] = useState<Row[]>([]);
   const [meterId, setMeterId] = useState("");
   const [readings, setReadings] = useState<Row[]>([]);
+  const [previousIndex, setPreviousIndex] = useState("");
   const [correctingReading, setCorrectingReading] = useState<Row | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); return; }
+    if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setPreviousIndex(""); return; }
     let active = true;
     localRequest<unknown>(`/local/v1/customers/${encodeURIComponent(customerId)}/service-accounts`).then((result) => {
-      if (active) { setAccounts(rows(result)); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); }
+      if (active) { setAccounts(rows(result)); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setPreviousIndex(""); }
     }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
     return () => { active = false; };
   }, [customerId]);
 
   useEffect(() => {
-    if (!accountId) { setMeters([]); setMeterId(""); setReadings([]); return; }
+    if (!accountId) { setMeters([]); setMeterId(""); setReadings([]); setPreviousIndex(""); return; }
     let active = true;
     localRequest<unknown>(`/local/v1/service-accounts/${encodeURIComponent(accountId)}/meters`).then((result) => {
-      if (active) { setMeters(rows(result).filter((meter) => meter.active !== false)); setMeterId(""); setReadings([]); }
+      if (active) { setMeters(rows(result).filter((meter) => meter.active !== false)); setMeterId(""); setReadings([]); setPreviousIndex(""); }
     }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
     return () => { active = false; };
   }, [accountId]);
 
   useEffect(() => {
-    if (!meterId) { setReadings([]); return; }
+    if (!meterId) { setReadings([]); setPreviousIndex(""); return; }
     let active = true;
     localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`).then((result) => {
-      if (active) setReadings(rows(result));
+      if (active) { const nextReadings = rows(result); setReadings(nextReadings); setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : ""); }
     }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
     return () => { active = false; };
   }, [meterId]);
@@ -585,7 +586,9 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
         period: form.get("period"), previous: form.get("previous"), current: form.get("current"), source: "MANUAL",
       });
       const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
-      setReadings(rows(result));
+      const nextReadings = rows(result);
+      setReadings(nextReadings);
+      setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : "");
       formElement.reset();
       setMessage("Relevé enregistré sur ce poste.");
     } catch (error) { setMessage(humanError(error)); }
@@ -602,7 +605,8 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
         current: form.get("current"), source: "MANUAL", reason: form.get("reason"),
       });
       const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
-      setReadings(rows(result)); setCorrectingReading(null);
+      const nextReadings = rows(result);
+      setReadings(nextReadings); setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : ""); setCorrectingReading(null);
       setMessage("Correction ajoutée à l’historique. Le relevé initial est conservé.");
     } catch (error) { setMessage(humanError(error)); }
     finally { setSaving(false); }
@@ -620,7 +624,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
       </div>
       {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void saveReading(event)}>
         <label>Période<input name="period" type="month" required /></label>
-        <label>Index précédent<input name="previous" type="number" min="0" step="0.001" required /></label>
+        <label>Index précédent<input name="previous" type="number" min="0" step="0.001" value={previousIndex} onChange={(event) => setPreviousIndex(event.target.value)} required /></label>
         <label>Nouvel index<input name="current" type="number" min="0" step="0.001" required /></label>
         <p className="help">L’index doit respecter l’historique du compteur. La quantité consommée sera retournée par le moteur métier.</p>
         <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer le relevé"}</Button></div>

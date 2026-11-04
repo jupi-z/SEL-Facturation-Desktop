@@ -209,6 +209,15 @@ def test_payment_workspace_uses_two_desktop_columns_and_stacks_below_breakpoint(
     assert ".payment-layout { grid-template-columns: 1fr; }" in css
 
 
+def test_new_meter_reading_prefills_last_index_without_recalculating_consumption() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    readings_view = app.split("function MeterReadingsView(", 1)[1].split("\nfunction CustomerStatement(", 1)[0]
+
+    assert 'setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : "")' in readings_view
+    assert 'value={previousIndex}' in readings_view
+    assert 'setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : "")' in readings_view
+
+
 def test_visual_review_captures_solar_payment_allocation() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
