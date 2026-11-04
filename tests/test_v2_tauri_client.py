@@ -327,21 +327,35 @@ def test_solar_payment_form_clears_stale_schedules_and_fails_closed() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     payment_form = app.split("function PaymentForm(", 1)[1].split("\n}\n\nfunction MeterReadingsView", 1)[0]
 
-    assert "setScheduleRows([]); setScheduleId(\"\"); setScheduleCurrency(\"\")" in payment_form
-    assert "setScheduleLoading(true)" in payment_form
-    assert "setScheduleError(humanError(error))" in payment_form
-    assert "disabled={scheduleLoading || Boolean(scheduleError)" in payment_form
-    assert "schedule_id: form.get(\"schedule_id\") || null" in payment_form
+    assert "if (!schedulePlanKey) { setPlanSchedules({}); return; }" in payment_form
+    assert "loading: true, error: \"\"" in payment_form
+    assert "error: humanError(error)" in payment_form
+    assert "disabled={!planState || planState.loading || Boolean(planState.error)}" in payment_form
+    assert "schedule_id: allocation.scheduleId || null" in payment_form
 
 
 def test_payment_form_clears_previous_customer_receivables_while_loading() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     payment_form = app.split("function PaymentForm(", 1)[1].split("\n}\n\nfunction MeterReadingsView", 1)[0]
 
-    assert "setReceivables([]); setReceivableId(\"\"); setReceivablesLoading(true)" in payment_form
+    assert "setReceivables([]); setReceivablesLoading(true); setReceivablesError(\"\")" in payment_form
     assert "disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}" in payment_form
-    assert "const paymentBlocked = receivablesLoading || Boolean(receivablesError) || !receivableId" in payment_form
+    assert "const paymentBlocked = receivablesLoading || Boolean(receivablesError) || !allocationsReady" in payment_form
     assert "disabled={paymentBlocked}" in payment_form
+
+
+def test_payment_form_can_allocate_one_receipt_to_multiple_real_receivables() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    payment_form = app.split("function PaymentForm(", 1)[1].split("\n}\n\nfunction MeterReadingsView", 1)[0]
+
+    assert "allocationRows" in payment_form
+    assert "Ajouter une créance" in payment_form
+    assert "allocations: allocationRows.map" in payment_form
+    assert "installmentPlanByReceivable" in payment_form
+    assert "Toutes les créances d’un même règlement doivent utiliser la même devise." in payment_form
+    review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+    assert "payments-solar-1440x900.png" in review
+    assert "page.locator('.allocation-card select').nth(2).select_option" in review
 
 
 def test_windows_typescript_target_does_not_use_es2022_array_at() -> None:
@@ -402,10 +416,10 @@ def test_payment_workspace_uses_two_desktop_columns_and_stacks_below_breakpoint(
 
     assert 'className="payment-workspace"' in app
     assert 'title="Récapitulatif"' in app
-    assert 'formatMoney(selectedReceivable.balance, selectedReceivable.currency)' in app
+    assert 'formatMoney(item.balance, item.currency)' in app
     assert 'formatMoney(receivedAmount, currency)' in app
     payment_form = app.split("function PaymentForm(", 1)[1].split("\nfunction MeterReadingsView(", 1)[0]
-    assert 'label>Abonné<select name="customer_id" value={customerId}' in payment_form
+    assert 'label className="span-two">Abonné<select name="customer_id" value={customerId}' in payment_form
     assert 'name="occurred_at" type="datetime-local"' in payment_form
     assert 'new Date(String(form.get("occurred_at"))).toISOString()' in payment_form
     assert 'label>Référence interne<input value="Générée par Rust à l’enregistrement" readOnly' in payment_form

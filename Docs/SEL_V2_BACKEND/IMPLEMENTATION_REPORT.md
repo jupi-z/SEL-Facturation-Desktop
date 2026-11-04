@@ -821,3 +821,17 @@ Cette tranche complète les lacunes de visibilité et de contrôle identifiées 
 Les vérifications automatiques de ce commit sont encore `IN_PROGRESS` jusqu’à la fin des workflows déclenchés par son SHA exact. Le dossier utilisateur non suivi `artifacts/` est préservé et exclu des changements livrés.
 
 **Progression Phase 7 : 97 % d’implémentation locale ; statut `IN_PROGRESS`.** La liste consultable des incidents, l’audit central en lecture seule et les actions de révocation sont codés et disposent de tests/contrats. Le pourcentage ne signifie pas validation CI du présent commit, recette Windows sur matériel réel, acceptation SEL ni déploiement. Les affectations de paiement multiples restent une lacune d’interface ; les PDF/reçus relèvent de la phase 8.
+
+### Phase 7 — affectations de paiement multiples dans le client (4 novembre 2026)
+
+Le formulaire d’encaissement prend maintenant en charge plusieurs créances distinctes au sein d’un même règlement. Chaque ligne est sélectionnée depuis le relevé réel du client et reçoit son montant ; les créances solaires exigent toujours une échéance ouverte. Le client bloque les doublons de créance et les mélanges de devise. L’API locale/Rust reste responsable de la validation atomique des montants, soldes, devise et échéance. Le scénario visuel synthétique couvre une créance ordinaire et une échéance solaire dans le même paiement ; il ne constitue pas un encaissement réel.
+
+| Vérification | Statut | Preuve / limite |
+|---|---|---|
+| Formulaire multi-affectation et contrôles de saisie | IN_PROGRESS — implémenté | `v2/windows-app/src/App.tsx`, CSS dans `v2/windows-app/src/App.css`; requête envoyée avec la liste d’affectations `allocations`. |
+| Captures et parcours visuel multi-affectation | IN_PROGRESS — implémenté, CI requise | `v2/windows-app/scripts/visual_review.py` construit le scénario créance ordinaire + échéance solaire et capture `payments-solar-1440x900.png`. |
+| Tests client ciblés | PASS local | `python -m pytest tests/test_v2_tauri_client.py -q` : **48 passed**. `python -m py_compile` des scripts de revue/tests : PASS ; `git diff --check` : PASS. |
+| CI du nouveau code | IN_PROGRESS | Le dernier code validé par CI reste le commit `edd22c06bf84a9ab1f530adaaa34cd181a69b89b`. Les workflows du nouveau formulaire et de la capture multi-affectation doivent être exécutés avant de mettre leur statut à `PASS`. |
+| Recette de paiement sur poste SEL | BLOCKED_EXTERNAL | Aucun paiement n’a été créé sur les données ou comptes SEL. Le scénario visuel CI est fictif ; une recette opérateur reste nécessaire. |
+
+**Progression Phase 7 : 98 % de code local ; statut `IN_PROGRESS`.** La capacité d’affecter plusieurs créances dans l’interface est ajoutée, mais sa compilation TypeScript/Tauri et sa capture multi-affectation sont en attente de CI sur Windows. Les reçus/PDF relèvent de la phase 8 ; installation, DPI, compte SEL et validation métier restent à effectuer sur matériel représentatif.
