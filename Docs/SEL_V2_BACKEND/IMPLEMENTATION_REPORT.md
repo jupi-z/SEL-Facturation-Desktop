@@ -709,3 +709,27 @@ L'audit de conception a porté sur la page Figma « Windows / Core operations »
 Les valeurs de démonstration visibles sur les écrans Figma ne sont pas reprises dans l'application. Le bandeau d'état indique uniquement l'état du service local et le nombre d'opérations en attente ; il ne prétend pas que le serveur est en ligne ou que les données sont synchronisées. Cette première tranche ne clôt pas la phase 7 : les écrans métier détaillés, le catalogue/contrat solaire, les créances et l'administration restent à intégrer.
 
 **Progression Phase 7 : 27 %** (audit Figma des écrans Core operations et shell/navigation validés par CI; aucun parcours Windows n'est déclaré validé visuellement). Les écrans détaillés, tests de comportement et recette visuelle restent nécessaires.
+
+### Phase 7 — mise à jour d’architecture et tranche Tauri/React (4 novembre 2026)
+
+La section précédente est conservée comme état historique de la tranche pywebview. Conformément au plan approuvé de reconstruction du frontend, le travail courant se fait dans `v2/windows-app/` en Tauri 2 + React/TypeScript ; l’ancienne interface n’est pas reprise dans la nouvelle application. Le frame Figma `7:2` a été relu pendant cette tranche. La grille 1440×900, sidebar 250 px, barre haute 76 px, couleurs de marque, Geist locale, trait supérieur jaune, navigation et marque sont repris dans les styles React/CSS. Les carrés d’icône reprennent les composants de navigation visibles dans la maquette au lieu d’icônes décoratives d’un autre style.
+
+| Critère | Statut au commit `03d0f9d` | Preuve / limite |
+|---|---|---|
+| Nouveau shell desktop Tauri/React, sans dépendance runtime distante | IN_PROGRESS | `v2/windows-app/`; contrat et assets locaux couverts par `tests/test_v2_tauri_client.py`. |
+| Correspondance des fondations avec Figma 7:2 | PARTIAL | Tokens, dimensions principales, logo, typographie, navigation, rail jaune et activité récente implémentés. Aucun screenshot comparatif de l’application compilée n’est encore produit. |
+| Tableau de bord | PARTIAL | Compteurs issus des données locales et tableau récent combinant factures, paiements et ventes ; aucune donnée de démonstration ou agrégation financière inventée. Le KPI financier Figma nécessiterait un agrégat backend dédié. |
+| Abonnés | PARTIAL | Liste/recherche, création, fiche, relevé et modification avec If-Match vers l’API locale. Champs absents du contrat Rust ne sont pas prétendus modifiables. |
+| Factures eau + électricité | PARTIAL | Prévisualisation Rust avant émission, confirmation distincte, historique et lecture du détail sans bouton de réémission. Le choix de la révision tarifaire est encore saisi manuellement ; UX/API du catalogue de tarifs à compléter. |
+| Encaissements et créances | PARTIAL | Saisie/affectation à une créance proposée par l’API et consultation des soldes ; parcours d’affectations multiples, annulations et reçus d’interface incomplets. |
+| Vente solaire | PARTIAL | Catalogue local actif/approuvé, devis Rust, confirmation explicite et création de vente. Contrats/échéanciers et administration visuelle du catalogue restent à intégrer. |
+| Compteurs, relevés, corrections | NOT_STARTED (UI) | Les routes locales existent, mais aucun parcours de saisie/consultation des compteurs n’est encore livré dans React. |
+| Synchronisation | PARTIAL | État et demande de synchronisation manuelle reliés à l’agent ; liste détaillée des événements/conflits et résolution restent à construire. |
+| Administration | BLOCKED_BY_API_GAP | L’écran signale explicitement les opérations non exposées au client local ; aucun faux contrôle actif. |
+| Bridge Tauri et sidecar Windows | IN_PROGRESS | IPC restreint aux routes locales, secret conservé dans Rust, démarrage fail-closed et packaging de `sel-local.exe`. Le workflow a révélé un dossier de ressources absent, corrigé au commit `03d0f9d`; le nouveau run est encore en cours. |
+| CI sur le dernier commit | IN_PROGRESS | À `03d0f9d`, les cinq workflows GitHub sont lancés. Au commit précédent `c20f533`, backend, paquet serveur et candidat Windows V1 ont réussi ; le workflow Tauri a échoué lors de la copie vers un dossier inexistant. Le correctif crée ce dossier et doit être confirmé par le run courant. |
+| Recette visuelle Windows | BLOCKED_EXTERNAL | Aucun lancement/capture de l’application compilée ou test d’installation sur le poste SEL. Les captures/mesures prévues doivent être faites sur un runner ou un poste représentatif ; l’ordinateur de développement est préservé de compilations locales à cause de sa surchauffe. |
+
+Les commits de cette tranche sont `fa051de` (fondation Tauri et premières routes catalogue), `68ecf50` (corrections CI), `0e43fa4` (fiches client et détail facture), `c20f533` (activité récente alignée sur Figma) et `03d0f9d` (dossier de ressources sidecar). Le statut de la génération du MSI/NSIS Tauri reste non confirmé tant que le workflow du dernier SHA n’est pas vert.
+
+**Progression Phase 7 : 34 % d’implémentation estimée, non équivalente à une recette acceptée.** Le shell et les premiers parcours ont été développés, mais la CI Tauri courante, l’intégration des autres écrans Figma, les captures comparatives et la validation Windows restent à accomplir. Ce pourcentage ne signifie ni livraison ni validation sur poste SEL.
