@@ -21,8 +21,8 @@ async fn seed_local_catalog(store: &LocalStore) {
     sqlx::query(
         "INSERT INTO tariff_versions
          (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
-         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', '2026-01-01', 'convergence-v1', 'APPROVED'),
-                ($2, 'WATER', 'RESIDENTIAL', 'M3', '0.50', 'USD', '2026-01-01', 'convergence-v1', 'APPROVED')",
+         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', '2000-01-01', 'convergence-v1', 'APPROVED'),
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', '0.50', 'USD', '2000-01-01', 'convergence-v1', 'APPROVED')",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
@@ -32,8 +32,8 @@ async fn seed_local_catalog(store: &LocalStore) {
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', '2026-01-01', 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', '2026-01-01', 'APPROVED')",
+         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', '2000-01-01', 'APPROVED'),
+                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', '2000-01-01', 'APPROVED')",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
@@ -56,8 +56,8 @@ async fn seed_central_catalog(store: &CentralStore) {
     sqlx::query(
         "INSERT INTO tariff_versions
          (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
-         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', 0.095, 'USD', '2026-01-01', 'convergence-v1', 'APPROVED'),
-                ($2, 'WATER', 'RESIDENTIAL', 'M3', 0.50, 'USD', '2026-01-01', 'convergence-v1', 'APPROVED')",
+         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', 0.095, 'USD', '2000-01-01', 'convergence-v1', 'APPROVED'),
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', 0.50, 'USD', '2000-01-01', 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())
@@ -67,8 +67,8 @@ async fn seed_central_catalog(store: &CentralStore) {
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', '2026-01-01', 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', '2026-01-01', 'APPROVED')",
+         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', '2000-01-01', 'APPROVED'),
+                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', '2000-01-01', 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())
@@ -183,7 +183,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     let customer = seed_local_customer(&first).await;
     let invoice_request = json!({
         "customer_id": customer.id,
-        "billing_period": "2026-11",
+        "billing_period": "2000-11",
         "electricity": {"quantity":"100","unit":"KWH"},
         "water": {"quantity":"0","unit":"M3"},
         "water_zero_confirmed": true,

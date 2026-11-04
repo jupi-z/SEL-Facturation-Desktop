@@ -8,6 +8,7 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .and_then(serde_yaml::Value::as_mapping)
         .unwrap();
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices/{id}/document-data")));
+    assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices")));
     let customer_list = paths
         .get(serde_yaml::Value::from("/v1/customers"))
         .and_then(|path| path.get("get"))

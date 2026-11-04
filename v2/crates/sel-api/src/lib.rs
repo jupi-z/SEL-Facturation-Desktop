@@ -317,6 +317,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/billing/utility/preview", post(preview_utility))
         .route("/v1/billing/utility/issue", post(issue_utility))
+        .route("/v1/invoices", get(list_invoices))
         .route("/v1/invoices/:id", get(get_invoice))
         .route("/v1/invoices/:id/document-data", get(get_document_data))
         .route("/v1/invoices/:id/void", post(void_invoice))
@@ -438,6 +439,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/catalog/fx-rates"
                     | "/v1/catalog/snapshot"
                     | "/v1/customers"
+                    | "/v1/invoices"
                     | "/v1/sync/pull"
                     | "/v1/sync/status"
                     | "/v1/config/versions"
@@ -1537,6 +1539,73 @@ struct CustomerListQuery {
     limit: Option<usize>,
     status: Option<String>,
     q: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct InvoiceListQuery {
+    customer_id: Option<Uuid>,
+    period: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn list_invoices(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<InvoiceListQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_auth(&headers)?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    let period = query
+        .period
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if period.is_some_and(|value| {
+        chrono::NaiveDate::parse_from_str(&format!("{value}-01"), "%Y-%m-%d").is_err()
+    }) {
+        return Err(ApiError::unprocessable(
+            "BILLING_PERIOD_INVALID",
+            "period must use YYYY-MM format",
+        ));
+    }
+    if let Some(store) = &state.central {
+        return store
+            .list_invoice_responses(query.customer_id, period, limit as i64)
+            .await
+            .map(Json)
+            .map_err(storage_error);
+    }
+    let mut invoices: Vec<_> = state
+        .invoices
+        .read()
+        .await
+        .iter()
+        .filter(|(_, invoice)| {
+            query
+                .customer_id
+                .is_none_or(|customer_id| invoice.customer_id == customer_id)
+                && period.is_none_or(|period| invoice.period == period)
+        })
+        .map(|(id, invoice)| {
+            let mut value = serde_json::to_value(&invoice.response).map_err(ApiError::internal)?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "period".into(),
+                    serde_json::Value::String(invoice.period.clone()),
+                );
+                object.insert(
+                    "invoice_id".into(),
+                    serde_json::Value::String(id.to_string()),
+                );
+            }
+            Ok((*id, value))
+        })
+        .collect::<Result<_, ApiError>>()?;
+    invoices.sort_by_key(|(id, _)| *id);
+    invoices.truncate(limit);
+    Ok(Json(
+        invoices.into_iter().map(|(_, invoice)| invoice).collect(),
+    ))
 }
 
 async fn list_customers(

@@ -93,6 +93,28 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(invoice["lines"][1]["quantity"], "0");
     assert_eq!(invoice["total"], "11.02");
 
+    let history = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/invoices?customer_id={}&period=2026-11&limit=10",
+                    customer["id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(history.status(), StatusCode::OK);
+    let history = json_body(history).await;
+    assert_eq!(history.as_array().unwrap().len(), 1);
+    assert_eq!(history[0]["invoice_id"], invoice["invoice_id"]);
+    assert_eq!(history[0]["status"], "CENTRAL_ACCEPTED");
+    assert_eq!(history[0]["period"], "2026-11");
+    assert!(history[0]["issued_at"].as_str().is_some());
+
     let retry = app.clone().oneshot(issue_request()).await.unwrap();
     assert_eq!(retry.status(), StatusCode::OK);
     assert_eq!(json_body(retry).await, invoice);

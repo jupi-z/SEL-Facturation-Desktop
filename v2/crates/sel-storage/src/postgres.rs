@@ -3030,6 +3030,59 @@ impl CentralStore {
         .transpose()
     }
 
+    pub async fn list_invoice_responses(
+        &self,
+        customer_id: Option<Uuid>,
+        period: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT i.id, i.invoice_number, i.period, i.issued_at, i.status,
+                    i.immutable_snapshot
+             FROM invoices i
+             JOIN customers c ON c.id = i.customer_id
+             WHERE c.organization_id = $1
+               AND ($2::uuid IS NULL OR i.customer_id = $2)
+               AND ($3::text IS NULL OR i.period = $3)
+             ORDER BY i.issued_at DESC, i.id DESC
+             LIMIT $4",
+        )
+        .bind(self.organization_id)
+        .bind(customer_id)
+        .bind(period)
+        .bind(limit.clamp(1, 100))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let snapshot: serde_json::Value = row.try_get("immutable_snapshot")?;
+                let document = snapshot.get("v2_document").cloned().unwrap_or(snapshot);
+                let mut response: UtilityBillingResponse = serde_json::from_value(document)
+                    .map_err(|error| {
+                        sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
+                    })?;
+                response.status = row.try_get("status")?;
+                response.invoice_number = row.try_get("invoice_number")?;
+                let mut value = serde_json::to_value(response).map_err(|error| {
+                    sqlx::Error::Protocol(format!("invalid invoice JSON: {error}"))
+                })?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    sqlx::Error::Protocol("invoice response is not a JSON object".into())
+                })?;
+                object.insert(
+                    "period".into(),
+                    serde_json::Value::from(row.try_get::<Option<String>, _>("period")?),
+                );
+                let issued_at: DateTime<Utc> = row.try_get("issued_at")?;
+                object.insert(
+                    "issued_at".into(),
+                    serde_json::Value::String(issued_at.to_rfc3339()),
+                );
+                Ok(value)
+            })
+            .collect()
+    }
+
     pub async fn get_receivable_summary(
         &self,
         id: Uuid,
