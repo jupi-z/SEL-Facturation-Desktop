@@ -63,6 +63,8 @@ def test_meter_reading_screen_uses_local_routes_and_displays_rust_measurements()
     assert 'measured_quantity' in app
     assert 'source: "MANUAL"' in app
     assert 'Number(form.get("previous"))' not in app
+    assert '/meter-readings/${encodeURIComponent(text(correctingReading.id))}/corrections' in app
+    assert "Le relevé initial est conservé." in app
     assert '"readings", "Relevés"' in visual_review
     assert '"DEMO-KWH-001"' in visual_review
 

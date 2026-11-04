@@ -489,6 +489,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   const [meters, setMeters] = useState<Row[]>([]);
   const [meterId, setMeterId] = useState("");
   const [readings, setReadings] = useState<Row[]>([]);
+  const [correctingReading, setCorrectingReading] = useState<Row | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -537,6 +538,24 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
     finally { setSaving(false); }
   }
 
+  async function correctReading(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!correctingReading) return;
+    const form = new FormData(event.currentTarget);
+    setSaving(true); setMessage("");
+    try {
+      await localRequest(`/local/v1/meter-readings/${encodeURIComponent(text(correctingReading.id))}/corrections`, "POST", {
+        current: form.get("current"), source: "MANUAL", reason: form.get("reason"),
+      });
+      const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
+      setReadings(rows(result)); setCorrectingReading(null);
+      setMessage("Correction ajoutée à l’historique. Le relevé initial est conservé.");
+    } catch (error) { setMessage(humanError(error)); }
+    finally { setSaving(false); }
+  }
+
+  const latestReading = readings.at(-1) ?? null;
+
   return <>
     <PageHeading eyebrow="CORE / RELEVÉS" title="Relevés de compteurs" description="Consultez l’historique et enregistrez les index. La consommation mesurée est calculée et validée par Rust." />
     <Panel title="Nouveau relevé">
@@ -557,7 +576,13 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
       {customerId && !accounts.length && <div className="empty-state">Aucun compte de service n’est enregistré pour cet abonné sur ce poste.</div>}
       {accountId && !meters.length && <div className="empty-state">Aucun compteur actif n’est associé à ce service.</div>}
     </Panel>
-    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), `${text(reading.previous)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.current)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.measured_quantity)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—"])} /></Panel>}
+    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), `${text(reading.previous)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.current)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.measured_quantity)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
+    {correctingReading && <Panel title={`Correction du relevé · ${text(correctingReading.period)}`}><form className="form-grid" onSubmit={(event) => void correctReading(event)}>
+      <label>Nouvel index corrigé<input name="current" type="number" min="0" step="0.001" defaultValue={text(correctingReading.current, "")} required /></label>
+      <label className="span-two">Motif de correction<input name="reason" maxLength={500} required /></label>
+      <p className="help span-two">La correction crée une nouvelle entrée d’audit et ne supprime pas le relevé initial.</p>
+      <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer la correction"}</Button><Button type="button" onClick={() => setCorrectingReading(null)}>Annuler</Button></div>
+    </form></Panel>}
   </>;
 }
 
