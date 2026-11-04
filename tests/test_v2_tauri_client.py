@@ -201,6 +201,14 @@ def test_financial_and_sync_statuses_are_shown_in_french() -> None:
     assert 'OVERDUE: "En retard"' in app
 
 
+def test_payment_workspace_uses_two_desktop_columns_and_stacks_below_breakpoint() -> None:
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+
+    assert ".payment-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);" in css
+    assert "@media (max-width: 1280px)" in css
+    assert ".payment-layout { grid-template-columns: 1fr; }" in css
+
+
 def test_visual_review_captures_solar_payment_allocation() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 

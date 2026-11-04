@@ -69,7 +69,7 @@ button { cursor: pointer; }
 .metric-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .columns { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr); gap: 18px; }
 .customer-layout { grid-template-columns: minmax(0, 1.35fr) minmax(330px, .85fr); align-items: start; }
-.payment-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
+.payment-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); align-items: start; gap: 18px; }
 .panel { min-width: 0; margin-bottom: 18px; padding: 20px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 11px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .panel-heading h2 { margin: 0; color: var(--navy); font-size: 14px; font-weight: 720; }
@@ -147,7 +147,7 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
   .topbar { margin-right: -28px; margin-left: -28px; padding-right: 28px; padding-left: 28px; }
   .sidebar { flex-basis: 230px; width: 230px; }
   .metric { padding-right: 14px; padding-left: 14px; }
-  .columns, .customer-layout { grid-template-columns: 1fr; }
+  .columns, .customer-layout, .payment-layout { grid-template-columns: 1fr; }
   .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
