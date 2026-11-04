@@ -312,6 +312,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
             "/local/v1/solar/sales",
             get(list_solar_sales).post(create_solar_sale),
         )
+        .route("/local/v1/solar/products", get(list_solar_products))
         .route("/local/v1/solar/quotes", post(create_solar_quote))
         .route("/local/v1/solar/contracts", post(create_solar_contract))
         .route(
@@ -1059,6 +1060,17 @@ async fn list_solar_sales(
             .await
             .map_err(internal_error)?,
     ))
+}
+
+async fn list_solar_products(
+    State(state): State<LocalAppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let products = state
+        .store
+        .list_active_solar_products()
+        .await
+        .map_err(storage_error)?;
+    Ok(Json(serde_json::Value::Array(products)))
 }
 
 async fn create_solar_quote(

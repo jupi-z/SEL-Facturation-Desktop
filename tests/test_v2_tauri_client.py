@@ -59,3 +59,30 @@ def test_v2_windows_client_has_local_brand_assets_and_no_remote_runtime_assets()
     assert "https://" not in html
     assert "https://" not in css
     assert "prefers-reduced-motion" in css
+
+
+def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    local_api = (ROOT / "v2" / "crates" / "sel-local" / "src" / "lib.rs").read_text(encoding="utf-8")
+    storage = (ROOT / "v2" / "crates" / "sel-storage" / "src" / "sqlite.rs").read_text(encoding="utf-8")
+
+    assert '"/local/v1/solar/products"' in local_api
+    assert "list_active_solar_products" in storage
+    assert '"/local/v1/solar/products"' in app
+    assert '"/local/v1/solar/quotes"' in app
+    assert "Vérifier le devis" in app
+    assert "principal: result.principal" in app
+    assert 'name="principal"' not in app
+    assert "innerHTML" not in app
+    assert "<NavIcon" in app
+
+
+def test_tauri_bridge_fails_closed_and_offloads_local_http() -> None:
+    native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+
+    assert "start_agent(app.handle(), &data_dir).ok()" not in native
+    assert "spawn_blocking" in native
+    assert "env_clear()" in native
+    assert "https://monarquegrp.com" in native
+    assert "open_monarque_site" in native
+    assert "open_monarque_site" in (APP / "src" / "api.ts").read_text(encoding="utf-8")

@@ -1889,6 +1889,43 @@ impl LocalStore {
             .collect()
     }
 
+    /// Returns only currently applicable, approved solar products from the
+    /// last verified catalog snapshot. Prices remain decimal strings at the
+    /// API boundary and are never computed by the desktop client.
+    pub async fn list_active_solar_products(
+        &self,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, sku, label, price_reference, currency,
+                    effective_from, effective_to, approval_ref
+             FROM products
+             WHERE product_type = 'SOLAR_KIT'
+               AND active = 1
+               AND status = 'APPROVED'
+               AND effective_from <= date('now')
+               AND (effective_to IS NULL OR effective_to >= date('now'))
+             ORDER BY sku, effective_from DESC, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(json!({
+                    "id": row.try_get::<String, _>("id")?,
+                    "sku": row.try_get::<String, _>("sku")?,
+                    "product_type": "SOLAR_KIT",
+                    "label": row.try_get::<String, _>("label")?,
+                    "price_reference": row.try_get::<String, _>("price_reference")?,
+                    "currency": row.try_get::<String, _>("currency")?,
+                    "effective_from": row.try_get::<String, _>("effective_from")?,
+                    "effective_to": row.try_get::<Option<String>, _>("effective_to")?,
+                    "approval_ref": row.try_get::<Option<String>, _>("approval_ref")?,
+                    "status": "APPROVED"
+                }))
+            })
+            .collect()
+    }
+
     pub async fn allocate_payment(
         &self,
         payment_id: Uuid,
