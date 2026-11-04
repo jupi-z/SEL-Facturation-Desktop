@@ -772,3 +772,150 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
     assert_eq!(correction.status(), axum::http::StatusCode::CONFLICT);
     let _ = std::fs::remove_file(path);
 }
+
+#[tokio::test]
+async fn service_account_contract_can_be_updated_with_revision_control_offline() {
+    let path = std::env::temp_dir().join(format!(
+        "sel-v2-service-account-update-{}.sqlite",
+        Uuid::new_v4()
+    ));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
+    let app = router_with_store(store.clone());
+
+    let customer = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/local/v1/customers")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"customer_code":"SERVICE-UPDATE-1","legal_name":"Test Client"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(customer.status(), axum::http::StatusCode::CREATED);
+    let customer = json_body(customer).await;
+    let account = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/customers/{}/service-accounts",
+                    customer["id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "service_code":"ELECTRICITY",
+                        "contract_ref":"CONTRACT-OLD",
+                        "connection_status":"CONNECTED",
+                        "activated_at":"2026-01-01"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(account.status(), axum::http::StatusCode::CREATED);
+    let account = json_body(account).await;
+    let account_id = account["id"].as_str().unwrap();
+
+    let update = || {
+        Request::builder()
+            .method("PATCH")
+            .uri(format!("/local/v1/service-accounts/{account_id}"))
+            .header("if-match", "\"1\"")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "contract_ref":"CONTRACT-NEW",
+                    "connection_status":"NOT_CONNECTED"
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    };
+    let updated = app.clone().oneshot(update()).await.unwrap();
+    assert_eq!(updated.status(), axum::http::StatusCode::OK);
+    let updated = json_body(updated).await;
+    assert_eq!(updated["contract_ref"], "CONTRACT-NEW");
+    assert_eq!(updated["connection_status"], "NOT_CONNECTED");
+    assert_eq!(updated["revision"], 2);
+
+    let stale = app.clone().oneshot(update()).await.unwrap();
+    assert_eq!(stale.status(), axum::http::StatusCode::CONFLICT);
+    let empty_patch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/local/v1/service-accounts/{account_id}"))
+                .header("if-match", "\"2\"")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        empty_patch.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let immutable_field_patch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/local/v1/service-accounts/{account_id}"))
+                .header("if-match", "\"2\"")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"customer_id":"f8f2c2ca-8cfe-4b11-bb3b-e044baec6b92"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        immutable_field_patch.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/customers/{}/service-accounts",
+                    customer["id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), axum::http::StatusCode::OK);
+    let listed = json_body(listed).await;
+    assert_eq!(listed[0]["contract_ref"], "CONTRACT-NEW");
+    assert_eq!(listed[0]["revision"], 2);
+
+    let pending_update_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox o JOIN command_journal j ON j.event_id=o.event_id
+         WHERE j.command_type='SERVICE_ACCOUNT_UPDATED'",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(pending_update_count, 1);
+    let _ = std::fs::remove_file(path);
+}

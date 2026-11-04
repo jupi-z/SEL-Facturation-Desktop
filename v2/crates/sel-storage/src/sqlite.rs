@@ -7,10 +7,11 @@ use sel_contracts::{
     CreateSolarSaleRequest, CreditNoteRequest, CreditNoteSyncPayload, Customer,
     InvoiceLineResponse, InvoiceVoidSyncPayload, Meter, MeterReading, PaymentAllocationRequest,
     PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
-    RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, SolarContractSyncPayload,
-    SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult,
-    SyncPullResponse, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
-    UtilityInvoiceSyncPayload, UtilityMeterReadingRefs, CUSTOMER_PATCH_FORMAT_VERSION,
+    RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, ServiceAccountUpdateSyncPayload,
+    SolarContractSyncPayload, SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload,
+    SyncEnvelope, SyncEventResult, SyncPullResponse, UpdateCustomer, UpdateServiceAccount,
+    UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    UtilityMeterReadingRefs, CUSTOMER_PATCH_FORMAT_VERSION,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -2504,6 +2505,7 @@ impl LocalStore {
             contract_ref: input.contract_ref.clone(),
             connection_status: input.connection_status.clone(),
             activated_at: input.activated_at,
+            revision: 1,
         };
         let payload = serde_json::to_value(&account)
             .map_err(|error| LocalMeterError::InvalidPayload(error.to_string()))?;
@@ -2519,7 +2521,7 @@ impl LocalStore {
     ) -> Result<Vec<ServiceAccount>, LocalMeterError> {
         let rows = sqlx::query(
             "SELECT sa.id, sa.customer_id, sa.service_code, sa.contract_ref,
-                    sa.connection_status, sa.activated_at
+                    sa.connection_status, sa.activated_at, sa.revision
              FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
              WHERE sa.customer_id = $1 AND c.organization_id = $2
              ORDER BY sa.service_code, sa.id",
@@ -2532,6 +2534,94 @@ impl LocalStore {
             .map(service_account_from_row)
             .collect::<Result<Vec<_>, _>>()
             .map_err(LocalMeterError::from)
+    }
+
+    pub async fn get_service_account(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<ServiceAccount>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT sa.id, sa.customer_id, sa.service_code, sa.contract_ref,
+                    sa.connection_status, sa.activated_at, sa.revision
+             FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
+             WHERE sa.id = $1 AND c.organization_id = $2",
+        )
+        .bind(id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(service_account_from_row).transpose()
+    }
+
+    pub async fn update_service_account(
+        &self,
+        id: Uuid,
+        expected_revision: i64,
+        input: &UpdateServiceAccount,
+    ) -> Result<Option<(ServiceAccount, SyncEnvelope)>, LocalMeterError> {
+        if expected_revision < 1
+            || (input.contract_ref.is_missing()
+                && input.connection_status.is_none()
+                && input.activated_at.is_missing())
+            || input
+                .connection_status
+                .as_deref()
+                .is_some_and(|status| !matches!(status, "CONNECTED" | "NOT_CONNECTED" | "UNKNOWN"))
+            || matches!(&input.contract_ref, sel_contracts::PatchValue::Value(value) if value.trim().is_empty() || value.chars().count() > 128)
+        {
+            return Err(LocalMeterError::InvalidConfiguration);
+        }
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT sa.id, sa.customer_id, sa.service_code, sa.contract_ref,
+                    sa.connection_status, sa.activated_at, sa.revision
+             FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
+             WHERE sa.id = $1 AND c.organization_id = $2 AND sa.revision = $3",
+        )
+        .bind(id.to_string())
+        .bind(self.organization_id.to_string())
+        .bind(expected_revision)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else { return Ok(None) };
+        let current = service_account_from_row(&row)?;
+        let contract_ref = input.contract_ref.apply_to(current.contract_ref.clone());
+        let connection_status = input
+            .connection_status
+            .clone()
+            .unwrap_or(current.connection_status.clone());
+        let activated_at = input.activated_at.apply_to(current.activated_at);
+        let new_revision = expected_revision + 1;
+        sqlx::query(
+            "UPDATE service_accounts SET contract_ref = $1, connection_status = $2,
+             activated_at = $3, revision = $4
+             WHERE id = $5 AND revision = $6",
+        )
+        .bind(&contract_ref)
+        .bind(&connection_status)
+        .bind(activated_at.map(|date| date.to_string()))
+        .bind(new_revision)
+        .bind(id.to_string())
+        .bind(expected_revision)
+        .execute(&mut *tx)
+        .await?;
+        let account = ServiceAccount {
+            contract_ref,
+            connection_status,
+            activated_at,
+            revision: new_revision,
+            ..current
+        };
+        let payload = serde_json::to_value(ServiceAccountUpdateSyncPayload {
+            expected_revision,
+            account: account.clone(),
+        })
+        .map_err(|error| LocalMeterError::InvalidPayload(error.to_string()))?;
+        let event = local_event(self, Uuid::new_v4(), id, "SERVICE_ACCOUNT_UPDATED", payload)?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        tx.commit().await?;
+        Ok(Some((account, event)))
     }
 
     pub async fn create_meter(
@@ -3046,6 +3136,7 @@ fn service_account_from_row(row: &SqliteRow) -> Result<ServiceAccount, sqlx::Err
             .map_err(|error| {
                 sqlx::Error::Protocol(format!("invalid service activation date: {error}"))
             })?,
+        revision: row.try_get("revision")?,
     })
 }
 
@@ -3339,6 +3430,15 @@ async fn apply_service_account_change(
             "service account references a customer not yet synchronized".into(),
         ));
     }
+    let incoming_revision = change
+        .get("revision")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(revision);
+    if incoming_revision < 1 || incoming_revision != revision {
+        return Err(sqlx::Error::Protocol(
+            "service account revision is invalid".into(),
+        ));
+    }
     let contract_ref = change
         .get("contract_ref")
         .and_then(serde_json::Value::as_str);
@@ -3347,8 +3447,8 @@ async fn apply_service_account_change(
         .and_then(serde_json::Value::as_str);
     sqlx::query(
         "INSERT INTO service_accounts
-         (id, customer_id, service_code, contract_ref, connection_status, activated_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
+         (id, customer_id, service_code, contract_ref, connection_status, activated_at, revision)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT(id) DO NOTHING",
     )
     .bind(account_id)
@@ -3357,10 +3457,11 @@ async fn apply_service_account_change(
     .bind(contract_ref)
     .bind(connection_status)
     .bind(activated_at)
+    .bind(incoming_revision)
     .execute(&mut **tx)
     .await?;
-    let stored: (String, String, Option<String>, String, Option<String>) = sqlx::query_as(
-        "SELECT customer_id, service_code, contract_ref, connection_status, activated_at
+    let stored: (String, String, Option<String>, String, Option<String>, i64) = sqlx::query_as(
+        "SELECT customer_id, service_code, contract_ref, connection_status, activated_at, revision
          FROM service_accounts WHERE id = $1",
     )
     .bind(account_id)
@@ -3373,13 +3474,37 @@ async fn apply_service_account_change(
             contract_ref.map(str::to_owned),
             connection_status.to_owned(),
             activated_at.map(str::to_owned),
+            incoming_revision,
         )
     {
-        return Err(sqlx::Error::Protocol(
-            "service account id was reused with different immutable data".into(),
-        ));
+        let immutable_matches = stored.0 == customer_id && stored.1 == service_code;
+        if !immutable_matches {
+            return Err(sqlx::Error::Protocol(
+                "service account id was reused with different immutable data".into(),
+            ));
+        }
+        if stored.5 >= incoming_revision {
+            if stored.5 == incoming_revision
+                && (stored.2.as_deref() != contract_ref
+                    || stored.3 != connection_status
+                    || stored.4.as_deref() != activated_at)
+            {
+                return Err(sqlx::Error::Protocol(
+                    "service account has divergent data at the same revision".into(),
+                ));
+            }
+            return Ok(());
+        }
+        sqlx::query("UPDATE service_accounts SET contract_ref = $1, connection_status = $2, activated_at = $3, revision = $4 WHERE id = $5 AND revision = $6")
+            .bind(contract_ref)
+            .bind(connection_status)
+            .bind(activated_at)
+            .bind(incoming_revision)
+            .bind(account_id)
+            .bind(stored.5)
+            .execute(&mut **tx)
+            .await?;
     }
-    let _ = revision;
     Ok(())
 }
 

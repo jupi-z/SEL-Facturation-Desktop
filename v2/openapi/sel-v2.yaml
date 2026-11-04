@@ -543,6 +543,32 @@ paths:
         '201': { description: Meter created, content: { application/json: { schema: { $ref: '#/components/schemas/Meter' } } } }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/service-accounts/{id}:
+    get:
+      operationId: getServiceAccount
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Service account, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceAccount' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateServiceAccount
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { name: If-Match, in: header, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateServiceAccount' } } } }
+      responses:
+        '200':
+          description: Updated service account
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceAccount' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/meters/{id}/readings:
     get:
       operationId: listMeterReadings
@@ -815,12 +841,20 @@ components:
   schemas:
     ServiceAccount:
       type: object
-      required: [id, customer_id, service_code, connection_status]
+      required: [id, customer_id, service_code, connection_status, revision]
       properties:
         id: { type: string, format: uuid }
         customer_id: { type: string, format: uuid }
         service_code: { type: string, enum: [ELECTRICITY, WATER] }
         contract_ref: { type: [string, 'null'] }
+        connection_status: { type: string, enum: [CONNECTED, NOT_CONNECTED, UNKNOWN] }
+        activated_at: { type: [string, 'null'], format: date }
+        revision: { type: integer, minimum: 1 }
+    UpdateServiceAccount:
+      type: object
+      additionalProperties: false
+      properties:
+        contract_ref: { type: [string, 'null'], maxLength: 128 }
         connection_status: { type: string, enum: [CONNECTED, NOT_CONNECTED, UNKNOWN] }
         activated_at: { type: [string, 'null'], format: date }
     CreateServiceAccount:

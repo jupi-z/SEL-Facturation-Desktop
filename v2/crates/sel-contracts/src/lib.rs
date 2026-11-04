@@ -99,6 +99,8 @@ pub struct ServiceAccount {
     pub contract_ref: Option<String>,
     pub connection_status: String,
     pub activated_at: Option<NaiveDate>,
+    #[serde(default = "default_revision")]
+    pub revision: i64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -107,6 +109,27 @@ pub struct CreateServiceAccount {
     pub contract_ref: Option<String>,
     pub connection_status: String,
     pub activated_at: Option<NaiveDate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateServiceAccount {
+    #[serde(default, skip_serializing_if = "PatchValue::is_missing")]
+    pub contract_ref: PatchValue<String>,
+    pub connection_status: Option<String>,
+    #[serde(default, skip_serializing_if = "PatchValue::is_missing")]
+    pub activated_at: PatchValue<NaiveDate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceAccountUpdateSyncPayload {
+    pub expected_revision: i64,
+    pub account: ServiceAccount,
+}
+
+fn default_revision() -> i64 {
+    1
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -11,8 +11,8 @@ use sel_contracts::{
     CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest,
     CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData, InvoiceLineResponse,
     PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
-    SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, VoidInvoiceRequest,
+    SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount,
+    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_storage::{LocalMeterError, LocalSolarSaleError, LocalStore};
@@ -260,6 +260,10 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route(
             "/local/v1/customers/:id/service-accounts",
             get(list_service_accounts).post(create_service_account),
+        )
+        .route(
+            "/local/v1/service-accounts/:id",
+            get(get_service_account).patch(update_service_account),
         )
         .route(
             "/local/v1/service-accounts/:id/meters",
@@ -533,6 +537,49 @@ async fn list_service_accounts(
         .await
         .map(Json)
         .map_err(local_meter_error)
+}
+
+async fn get_service_account(
+    State(state): State<LocalAppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<sel_contracts::ServiceAccount>, (StatusCode, String)> {
+    state
+        .store
+        .get_service_account(id)
+        .await
+        .map_err(internal_error)?
+        .map(Json)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "service account not found".into()))
+}
+
+async fn update_service_account(
+    State(state): State<LocalAppState>,
+    Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<UpdateServiceAccount>,
+) -> Result<Json<sel_contracts::ServiceAccount>, (StatusCode, String)> {
+    let expected_revision = headers
+        .get("if-match")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim_matches('"').parse::<i64>().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::PRECONDITION_REQUIRED,
+                "If-Match revision is required".into(),
+            )
+        })?;
+    state
+        .store
+        .update_service_account(id, expected_revision, &input)
+        .await
+        .map_err(local_meter_error)?
+        .map(|(account, _)| Json(account))
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                "service account is missing or its revision has changed".into(),
+            )
+        })
 }
 
 async fn create_meter(

@@ -12,10 +12,10 @@ use sel_contracts::{
     CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
     CreditNoteRequest, CreditNoteSyncPayload, Customer, InvoiceVoidSyncPayload, Meter,
     MeterReading, PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
-    RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, SolarContractSyncPayload,
-    SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult,
-    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
-    UtilityMeterReadingRefs,
+    RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, ServiceAccountUpdateSyncPayload,
+    SolarContractSyncPayload, SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload,
+    SyncEnvelope, SyncEventResult, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
+    UtilityBillingResponse, UtilityInvoiceSyncPayload, UtilityMeterReadingRefs,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -425,6 +425,8 @@ pub enum MeterWriteError {
     CustomerNotFound,
     #[error("service account was not found in this organization")]
     ServiceAccountNotFound,
+    #[error("service account revision changed during the update")]
+    ServiceAccountRevisionConflict,
     #[error("meter was not found in this organization")]
     MeterNotFound,
     #[error("service code, connection status, or meter unit is invalid")]
@@ -4900,6 +4902,7 @@ impl CentralStore {
         }
         match event.command_type.as_str() {
             "SERVICE_ACCOUNT_CREATED"
+            | "SERVICE_ACCOUNT_UPDATED"
             | "METER_CREATED"
             | "METER_READING_CREATED"
             | "METER_READING_CORRECTED" => {
@@ -5990,8 +5993,8 @@ impl CentralStore {
                     return Ok(result);
                 }
                 sqlx::query(
-                    "INSERT INTO service_accounts (id, customer_id, service_code, contract_ref, connection_status, activated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    "INSERT INTO service_accounts (id, customer_id, service_code, contract_ref, connection_status, activated_at, revision)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
                 )
                 .bind(account.id)
                 .bind(account.customer_id)
@@ -5999,6 +6002,91 @@ impl CentralStore {
                 .bind(&account.contract_ref)
                 .bind(&account.connection_status)
                 .bind(account.activated_at)
+                .bind(account.revision)
+                .execute(&mut **tx)
+                .await?;
+                ("service_accounts", account.id)
+            }
+            "SERVICE_ACCOUNT_UPDATED" => {
+                let Ok(payload) = serde_json::from_value::<ServiceAccountUpdateSyncPayload>(
+                    event.payload.clone(),
+                ) else {
+                    let result = rejected(
+                        "SERVICE_ACCOUNT_UPDATE_INVALID",
+                        "send_a_valid_revisioned_service_account_update",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                };
+                let account = payload.account;
+                if account.id != event.aggregate_id
+                    || payload.expected_revision < 1
+                    || account.revision != payload.expected_revision + 1
+                    || !matches!(account.service_code.as_str(), "ELECTRICITY" | "WATER")
+                    || !matches!(
+                        account.connection_status.as_str(),
+                        "CONNECTED" | "NOT_CONNECTED" | "UNKNOWN"
+                    )
+                    || account
+                        .contract_ref
+                        .as_deref()
+                        .is_some_and(|value| value.trim().is_empty() || value.chars().count() > 128)
+                {
+                    let result = rejected(
+                        "SERVICE_ACCOUNT_UPDATE_INVALID",
+                        "send_a_valid_service_account_update",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                let current = sqlx::query(
+                    "SELECT sa.customer_id, sa.service_code, sa.revision FROM service_accounts sa
+                     JOIN customers c ON c.id = sa.customer_id
+                     WHERE sa.id = $1 AND c.organization_id = $2 FOR UPDATE OF sa",
+                )
+                .bind(account.id)
+                .bind(self.organization_id)
+                .fetch_optional(&mut **tx)
+                .await?;
+                let Some(current) = current else {
+                    let result = rejected(
+                        "SERVICE_ACCOUNT_NOT_FOUND",
+                        "sync_the_service_account_before_its_update",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                };
+                let current_customer: Uuid = current.try_get("customer_id")?;
+                let current_service: String = current.try_get("service_code")?;
+                let current_revision: i64 = current.try_get("revision")?;
+                if current_customer != account.customer_id
+                    || current_service != account.service_code
+                {
+                    let result = conflict("SERVICE_ACCOUNT_IDENTITY_CHANGED");
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                if current_revision != payload.expected_revision {
+                    let mut result = conflict("SERVICE_ACCOUNT_REVISION_CONFLICT");
+                    if let SyncEventResult::Conflict {
+                        central_revision, ..
+                    } = &mut result
+                    {
+                        *central_revision = Some(current_revision);
+                    }
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                sqlx::query(
+                    "UPDATE service_accounts SET contract_ref = $1, connection_status = $2,
+                     activated_at = $3, revision = $4 WHERE id = $5 AND revision = $6",
+                )
+                .bind(&account.contract_ref)
+                .bind(&account.connection_status)
+                .bind(account.activated_at)
+                .bind(account.revision)
+                .bind(account.id)
+                .bind(payload.expected_revision)
                 .execute(&mut **tx)
                 .await?;
                 ("service_accounts", account.id)
@@ -6231,6 +6319,16 @@ impl CentralStore {
             }
             _ => unreachable!("only meter commands are dispatched here"),
         };
+        let (accepted_revision, accepted_change) =
+            if event.command_type == "SERVICE_ACCOUNT_UPDATED" {
+                let payload: ServiceAccountUpdateSyncPayload =
+                    serde_json::from_value(event.payload.clone()).map_err(|error| {
+                        sqlx::Error::Protocol(format!("invalid service account update: {error}"))
+                    })?;
+                (payload.account.revision, json!(payload.account))
+            } else {
+                (1, event.payload.clone())
+            };
         let result = persist_sync_result(
             tx,
             self.organization_id,
@@ -6239,7 +6337,7 @@ impl CentralStore {
                 server_sequence: 0,
                 server_entity_id: payload_id,
             },
-            Some((entity, payload_id, 1, event.payload.clone())),
+            Some((entity, payload_id, accepted_revision, accepted_change)),
         )
         .await?;
         Ok(result)
@@ -6251,6 +6349,7 @@ fn offline_role_allows_command(role: &str, command_type: &str) -> bool {
         "CUSTOMER_CREATED"
         | "CUSTOMER_UPDATED"
         | "SERVICE_ACCOUNT_CREATED"
+        | "SERVICE_ACCOUNT_UPDATED"
         | "METER_CREATED"
         | "METER_READING_CREATED"
         | "UTILITY_INVOICE_ISSUED"
@@ -6420,9 +6519,9 @@ impl CentralStore {
         let id = Uuid::new_v4();
         let row = sqlx::query(
             "INSERT INTO service_accounts
-             (id, customer_id, service_code, contract_ref, connection_status, activated_at)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id, customer_id, service_code, contract_ref, connection_status, activated_at",
+             (id, customer_id, service_code, contract_ref, connection_status, activated_at, revision)
+             VALUES ($1, $2, $3, $4, $5, $6, 1)
+             RETURNING id, customer_id, service_code, contract_ref, connection_status, activated_at, revision",
         )
         .bind(id)
         .bind(customer_id)
@@ -6460,7 +6559,7 @@ impl CentralStore {
     ) -> Result<Vec<ServiceAccount>, MeterWriteError> {
         let rows = sqlx::query(
             "SELECT sa.id, sa.customer_id, sa.service_code, sa.contract_ref,
-                    sa.connection_status, sa.activated_at
+                    sa.connection_status, sa.activated_at, sa.revision
              FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
              WHERE sa.customer_id = $1 AND c.organization_id = $2
              ORDER BY sa.service_code, sa.id",
@@ -6473,6 +6572,100 @@ impl CentralStore {
             .map(service_account_from_pg_row)
             .collect::<Result<Vec<_>, _>>()
             .map_err(MeterWriteError::from)
+    }
+
+    pub async fn get_service_account(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<ServiceAccount>, MeterWriteError> {
+        let row = sqlx::query(
+            "SELECT sa.id, sa.customer_id, sa.service_code, sa.contract_ref,
+                    sa.connection_status, sa.activated_at, sa.revision
+             FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
+             WHERE sa.id = $1 AND c.organization_id = $2",
+        )
+        .bind(id)
+        .bind(self.organization_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref()
+            .map(service_account_from_pg_row)
+            .transpose()
+            .map_err(MeterWriteError::from)
+    }
+
+    pub async fn update_service_account(
+        &self,
+        id: Uuid,
+        expected_revision: i64,
+        input: &UpdateServiceAccount,
+        actor_id: Option<Uuid>,
+    ) -> Result<Option<ServiceAccount>, MeterWriteError> {
+        if expected_revision < 1
+            || (input.contract_ref.is_missing()
+                && input.connection_status.is_none()
+                && input.activated_at.is_missing())
+            || input
+                .connection_status
+                .as_deref()
+                .is_some_and(|status| !matches!(status, "CONNECTED" | "NOT_CONNECTED" | "UNKNOWN"))
+            || matches!(&input.contract_ref, sel_contracts::PatchValue::Value(value) if value.trim().is_empty() || value.chars().count() > 128)
+        {
+            return Err(MeterWriteError::InvalidConfiguration);
+        }
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT sa.id, sa.customer_id, sa.service_code, sa.contract_ref, sa.connection_status, sa.activated_at, sa.revision
+             FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
+             WHERE sa.id = $1 AND c.organization_id = $2 FOR UPDATE OF sa",
+        )
+        .bind(id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            return Err(MeterWriteError::ServiceAccountNotFound);
+        };
+        let current = service_account_from_pg_row(&row)?;
+        if current.revision != expected_revision {
+            return Err(MeterWriteError::ServiceAccountRevisionConflict);
+        }
+        let account = ServiceAccount {
+            contract_ref: input.contract_ref.apply_to(current.contract_ref.clone()),
+            connection_status: input
+                .connection_status
+                .clone()
+                .unwrap_or(current.connection_status.clone()),
+            activated_at: input.activated_at.apply_to(current.activated_at),
+            revision: expected_revision + 1,
+            ..current
+        };
+        sqlx::query("UPDATE service_accounts SET contract_ref = $1, connection_status = $2, activated_at = $3, revision = $4 WHERE id = $5 AND revision = $6")
+            .bind(&account.contract_ref)
+            .bind(&account.connection_status)
+            .bind(account.activated_at)
+            .bind(account.revision)
+            .bind(id)
+            .bind(expected_revision)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO central_changes (organization_id, entity, entity_id, revision, change_json) VALUES ($1, 'service_accounts', $2, $3, $4)")
+            .bind(self.organization_id)
+            .bind(id)
+            .bind(account.revision)
+            .bind(json!(account))
+            .execute(&mut *tx)
+            .await?;
+        audit_meter_mutation(
+            &mut tx,
+            actor_id,
+            "SERVICE_ACCOUNT_UPDATED",
+            id,
+            json!({"revision": account.revision}),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(Some(account))
     }
 
     pub async fn create_meter(
@@ -6877,6 +7070,7 @@ fn service_account_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<ServiceAcc
         contract_ref: row.try_get("contract_ref")?,
         connection_status: row.try_get("connection_status")?,
         activated_at: row.try_get("activated_at")?,
+        revision: row.try_get("revision")?,
     })
 }
 

@@ -151,6 +151,77 @@ async fn pulled_meter_accounts_meters_and_corrections_project_idempotently() {
     let _ = std::fs::remove_file(path);
 }
 
+#[tokio::test]
+async fn pulled_service_account_revision_updates_existing_local_projection_idempotently() {
+    let path =
+        std::env::temp_dir().join(format!("sel-v2-account-revision-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("open local database");
+    let (customer, _) = store
+        .create_customer(&sel_contracts::CreateCustomer {
+            customer_code: "ACCOUNT-REV-1".into(),
+            legal_name: "Account revision fixture".into(),
+            address: None,
+            phone: None,
+        })
+        .await
+        .expect("create customer");
+    let account = store
+        .create_service_account(
+            customer.id,
+            &sel_contracts::CreateServiceAccount {
+                service_code: "WATER".into(),
+                contract_ref: Some("CONTRACT-OLD".into()),
+                connection_status: "CONNECTED".into(),
+                activated_at: None,
+            },
+        )
+        .await
+        .expect("create service account");
+    let changes = SyncPullResponse {
+        changes: vec![json!({
+            "sequence": 1,
+            "entity": "service_accounts",
+            "entity_id": account.id,
+            "revision": 2,
+            "change": {
+                "id": account.id,
+                "customer_id": customer.id,
+                "service_code": "WATER",
+                "contract_ref": "CONTRACT-NEW",
+                "connection_status": "NOT_CONNECTED",
+                "activated_at": null,
+                "revision": 2
+            }
+        })],
+        next_cursor: 1,
+    };
+    store
+        .apply_pulled_changes(&changes)
+        .await
+        .expect("apply revision update");
+    store
+        .apply_pulled_changes(&changes)
+        .await
+        .expect("replay revision update");
+    let projected = store
+        .list_service_accounts(customer.id)
+        .await
+        .expect("read account");
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0].id, account.id);
+    assert_eq!(projected[0].contract_ref.as_deref(), Some("CONTRACT-NEW"));
+    assert_eq!(projected[0].connection_status, "NOT_CONNECTED");
+    assert_eq!(projected[0].revision, 2);
+    drop(store);
+    let _ = std::fs::remove_file(path);
+}
+
 async fn malformed_then_accept(
     State(attempts): State<Arc<AtomicUsize>>,
     Json(request): Json<SyncPushRequest>,

@@ -1,6 +1,9 @@
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
-use sel_contracts::{Meter, MeterReading, ServiceAccount, SyncEnvelope, SyncEventResult};
+use sel_contracts::{
+    Meter, MeterReading, PatchValue, ServiceAccount, ServiceAccountUpdateSyncPayload, SyncEnvelope,
+    SyncEventResult, UpdateServiceAccount,
+};
 use sel_storage::{migrate_postgres, CentralStore};
 use sel_sync::payload_digest;
 use sqlx::{postgres::PgPoolOptions, Row};
@@ -100,6 +103,7 @@ async fn offline_meter_account_and_reading_events_apply_atomically_and_idempoten
         contract_ref: Some("WATER-SYNC-1".into()),
         connection_status: "CONNECTED".into(),
         activated_at: Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+        revision: 1,
     };
     let meter = Meter {
         id: Uuid::new_v4(),
@@ -173,6 +177,76 @@ async fn offline_meter_account_and_reading_events_apply_atomically_and_idempoten
         ));
     }
 
+    let updated_account = ServiceAccount {
+        contract_ref: Some("WATER-SYNC-UPDATED".into()),
+        connection_status: "NOT_CONNECTED".into(),
+        revision: 2,
+        ..account.clone()
+    };
+    let update_event = envelope(
+        organization_id,
+        device_id,
+        actor_id,
+        grant_id,
+        account.id,
+        "SERVICE_ACCOUNT_UPDATED",
+        serde_json::to_value(ServiceAccountUpdateSyncPayload {
+            expected_revision: 1,
+            account: updated_account.clone(),
+        })
+        .unwrap(),
+    );
+    assert!(matches!(
+        store.apply_sync_event(&update_event).await.unwrap(),
+        SyncEventResult::Accepted { .. }
+    ));
+    assert!(matches!(
+        store.apply_sync_event(&update_event).await.unwrap(),
+        SyncEventResult::Duplicate { .. }
+    ));
+    let stored_account: (Option<String>, String, i64) = sqlx::query_as(
+        "SELECT contract_ref, connection_status, revision FROM service_accounts WHERE id = $1",
+    )
+    .bind(account.id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored_account,
+        (Some("WATER-SYNC-UPDATED".into()), "NOT_CONNECTED".into(), 2)
+    );
+    let central_updated = store
+        .update_service_account(
+            account.id,
+            2,
+            &UpdateServiceAccount {
+                contract_ref: PatchValue::Missing,
+                connection_status: Some("CONNECTED".into()),
+                activated_at: PatchValue::Missing,
+            },
+            Some(actor_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(central_updated.revision, 3);
+    assert_eq!(central_updated.connection_status, "CONNECTED");
+    assert!(matches!(
+        store
+            .update_service_account(
+                account.id,
+                2,
+                &UpdateServiceAccount {
+                    contract_ref: PatchValue::Missing,
+                    connection_status: Some("UNKNOWN".into()),
+                    activated_at: PatchValue::Missing,
+                },
+                Some(actor_id),
+            )
+            .await,
+        Err(sel_storage::postgres::MeterWriteError::ServiceAccountRevisionConflict)
+    ));
+
     let reading_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM meter_readings WHERE meter_id = $1")
             .bind(meter.id)
@@ -202,7 +276,7 @@ async fn offline_meter_account_and_reading_events_apply_atomically_and_idempoten
     .fetch_one(&store.pool)
     .await
     .unwrap();
-    assert_eq!(change_count, 4);
+    assert_eq!(change_count, 6);
 
     let row = sqlx::query("SELECT current_schema() AS schema")
         .fetch_one(&store.pool)

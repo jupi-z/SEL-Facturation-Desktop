@@ -15,8 +15,8 @@ use sel_contracts::{
     CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData,
     InvoiceLineResponse, Meter, MeterReading, PaymentAllocationRequest, ProblemDetails,
     RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse,
-    SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, VoidInvoiceRequest,
+    SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount,
+    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -321,6 +321,10 @@ pub fn router(state: AppState) -> Router {
             get(list_service_accounts).post(create_service_account),
         )
         .route(
+            "/v1/service-accounts/:id",
+            get(get_service_account).patch(update_service_account),
+        )
+        .route(
             "/v1/service-accounts/:id/meters",
             get(list_meters).post(create_meter),
         )
@@ -465,6 +469,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/client-resources/manifest"
             ) || path_matches(path, "/v1/customers/:id")
                 || path_matches(path, "/v1/customers/:id/service-accounts")
+                || path_matches(path, "/v1/service-accounts/:id")
                 || path_matches(path, "/v1/service-accounts/:id/meters")
                 || path_matches(path, "/v1/meters/:id/readings")
                 || path_matches(path, "/v1/customers/:id/statement")
@@ -549,6 +554,9 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
     }
 
     if *method == Method::PATCH && path_matches(path, "/v1/customers/:id") {
+        return is_admin || is_supervisor || is_billing;
+    }
+    if *method == Method::PATCH && path_matches(path, "/v1/service-accounts/:id") {
         return is_admin || is_supervisor || is_billing;
     }
 
@@ -1947,6 +1955,72 @@ async fn list_service_accounts(
         .await
         .map(Json)
         .map_err(meter_write_error)
+}
+
+async fn get_service_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<sel_contracts::ServiceAccount>, ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .get_service_account(id)
+        .await
+        .map_err(meter_write_error)?
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::not_found("SERVICE_ACCOUNT_NOT_FOUND", "service account not found")
+        })
+}
+
+async fn update_service_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<UpdateServiceAccount>,
+) -> Result<Response, ApiError> {
+    require_auth(&headers)?;
+    let expected = headers
+        .get("if-match")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim_matches('"').parse::<i64>().ok())
+        .ok_or_else(|| {
+            ApiError::unprocessable(
+                "IF_MATCH_REQUIRED",
+                "If-Match must contain the service account revision",
+            )
+        })?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    let account = store
+        .update_service_account(
+            id,
+            expected,
+            &input,
+            principal.map(|Extension(AuthenticatedPrincipal(principal))| principal.user_id),
+        )
+        .await
+        .map_err(meter_write_error)?
+        .ok_or_else(|| {
+            ApiError::not_found("SERVICE_ACCOUNT_NOT_FOUND", "service account not found")
+        })?;
+    let mut response = Json(account.clone()).into_response();
+    response.headers_mut().insert(
+        "etag",
+        HeaderValue::from_str(&format!("\"{}\"", account.revision)).map_err(ApiError::internal)?,
+    );
+    Ok(response)
 }
 
 async fn create_meter(
@@ -3381,6 +3455,10 @@ fn meter_write_error(error: sel_storage::postgres::MeterWriteError) -> ApiError 
         MeterWriteError::ServiceAccountNotFound => {
             ApiError::not_found("SERVICE_ACCOUNT_NOT_FOUND", "service account not found")
         }
+        MeterWriteError::ServiceAccountRevisionConflict => ApiError::conflict(
+            "SERVICE_ACCOUNT_REVISION_CONFLICT",
+            "service account was changed by another actor",
+        ),
         MeterWriteError::MeterNotFound => ApiError::not_found("METER_NOT_FOUND", "meter not found"),
         MeterWriteError::DuplicateReading => ApiError::conflict(
             "METER_READING_EXISTS",
@@ -3901,6 +3979,21 @@ mod tests {
             &Method::POST,
             &format!("/v1/service-accounts/{service_account_id}/meters"),
             "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::GET,
+            &format!("/v1/service-accounts/{service_account_id}"),
+            "AUDITOR_READONLY"
+        ));
+        assert!(role_allows_request(
+            &Method::PATCH,
+            &format!("/v1/service-accounts/{service_account_id}"),
+            "BILLING_AGENT"
+        ));
+        assert!(!role_allows_request(
+            &Method::PATCH,
+            &format!("/v1/service-accounts/{service_account_id}"),
+            "AUDITOR_READONLY"
         ));
         assert!(role_allows_request(
             &Method::POST,
