@@ -216,7 +216,7 @@ export default function App() {
     return activity.sort((left, right) => Date.parse(right.date) - Date.parse(left.date)).slice(0, 8);
   }, [customers, invoices, payments, sales]);
 
-  async function submit(event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) {
+  async function submit(event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string): Promise<boolean> {
     event.preventDefault();
     const form = event.currentTarget;
     try {
@@ -224,7 +224,8 @@ export default function App() {
       setNotice({ message: success });
       form.reset();
       await refresh();
-    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+      return true;
+    } catch (error) { setNotice({ message: humanError(error), error: true }); return false; }
   }
 
   async function createCustomer(event: FormEvent<HTMLFormElement>) {
@@ -453,10 +454,8 @@ export default function App() {
 
       {view === "payments" && <>
         <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
-        <div className="payment-layout">
-          <Panel title="Nouvel encaissement"><PaymentForm customers={customers} sales={sales} onSubmit={submit} /></Panel>
-          <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), domainLabel(row.method), <Status value={row.status} />])} /></Panel>
-        </div>
+        <PaymentForm customers={customers} sales={sales} onSubmit={submit} />
+        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), domainLabel(row.method), <Status value={row.status} />])} /></Panel>
       </>}
 
       {view === "solar" && <>
@@ -553,7 +552,7 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: Row[]; onSubmit: (event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) => Promise<void> }) {
+function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: Row[]; onSubmit: (event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) => Promise<boolean> }) {
   const [customerId, setCustomerId] = useState("");
   const [receivableId, setReceivableId] = useState("");
   const [receivables, setReceivables] = useState<Row[]>([]);
@@ -566,6 +565,7 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState("");
   const [currency, setCurrency] = useState("USD");
+  const [receivedAmount, setReceivedAmount] = useState("");
   useEffect(() => {
     if (!customerId) { setReceivables([]); setReceivableId(""); setReceivablesLoading(false); setReceivablesError(""); setCurrency("USD"); return; }
     let active = true;
@@ -595,22 +595,23 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
   }, [receivableId, sales]);
 
   const selectedSale = sales.find((item) => text(item.receivable_id) === receivableId && item.installment_plan_id);
+  const selectedReceivable = receivables.find((item) => text(item.receivable_id ?? item.id) === receivableId);
   const scheduleRequired = Boolean(selectedSale?.installment_plan_id);
   const openScheduleRows = scheduleRows.filter((item) => text(item.status).toUpperCase() !== "PAID");
+  const paymentBlocked = receivablesLoading || Boolean(receivablesError) || !receivableId || scheduleLoading || Boolean(scheduleError) || (scheduleRequired && (!openScheduleRows.length || !scheduleId));
 
-  return <form className="form-grid" onSubmit={(event) => { const form = new FormData(event.currentTarget); void onSubmit(event, "/local/v1/payments", {
+  return <div className="payment-workspace"><Panel title="Informations du règlement"><form id="local-payment-form" className="form-grid" onSubmit={async (event) => { const form = new FormData(event.currentTarget); const saved = await onSubmit(event, "/local/v1/payments", {
     customer_id: form.get("customer_id"), received_amount: form.get("received_amount"), currency: form.get("currency"), method: form.get("method"), occurred_at: new Date().toISOString(),
     allocations: [{ receivable_id: form.get("receivable_id"), amount: form.get("received_amount"), schedule_id: form.get("schedule_id") || null }],
-  }, "Règlement enregistré sur ce poste."); }}>
+  }, "Règlement enregistré sur ce poste."); if (saved) { setCustomerId(""); setReceivableId(""); setScheduleId(""); setCurrency("USD"); setReceivedAmount(""); } }}>
     <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setReceivableId(""); setScheduleId(""); setCurrency("USD"); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-    <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" required /></label><label>Devise<input name="currency" value={currency} readOnly required /></label>
+    <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)} required /></label><label>Devise<input name="currency" value={currency} readOnly required /></label>
     <label>Mode<select name="method"><option value="CASH">Espèces</option><option value="BANK">Banque</option><option value="MOBILE_MONEY">Mobile Money</option><option value="OTHER">Autre</option></select></label>
     <label>Créance à affecter<select name="receivable_id" value={receivableId} onChange={(event) => { setReceivableId(event.target.value); setScheduleId(""); const selected = receivables.find((item) => text(item.receivable_id ?? item.id) === event.target.value); setCurrency(text(selected?.currency, "USD")); }} required disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}><option value="">{!customerId ? "Sélectionnez d’abord un abonné" : receivablesLoading ? "Chargement des créances…" : "Sélectionner une créance"}</option>{receivables.map((item) => <option key={text(item.receivable_id ?? item.id)} value={text(item.receivable_id ?? item.id)}>{domainLabel(item.source_type ?? item.status)} · {formatMoney(item.balance, item.currency)}</option>)}</select></label>
     {receivablesError && <p className="help error-text span-two" role="alert">Impossible de charger les créances : {receivablesError}</p>}
     {scheduleRequired && <label className="span-two">Échéance solaire<select name="schedule_id" value={scheduleId} onChange={(event) => setScheduleId(event.target.value)} required disabled={scheduleLoading || Boolean(scheduleError)}><option value="">{scheduleLoading ? "Chargement de l’échéancier…" : "Sélectionner une échéance…"}</option>{openScheduleRows.map((item) => <option key={text(item.id)} value={text(item.id)}>N° {text(item.sequence)} · {text(item.due_date)} · restant {formatMoney(item.remaining, scheduleCurrency)}</option>)}</select></label>}
     {scheduleMessage && <p className="help span-two" role="status">{scheduleMessage}</p>}
-    <div className="form-actions span-two"><Button primary type="submit" disabled={receivablesLoading || Boolean(receivablesError) || !receivableId || scheduleLoading || Boolean(scheduleError) || (scheduleRequired && (!openScheduleRows.length || !scheduleId))}>Enregistrer le règlement</Button></div>
-  </form>;
+  </form></Panel><Panel title="Récapitulatif"><div className="payment-summary"><p className="eyebrow">PRÉPARATION DU RÈGLEMENT</p><h2>Règlement</h2><p className="muted">{selectedReceivable ? `${domainLabel(selectedReceivable.source_type ?? selectedReceivable.status)} · solde retourné par Rust` : "Choisissez un abonné puis une créance à affecter."}</p><div className="payment-summary-values"><div><span>Abonné</span><strong>{customerId ? customerLabel(customerId, customers) : "—"}</strong></div><div><span>Créance sélectionnée</span><strong>{selectedReceivable ? text(selectedReceivable.receivable_number ?? selectedReceivable.receivable_id ?? selectedReceivable.id) : "—"}</strong></div><div><span>Solde actuel</span><strong>{selectedReceivable ? formatMoney(selectedReceivable.balance, selectedReceivable.currency) : "—"}</strong></div></div><p className="eyebrow">MONTANT À CONFIRMER</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong><span className={`status-badge${selectedReceivable ? " pending" : ""}`}>{selectedReceivable ? "En attente d’enregistrement" : "Aucune créance sélectionnée"}</span><p className="help">Le solde restant est recalculé et validé par Rust à l’enregistrement.</p><Button primary type="submit" form="local-payment-form" disabled={paymentBlocked}>Enregistrer le règlement</Button></div></Panel></div>;
 }
 
 function MeterReadingsView({ customers }: { customers: Row[] }) {
@@ -620,44 +621,46 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   const [meters, setMeters] = useState<Row[]>([]);
   const [meterId, setMeterId] = useState("");
   const [readings, setReadings] = useState<Row[]>([]);
+  const [readingPeriod, setReadingPeriod] = useState("");
   const [previousIndex, setPreviousIndex] = useState("");
   const [correctingReading, setCorrectingReading] = useState<Row | null>(null);
   const [message, setMessage] = useState("");
+  const [messageError, setMessageError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<Row | null>(null);
   const [previewInput, setPreviewInput] = useState<Row | null>(null);
 
   useEffect(() => {
-    if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setPreviousIndex(""); return; }
+    if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); return; }
     let active = true;
     localRequest<unknown>(`/local/v1/customers/${encodeURIComponent(customerId)}/service-accounts`).then((result) => {
-      if (active) { setAccounts(rows(result)); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setPreviousIndex(""); }
-    }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
+      if (active) { setAccounts(rows(result)); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); }
+    }).catch((error: unknown) => { if (active) { setMessage(humanError(error)); setMessageError(true); } });
     return () => { active = false; };
   }, [customerId]);
 
   useEffect(() => {
-    if (!accountId) { setMeters([]); setMeterId(""); setReadings([]); setPreviousIndex(""); return; }
+    if (!accountId) { setMeters([]); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); return; }
     let active = true;
     localRequest<unknown>(`/local/v1/service-accounts/${encodeURIComponent(accountId)}/meters`).then((result) => {
-      if (active) { setMeters(rows(result).filter((meter) => meter.active !== false)); setMeterId(""); setReadings([]); setPreviousIndex(""); }
-    }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
+      if (active) { setMeters(rows(result).filter((meter) => meter.active !== false)); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); }
+    }).catch((error: unknown) => { if (active) { setMessage(humanError(error)); setMessageError(true); } });
     return () => { active = false; };
   }, [accountId]);
 
   useEffect(() => {
-    if (!meterId) { setReadings([]); setPreviousIndex(""); return; }
+    if (!meterId) { setReadings([]); setReadingPeriod(""); setPreviousIndex(""); return; }
     let active = true;
     localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`).then((result) => {
       if (active) { const nextReadings = rows(result); setReadings(nextReadings); setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : ""); }
-    }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
+    }).catch((error: unknown) => { if (active) { setMessage(humanError(error)); setMessageError(true); } });
     return () => { active = false; };
   }, [meterId]);
 
   async function previewReading(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!meterId) return;
-    setSaving(true); setMessage("");
+    setSaving(true); setMessage(""); setMessageError(false);
     try {
       const form = new FormData(event.currentTarget);
       const input = { period: form.get("period"), previous: form.get("previous"), current: form.get("current"), source: "MANUAL" };
@@ -665,22 +668,23 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
       const result = await localRequest<Row>(`${meterBase}/preview`, "POST", input);
       setPreview(result);
       setPreviewInput(input);
-    } catch (error) { setPreview(null); setPreviewInput(null); setMessage(humanError(error)); }
+    } catch (error) { setPreview(null); setPreviewInput(null); setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
   }
 
   async function saveReading() {
     if (!meterId || !previewInput) return;
-    setSaving(true); setMessage("");
+    setSaving(true); setMessage(""); setMessageError(false);
     try {
       await localRequest(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`, "POST", previewInput);
       const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
       const nextReadings = rows(result);
       setReadings(nextReadings);
       setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : "");
+      setReadingPeriod("");
       setPreview(null); setPreviewInput(null);
-      setMessage("Relevé enregistré sur ce poste.");
-    } catch (error) { setMessage(humanError(error)); }
+      setMessage("Relevé enregistré sur ce poste."); setMessageError(false);
+    } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
   }
 
@@ -688,7 +692,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
     event.preventDefault();
     if (!correctingReading) return;
     const form = new FormData(event.currentTarget);
-    setSaving(true); setMessage("");
+    setSaving(true); setMessage(""); setMessageError(false);
     try {
       await localRequest(`/local/v1/meter-readings/${encodeURIComponent(text(correctingReading.id))}/corrections`, "POST", {
         current: form.get("current"), source: "MANUAL", reason: form.get("reason"),
@@ -696,8 +700,8 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
       const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
       const nextReadings = rows(result);
       setReadings(nextReadings); setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : ""); setCorrectingReading(null);
-      setMessage("Correction ajoutée à l’historique. Le relevé initial est conservé.");
-    } catch (error) { setMessage(humanError(error)); }
+      setMessage("Correction ajoutée à l’historique. Le relevé initial est conservé."); setMessageError(false);
+    } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
   }
 
@@ -715,14 +719,14 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
           <label className="span-two">Compteur<select value={meterId} onChange={(event) => { setMeterId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {text(meter.unit)}</option>)}</select></label>
         </div>
         {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void previewReading(event)} onChange={() => { setPreview(null); setPreviewInput(null); }}>
-          <label>Période<input name="period" type="month" required /></label>
+          <label>Période<input name="period" type="month" value={readingPeriod} onChange={(event) => { const selectedPeriod = event.target.value; setReadingPeriod(selectedPeriod); const preceding = readings.filter((reading) => text(reading.period) < selectedPeriod); setPreviousIndex(preceding.length ? text(preceding[preceding.length - 1].current) : ""); }} required /></label>
           <label>Index précédent<input name="previous" type="number" min="0" step="0.001" value={previousIndex} onChange={(event) => setPreviousIndex(event.target.value)} required /></label>
           <label>Nouvel index<input name="current" type="number" min="0" step="0.001" required /></label>
           <label>Source du relevé<input value="Saisie sur ce poste" readOnly /></label>
           <p className="help span-two">La consommation est calculée et validée par le moteur Rust avant l’enregistrement.</p>
           <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Vérification…" : "Prévisualiser les index"}</Button></div>
         </form>}
-        {message && <p role="status" className="reading-message">{message}</p>}
+        {message && <p role={messageError ? "alert" : "status"} className={`reading-message${messageError ? " error" : ""}`}>{message}</p>}
         {!customerId && <div className="empty-state">Choisissez un abonné pour afficher ses services et ses compteurs.</div>}
         {customerId && !accounts.length && <div className="empty-state">Aucun compte de service n’est enregistré pour cet abonné sur ce poste.</div>}
         {accountId && !meters.length && <div className="empty-state">Aucun compteur actif n’est associé à ce service.</div>}

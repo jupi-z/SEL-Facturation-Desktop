@@ -71,7 +71,7 @@ button { cursor: pointer; }
 .metric-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .columns { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr); gap: 18px; }
 .customer-layout { grid-template-columns: minmax(0, 1.35fr) minmax(330px, .85fr); align-items: start; }
-.payment-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); align-items: start; gap: 18px; }
+.payment-workspace { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(285px, .72fr); align-items: stretch; gap: 14px; margin-bottom: 18px; }
 .invoice-workspace { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(285px, .72fr); align-items: stretch; gap: 14px; }
 .invoice-editor { min-height: 390px; padding: 25px 27px; }
 .invoice-form { gap: 20px 18px; }
@@ -126,9 +126,21 @@ table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .reading-summary dd { margin: 0; color: var(--navy); font-weight: 700; text-align: right; }
 .reading-quantity { color: var(--navy); font-size: 28px; line-height: 1.1; }
 .reading-summary > .button { width: 100%; margin-top: auto; }
+.payment-summary { display: flex; min-height: 100%; flex-direction: column; align-items: stretch; gap: 12px; padding: 10px 0; }
+.payment-summary .eyebrow { margin: 0; }
+.payment-summary h2 { margin: 0; color: var(--navy); font-size: 19px; }
+.payment-summary > .muted { margin: 0; }
+.payment-summary-values { display: grid; gap: 0; margin: 4px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.payment-summary-values div { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.payment-summary-values div:last-child { border-bottom: 0; }
+.payment-summary-values span { color: var(--muted); font-size: 10px; }
+.payment-summary-values strong { color: var(--navy); font-size: 12px; overflow-wrap: anywhere; }
+.payment-amount { color: var(--navy); font-size: 27px; line-height: 1.15; }
+.payment-summary > .button { width: 100%; margin-top: auto; }
 .reading-entry { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-top: 16px; border-top: 1px solid var(--line); }
 .reading-entry .help { align-self: end; padding-bottom: 10px; }
 .reading-message { margin: 12px 0; color: var(--green); font-size: 12px; }
+.reading-message.error { color: var(--red); }
 .schedule-entry { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 12px; padding: 12px; border: 1px solid var(--line); background: var(--canvas); }
 .schedule-entry label { display: grid; gap: 7px; color: #24405f; font-size: 11px; font-weight: 680; }
 .schedule-actions { display: flex; justify-content: flex-start; }
@@ -180,8 +192,8 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
   .topbar { margin-right: -28px; margin-left: -28px; padding-right: 28px; padding-left: 28px; }
   .sidebar { flex-basis: 230px; width: 230px; }
   .metric { padding-right: 14px; padding-left: 14px; }
-  .columns, .customer-layout, .payment-layout { grid-template-columns: 1fr; }
-  .invoice-workspace, .reading-workspace { grid-template-columns: 1fr; }
+  .columns, .customer-layout { grid-template-columns: 1fr; }
+  .invoice-workspace, .reading-workspace, .payment-workspace { grid-template-columns: 1fr; }
   .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

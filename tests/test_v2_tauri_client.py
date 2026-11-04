@@ -136,7 +136,8 @@ def test_cash_journal_uses_a_wide_table_and_lubumbashi_datetime_format() -> None
     css = (APP / "src" / "App.css").read_text(encoding="utf-8")
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
-    assert '<div className="payment-layout">' in app
+    assert 'className="payment-workspace"' in app
+    assert 'title="Encaissements enregistrés"' in app
     assert 'className="payment-table"' in app
     assert 'timeZone: "Africa/Lubumbashi"' in app
     assert 'formatDateTime(row.paid_at ?? row.occurred_at)' in app
@@ -241,7 +242,8 @@ def test_payment_form_clears_previous_customer_receivables_while_loading() -> No
 
     assert "setReceivables([]); setReceivableId(\"\"); setReceivablesLoading(true)" in payment_form
     assert "disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}" in payment_form
-    assert "disabled={receivablesLoading || Boolean(receivablesError) || !receivableId" in payment_form
+    assert "const paymentBlocked = receivablesLoading || Boolean(receivablesError) || !receivableId" in payment_form
+    assert "disabled={paymentBlocked}" in payment_form
 
 
 def test_windows_typescript_target_does_not_use_es2022_array_at() -> None:
@@ -297,11 +299,16 @@ def test_business_codes_are_localized_before_they_reach_tables() -> None:
 
 
 def test_payment_workspace_uses_two_desktop_columns_and_stacks_below_breakpoint() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     css = (APP / "src" / "App.css").read_text(encoding="utf-8")
 
-    assert ".payment-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);" in css
+    assert 'className="payment-workspace"' in app
+    assert 'title="Récapitulatif"' in app
+    assert 'formatMoney(selectedReceivable.balance, selectedReceivable.currency)' in app
+    assert 'formatMoney(receivedAmount, currency)' in app
+    assert ".payment-workspace { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(285px, .72fr);" in css
     assert "@media (max-width: 1280px)" in css
-    assert ".payment-layout { grid-template-columns: 1fr; }" in css
+    assert ".payment-workspace { grid-template-columns: 1fr; }" in css
 
 
 def test_new_meter_reading_prefills_last_index_without_recalculating_consumption() -> None:
@@ -326,11 +333,21 @@ def test_meter_reading_preview_is_calculated_by_local_rust_before_saving() -> No
     assert "measured_quantity: current - previous" not in app
 
 
+def test_meter_reading_period_uses_a_prior_index_and_errors_are_not_success_green() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    readings_view = app.split("function MeterReadingsView(", 1)[1].split("\nfunction CustomerStatement(", 1)[0]
+
+    assert 'const preceding = readings.filter((reading) => text(reading.period) < selectedPeriod)' in readings_view
+    assert 'className={`reading-message${messageError ? " error" : ""}`}' in readings_view
+    assert '.reading-message.error { color: var(--red); }' in css
+
+
 def test_visual_review_captures_solar_payment_allocation() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
     assert '"payments-solar-1440x900.png"' in visual_review
-    assert '.payment-layout form select[name="customer_id"]' in visual_review
+    assert '.payment-workspace form select[name="customer_id"]' in visual_review
     assert 'wait_for(state="attached")' in visual_review
     assert 'select_option("demo-receivable-solar-0001")' in visual_review
     assert 'select_option("demo-solar-schedule-0001")' in visual_review
