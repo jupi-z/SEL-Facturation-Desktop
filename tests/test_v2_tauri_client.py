@@ -311,6 +311,13 @@ def test_payment_workspace_uses_two_desktop_columns_and_stacks_below_breakpoint(
     assert ".payment-workspace { grid-template-columns: 1fr; }" in css
 
 
+def test_payment_and_meter_summary_actions_stay_inside_their_panels() -> None:
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+
+    assert ".payment-workspace > .panel:last-child, .reading-workspace > .panel:last-child { display: flex; flex-direction: column; }" in css
+    assert ".reading-summary, .payment-summary { display: flex; min-height: 0; flex: 1; flex-direction: column; align-items: stretch; gap: 12px; padding: 10px 0; }" in css
+
+
 def test_new_meter_reading_prefills_last_index_without_recalculating_consumption() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     readings_view = app.split("function MeterReadingsView(", 1)[1].split("\nfunction CustomerStatement(", 1)[0]
