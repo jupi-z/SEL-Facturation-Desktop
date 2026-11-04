@@ -1113,6 +1113,9 @@ impl LocalStore {
 
     pub async fn list_invoice_responses(
         &self,
+        customer_id: Option<Uuid>,
+        period: Option<&str>,
+        status: Option<&str>,
         limit: u32,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
@@ -1120,10 +1123,16 @@ impl LocalStore {
              FROM invoices i
              JOIN customers c ON c.id = i.customer_id
              WHERE c.organization_id = $1
+               AND ($2 IS NULL OR i.customer_id = $2)
+               AND ($3 IS NULL OR i.period = $3)
+               AND ($4 IS NULL OR i.status = $4)
              ORDER BY i.issued_at DESC, i.id DESC
-             LIMIT $2",
+             LIMIT $5",
         )
         .bind(self.organization_id.to_string())
+        .bind(customer_id.map(|id| id.to_string()))
+        .bind(period)
+        .bind(status)
         .bind(i64::from(limit.clamp(1, 100)))
         .fetch_all(&self.pool)
         .await?;

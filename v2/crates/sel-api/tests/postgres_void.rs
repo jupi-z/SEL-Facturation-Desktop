@@ -140,6 +140,40 @@ async fn invoice_void_is_audited_and_idempotent() {
     let retry = app.clone().oneshot(void_request()).await.unwrap();
     assert_eq!(retry.status(), StatusCode::OK);
     assert_eq!(json_body(retry).await, first_void);
+
+    let void_history = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/invoices?customer_id={}&period=2000-12&status=VOID",
+                    customer["id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer fixture")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(void_history.status(), StatusCode::OK);
+    let void_history = json_body(void_history).await;
+    assert_eq!(void_history.as_array().unwrap().len(), 1);
+    assert_eq!(void_history[0]["invoice_id"], invoice["invoice_id"]);
+    assert_eq!(void_history[0]["status"], "VOID");
+
+    let invalid_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/invoices?status=UNKNOWN")
+                .header("authorization", "Bearer fixture")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_status.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
     let counts = sqlx::query(
         "SELECT i.status AS invoice_status, r.status AS receivable_status,
                 (SELECT count(*) FROM invoice_voids WHERE invoice_id = i.id) AS voids,

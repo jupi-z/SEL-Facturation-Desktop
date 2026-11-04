@@ -1573,6 +1573,7 @@ struct CustomerListQuery {
 struct InvoiceListQuery {
     customer_id: Option<Uuid>,
     period: Option<String>,
+    status: Option<String>,
     limit: Option<usize>,
 }
 
@@ -1596,9 +1597,25 @@ async fn list_invoices(
             "period must use YYYY-MM format",
         ));
     }
+    if query.status.as_deref().is_some_and(|status| {
+        !matches!(
+            status,
+            "LOCAL_PENDING" | "CENTRAL_ACCEPTED" | "VOID" | "CONFLICT_REQUIRES_REVIEW"
+        )
+    }) {
+        return Err(ApiError::unprocessable(
+            "INVOICE_STATUS_INVALID",
+            "status must be LOCAL_PENDING, CENTRAL_ACCEPTED, VOID or CONFLICT_REQUIRES_REVIEW",
+        ));
+    }
     if let Some(store) = &state.central {
         return store
-            .list_invoice_responses(query.customer_id, period, limit as i64)
+            .list_invoice_responses(
+                query.customer_id,
+                period,
+                query.status.as_deref(),
+                limit as i64,
+            )
             .await
             .map(Json)
             .map_err(storage_error);
@@ -1613,6 +1630,10 @@ async fn list_invoices(
                 .customer_id
                 .is_none_or(|customer_id| invoice.customer_id == customer_id)
                 && period.is_none_or(|period| invoice.period == period)
+                && query
+                    .status
+                    .as_deref()
+                    .is_none_or(|status| invoice.response.status == status)
         })
         .map(|(id, invoice)| {
             let mut value = serde_json::to_value(&invoice.response).map_err(ApiError::internal)?;

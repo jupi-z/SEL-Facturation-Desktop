@@ -514,3 +514,20 @@ Le premier test HTTP a été exécuté avant implémentation et a échoué sur l
 **Progression estimée de phase 3 : 65 %.** La facturation alimentée par des relevés est maintenant démontrée dans le parcours offline → PostgreSQL → second poste, et les quatre workflows GitHub du commit `71d24f86ddeb7c7cc8340495d5f44df39cea4765` sont `PASS` (preuves et limites ci-dessus). Il reste notamment les parcours CRUD/historique client et facture, l'intégration de l'interface Windows V2, l'administration opérationnelle complète et les recettes sur poste SEL. Phase 2 (référentiels backend) reste à 100 % de ses critères techniques ; la validation par SEL des valeurs tarifaires et fiscales réelles demeure `BLOCKED_EXTERNAL`.
 
 Les tests ont utilisé exclusivement une instance PostgreSQL jetable et des SQLite créées par les tests. Le conteneur de test est supprimé après vérification. Aucun compte, tarif, facture ni fichier de SEL réel n'a été consulté ou modifié. Aucun merge, release ou déploiement n'a été effectué.
+
+### Phase 3 — filtres d'historique des factures local et central (4 novembre 2026)
+
+Les listes `GET /local/v1/invoices` et `GET /v1/invoices` acceptent maintenant le même contrat de recherche par `customer_id`, période `YYYY-MM`, état du cycle de vie et limite bornée. Le filtrage s'effectue dans la requête SQLite/PostgreSQL, avec contrôle du périmètre d'organisation ; l'API locale ne renvoie plus l'ensemble des factures quand un client ou une période est sélectionné. Les statuts inconnus et périodes invalides sont rejetés par HTTP 422. Le contrat OpenAPI central précise l'énumération de statuts. Les factures restent immuables : ce lot ne modifie ni documents, ni snapshots, ni lignes ni soldes.
+
+| Critère | Statut | Preuve |
+|---|---|---|
+| Filtre local client + période + état | PASS | Le test HTTP local couvre une facture `LOCAL_PENDING` et une facture `VOID`, vérifie chacune est isolée par son filtre et qu'un état inconnu reçoit HTTP 422. |
+| Filtre PostgreSQL après annulation | PASS | `invoice_void_is_audited_and_idempotent` exécuté sur PostgreSQL 16.4 jetable ; après annulation, la requête filtrée retourne une seule facture `VOID` et un état inconnu reçoit HTTP 422. |
+| Contrat HTTP et documentation | PASS local | `cargo test -p sel-contracts --test openapi_contract` ; le paramètre `status` et ses états sont documentés. |
+| Régression workspace | PASS local | `cargo test --workspace` : tous les tests exécutés passent. Les tests marqués `ignored` qui exigent `TEST_DATABASE_URL` ne sont pas tous inclus dans cette commande ; le test PostgreSQL de ce lot a été lancé séparément. |
+| Analyse statique et format | PASS local | `cargo clippy --workspace --all-targets -- -D warnings` et `cargo fmt --all -- --check`. |
+| CI GitHub du commit fonctionnel | À exécuter | La CI du commit à venir doit réussir avant de considérer le lot confirmé à distance. |
+
+Le test HTTP local a d'abord échoué comme attendu : il renvoyait 2 factures pour une requête filtrée qui devait en retourner 1. Après implémentation, le test passe. Une base PostgreSQL 16.4 isolée a ensuite confirmé le filtre central ; le conteneur a été arrêté, sans accéder aux données réelles de SEL.
+
+**Progression estimée : Phase 2 100 % ; Phase 3 68 %.** La prochaine tranche Phase 3 vise la cohérence du relevé client et de l'historique complet des factures côté local/central, puis les lacunes restantes de création, modification et archivage client. L'interface Windows V2, l'administration visuelle, la recette sur le poste SEL et l'approbation métier des paramètres réels restent à réaliser ou confirmer.

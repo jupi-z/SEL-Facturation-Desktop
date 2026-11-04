@@ -53,6 +53,14 @@ struct ListQuery {
     limit: Option<u32>,
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct InvoiceHistoryQuery {
+    customer_id: Option<Uuid>,
+    period: Option<String>,
+    status: Option<String>,
+    limit: Option<u32>,
+}
+
 impl ListQuery {
     fn bounded_limit(&self) -> u32 {
         self.limit.unwrap_or(50).clamp(1, 100)
@@ -708,12 +716,42 @@ async fn get_invoice(
 
 async fn list_invoices(
     State(state): State<LocalAppState>,
-    Query(query): Query<ListQuery>,
+    Query(query): Query<InvoiceHistoryQuery>,
 ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    let period = query
+        .period
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if period.is_some_and(|value| {
+        chrono::NaiveDate::parse_from_str(&format!("{value}-01"), "%Y-%m-%d").is_err()
+    }) {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "period must use YYYY-MM format".into(),
+        ));
+    }
+    if query.status.as_deref().is_some_and(|status| {
+        !matches!(
+            status,
+            "LOCAL_PENDING" | "CENTRAL_ACCEPTED" | "VOID" | "CONFLICT_REQUIRES_REVIEW"
+        )
+    }) {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "status must be LOCAL_PENDING, CENTRAL_ACCEPTED, VOID or CONFLICT_REQUIRES_REVIEW"
+                .into(),
+        ));
+    }
     Ok(Json(
         state
             .store
-            .list_invoice_responses(query.bounded_limit())
+            .list_invoice_responses(
+                query.customer_id,
+                period,
+                query.status.as_deref(),
+                query.limit.unwrap_or(50).clamp(1, 100),
+            )
             .await
             .map_err(internal_error)?,
     ))

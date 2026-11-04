@@ -599,6 +599,7 @@ paths:
       parameters:
         - { name: customer_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: period, in: query, required: false, description: Billing month in YYYY-MM format, schema: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }
+        - { name: status, in: query, required: false, description: Invoice lifecycle status filter, schema: { type: string, enum: [LOCAL_PENDING, CENTRAL_ACCEPTED, VOID, CONFLICT_REQUIRES_REVIEW] } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
       responses:
         '200':

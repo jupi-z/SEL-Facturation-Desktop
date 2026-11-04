@@ -336,6 +336,57 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
             && entry["lines"].as_array().unwrap().len() == 2
     }));
 
+    let filtered_invoices = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/invoices?customer_id={}&period=2026-11&status=LOCAL_PENDING",
+                    customer["id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered_invoices.status(), StatusCode::OK);
+    let filtered_invoices = json_body(filtered_invoices).await;
+    assert_eq!(filtered_invoices.as_array().unwrap().len(), 1);
+    assert_eq!(filtered_invoices[0]["invoice_id"], invoice["invoice_id"]);
+
+    let void_invoices = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/invoices?customer_id={}&status=VOID",
+                    customer["id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(void_invoices.status(), StatusCode::OK);
+    let void_invoices = json_body(void_invoices).await;
+    assert_eq!(void_invoices.as_array().unwrap().len(), 1);
+    assert_eq!(void_invoices[0]["invoice_id"], void_invoice["invoice_id"]);
+
+    let invalid_invoice_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/local/v1/invoices?status=UNKNOWN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invalid_invoice_status.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
     let payments = app
         .clone()
         .oneshot(

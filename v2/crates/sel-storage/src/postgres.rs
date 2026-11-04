@@ -3129,6 +3129,7 @@ impl CentralStore {
         &self,
         customer_id: Option<Uuid>,
         period: Option<&str>,
+        status: Option<&str>,
         limit: i64,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
@@ -3139,12 +3140,14 @@ impl CentralStore {
              WHERE c.organization_id = $1
                AND ($2::uuid IS NULL OR i.customer_id = $2)
                AND ($3::text IS NULL OR i.period = $3)
+               AND ($4::text IS NULL OR i.status = $4)
              ORDER BY i.issued_at DESC, i.id DESC
-             LIMIT $4",
+             LIMIT $5",
         )
         .bind(self.organization_id)
         .bind(customer_id)
         .bind(period)
+        .bind(status)
         .bind(limit.clamp(1, 100))
         .fetch_all(&self.pool)
         .await?;
