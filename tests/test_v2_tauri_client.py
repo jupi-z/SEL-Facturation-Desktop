@@ -312,6 +312,19 @@ def test_new_meter_reading_prefills_last_index_without_recalculating_consumption
     assert 'setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : "")' in readings_view
 
 
+def test_meter_reading_preview_is_calculated_by_local_rust_before_saving() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    local_api = (ROOT / "v2" / "crates" / "sel-local" / "src" / "lib.rs").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+
+    assert '"/local/v1/meters/:id/readings/preview"' in local_api
+    assert '`${meterBase}/preview`' in app
+    assert 'className="reading-workspace"' in app
+    assert 'preview.measured_quantity' in app
+    assert ".reading-workspace { display: grid; grid-template-columns:" in css
+    assert "measured_quantity: current - previous" not in app
+
+
 def test_visual_review_captures_solar_payment_allocation() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
@@ -324,6 +337,16 @@ def test_visual_review_captures_solar_payment_allocation() -> None:
     assert "element.closest('.panel').getBoundingClientRect().top" in visual_review
     assert '"solar-contracts-1440x900.png"' in visual_review
     assert 'path=str(OUTPUT / "solar-contracts-1440x900.png"), full_page=True' in visual_review
+
+
+def test_visual_review_captures_rust_validated_meter_preview() -> None:
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert "endsWith('/readings/preview')" in visual_review
+    assert 'name="period"' in visual_review
+    assert 'name="current"' in visual_review
+    assert 'name="Prévisualiser les index"' in visual_review
+    assert 'get_by_text("100 KWH", exact=True).wait_for()' in visual_review
 
 
 def test_visual_review_captures_customer_record_and_receivable_statement() -> None:

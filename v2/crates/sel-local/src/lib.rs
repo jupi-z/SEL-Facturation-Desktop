@@ -276,6 +276,10 @@ fn router_with_store_base(store: LocalStore) -> Router {
             get(list_meter_readings).post(create_meter_reading),
         )
         .route(
+            "/local/v1/meters/:id/readings/preview",
+            post(preview_meter_reading),
+        )
+        .route(
             "/local/v1/meter-readings/:id/corrections",
             post(correct_meter_reading),
         )
@@ -642,6 +646,19 @@ async fn create_meter_reading(
         .create_meter_reading(meter_id, &input)
         .await
         .map(|reading| (StatusCode::CREATED, Json(reading)))
+        .map_err(local_meter_error)
+}
+
+async fn preview_meter_reading(
+    State(state): State<LocalAppState>,
+    Path(meter_id): Path<Uuid>,
+    Json(input): Json<CreateMeterReading>,
+) -> Result<Json<sel_contracts::MeterReadingPreview>, (StatusCode, String)> {
+    state
+        .store
+        .preview_meter_reading(meter_id, &input)
+        .await
+        .map(Json)
         .map_err(local_meter_error)
 }
 

@@ -613,6 +613,8 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   const [correctingReading, setCorrectingReading] = useState<Row | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState<Row | null>(null);
+  const [previewInput, setPreviewInput] = useState<Row | null>(null);
 
   useEffect(() => {
     if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setPreviousIndex(""); return; }
@@ -641,21 +643,31 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
     return () => { active = false; };
   }, [meterId]);
 
-  async function saveReading(event: FormEvent<HTMLFormElement>) {
+  async function previewReading(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!meterId) return;
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
     setSaving(true); setMessage("");
     try {
-      await localRequest(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`, "POST", {
-        period: form.get("period"), previous: form.get("previous"), current: form.get("current"), source: "MANUAL",
-      });
+      const form = new FormData(event.currentTarget);
+      const input = { period: form.get("period"), previous: form.get("previous"), current: form.get("current"), source: "MANUAL" };
+      const meterBase = `/local/v1/meters/${encodeURIComponent(meterId)}/readings`;
+      const result = await localRequest<Row>(`${meterBase}/preview`, "POST", input);
+      setPreview(result);
+      setPreviewInput(input);
+    } catch (error) { setPreview(null); setPreviewInput(null); setMessage(humanError(error)); }
+    finally { setSaving(false); }
+  }
+
+  async function saveReading() {
+    if (!meterId || !previewInput) return;
+    setSaving(true); setMessage("");
+    try {
+      await localRequest(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`, "POST", previewInput);
       const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
       const nextReadings = rows(result);
       setReadings(nextReadings);
       setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : "");
-      formElement.reset();
+      setPreview(null); setPreviewInput(null);
       setMessage("Relevé enregistré sur ce poste.");
     } catch (error) { setMessage(humanError(error)); }
     finally { setSaving(false); }
@@ -680,27 +692,45 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
 
   const latestReading = readings.length ? readings[readings.length - 1] : null;
 
+  const selectedMeter = meters.find((meter) => text(meter.id) === meterId);
+
   return <>
     <PageHeading eyebrow="CORE / RELEVÉS" title="Relevés de compteurs" description="Consultez l’historique et enregistrez les index. La consommation mesurée est calculée et validée par Rust." />
-    <Panel title="Nouveau relevé">
-      <div className="form-grid reading-filters">
-        <label>Abonné<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Sélectionner…</option>{customers.map((customer) => <option key={text(customer.customer_id ?? customer.id)} value={text(customer.customer_id ?? customer.id)}>{text(customer.customer_code)} — {text(customer.legal_name)}</option>)}</select></label>
-        <label>Service<select value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{domainLabel(account.service_code)} · {domainLabel(account.connection_status)}</option>)}</select></label>
-        <label className="span-two">Compteur<select value={meterId} onChange={(event) => setMeterId(event.target.value)} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {text(meter.unit)}</option>)}</select></label>
-      </div>
-      {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void saveReading(event)}>
-        <label>Période<input name="period" type="month" required /></label>
-        <label>Index précédent<input name="previous" type="number" min="0" step="0.001" value={previousIndex} onChange={(event) => setPreviousIndex(event.target.value)} required /></label>
-        <label>Nouvel index<input name="current" type="number" min="0" step="0.001" required /></label>
-        <p className="help">L’index doit respecter l’historique du compteur. La quantité consommée sera retournée par le moteur métier.</p>
-        <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer le relevé"}</Button></div>
-      </form>}
-      {message && <p role="status" className="reading-message">{message}</p>}
-      {!customerId && <div className="empty-state">Choisissez un abonné pour afficher ses services et ses compteurs.</div>}
-      {customerId && !accounts.length && <div className="empty-state">Aucun compte de service n’est enregistré pour cet abonné sur ce poste.</div>}
-      {accountId && !meters.length && <div className="empty-state">Aucun compteur actif n’est associé à ce service.</div>}
-    </Panel>
-    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), `${text(reading.previous)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.current)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.measured_quantity)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
+    <div className="reading-workspace">
+      <Panel title="Paramètres de facturation">
+        <div className="form-grid reading-filters">
+          <label>Abonné<select value={customerId} onChange={(event) => { setCustomerId(event.target.value); setPreview(null); setPreviewInput(null); }}><option value="">Sélectionner…</option>{customers.map((customer) => <option key={text(customer.customer_id ?? customer.id)} value={text(customer.customer_id ?? customer.id)}>{text(customer.customer_code)} — {text(customer.legal_name)}</option>)}</select></label>
+          <label>Service<select value={accountId} onChange={(event) => { setAccountId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{domainLabel(account.service_code)} · {domainLabel(account.connection_status)}</option>)}</select></label>
+          <label className="span-two">Compteur<select value={meterId} onChange={(event) => { setMeterId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {text(meter.unit)}</option>)}</select></label>
+        </div>
+        {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void previewReading(event)} onChange={() => { setPreview(null); setPreviewInput(null); }}>
+          <label>Période<input name="period" type="month" required /></label>
+          <label>Index précédent<input name="previous" type="number" min="0" step="0.001" value={previousIndex} onChange={(event) => setPreviousIndex(event.target.value)} required /></label>
+          <label>Nouvel index<input name="current" type="number" min="0" step="0.001" required /></label>
+          <label>Source du relevé<input value="Saisie sur ce poste" readOnly /></label>
+          <p className="help span-two">La consommation est calculée et validée par le moteur Rust avant l’enregistrement.</p>
+          <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Vérification…" : "Prévisualiser les index"}</Button></div>
+        </form>}
+        {message && <p role="status" className="reading-message">{message}</p>}
+        {!customerId && <div className="empty-state">Choisissez un abonné pour afficher ses services et ses compteurs.</div>}
+        {customerId && !accounts.length && <div className="empty-state">Aucun compte de service n’est enregistré pour cet abonné sur ce poste.</div>}
+        {accountId && !meters.length && <div className="empty-state">Aucun compteur actif n’est associé à ce service.</div>}
+      </Panel>
+      <Panel title="Récapitulatif">
+        <div className="reading-summary">
+          <p className="eyebrow">PRÉPARATION DU RELEVÉ</p>
+          <h2>{preview ? "Index vérifiés" : "À vérifier"}</h2>
+          <p className="muted">{preview ? `${domainLabel(selectedMeter?.unit)} · ${text(preview.period)}` : "Le moteur calcule la différence entre les index avant l’enregistrement."}</p>
+          <dl><div><dt>Compteur</dt><dd>{selectedMeter ? text(selectedMeter.serial) : "—"}</dd></div><div><dt>Index précédent</dt><dd>{preview ? `${text(preview.previous)} ${text(selectedMeter?.unit)}` : "—"}</dd></div><div><dt>Index actuel</dt><dd>{preview ? `${text(preview.current)} ${text(selectedMeter?.unit)}` : "—"}</dd></div></dl>
+          <p className="eyebrow">CONSOMMATION MESURÉE</p>
+          <strong className="reading-quantity">{preview ? `${text(preview.measured_quantity)} ${text(selectedMeter?.unit)}` : "—"}</strong>
+          <span className={`status-badge${preview ? " pending" : ""}`}>{preview ? "Brouillon local · non enregistré" : "En attente de vérification"}</span>
+          <p className="help">Les index sont revalidés par Rust au moment de l’enregistrement.</p>
+          {preview && <Button primary onClick={() => void saveReading()} disabled={saving}>{saving ? "Enregistrement…" : "Valider les index"}</Button>}
+        </div>
+      </Panel>
+    </div>
+    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), `${text(reading.previous)} ${text(selectedMeter?.unit)}`, `${text(reading.current)} ${text(selectedMeter?.unit)}`, `${text(reading.measured_quantity)} ${text(selectedMeter?.unit)}`, text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
     {correctingReading && <Panel title={`Correction du relevé · ${text(correctingReading.period)}`}><form className="form-grid" onSubmit={(event) => void correctReading(event)}>
       <label>Nouvel index corrigé<input name="current" type="number" min="0" step="0.001" defaultValue={text(correctingReading.current, "")} required /></label>
       <label className="span-two">Motif de correction<input name="reason" maxLength={500} required /></label>

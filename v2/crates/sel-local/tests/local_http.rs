@@ -308,6 +308,42 @@ async fn local_meter_readings_are_durable_validated_and_corrected_append_only() 
     let meter = json_body(created_meter).await;
     let meter_id = meter["id"].as_str().unwrap();
 
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/meters/{meter_id}/readings/preview"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "period":"2026-10",
+                        "previous":"0",
+                        "current":"1.25",
+                        "source":"MANUAL"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), axum::http::StatusCode::OK);
+    let preview = json_body(preview).await;
+    assert_eq!(preview["measured_quantity"], "1.25");
+    assert_eq!(preview["meter_id"], meter_id);
+    let readings_before_save = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/local/v1/meters/{meter_id}/readings"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(json_body(readings_before_save).await.as_array().unwrap().is_empty());
+
     let zero_reading = app
         .clone()
         .oneshot(

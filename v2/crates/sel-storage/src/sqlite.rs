@@ -11,7 +11,7 @@ use sel_contracts::{
     SolarContractSyncPayload, SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload,
     SyncEnvelope, SyncEventResult, SyncPullResponse, UpdateCustomer, UpdateServiceAccount,
     UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
-    UtilityMeterReadingRefs, CUSTOMER_PATCH_FORMAT_VERSION,
+    UtilityMeterReadingRefs, MeterReadingPreview, CUSTOMER_PATCH_FORMAT_VERSION,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -2981,6 +2981,70 @@ impl LocalStore {
             .map(meter_reading_from_row)
             .collect::<Result<Vec<_>, _>>()
             .map_err(LocalMeterError::from)
+    }
+
+    pub async fn preview_meter_reading(
+        &self,
+        meter_id: Uuid,
+        input: &CreateMeterReading,
+    ) -> Result<MeterReadingPreview, LocalMeterError> {
+        validate_reading_input(
+            &input.period,
+            &input.previous,
+            &input.current,
+            &input.source,
+        )?;
+        let mut tx = self.pool.begin().await?;
+        let active: Option<i64> = sqlx::query_scalar(
+            "SELECT m.active FROM meters m
+             JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE m.id = $1 AND c.organization_id = $2",
+        )
+        .bind(meter_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if active.ok_or(LocalMeterError::MeterNotFound)? == 0 {
+            return Err(LocalMeterError::InvalidConfiguration);
+        }
+        let duplicate: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM meter_readings
+             WHERE meter_id = $1 AND period = $2 AND corrected_from_id IS NULL)",
+        )
+        .bind(meter_id.to_string())
+        .bind(&input.period)
+        .fetch_one(&mut *tx)
+        .await?;
+        if duplicate {
+            return Err(LocalMeterError::DuplicateReading);
+        }
+        let previous_period_current: Option<String> = sqlx::query_scalar(
+            "SELECT current FROM meter_readings
+             WHERE meter_id = $1 AND period < $2
+               AND NOT EXISTS (SELECT 1 FROM meter_readings child WHERE child.corrected_from_id = meter_readings.id)
+             ORDER BY period DESC, created_at DESC, id DESC LIMIT 1",
+        )
+        .bind(meter_id.to_string())
+        .bind(&input.period)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if previous_period_current
+            .as_deref()
+            .and_then(|value| Decimal::from_str(value).ok())
+            .is_some_and(|value| value != input.previous)
+        {
+            return Err(LocalMeterError::PreviousIndexMismatch);
+        }
+        tx.commit().await?;
+        Ok(MeterReadingPreview {
+            meter_id,
+            period: input.period.clone(),
+            previous: input.previous,
+            current: input.current,
+            measured_quantity: input.current - input.previous,
+            source: input.source.trim().to_owned(),
+        })
     }
 
     pub async fn utility_meter_reading_quantities(

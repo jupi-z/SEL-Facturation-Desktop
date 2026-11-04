@@ -161,6 +161,16 @@ pub struct MeterReading {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MeterReadingPreview {
+    pub meter_id: Uuid,
+    pub period: String,
+    pub previous: Decimal,
+    pub current: Decimal,
+    pub measured_quantity: Decimal,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CreateMeterReading {
     pub period: String,
     pub previous: Decimal,

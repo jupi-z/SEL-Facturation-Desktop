@@ -123,6 +123,7 @@ def mock_invoke_script() -> str:
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}};
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/service-accounts')) body = fixtures.serviceAccounts;
         else if (path.startsWith('/local/v1/service-accounts/') && path.endsWith('/meters')) body = fixtures.meters;
+        else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings/preview')) body = {{meter_id:'demo-meter-0001',period:'2026-10',previous:'1000',current:'1100',measured_quantity:'100',source:'MANUAL'}};
         else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings')) body = fixtures.readings;
         else if (path.startsWith('/local/v1/customers/')) body = fixtures.customers[0];
         else if (path.startsWith('/local/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
@@ -186,6 +187,10 @@ async def capture_views() -> None:
                     await selects.nth(0).select_option("demo-customer-0001")
                     await selects.nth(1).select_option("demo-service-account-0001")
                     await selects.nth(2).select_option("demo-meter-0001")
+                    await page.locator('.reading-entry input[name="period"]').fill("2026-11")
+                    await page.locator('.reading-entry input[name="current"]').fill("1100")
+                    await page.get_by_role("button", name="Prévisualiser les index").click()
+                    await page.get_by_text("100 KWH", exact=True).wait_for()
                 if slug == "solar":
                     await page.get_by_label("Vente à financer").select_option("demo-sale-0001")
                     await page.get_by_label("Échéance 1 · Date").fill("2026-12-01")
