@@ -195,8 +195,14 @@ async def capture_views() -> None:
                     await page.get_by_label("Référence des conditions approuvées").fill("DEMO-SOLAR-TERMS")
                     await page.get_by_role("button", name="Créer le contrat").click()
                     await page.get_by_role("heading", name="Échéancier consulté").wait_for()
+                    await page.get_by_role("heading", name="Contrats et échéanciers solaires").evaluate(
+                        "element => window.scrollTo(0, element.getBoundingClientRect().top + window.scrollY - 90)"
+                    )
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "solar-contracts-1440x900.png"))
+                await page.evaluate("window.scrollTo(0, 0)")
                 await page.wait_for_timeout(120)
-                await page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"), full_page=True)
+                await page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"))
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")

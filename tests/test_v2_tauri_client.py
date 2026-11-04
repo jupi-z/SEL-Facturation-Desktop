@@ -204,3 +204,5 @@ def test_figma_visual_review_uses_only_marked_synthetic_fixtures() -> None:
     assert 'DEMO-SOLAR-TERMS' in visual_review
     assert '"solarPlan": SOLAR_PLAN' in visual_review
     assert "body = fixtures.solarPlan" in visual_review
+    assert '"solar-contracts-1440x900.png"' in visual_review
+    assert 'page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"))' in visual_review
