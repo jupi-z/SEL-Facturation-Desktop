@@ -404,6 +404,7 @@ def test_visual_review_covers_water_meter_and_positive_water_invoice() -> None:
     assert '"demo-meter-water-0001"' in visual_review
     assert '"water-reading-preview-1440x900.png"' in visual_review
     assert '"invoice-preview-water-positive-1440x900.png"' in visual_review
+    assert 'Le calcul et les taxes viennent du moteur Rust. Cette prévisualisation n’a pas encore créé une facture.' in visual_review
     assert "Number(args.body?.water?.quantity ?? 0)" in visual_review
     assert 'get_by_text("5 m³", exact=True).wait_for()' in visual_review
     assert 'get_by_text("18,56 USD", exact=True).wait_for()' in visual_review

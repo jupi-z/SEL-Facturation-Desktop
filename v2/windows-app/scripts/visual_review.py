@@ -282,7 +282,7 @@ async def capture_views() -> None:
                     await page.get_by_label("Révision tarifaire approuvée").fill("DÉMO — DONNÉE FICTIVE")
                     await page.get_by_label("Je confirme que le relevé d’eau est exactement de 0 m³.").check()
                     await page.get_by_role("button", name="Prévisualiser la facture").click()
-                    await page.get_by_text("Calcul validé par Rust · facture non émise").wait_for()
+                    await page.get_by_text("Le calcul et les taxes viennent du moteur Rust. Cette prévisualisation n’a pas encore créé une facture.").wait_for()
                     await page.get_by_role("heading", name="Prévisualisation de facture").wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
