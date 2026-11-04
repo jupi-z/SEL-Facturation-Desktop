@@ -196,6 +196,10 @@ fn validate_central_admin_request(path: &str, method: &str) -> Result<(), String
         if is_uuid_segment(id) && method == "POST" { return Ok(()); }
         return Err("Méthode ou identifiant non autorisé pour cette route.".into());
     }
+    if let ["", "v1", "devices", id, "revoke"] = parts.as_slice() {
+        if is_uuid_segment(id) && method == "POST" { return Ok(()); }
+        return Err("Méthode ou identifiant non autorisé pour cette route.".into());
+    }
     if !path.starts_with("/v1/admin/") {
         return Err("Cette route centrale n’est pas autorisée depuis le client.".into());
     }
@@ -221,7 +225,7 @@ fn validate_central_admin_request(path: &str, method: &str) -> Result<(), String
     let Some(collection) = collection else {
         return Err("Cette route centrale n’est pas autorisée depuis le client.".into());
     };
-    if !matches!(collection, "users" | "devices" | "offline-grants" | "tariffs" | "products" | "tax-profiles" | "fx-rates") {
+    if !matches!(collection, "users" | "devices" | "offline-grants" | "audit-events" | "tariffs" | "products" | "tax-profiles" | "fx-rates") {
         return Err("Référentiel central non autorisé.".into());
     }
     let create_allowed = matches!(collection, "users" | "tariffs" | "products" | "tax-profiles" | "fx-rates");
@@ -482,11 +486,13 @@ mod tests {
             ("/v1/admin/users", "POST"),
             ("/v1/admin/devices", "GET"),
             ("/v1/admin/offline-grants", "GET"),
+            ("/v1/admin/audit-events", "GET"),
             ("/v1/admin/catalog/tariffs", "GET"),
             ("/v1/admin/catalog/products", "POST"),
             ("/v1/admin/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0", "PATCH"),
             ("/v1/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/password", "POST"),
             ("/v1/admin/offline-grants/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke", "POST"),
+            ("/v1/devices/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke", "POST"),
             ("/v1/admin/catalog/tariffs/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/approve", "POST"),
             ("/v1/admin/catalog/products/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke", "POST"),
         ] {
@@ -502,6 +508,8 @@ mod tests {
             ("/v1/admin/users?organization=other", "GET"),
             ("/v1/admin/catalog/products/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke", "DELETE"),
             ("/v1/admin/devices", "POST"),
+            ("/v1/devices/not-a-uuid/revoke", "POST"),
+            ("/v1/admin/audit-events", "POST"),
             ("/v1/admin/audit", "GET"),
             ("/v1/admin/users/not-a-uuid", "PATCH"),
             ("/v1/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/password", "GET"),

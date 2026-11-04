@@ -99,6 +99,31 @@ paths:
         '201': { description: Account created }
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/audit-events:
+    get:
+      operationId: listAdminAuditEvents
+      description: ADMIN only. Returns at most the 100 most recent redacted events associated with the authenticated organization through an actor or device; no event payloads are exposed.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Organization-scoped redacted audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, event_type, occurred_at, redacted_metadata]
+                  properties:
+                    id: { type: string, format: uuid }
+                    actor_id: { type: [string, 'null'], format: uuid }
+                    actor_identity: { type: [string, 'null'] }
+                    device_id: { type: [string, 'null'], format: uuid }
+                    event_type: { type: string }
+                    subject_id: { type: [string, 'null'], format: uuid }
+                    occurred_at: { type: string, format: date-time }
+                    redacted_metadata: { type: object }
+        '403': { $ref: '#/components/responses/Problem' }
   /v1/admin/users/{id}:
     patch:
       operationId: updateAdminUserAccess

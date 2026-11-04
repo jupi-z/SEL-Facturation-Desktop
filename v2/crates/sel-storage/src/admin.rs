@@ -29,6 +29,35 @@ impl CentralStore {
             .collect()
     }
 
+    pub async fn admin_list_audit_events(&self) -> Result<Vec<Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT e.id, e.actor, u.identity_ref AS actor_identity, e.device,
+                    e.event_type, e.subject_id, e.occurred_at, e.redacted_metadata
+             FROM audit_events e
+             LEFT JOIN users u ON u.id = e.actor AND u.organization_id = $1
+             WHERE EXISTS (SELECT 1 FROM users au WHERE au.id = e.actor AND au.organization_id = $1)
+                OR EXISTS (SELECT 1 FROM devices d WHERE d.id = e.device AND d.organization_id = $1)
+             ORDER BY e.occurred_at DESC, e.id DESC LIMIT 100",
+        )
+        .bind(self.organization_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(json!({
+                    "id": row.try_get::<Uuid, _>("id")?,
+                    "actor_id": row.try_get::<Option<Uuid>, _>("actor")?,
+                    "actor_identity": row.try_get::<Option<String>, _>("actor_identity")?,
+                    "device_id": row.try_get::<Option<Uuid>, _>("device")?,
+                    "event_type": row.try_get::<String, _>("event_type")?,
+                    "subject_id": row.try_get::<Option<Uuid>, _>("subject_id")?,
+                    "occurred_at": row.try_get::<DateTime<Utc>, _>("occurred_at")?,
+                    "redacted_metadata": row.try_get::<Value, _>("redacted_metadata")?
+                }))
+            })
+            .collect()
+    }
+
     pub async fn admin_create_user(
         &self,
         actor_id: Uuid,

@@ -2372,6 +2372,58 @@ impl LocalStore {
             .await
     }
 
+    pub async fn sync_issue_counts(&self) -> Result<(i64, i64), sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT
+                (SELECT count(*) FROM sync_conflicts) +
+                (SELECT count(*) FROM outbox o WHERE o.state = 'CONFLICT'
+                 AND NOT EXISTS (SELECT 1 FROM sync_conflicts c WHERE c.event_id = o.event_id)) AS conflicts,
+                (SELECT count(*) FROM outbox WHERE state = 'REJECTED') AS rejected",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((row.try_get("conflicts")?, row.try_get("rejected")?))
+    }
+
+    /// Read-only synchronization diagnostics. Never returns stored command payloads.
+    pub async fn list_sync_issues(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, event_id, reason, central_revision, created_at, issue_type, command_type
+             FROM (
+                SELECT c.id, c.event_id, c.reason, c.central_revision, c.created_at,
+                       'CONFLICT' AS issue_type, NULL AS command_type
+                FROM sync_conflicts c
+                UNION ALL
+                SELECT j.event_id AS id, j.event_id,
+                       COALESCE(o.last_error, j.status) AS reason, NULL AS central_revision,
+                       j.created_at, o.state AS issue_type, j.command_type
+                FROM outbox o JOIN command_journal j ON j.event_id = o.event_id
+                WHERE o.state IN ('CONFLICT', 'REJECTED')
+                  AND NOT EXISTS (SELECT 1 FROM sync_conflicts c WHERE c.event_id = j.event_id)
+             ) AS issues
+             ORDER BY created_at DESC, id DESC LIMIT $1",
+        )
+        .bind(limit.clamp(1, 100))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(json!({
+                    "id": row.try_get::<String, _>("id")?,
+                    "event_id": row.try_get::<String, _>("event_id")?,
+                    "reason": row.try_get::<String, _>("reason")?,
+                    "central_revision": row.try_get::<Option<i64>, _>("central_revision")?,
+                    "created_at": row.try_get::<String, _>("created_at")?,
+                    "status": row.try_get::<String, _>("issue_type")?,
+                    "command_type": row.try_get::<Option<String>, _>("command_type")?
+                }))
+            })
+            .collect()
+    }
+
     pub async fn central_cursor(&self) -> Result<i64, sqlx::Error> {
         Ok(sqlx::query_scalar::<_, String>(
             "SELECT value FROM sync_state WHERE key = 'central_cursor'",

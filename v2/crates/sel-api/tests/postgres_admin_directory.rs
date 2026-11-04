@@ -166,3 +166,85 @@ async fn admin_directory_creates_lists_and_suspends_users_without_destructive_de
         .unwrap();
     assert_eq!(protected_admin.status(), StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn central_audit_listing_is_admin_only_and_organization_scoped() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    std::env::remove_var("SEL_ALLOW_LEGACY_TOKEN");
+    let organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .unwrap();
+    migrate_postgres(&store.pool).await.unwrap();
+    store
+        .ensure_organization("SEL audit fixture")
+        .await
+        .unwrap();
+    let admin_id = store
+        .bootstrap_initial_admin("audit-admin", "audit admin passcode")
+        .await
+        .unwrap();
+    let outsider_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO audit_events (id, actor, event_type, subject_id, occurred_at, redacted_metadata)
+         VALUES ($1,$2,'AUDIT_VISIBLE',$3,now(),'{}'::jsonb),
+                ($4,$5,'AUDIT_OTHER_ORG',$6,now(),'{}'::jsonb)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(admin_id)
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .bind(outsider_id)
+    .bind(Uuid::new_v4())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    let other_store = CentralStore::connect(&database_url, Uuid::new_v4())
+        .await
+        .unwrap();
+    other_store
+        .ensure_organization("Other audit fixture")
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO users (id, organization_id, role, status, identity_ref) VALUES ($1,$2,'ADMIN','ACTIVE','other-audit-admin')")
+        .bind(outsider_id)
+        .bind(other_store.organization_id)
+        .execute(&other_store.pool)
+        .await
+        .unwrap();
+
+    let app = router(AppState::with_production_central_store(store));
+    let (status, login_response) = login(&app, "audit-admin", "audit admin passcode").await;
+    assert_eq!(status, StatusCode::OK);
+    let admin_token = login_response["access_token"].as_str().unwrap();
+    let audit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/admin/audit-events")
+                .header("authorization", format!("Bearer {admin_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit.status(), StatusCode::OK);
+    let audit = body(audit).await;
+    assert!(audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["event_type"] == "AUDIT_VISIBLE"));
+    assert!(!audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["event_type"] == "AUDIT_OTHER_ORG"));
+    assert!(audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry.get("redacted_metadata").is_some()));
+}

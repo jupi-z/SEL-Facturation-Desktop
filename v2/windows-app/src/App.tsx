@@ -146,6 +146,7 @@ export default function App() {
   const [solarSaleDraft, setSolarSaleDraft] = useState<Row | null>(null);
   const [solarSaleOpen, setSolarSaleOpen] = useState(false);
   const [sync, setSync] = useState<Row | null>(null);
+  const [syncIssues, setSyncIssues] = useState<Row[]>([]);
   const [notice, setNotice] = useState<Notice>(null);
   const [loading, setLoading] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState("");
@@ -167,17 +168,18 @@ export default function App() {
       const local = await localStatus<Row>();
       setSync(local);
       if (local.status === "ACTIVATION_REQUIRED") {
-        setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]);
+        setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]); setSyncIssues([]);
         setNotice({ message: text(local.message, "Ce poste doit être activé par un administrateur SEL."), error: true });
         return;
       }
-      const [customerResult, invoiceResult, paymentResult, saleResult, productsResult, syncResult] = await Promise.allSettled([
+      const [customerResult, invoiceResult, paymentResult, saleResult, productsResult, syncResult, issueResult] = await Promise.allSettled([
         localRequest<unknown>("/local/v1/customers"),
         localRequest<unknown>("/local/v1/invoices?limit=100"),
         localRequest<unknown>("/local/v1/payments?limit=100"),
         localRequest<unknown>("/local/v1/solar/sales?limit=100"),
         localRequest<unknown>("/local/v1/solar/products"),
         Promise.resolve(local),
+        localRequest<Row>("/local/v1/sync/issues"),
       ]);
       if (customerResult.status === "fulfilled") setCustomers(rows(customerResult.value));
       if (invoiceResult.status === "fulfilled") setInvoices(rows(invoiceResult.value));
@@ -185,7 +187,8 @@ export default function App() {
       if (saleResult.status === "fulfilled") setSales(rows(saleResult.value));
       if (productsResult.status === "fulfilled") setSolarProducts(rows(productsResult.value));
       if (syncResult.status === "fulfilled") setSync(syncResult.value);
-      const failure = [customerResult, invoiceResult, paymentResult, saleResult, productsResult, syncResult].find((result) => result.status === "rejected");
+      if (issueResult.status === "fulfilled") setSyncIssues(rows<Row>(issueResult.value.items));
+      const failure = [customerResult, invoiceResult, paymentResult, saleResult, productsResult, syncResult, issueResult].find((result) => result.status === "rejected");
       setNotice(failure?.status === "rejected" ? { message: humanError(failure.reason), error: true } : null);
     } finally {
       setLoading(false);
@@ -530,6 +533,7 @@ export default function App() {
         <div className="page-heading"><div><p className="eyebrow">ADMIN / CONTINUITÉ</p><h1>Centre de synchronisation</h1><p className="muted">Une opération n’est confirmée qu’après l’accusé durable du serveur central.</p></div><Button primary onClick={() => void syncNow()}>Synchroniser maintenant</Button></div>
         <div className="metrics compact-metrics"><Metric label="À envoyer" value={text(sync?.pending, "—")} note="Enregistrées en SQLite" /><Metric label="Conflits" value={text(sync?.conflicts, "—")} note="À examiner" /><Metric label="Refus" value={text(sync?.rejected, "—")} note="Motif conservé" /><Metric label="Dernière réussite" value={text(sync?.last_successful_sync, "Aucune confirmée")} note="Accusé central" /></div>
         <Panel title="État du poste"><div className="summary-state"><Status value={text(sync?.state ?? sync?.status, "LOCAL_ONLY")} /><p>{pending ? `${pending} opération(s) attendent leur confirmation centrale.` : "Le statut reflète les informations confirmées par l’agent local."}</p><p>Autorisation hors ligne : {text(sync?.offline_grant, "état non communiqué")}</p></div></Panel>
+        <Panel title="Conflits et refus à examiner"><p className="help">Ces opérations restent conservées sur le poste. Aucun conflit financier n’est résolu automatiquement.</p><Table headers={["Événement", "Commande", "État", "Motif", "Révision centrale", "Date"]} empty="Aucun conflit ou refus enregistré localement." data={syncIssues.map((issue) => [<strong>{text(issue.event_id)}</strong>, text(issue.command_type), <Status value={issue.status} />, text(issue.reason), text(issue.central_revision), formatDateTime(issue.created_at)])} /></Panel>
       </>}
 
       {view === "admin" && <>
@@ -940,6 +944,7 @@ function AdminConsole() {
   const [products, setProducts] = useState<Row[]>([]);
   const [taxProfiles, setTaxProfiles] = useState<Row[]>([]);
   const [fxRates, setFxRates] = useState<Row[]>([]);
+  const [auditEvents, setAuditEvents] = useState<Row[]>([]);
   const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
   const [passwordTarget, setPasswordTarget] = useState("");
   const [message, setMessage] = useState("");
@@ -951,7 +956,7 @@ function AdminConsole() {
   function clearAdminSession() {
     authenticated.current = false;
     setSession({ authenticated: false });
-    setUsers([]); setDevices([]); setGrants([]); setTariffs([]); setProducts([]); setTaxProfiles([]); setFxRates([]);
+    setUsers([]); setDevices([]); setGrants([]); setTariffs([]); setProducts([]); setTaxProfiles([]); setFxRates([]); setAuditEvents([]);
   }
 
   const loadData = useCallback(async () => {
@@ -959,11 +964,11 @@ function AdminConsole() {
     const paths = [
       "/v1/admin/users", "/v1/admin/devices", "/v1/admin/offline-grants",
       "/v1/admin/catalog/tariffs", "/v1/admin/catalog/products",
-      "/v1/admin/catalog/tax-profiles", "/v1/admin/catalog/fx-rates",
+      "/v1/admin/catalog/tax-profiles", "/v1/admin/catalog/fx-rates", "/v1/admin/audit-events",
     ];
     const results = await Promise.allSettled(paths.map((path) => centralAdminRequest<unknown>(path)));
     if (!authenticated.current) return;
-    const setters = [setUsers, setDevices, setGrants, setTariffs, setProducts, setTaxProfiles, setFxRates] as const;
+    const setters = [setUsers, setDevices, setGrants, setTariffs, setProducts, setTaxProfiles, setFxRates, setAuditEvents] as const;
     results.forEach((result, index) => { if (result.status === "fulfilled") setters[index](rows<Row>(result.value)); });
     const failed = results.filter((result) => result.status === "rejected");
     if (failed.length) {
@@ -974,7 +979,7 @@ function AdminConsole() {
         return;
       }
     }
-    setMessage(failed.length ? `${7 - failed.length} référentiel(s) chargé(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "Données d’administration actualisées depuis le serveur central.");
+    setMessage(failed.length ? `${8 - failed.length} rubrique(s) chargée(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "Données d’administration actualisées depuis le serveur central.");
     setError(failed.length > 0);
     setLoading(false);
   }, []);
@@ -1031,6 +1036,26 @@ function AdminConsole() {
       await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { status });
       setMessage(status === "ACTIVE" ? "Compte réactivé." : "Compte désactivé. Les sessions associées sont révoquées côté serveur.");
       setError(false); await loadData();
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+  }
+
+  async function revokeDevice(device: Row) {
+    const id = text(device.id ?? device.device_id, "");
+    if (!id || text(device.state ?? device.status).toUpperCase() === "REVOKED") return;
+    if (!window.confirm("Révoquer cet appareil ? Il ne pourra plus synchroniser jusqu’à un nouvel enrôlement.")) return;
+    try {
+      await centralAdminRequest(`/v1/devices/${encodeURIComponent(id)}/revoke`, "POST");
+      setMessage("Appareil révoqué par le serveur central."); setError(false); await loadData();
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+  }
+
+  async function revokeGrant(grant: Row) {
+    const id = text(grant.id ?? grant.grant_id, "");
+    if (!id || grant.revoked_at) return;
+    if (!window.confirm("Révoquer cette autorisation hors ligne ? Le poste concerné devra se reconnecter pour recevoir une nouvelle autorisation.")) return;
+    try {
+      await centralAdminRequest(`/v1/admin/offline-grants/${encodeURIComponent(id)}/revoke`, "POST");
+      setMessage("Autorisation hors ligne révoquée par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
   }
 
@@ -1131,9 +1156,9 @@ function AdminConsole() {
       <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
     </div>
     <div className="admin-grid">
-      <Panel title="Appareils enrôlés"><Table headers={["Appareil", "État", "Dernière activité"]} empty="Aucun appareil communiqué." data={devices.map((device) => [text(device.id ?? device.device_id), <Status value={device.state ?? device.status} />, text(device.last_seen ?? device.last_seen_at)])} /></Panel>
-      <Panel title="Autorisations hors ligne"><Table headers={["Autorisation", "Utilisateur", "Expiration", "État"]} empty="Aucune autorisation retournée." data={grants.map((grant) => [text(grant.id ?? grant.grant_id), text(grant.user_id), text(grant.expires_at), <Status value={grant.revoked_at ? "Révoquée" : "Émise"} />])} /></Panel>
+      <Panel title="Appareils enrôlés"><Table headers={["Appareil", "État", "Dernière activité", "Action"]} empty="Aucun appareil communiqué." data={devices.map((device) => [text(device.id ?? device.device_id), <Status value={device.state ?? device.status} />, text(device.last_seen ?? device.last_seen_at), <Button disabled={text(device.state ?? device.status).toUpperCase() === "REVOKED"} onClick={() => void revokeDevice(device)}>Révoquer</Button>])} /></Panel>
+      <Panel title="Autorisations hors ligne"><Table headers={["Autorisation", "Utilisateur", "Expiration", "État", "Action"]} empty="Aucune autorisation retournée." data={grants.map((grant) => [text(grant.id ?? grant.grant_id), text(grant.user_id), text(grant.expires_at), <Status value={grant.revoked_at ? "Révoquée" : "Émise"} />, <Button disabled={Boolean(grant.revoked_at)} onClick={() => void revokeGrant(grant)}>Révoquer</Button>])} /></Panel>
     </div>
-    <p className="help">Les changements sont créés comme brouillons puis approuvés avec une référence fournie par SEL. La consultation du journal d’audit n’est pas intégrée car l’API ne fournit pas encore cette route.</p>
+    <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>
   </>;
 }

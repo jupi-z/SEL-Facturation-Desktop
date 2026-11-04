@@ -250,6 +250,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/admin/users",
             get(admin_list_users).post(admin_create_user),
         )
+        .route("/v1/admin/audit-events", get(admin_list_audit_events))
         .route("/v1/admin/users/:id", patch(admin_update_user))
         .route("/v1/admin/devices", get(admin_list_devices))
         .route("/v1/admin/offline-grants", get(admin_list_offline_grants))
@@ -444,7 +445,10 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
     if *method == Method::GET {
         if matches!(
             path,
-            "/v1/admin/users" | "/v1/admin/devices" | "/v1/admin/offline-grants"
+            "/v1/admin/users"
+                | "/v1/admin/devices"
+                | "/v1/admin/offline-grants"
+                | "/v1/admin/audit-events"
         ) || matches!(
             path,
             "/v1/admin/catalog/tariffs"
@@ -1295,6 +1299,20 @@ async fn admin_list_users(
     let store = central_store(&state)?;
     store
         .admin_list_users()
+        .await
+        .map(Json)
+        .map_err(storage_error)
+}
+
+async fn admin_list_audit_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_auth(&headers)?;
+    require_admin(principal)?;
+    central_store(&state)?
+        .admin_list_audit_events()
         .await
         .map(Json)
         .map_err(storage_error)
@@ -4121,6 +4139,7 @@ mod tests {
             "/v1/admin/users",
             "/v1/admin/devices",
             "/v1/admin/offline-grants",
+            "/v1/admin/audit-events",
         ] {
             assert!(role_allows_request(&Method::GET, path, "ADMIN"), "{path}");
             for role in ["SUPERVISOR", "BILLING_AGENT", "CASHIER", "AUDITOR_READONLY"] {

@@ -133,7 +133,7 @@ def mock_invoke_script() -> str:
     return f"""
       const fixtures = {fixtures};
       window.__TAURI_INTERNALS__ = {{ invoke: async (command, args = {{}}) => {{
-        if (command === 'local_status') return {{status:'LOCAL_READY',pending:5,conflicts:0,rejected:0,last_successful_sync:'Aucune confirmée'}};
+        if (command === 'local_status') return {{status:'LOCAL_READY',pending:5,conflicts:1,rejected:1,last_successful_sync:'Aucune confirmée'}};
         if (command === 'central_session_status') return window.__ADMIN_DEMO_SESSION__ ? {{authenticated:true,user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}} : {{authenticated:false}};
         if (command === 'central_login') {{ window.__ADMIN_DEMO_SESSION__ = true; return {{user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}}; }}
         if (command === 'central_logout') {{ window.__ADMIN_DEMO_SESSION__ = false; return null; }}
@@ -143,6 +143,7 @@ def mock_invoke_script() -> str:
           if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
           else if (adminPath === '/v1/admin/devices') adminBody = [{{device_id:'demo-device-0001',status:'ACTIVE',last_seen_at:'2026-11-04T08:00:00Z'}}];
           else if (adminPath === '/v1/admin/offline-grants') adminBody = [{{grant_id:'demo-grant-0001',user_id:'demo-agent-0001',expires_at:'2026-12-01',status:'ACTIVE'}}];
+          else if (adminPath === '/v1/admin/audit-events') adminBody = [{{id:'demo-audit-0001',event_type:'USER_CREATED',actor_identity:'admin-demo',subject_id:'demo-agent-0001',occurred_at:'2026-11-04T08:10:00Z',redacted_metadata:{{role:'BILLING_AGENT'}}}}];
           else if (adminPath.endsWith('/tariffs')) adminBody = [{{service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',status:'APPROVED'}}];
           else if (adminPath.endsWith('/products')) adminBody = fixtures.products.map(product => ({{...product,status:'APPROVED'}}));
           else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{service_code:'DEMO',jurisdiction:'DEMO',base:'NET',rate:'0.16',status:'APPROVED'}}];
@@ -173,6 +174,7 @@ def mock_invoke_script() -> str:
         else if (path.startsWith('/local/v1/solar/contracts')) {{ fixtures.sales[0].installment_plan_id = 'demo-plan-0001'; body = {{installment_plan_id:'demo-plan-0001',contract_id:'demo-contract-0001'}}; }}
         else if (path.startsWith('/local/v1/installment-plans/')) body = fixtures.solarPlan;
         else if (path.startsWith('/local/v1/sync/trigger')) body = {{status:'PENDING_NETWORK',pending:5}};
+        else if (path.startsWith('/local/v1/sync/issues')) body = {{conflicts:1,rejected:1,items:[{{id:'demo-conflict-0001',event_id:'demo-event-0001',command_type:'UTILITY_INVOICE_ISSUED',status:'CONFLICT',reason:'Révision centrale différente',central_revision:4,created_at:'2026-11-04T08:12:00Z'}}]}};
         else if (path.startsWith('/local/v1/sync/status')) body = {{status:'LOCAL_READY',pending:5,conflicts:0,rejected:0,last_successful_sync:'Aucune confirmée'}};
         return {{status:200,body}};
       }}}};

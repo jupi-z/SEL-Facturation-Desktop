@@ -324,6 +324,7 @@ fn router_with_store_base(store: LocalStore) -> Router {
             post(activate_solar_contract),
         )
         .route("/local/v1/sync/status", get(status_with_store))
+        .route("/local/v1/sync/issues", get(sync_issues))
         .route("/local/v1/sync/trigger", post(trigger_sync_with_store))
         .route("/local/v1/updates/status", get(update_status))
         .with_state(LocalAppState { store })
@@ -379,6 +380,11 @@ async fn status_with_store(
     State(state): State<LocalAppState>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
     let pending = state.store.pending_count().await.map_err(internal_error)?;
+    let (conflicts, rejected) = state
+        .store
+        .sync_issue_counts()
+        .await
+        .map_err(internal_error)?;
     let offline_grant =
         if state.store.actor_id != Uuid::nil() && state.store.offline_grant_id != Uuid::nil() {
             "CONFIGURED"
@@ -388,11 +394,29 @@ async fn status_with_store(
     Ok(Json(json!({
         "status": if pending == 0 { "LOCAL_READY" } else { "LOCAL_PENDING" },
         "pending": pending,
-        "conflicts": 0,
-        "rejected": 0,
+        "conflicts": conflicts,
+        "rejected": rejected,
         "protocol_version": 1,
         "offline_grant": offline_grant
     })))
+}
+
+async fn sync_issues(
+    State(state): State<LocalAppState>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    let (conflicts, rejected) = state
+        .store
+        .sync_issue_counts()
+        .await
+        .map_err(internal_error)?;
+    let items = state
+        .store
+        .list_sync_issues(100)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(
+        json!({"conflicts": conflicts, "rejected": rejected, "items": items}),
+    ))
 }
 
 async fn create_customer(

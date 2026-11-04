@@ -59,7 +59,9 @@ async fn local_solar_catalog_exposes_only_current_approved_products() {
         .unwrap();
     }
 
-    let response = router_with_store(store.clone())
+    let app = router_with_store(store.clone());
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/local/v1/solar/products")
@@ -118,6 +120,61 @@ async fn local_status_reads_durable_outbox_counts() {
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["status"], "LOCAL_PENDING");
     assert_eq!(body["pending"], 1);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn local_sync_issues_expose_conflicts_without_leaking_payloads() {
+    let path = std::env::temp_dir().join(format!("sel-v2-sync-issues-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
+    let event_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO sync_conflicts (id,event_id,reason,central_revision,payload_json,created_at)
+         VALUES ($1,$2,'REVISION_MISMATCH',7,'{\"sensitive\":\"must-not-be-returned\"}',datetime('now'))",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(event_id.to_string())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+
+    let app = router_with_store(store.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/local/v1/sync/issues")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let issues = json_body(response).await;
+    assert_eq!(issues["conflicts"], 1);
+    assert_eq!(issues["items"][0]["event_id"], event_id.to_string());
+    assert_eq!(issues["items"][0]["reason"], "REVISION_MISMATCH");
+    assert_eq!(issues["items"][0]["central_revision"], 7);
+    assert!(issues["items"][0].get("payload").is_none());
+    assert!(issues["items"][0].get("payload_json").is_none());
+
+    let status = app
+        .oneshot(
+            Request::builder()
+                .uri("/local/v1/sync/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json_body(status).await["conflicts"], 1);
+
     let _ = std::fs::remove_file(path);
 }
 

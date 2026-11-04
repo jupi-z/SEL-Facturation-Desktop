@@ -11,7 +11,7 @@
 | Domaine | Routes proposées | Règles |
 |---|---|---|
 | Contrôle API | `GET /health/live`, `GET /health/ready`, `GET /v1/meta/capabilities` | Sans frontend, version/protocol, aucun secret |
-| Auth/admin | `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/devices/enroll`, `POST /v1/offline-grants` | RBAC, enrôlement supervisé, scopes |
+| Auth/admin | `POST /v1/auth/login`, `POST /v1/auth/refresh`, `GET /v1/admin/audit-events`, `POST /v1/devices/enroll`, `POST /v1/offline-grants` | RBAC, événements redacted limités à l’organisation (100 derniers), enrôlement supervisé, scopes |
 | Abonnés | `GET/POST /v1/customers`, `GET/PATCH /v1/customers/{id}` | ID UUID, suppression sécurisée, ETag |
 | Référentiels | `GET /v1/catalog/products`, `GET /v1/catalog/tariffs`, `GET /v1/catalog/tax-profiles`, `GET /v1/catalog/fx-rates` | Versions validées/datées, lecture cache offline |
 | Énergie/eau | `POST /v1/billing/utility/preview`, `POST /v1/billing/utility/issue` | Exactement deux services, 0 M3, snapshot immuable |
@@ -22,7 +22,7 @@
 | Synchronisation | `POST /v1/sync/push`, `GET /v1/sync/pull?cursor=...&limit=...`, `GET /v1/sync/status` | Enveloppes signées/authentifiées, ack, pagination, conflits |
 | LiveUpdate | `GET /v1/config/versions`, `GET /v1/client-resources/manifest` | Métadonnées/ressources génériques signées, jamais PDF facture |
 
-**Local API `http://127.0.0.1:<port>/local/v1/`** : endpoints homologues pour tests et client existant, et `/local/v1/sync/status`, `/local/v1/sync/trigger`, `/local/v1/updates/status` ; l'agent traduit commandes offline en outbox, ne proxy pas aveuglément des POST distants. Le local doit aussi être testable sans UI via HTTP/CLI.
+**Local API `http://127.0.0.1:<port>/local/v1/`** : endpoints homologues pour tests et client, avec `/local/v1/sync/status`, `/local/v1/sync/issues`, `/local/v1/sync/trigger` et `/local/v1/updates/status`. `sync/issues` retourne au plus 100 conflits/refus sans le payload des commandes ; les opérations financières conflictuelles restent conservées et ne sont jamais résolues automatiquement. L'agent traduit les commandes offline en outbox, sans proxy aveugle de POST distants. Le local est testable sans UI via HTTP/CLI.
 
 ## Exemples contractuels (données synthétiques)
 ```json
