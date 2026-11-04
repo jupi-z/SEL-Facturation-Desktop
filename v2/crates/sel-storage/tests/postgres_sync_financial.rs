@@ -8,8 +8,35 @@ use sel_contracts::{
 use sel_storage::postgres::PaymentWriteOutcome;
 use sel_storage::{migrate_postgres, CentralStore};
 use sel_sync::payload_digest;
-use sqlx::Row;
+use sqlx::{postgres::PgPoolOptions, Row};
+use std::str::FromStr;
 use uuid::Uuid;
+
+async fn isolated_central_store(
+    database_url: &str,
+    organization_id: Uuid,
+) -> (CentralStore, String) {
+    let schema = format!("financial_sync_{}", Uuid::new_v4().simple());
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+    let options = sqlx::postgres::PgConnectOptions::from_str(database_url)
+        .unwrap()
+        .options([("search_path", schema.as_str())]);
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect_with(options)
+        .await
+        .unwrap();
+    admin_pool.close().await;
+    (CentralStore::from_pool(pool, organization_id), schema)
+}
 
 #[tokio::test]
 #[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
@@ -247,9 +274,7 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
     let customer_id = Uuid::new_v4();
     let invoice_id = Uuid::new_v4();
     let receivable_id = Uuid::new_v4();
-    let store = CentralStore::connect(&database_url, organization_id)
-        .await
-        .unwrap();
+    let (store, schema) = isolated_central_store(&database_url, organization_id).await;
     migrate_postgres(&store.pool).await.unwrap();
     store
         .ensure_organization("utility sync fixture")
@@ -419,6 +444,17 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
     assert_eq!(positive_water.0, Decimal::new(2, 0));
     assert_eq!(positive_water.1, Decimal::new(250, 2));
     assert_eq!(positive_water.2, Decimal::new(290, 2));
+    store.pool.close().await;
+    let cleanup_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&cleanup_pool)
+        .await
+        .unwrap();
+    cleanup_pool.close().await;
 }
 
 #[tokio::test]
