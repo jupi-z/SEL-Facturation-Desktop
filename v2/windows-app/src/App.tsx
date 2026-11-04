@@ -914,7 +914,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }:
       <div className="form-actions span-two"><Button primary type="submit" disabled={busy}>Créer un brouillon</Button></div>
       <p className="help span-two">Le brouillon n’est pas applicable aux factures. Il faut une référence d’approbation saisie par SEL pour l’activer.</p>
     </form>
-    <Table headers={[...definition.columns.map((field) => field.replaceAll("_", " ")), "Approbation"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
+    <Table headers={[...definition.columns.map((field) => field.replace(/_/g, " ")), "Approbation"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
       const id = text(item.id ?? item[idField], "");
       const status = text(item.status).toUpperCase();
       const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={(event) => {
