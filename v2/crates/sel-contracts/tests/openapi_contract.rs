@@ -9,6 +9,12 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .unwrap();
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices/{id}/document-data")));
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices")));
+    let payment_list = paths
+        .get(serde_yaml::Value::from("/v1/payments"))
+        .and_then(|path| path.get("get"))
+        .expect("central payment journal route is documented");
+    assert!(payment_list.get("security").is_some());
+    assert!(paths.contains_key(serde_yaml::Value::from("/v1/payments/{id}/document-data")));
     let statement_operation = paths
         .get(serde_yaml::Value::from("/v1/customers/{id}/statement"))
         .and_then(|path| path.get("get"))
@@ -145,6 +151,8 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         "TariffDraft",
         "CustomerStatement",
         "CustomerStatementPayment",
+        "PaymentListItem",
+        "PaymentReceiptData",
     ] {
         assert!(schemas.contains_key(serde_yaml::Value::from(schema)));
     }

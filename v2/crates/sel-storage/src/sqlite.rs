@@ -1724,17 +1724,26 @@ impl LocalStore {
         ))
     }
 
-    pub async fn list_payments(&self, limit: u32) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    pub async fn list_payments(
+        &self,
+        limit: u32,
+        customer_id: Option<Uuid>,
+        status: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT p.id, p.customer_id, p.amount_received, p.currency,
                     p.method, p.paid_at, p.status
              FROM payments p
              JOIN customers c ON c.id = p.customer_id
              WHERE c.organization_id = $1
+               AND ($2 IS NULL OR p.customer_id = $2)
+               AND ($3 IS NULL OR p.status = $3)
              ORDER BY p.paid_at DESC, p.id DESC
-             LIMIT $2",
+             LIMIT $4",
         )
         .bind(self.organization_id.to_string())
+        .bind(customer_id.map(|id| id.to_string()))
+        .bind(status)
         .bind(i64::from(limit.clamp(1, 100)))
         .fetch_all(&self.pool)
         .await?;
@@ -1751,6 +1760,95 @@ impl LocalStore {
                 }))
             })
             .collect()
+    }
+
+    pub async fn payment_document_data(
+        &self,
+        payment_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let payment = sqlx::query(
+            "SELECT p.id, p.customer_id, p.amount_received, p.currency, p.method,
+                    p.paid_at, p.status, c.customer_code, c.legal_name,
+                    c.contact_fields_json
+             FROM payments p
+             JOIN customers c ON c.id = p.customer_id
+             WHERE p.id = $1 AND c.organization_id = $2",
+        )
+        .bind(payment_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(payment) = payment else {
+            return Ok(None);
+        };
+
+        let allocation_rows = sqlx::query(
+            "SELECT receivable_id, schedule_id, allocated_amount, currency
+             FROM payment_allocations WHERE payment_id = $1 ORDER BY id",
+        )
+        .bind(payment_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let allocations = allocation_rows
+            .into_iter()
+            .map(|row| {
+                Ok(json!({
+                    "receivable_id": parse_uuid_column(&row, "receivable_id", "payment receivable")?,
+                    "schedule_id": row.try_get::<Option<String>, _>("schedule_id")?.and_then(|value| value.parse::<Uuid>().ok()),
+                    "amount": format!("{:.2}", decimal_text(&row, "allocated_amount")?.round_dp(2)),
+                    "currency": row.try_get::<String, _>("currency")?
+                }))
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+
+        let reversal_rows = sqlx::query(
+            "SELECT amount, reason, created_at FROM payment_reversals
+             WHERE payment_id = $1 ORDER BY created_at, id",
+        )
+        .bind(payment_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let reversals = reversal_rows
+            .into_iter()
+            .map(|row| {
+                Ok(json!({
+                    "amount": format!("{:.2}", decimal_text(&row, "amount")?.round_dp(2)),
+                    "reason": row.try_get::<String, _>("reason")?,
+                    "created_at": row.try_get::<String, _>("created_at")?
+                }))
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+
+        let customer_id = parse_uuid_column(&payment, "customer_id", "payment customer")?;
+        let contact_fields: serde_json::Value =
+            serde_json::from_str(&payment.try_get::<String, _>("contact_fields_json")?).map_err(
+                |error| sqlx::Error::Protocol(format!("invalid customer contact fields: {error}")),
+            )?;
+        Ok(Some(json!({
+            "document_schema_version": 1,
+            "document_type": "PAYMENT_RECEIPT",
+            "document_reference": format!("SEL-PAY-{}", payment_id.simple().to_string().to_uppercase()),
+            "qr_internal_reference": format!("SEL:PAYMENT:{payment_id}"),
+            "payment": {
+                "payment_id": payment_id,
+                "customer_id": customer_id,
+                "amount_received": format!("{:.2}", decimal_text(&payment, "amount_received")?.round_dp(2)),
+                "currency": payment.try_get::<String, _>("currency")?,
+                "method": payment.try_get::<String, _>("method")?,
+                "paid_at": payment.try_get::<String, _>("paid_at")?,
+                "status": payment.try_get::<String, _>("status")?
+            },
+            "customer": {
+                "customer_id": customer_id,
+                "customer_code": payment.try_get::<String, _>("customer_code")?,
+                "legal_name": payment.try_get::<String, _>("legal_name")?,
+                "address": contact_fields.get("address").cloned().unwrap_or(serde_json::Value::Null),
+                "phone": contact_fields.get("phone").cloned().unwrap_or(serde_json::Value::Null)
+            },
+            "allocations": allocations,
+            "reversals": reversals,
+            "origin": "LOCAL"
+        })))
     }
 
     pub async fn list_solar_sales(

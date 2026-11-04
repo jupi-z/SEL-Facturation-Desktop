@@ -662,6 +662,29 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
   /v1/payments:
+    get:
+      operationId: listPayments
+      description: Bounded central payment journal. Results are scoped to the authenticated organization and may be filtered by customer and status.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: customer_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [CENTRAL_ACCEPTED, CONFLICT_REQUIRES_REVIEW, REJECTED] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Payments ordered by payment time, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PaymentListItem' }
+        '401': { $ref: '#/components/responses/Problem' }
     post:
       operationId: recordPayment
       security: [{ bearerAuth: [] }]
@@ -670,6 +693,19 @@ paths:
       responses:
         '201': { description: Payment recorded }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/payments/{id}/document-data:
+    get:
+      operationId: getPaymentDocumentData
+      description: Versioned JSON facts for local receipt rendering. This endpoint never returns or stores a document file.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200':
+          description: Structured receipt facts for client-side rendering.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentReceiptData' }
+        '404': { $ref: '#/components/responses/Problem' }
   /v1/payments/{id}/allocate:
     post:
       operationId: allocatePayment
@@ -1240,6 +1276,66 @@ components:
               amount: { type: string }
               reason: { type: string }
               created_at: { type: string, format: date-time }
+    PaymentListItem:
+      type: object
+      required: [payment_id, customer_id, amount_received, currency, method, paid_at, status]
+      properties:
+        payment_id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        amount_received: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        method: { type: string }
+        paid_at: { type: string, format: date-time }
+        status: { type: string }
+    PaymentReceiptData:
+      type: object
+      required: [document_schema_version, document_type, document_reference, qr_internal_reference, payment, customer, allocations, reversals, origin]
+      properties:
+        document_schema_version: { type: integer, const: 1 }
+        document_type: { type: string, const: PAYMENT_RECEIPT }
+        document_reference: { type: string, description: Stable internal reference derived from the payment UUID; not a tax identifier. }
+        qr_internal_reference: { type: string, description: Internal SEL reference only; not an official tax QR. }
+        payment:
+          type: object
+          required: [payment_id, customer_id, amount_received, currency, method, paid_at, status]
+          properties:
+            payment_id: { type: string, format: uuid }
+            customer_id: { type: string, format: uuid }
+            amount_received: { type: string }
+            currency: { type: string, pattern: '^[A-Z]{3}$' }
+            method: { type: string }
+            paid_at: { type: string, format: date-time }
+            status: { type: string }
+        customer:
+          description: Customer identity and contact fields reflect the customer profile at the time this data is read; payment and allocation facts remain stored financial records.
+          type: object
+          required: [customer_id, customer_code, legal_name, address, phone]
+          properties:
+            customer_id: { type: string, format: uuid }
+            customer_code: { type: string }
+            legal_name: { type: string }
+            address: { type: [string, 'null'] }
+            phone: { type: [string, 'null'] }
+        allocations:
+          type: array
+          items:
+            type: object
+            required: [receivable_id, schedule_id, amount, currency]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              schedule_id: { type: [string, 'null'], format: uuid }
+              amount: { type: string }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+        reversals:
+          type: array
+          items:
+            type: object
+            required: [amount, reason, created_at]
+            properties:
+              amount: { type: string }
+              reason: { type: string }
+              created_at: { type: string, format: date-time }
+        origin: { type: string, enum: [LOCAL, CENTRAL] }
     PaymentAllocation:
       type: object
       required: [receivable_id, amount]

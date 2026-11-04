@@ -51,6 +51,8 @@ pub struct AllocatePaymentRequest {
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 struct ListQuery {
     limit: Option<u32>,
+    customer_id: Option<Uuid>,
+    status: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -299,6 +301,10 @@ fn router_with_store_base(store: LocalStore) -> Router {
         .route(
             "/local/v1/payments",
             get(list_payments).post(record_payment),
+        )
+        .route(
+            "/local/v1/payments/:id/document-data",
+            get(payment_document_data),
         )
         .route("/local/v1/payments/:id/allocate", post(allocate_payment))
         .route("/local/v1/payments/:id/reverse", post(reverse_payment))
@@ -938,13 +944,42 @@ async fn list_payments(
     State(state): State<LocalAppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, String)> {
+    if query.status.as_deref().is_some_and(|status| {
+        !matches!(
+            status,
+            "LOCAL_PENDING" | "CENTRAL_ACCEPTED" | "CONFLICT_REQUIRES_REVIEW" | "REJECTED"
+        )
+    }) {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "status must be LOCAL_PENDING, CENTRAL_ACCEPTED, CONFLICT_REQUIRES_REVIEW or REJECTED"
+                .into(),
+        ));
+    }
     Ok(Json(
         state
             .store
-            .list_payments(query.bounded_limit())
+            .list_payments(
+                query.bounded_limit(),
+                query.customer_id,
+                query.status.as_deref(),
+            )
             .await
             .map_err(internal_error)?,
     ))
+}
+
+async fn payment_document_data(
+    State(state): State<LocalAppState>,
+    Path(payment_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    state
+        .store
+        .payment_document_data(payment_id)
+        .await
+        .map_err(internal_error)?
+        .map(Json)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "payment not found".into()))
 }
 
 async fn allocate_payment(

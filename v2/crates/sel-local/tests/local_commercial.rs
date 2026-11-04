@@ -406,7 +406,10 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/local/v1/payments?limit=20")
+                .uri(format!(
+                    "/local/v1/payments?limit=20&customer_id={}&status=LOCAL_PENDING",
+                    customer["id"].as_str().unwrap()
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -417,6 +420,20 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert!(payments.as_array().unwrap().iter().any(|entry| {
         entry["payment_id"] == payment["payment_id"] && entry["amount_received"] == "4.00"
     }));
+    let invalid_payment_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/local/v1/payments?status=UNKNOWN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invalid_payment_status.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 
     let reversal = app
         .clone()
@@ -549,6 +566,65 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert_eq!(credited_receivable["credited"], "2.00");
     assert_eq!(credited_receivable["balance"], "6.02");
 
+    let receipt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/payments/{}/document-data",
+                    payment["payment_id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let receipt_status = receipt.status();
+    let receipt_bytes = receipt.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        receipt_status,
+        StatusCode::OK,
+        "receipt body: {}",
+        String::from_utf8_lossy(&receipt_bytes)
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(&receipt_bytes).unwrap();
+    assert_eq!(receipt["document_schema_version"], 1);
+    assert_eq!(receipt["document_type"], "PAYMENT_RECEIPT");
+    assert_eq!(receipt["payment"]["payment_id"], payment["payment_id"]);
+    assert_eq!(receipt["payment"]["amount_received"], "4.00");
+    assert_eq!(receipt["customer"]["legal_name"], "Updated local customer");
+    assert_eq!(receipt["allocations"].as_array().unwrap().len(), 2);
+    assert_eq!(receipt["reversals"].as_array().unwrap().len(), 1);
+
+    let statement_after_credit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/customers/{}/statement",
+                    customer["id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(statement_after_credit.status(), StatusCode::OK);
+    let statement_after_credit = json_body(statement_after_credit).await;
+    assert_eq!(
+        statement_after_credit["receivables"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(statement_after_credit["receivables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|receivable| receivable["id"] == invoice["receivable_id"]
+            && receivable["balance"] == "6.02"));
+
     drop(app);
     drop(store);
     let reopened = LocalStore::connect(&database_url, organization_id, device_id)
@@ -559,6 +635,16 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .await
         .expect("read invoice after restart")
         .is_some());
+    let receipt_after_restart = reopened
+        .payment_document_data(payment["payment_id"].as_str().unwrap().parse().unwrap())
+        .await
+        .expect("read receipt data after restart")
+        .expect("receipt data remains available after restart");
+    assert_eq!(receipt_after_restart["payment"]["amount_received"], "4.00");
+    assert_eq!(
+        receipt_after_restart["reversals"].as_array().unwrap().len(),
+        1
+    );
     assert_eq!(reopened.pending_count().await.unwrap(), 9);
     let _ = std::fs::remove_file(path);
 }

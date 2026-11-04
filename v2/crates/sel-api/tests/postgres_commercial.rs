@@ -177,6 +177,40 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .unwrap();
     assert_eq!(payment_retry.status(), StatusCode::OK);
     assert_eq!(json_body(payment_retry).await, payment);
+    let payment_list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/payments?customer_id={}&status=CENTRAL_ACCEPTED&limit=10",
+                    customer["id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(payment_list.status(), StatusCode::OK);
+    let payment_list = json_body(payment_list).await;
+    assert_eq!(payment_list.as_array().unwrap().len(), 1);
+    assert_eq!(payment_list[0]["payment_id"], payment["payment_id"]);
+    assert_eq!(payment_list[0]["amount_received"], "3.00");
+    let invalid_payment_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/payments?status=UNKNOWN")
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invalid_payment_status.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
     let allocation_request = json!({
         "allocations": [{"receivable_id": invoice["receivable_id"], "amount": "1.00"}]
     });
@@ -439,6 +473,32 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
             .await
             .unwrap();
     assert_eq!(reversal_count, 2);
+    let receipt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/payments/{}/document-data",
+                    payment["payment_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.status(), StatusCode::OK);
+    let receipt = json_body(receipt).await;
+    assert_eq!(receipt["document_schema_version"], 1);
+    assert_eq!(receipt["document_type"], "PAYMENT_RECEIPT");
+    assert_eq!(receipt["payment"]["payment_id"], payment["payment_id"]);
+    assert_eq!(receipt["payment"]["amount_received"], "3.00");
+    assert_eq!(
+        receipt["customer"]["legal_name"],
+        "Commercial persistence fixture"
+    );
+    assert_eq!(receipt["allocations"].as_array().unwrap().len(), 2);
+    assert_eq!(receipt["reversals"].as_array().unwrap().len(), 2);
     let audit_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM audit_events WHERE event_type = 'PAYMENT_REVERSED' AND subject_id = $1",
     )
@@ -481,4 +541,90 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(loaded_status, StatusCode::OK, "loaded body: {loaded_text}");
     let loaded_body: serde_json::Value = serde_json::from_slice(&loaded_bytes).unwrap();
     assert_eq!(loaded_body, invoice);
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn payment_journal_and_receipt_are_scoped_to_the_store_organization() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    let organization_id = Uuid::new_v4();
+    let other_organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .expect("connect current organization store");
+    migrate_postgres(&store.pool).await.expect("run migrations");
+    store
+        .ensure_organization("SEL payment read scope fixture")
+        .await
+        .expect("create current organization");
+    let other_store = CentralStore::connect(&database_url, other_organization_id)
+        .await
+        .expect("connect other organization store");
+    other_store
+        .ensure_organization("Other organization payment scope fixture")
+        .await
+        .expect("create other organization");
+
+    let current_customer_id = Uuid::new_v4();
+    let other_customer_id = Uuid::new_v4();
+    for (customer_id, organization, code, name) in [
+        (
+            current_customer_id,
+            organization_id,
+            "SEL-PAY-SCOPE",
+            "SEL customer",
+        ),
+        (
+            other_customer_id,
+            other_organization_id,
+            "OTHER-PAY-SCOPE",
+            "Other customer",
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO customers (id, organization_id, customer_code, legal_name, status)
+             VALUES ($1, $2, $3, $4, 'ACTIVE')",
+        )
+        .bind(customer_id)
+        .bind(organization)
+        .bind(code)
+        .bind(name)
+        .execute(&store.pool)
+        .await
+        .expect("insert scoped customer");
+    }
+    let current_payment_id = Uuid::new_v4();
+    let other_payment_id = Uuid::new_v4();
+    for (payment_id, customer_id) in [
+        (current_payment_id, current_customer_id),
+        (other_payment_id, other_customer_id),
+    ] {
+        sqlx::query(
+            "INSERT INTO payments (id, customer_id, amount_received, currency, method, paid_at, status)
+             VALUES ($1, $2, 2.00, 'USD', 'CASH', now(), 'CENTRAL_ACCEPTED')",
+        )
+        .bind(payment_id)
+        .bind(customer_id)
+        .execute(&store.pool)
+        .await
+        .expect("insert scoped payment");
+    }
+
+    let journal = store
+        .list_payment_responses(None, None, 100)
+        .await
+        .expect("read organization payment journal");
+    assert_eq!(journal.len(), 1);
+    assert_eq!(journal[0]["payment_id"], current_payment_id.to_string());
+    assert!(store
+        .payment_document_data(current_payment_id)
+        .await
+        .expect("read in-scope receipt")
+        .is_some());
+    assert!(store
+        .payment_document_data(other_payment_id)
+        .await
+        .expect("check out-of-scope receipt")
+        .is_none());
 }

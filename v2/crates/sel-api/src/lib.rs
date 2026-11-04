@@ -342,7 +342,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/invoices/:id", get(get_invoice))
         .route("/v1/invoices/:id/document-data", get(get_document_data))
         .route("/v1/invoices/:id/void", post(void_invoice))
-        .route("/v1/payments", post(record_payment))
+        .route("/v1/payments", get(list_payments).post(record_payment))
+        .route(
+            "/v1/payments/:id/document-data",
+            get(get_payment_document_data),
+        )
         .route("/v1/payments/:id/allocate", post(allocate_payment))
         .route("/v1/payments/:id/reverse", post(reverse_payment))
         .route("/v1/receivables/:id", get(get_receivable))
@@ -463,6 +467,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/service-accounts/:id/meters"
                     | "/v1/meters/:id/readings"
                     | "/v1/invoices"
+                    | "/v1/payments"
                     | "/v1/sync/pull"
                     | "/v1/sync/status"
                     | "/v1/config/versions"
@@ -475,6 +480,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 || path_matches(path, "/v1/customers/:id/statement")
                 || path_matches(path, "/v1/invoices/:id")
                 || path_matches(path, "/v1/invoices/:id/document-data")
+                || path_matches(path, "/v1/payments/:id/document-data")
                 || path_matches(path, "/v1/receivables/:id")
                 || path_matches(path, "/v1/installment-plans/:id"));
     }
@@ -1585,6 +1591,13 @@ struct InvoiceListQuery {
     limit: Option<usize>,
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct PaymentListQuery {
+    customer_id: Option<Uuid>,
+    status: Option<String>,
+    limit: Option<usize>,
+}
+
 async fn list_invoices(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2513,6 +2526,60 @@ async fn void_invoice(
             Ok((StatusCode::OK, Json(body)))
         }
     }
+}
+
+async fn list_payments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PaymentListQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_auth(&headers)?;
+    if query.status.as_deref().is_some_and(|status| {
+        !matches!(
+            status,
+            "CENTRAL_ACCEPTED" | "CONFLICT_REQUIRES_REVIEW" | "REJECTED"
+        )
+    }) {
+        return Err(ApiError::unprocessable(
+            "PAYMENT_STATUS_INVALID",
+            "status must be CENTRAL_ACCEPTED, CONFLICT_REQUIRES_REVIEW or REJECTED",
+        ));
+    }
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "PAYMENTS_CENTRAL_REQUIRED",
+            "the payment journal requires the central PostgreSQL store",
+        )
+    })?;
+    store
+        .list_payment_responses(
+            query.customer_id,
+            query.status.as_deref(),
+            query.limit.unwrap_or(50).clamp(1, 100) as i64,
+        )
+        .await
+        .map(Json)
+        .map_err(storage_error)
+}
+
+async fn get_payment_document_data(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(payment_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "PAYMENT_DOCUMENT_CENTRAL_REQUIRED",
+            "payment receipt data requires the central PostgreSQL store",
+        )
+    })?;
+    store
+        .payment_document_data(payment_id)
+        .await
+        .map_err(storage_error)?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("PAYMENT_NOT_FOUND", "payment not found"))
 }
 
 async fn record_payment(
@@ -3878,6 +3945,12 @@ mod tests {
             &Method::POST,
             "/v1/payments",
             "CASHIER"
+        ));
+        assert!(role_allows_request(&Method::GET, "/v1/payments", "CASHIER"));
+        assert!(role_allows_request(
+            &Method::GET,
+            "/v1/payments/00000000-0000-0000-0000-000000000001/document-data",
+            "AUDITOR_READONLY"
         ));
         assert!(!role_allows_request(
             &Method::POST,

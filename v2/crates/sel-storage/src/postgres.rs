@@ -3197,6 +3197,139 @@ impl CentralStore {
             .collect()
     }
 
+    pub async fn list_payment_responses(
+        &self,
+        customer_id: Option<Uuid>,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT p.id, p.customer_id, p.amount_received, p.currency,
+                    p.method, p.paid_at, p.status
+             FROM payments p
+             JOIN customers c ON c.id = p.customer_id
+             WHERE c.organization_id = $1
+               AND ($2::uuid IS NULL OR p.customer_id = $2)
+               AND ($3::text IS NULL OR p.status = $3)
+             ORDER BY p.paid_at DESC, p.id DESC
+             LIMIT $4",
+        )
+        .bind(self.organization_id)
+        .bind(customer_id)
+        .bind(status)
+        .bind(limit.clamp(1, 100))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let amount: Decimal = row.try_get("amount_received")?;
+                let paid_at: DateTime<Utc> = row.try_get("paid_at")?;
+                Ok(json!({
+                    "payment_id": row.try_get::<Uuid, _>("id")?,
+                    "customer_id": row.try_get::<Uuid, _>("customer_id")?,
+                    "amount_received": format!("{:.2}", amount.round_dp(2)),
+                    "currency": row.try_get::<String, _>("currency")?,
+                    "method": row.try_get::<String, _>("method")?,
+                    "paid_at": paid_at.to_rfc3339(),
+                    "status": row.try_get::<String, _>("status")?
+                }))
+            })
+            .collect()
+    }
+
+    pub async fn payment_document_data(
+        &self,
+        payment_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let payment = sqlx::query(
+            "SELECT p.id, p.customer_id, p.amount_received, p.currency, p.method,
+                    p.paid_at, p.status, c.customer_code, c.legal_name,
+                    c.contact_fields::text AS contact_fields_json
+             FROM payments p
+             JOIN customers c ON c.id = p.customer_id
+             WHERE p.id = $1 AND c.organization_id = $2",
+        )
+        .bind(payment_id)
+        .bind(self.organization_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(payment) = payment else {
+            return Ok(None);
+        };
+        let contact_fields: serde_json::Value =
+            serde_json::from_str(&payment.try_get::<String, _>("contact_fields_json")?).map_err(
+                |error| sqlx::Error::Protocol(format!("invalid customer contact fields: {error}")),
+            )?;
+
+        let allocation_rows = sqlx::query(
+            "SELECT receivable_id, schedule_id, allocated_amount, currency
+             FROM payment_allocations WHERE payment_id = $1 ORDER BY id",
+        )
+        .bind(payment_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let allocations = allocation_rows
+            .into_iter()
+            .map(|row| {
+                let amount: Decimal = row.try_get("allocated_amount")?;
+                Ok(json!({
+                    "receivable_id": row.try_get::<Uuid, _>("receivable_id")?,
+                    "schedule_id": row.try_get::<Option<Uuid>, _>("schedule_id")?,
+                    "amount": format!("{:.2}", amount.round_dp(2)),
+                    "currency": row.try_get::<String, _>("currency")?
+                }))
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        let reversal_rows = sqlx::query(
+            "SELECT amount, reason, created_at FROM payment_reversals
+             WHERE payment_id = $1 ORDER BY created_at, id",
+        )
+        .bind(payment_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let reversals = reversal_rows
+            .into_iter()
+            .map(|row| {
+                let amount: Decimal = row.try_get("amount")?;
+                let created_at: DateTime<Utc> = row.try_get("created_at")?;
+                Ok(json!({
+                    "amount": format!("{:.2}", amount.round_dp(2)),
+                    "reason": row.try_get::<String, _>("reason")?,
+                    "created_at": created_at.to_rfc3339()
+                }))
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+
+        let customer_id: Uuid = payment.try_get("customer_id")?;
+        let amount: Decimal = payment.try_get("amount_received")?;
+        let paid_at: DateTime<Utc> = payment.try_get("paid_at")?;
+        Ok(Some(json!({
+            "document_schema_version": 1,
+            "document_type": "PAYMENT_RECEIPT",
+            "document_reference": format!("SEL-PAY-{}", payment_id.simple().to_string().to_uppercase()),
+            "qr_internal_reference": format!("SEL:PAYMENT:{payment_id}"),
+            "payment": {
+                "payment_id": payment_id,
+                "customer_id": customer_id,
+                "amount_received": format!("{:.2}", amount.round_dp(2)),
+                "currency": payment.try_get::<String, _>("currency")?,
+                "method": payment.try_get::<String, _>("method")?,
+                "paid_at": paid_at.to_rfc3339(),
+                "status": payment.try_get::<String, _>("status")?
+            },
+            "customer": {
+                "customer_id": customer_id,
+                "customer_code": payment.try_get::<String, _>("customer_code")?,
+                "legal_name": payment.try_get::<String, _>("legal_name")?,
+                "address": contact_fields.get("address").cloned().unwrap_or(serde_json::Value::Null),
+                "phone": contact_fields.get("phone").cloned().unwrap_or(serde_json::Value::Null)
+            },
+            "allocations": allocations,
+            "reversals": reversals,
+            "origin": "CENTRAL"
+        })))
+    }
+
     pub async fn get_receivable_summary(
         &self,
         id: Uuid,
