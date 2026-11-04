@@ -1,5 +1,9 @@
 use axum::body::Body;
+use axum::extract::{Request as AxumRequest, State};
 use axum::http::Request;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::http::{Method, StatusCode};
 use chrono::Utc;
 use http_body_util::BodyExt;
 use sel_api::{router, AppState};
@@ -12,12 +16,31 @@ use sel_local::sync_once;
 use sel_storage::{migrate_postgres, postgres::MeterWriteError, CentralStore, LocalStore};
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
-use std::str::FromStr;
+use std::{
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+async fn lose_first_sync_ack(
+    State(lose_ack): State<Arc<AtomicBool>>,
+    request: AxumRequest,
+    next: Next,
+) -> Response {
+    let is_sync_push = request.method() == Method::POST && request.uri().path() == "/v1/sync/push";
+    let response = next.run(request).await;
+    if is_sync_push && lose_ack.swap(false, Ordering::SeqCst) {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    response
 }
 
 async fn seed_local_catalog(store: &LocalStore, effective_from: chrono::NaiveDate) {
@@ -483,23 +506,77 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     let token = format!("convergence-token-{}", Uuid::new_v4());
     std::env::set_var("SEL_API_AUTH_TOKEN", &token);
     std::env::set_var("SEL_ALLOW_LEGACY_TOKEN", "1");
+    let lose_ack = Arc::new(AtomicBool::new(true));
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();
     let address = listener.local_addr().unwrap();
+    let central_router = router(AppState::with_production_central_store(central))
+        .layer(middleware::from_fn_with_state(
+            lose_ack.clone(),
+            lose_first_sync_ack,
+        ));
     let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            router(AppState::with_production_central_store(central)),
-        )
-        .await
-        .unwrap();
+        axum::serve(listener, central_router).await.unwrap();
     });
     let endpoint = format!("http://{address}");
+    let lost_ack = sync_once(&first, &endpoint, &token).await;
+    assert!(lost_ack.is_err(), "the first central ACK is deliberately lost");
+    assert!(!lose_ack.load(Ordering::SeqCst));
+    assert_eq!(first.pending_count().await.unwrap(), 13);
+    let committed_event_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sync_inbox i
+         JOIN devices d ON d.id = i.device_id
+         WHERE d.organization_id = $1",
+    )
+    .bind(organization_id)
+    .fetch_one(&central_for_verify.pool)
+    .await
+    .unwrap();
+    assert_eq!(committed_event_count, 13, "central effects committed before the lost ACK");
+    let committed_change_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM central_changes WHERE organization_id = $1",
+    )
+    .bind(organization_id)
+    .fetch_one(&central_for_verify.pool)
+    .await
+    .unwrap();
+
+    drop(first);
+    let mut first = LocalStore::connect(
+        &format!("sqlite://{}", path_one.display()),
+        organization_id,
+        device_one,
+    )
+    .await
+    .expect("restart first device after lost ACK");
+    first
+        .configure_offline_identity(actor_id, grant_one)
+        .await
+        .unwrap();
     let first_sync = sync_once(&first, &endpoint, &token).await.unwrap();
-    assert_eq!(first_sync.accepted, 13);
+    assert_eq!(first_sync.duplicates, 13, "retry must reuse central results");
+    assert_eq!(first.pending_count().await.unwrap(), 0);
     let second_sync = sync_once(&second, &endpoint, &token).await.unwrap();
     assert_eq!(second_sync.pulled, 13);
+    let committed_event_count_after_retry: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sync_inbox i
+         JOIN devices d ON d.id = i.device_id
+         WHERE d.organization_id = $1",
+    )
+    .bind(organization_id)
+    .fetch_one(&central_for_verify.pool)
+    .await
+    .unwrap();
+    assert_eq!(committed_event_count_after_retry, committed_event_count);
+    let committed_change_count_after_retry: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM central_changes WHERE organization_id = $1",
+    )
+    .bind(organization_id)
+    .fetch_one(&central_for_verify.pool)
+    .await
+    .unwrap();
+    assert_eq!(committed_change_count_after_retry, committed_change_count);
     let central_meter_history = central_for_verify
         .list_meter_readings(meter_id.parse().unwrap(), Some("2026-10"))
         .await
@@ -609,6 +686,13 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         assert_eq!(balance["paid"], "3.00");
         assert_eq!(balance["balance"], "9.47");
     }
+    let central_utility_balance = central_for_verify
+        .get_receivable_summary(local_receivable_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(central_utility_balance["paid"], "3.00");
+    assert_eq!(central_utility_balance["balance"], "9.47");
 
     let (sale, _) = first
         .create_solar_sale_offline(&sel_contracts::CreateSolarSaleRequest {
@@ -749,13 +833,32 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
             .count(),
         1
     );
-    let second_balance = second
+    let central_payment_id: Uuid = sqlx::query_scalar(
+        "SELECT p.id FROM payments p
+         JOIN payment_allocations pa ON pa.payment_id = p.id
+         WHERE pa.receivable_id = $1",
+    )
+    .bind(sale.receivable_id)
+    .fetch_one(&central.pool)
+    .await
+    .unwrap();
+    assert!(central_payment_id == first_payment_id || central_payment_id == second_payment_id);
+    for store in [&first, &second] {
+        let solar_balance = store
+            .get_receivable_summary(sale.receivable_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(solar_balance["paid"], "70.00");
+        assert_eq!(solar_balance["balance"], "50.00");
+    }
+    let central_solar_balance = central
         .get_receivable_summary(sale.receivable_id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(second_balance["paid"], "70.00");
-    assert_eq!(second_balance["balance"], "50.00");
+    assert_eq!(central_solar_balance["paid"], "70.00");
+    assert_eq!(central_solar_balance["balance"], "50.00");
     server.abort();
     let _ = server.await;
     std::env::remove_var("SEL_API_AUTH_TOKEN");

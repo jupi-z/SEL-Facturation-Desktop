@@ -654,3 +654,19 @@ Le backend expose maintenant un journal de paiements borné et filtrable par cli
 Les tests PostgreSQL ont tourné sur `postgres:16-alpine` dans un conteneur temporaire et une base de test jetable. Le conteneur a été supprimé après exécution. Aucun secret, aucune facture PDF et aucune donnée SEL réelle n'ont été utilisés. Après le signalement d'une surchauffe matérielle, aucune nouvelle compilation locale ne sera lancée pour cette phase ; la validation des derniers changements dépend de la CI distante.
 
 **Progression de Phase 4 : 100 % pour le périmètre backend/API défini dans `PHASE_4_PAIEMENTS_PLAN.md`**, validé par tests ciblés, PostgreSQL réel jetable et CI finale. Les reçus restent des données JSON destinées au rendu local : leur mise en page, export et impression sont traités dans les phases frontend/documents. La fiche client des reçus reflète le profil au moment de la lecture, tandis que les faits financiers sont issus du journal. Les remboursements ou compensations métier non spécifiés restent à confirmer par SEL. Cela ne clôt pas les phases frontend, documents, recette sur poste SEL, ni la préparation opérationnelle.
+
+### Phase 5 — convergence offline multi-postes (travail en cours, 4 novembre 2026)
+
+L’audit confirme que le test ignoré `two_sqlite_devices_converge_through_real_postgres_and_http` est déjà exécuté dans le job CI PostgreSQL (`cargo test --workspace -- --ignored`). Il couvre la facture eau + électricité et son paiement partiel sur le premier poste, son redémarrage avant envoi, la convergence vers PostgreSQL puis le second poste, la vente solaire avec échéancier, ainsi que deux paiements concurrents sur la même obligation. La suite `sync_worker.rs` couvre séparément les reprises, les projections et les conflits avec un serveur simulé.
+
+Le nouvel incrément étend le scénario réel multi-postes : un middleware de panne remplace par HTTP 503 la première réponse du vrai `POST /v1/sync/push`, après que la route PostgreSQL a terminé sa transaction. Le test vérifie que les événements sont déjà inscrits dans `sync_inbox`, que l'outbox SQLite reste à transmettre, redémarre le premier store et rejoue les événements. Il compare le nombre d'événements et de changements centraux avant/après rejeu, puis vérifie les soldes de la facture et du contrat solaire dans les deux SQLite et PostgreSQL. Cette injection simule la perte de l'accusé applicatif après commit ; elle ne prétend pas reproduire une coupure TCP réelle.
+
+| Critère | Statut | Preuve |
+|---|---|---|
+| État initial et parcours existant | PASS code/CI antérieure | Le test multi-postes est exécuté par la CI avec PostgreSQL ; les scénarios de reprise et de rejeu du worker sont dans `sync_worker.rs`. |
+| Rejeu après commit central sans accusé | IN_PROGRESS | Test de panne ajouté à `two_device_convergence.rs` ; l’exécution est en attente de la prochaine CI, sans exécution locale pour protéger le processeur. |
+| Égalité des factures, paiements et soldes sur trois bases | IN_PROGRESS | Assertions d'identifiants, empreintes, lignes et soldes ajoutées/renforcées ; CI du nouveau commit requise. |
+| Échéancier solaire et paiements concurrents | IN_PROGRESS | Le test existant vérifie une seule créance et décision acceptée/rejetée ; les assertions de solde central et des deux postes sont renforcées, en attente de CI. |
+| Coupure réseau réelle/Windows et détection de reconnexion | BLOCKED_EXTERNAL | Le test ajoute une réponse HTTP de panne après commit ; le reset réseau, le signal système Windows et l'essai sur poste SEL ne sont pas réalisés. |
+
+**Progression Phase 5 : 35 % — code de test et critères en place, nouvelle preuve non encore exécutée.** Aucun résultat de test n'est revendiqué pour les modifications de cette phase avant la CI du commit correspondant. La phase ne sera clôturée qu'après réussite de la CI PostgreSQL qui exécute les tests marqués `ignored`, puis mise à jour de ce rapport avec le SHA exact et les résultats.
