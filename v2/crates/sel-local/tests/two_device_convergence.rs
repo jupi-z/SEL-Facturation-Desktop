@@ -1,9 +1,8 @@
 use axum::body::Body;
 use axum::extract::{Request as AxumRequest, State};
-use axum::http::Request;
+use axum::http::{Method, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::http::{Method, StatusCode};
 use chrono::Utc;
 use http_body_util::BodyExt;
 use sel_api::{router, AppState};
@@ -511,17 +510,18 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .await
         .unwrap();
     let address = listener.local_addr().unwrap();
-    let central_router = router(AppState::with_production_central_store(central))
-        .layer(middleware::from_fn_with_state(
-            lose_ack.clone(),
-            lose_first_sync_ack,
-        ));
+    let central_router = router(AppState::with_production_central_store(central)).layer(
+        middleware::from_fn_with_state(lose_ack.clone(), lose_first_sync_ack),
+    );
     let server = tokio::spawn(async move {
         axum::serve(listener, central_router).await.unwrap();
     });
     let endpoint = format!("http://{address}");
     let lost_ack = sync_once(&first, &endpoint, &token).await;
-    assert!(lost_ack.is_err(), "the first central ACK is deliberately lost");
+    assert!(
+        lost_ack.is_err(),
+        "the first central ACK is deliberately lost"
+    );
     assert!(!lose_ack.load(Ordering::SeqCst));
     assert_eq!(first.pending_count().await.unwrap(), 13);
     let committed_event_count: i64 = sqlx::query_scalar(
@@ -533,14 +533,16 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     .fetch_one(&central_for_verify.pool)
     .await
     .unwrap();
-    assert_eq!(committed_event_count, 13, "central effects committed before the lost ACK");
-    let committed_change_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM central_changes WHERE organization_id = $1",
-    )
-    .bind(organization_id)
-    .fetch_one(&central_for_verify.pool)
-    .await
-    .unwrap();
+    assert_eq!(
+        committed_event_count, 13,
+        "central effects committed before the lost ACK"
+    );
+    let committed_change_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM central_changes WHERE organization_id = $1")
+            .bind(organization_id)
+            .fetch_one(&central_for_verify.pool)
+            .await
+            .unwrap();
 
     drop(first);
     let mut first = LocalStore::connect(
@@ -555,7 +557,10 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .await
         .unwrap();
     let first_sync = sync_once(&first, &endpoint, &token).await.unwrap();
-    assert_eq!(first_sync.duplicates, 13, "retry must reuse central results");
+    assert_eq!(
+        first_sync.duplicates, 13,
+        "retry must reuse central results"
+    );
     assert_eq!(first.pending_count().await.unwrap(), 0);
     let second_sync = sync_once(&second, &endpoint, &token).await.unwrap();
     assert_eq!(second_sync.pulled, 13);
@@ -569,13 +574,12 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     .await
     .unwrap();
     assert_eq!(committed_event_count_after_retry, committed_event_count);
-    let committed_change_count_after_retry: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM central_changes WHERE organization_id = $1",
-    )
-    .bind(organization_id)
-    .fetch_one(&central_for_verify.pool)
-    .await
-    .unwrap();
+    let committed_change_count_after_retry: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM central_changes WHERE organization_id = $1")
+            .bind(organization_id)
+            .fetch_one(&central_for_verify.pool)
+            .await
+            .unwrap();
     assert_eq!(committed_change_count_after_retry, committed_change_count);
     let central_meter_history = central_for_verify
         .list_meter_readings(meter_id.parse().unwrap(), Some("2026-10"))
