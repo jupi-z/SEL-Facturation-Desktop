@@ -176,6 +176,15 @@ def test_solar_payment_form_clears_stale_schedules_and_fails_closed() -> None:
     assert "schedule_id: form.get(\"schedule_id\") || null" in payment_form
 
 
+def test_payment_form_clears_previous_customer_receivables_while_loading() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    payment_form = app.split("function PaymentForm(", 1)[1].split("\n}\n\nfunction MeterReadingsView", 1)[0]
+
+    assert "setReceivables([]); setReceivableId(\"\"); setReceivablesLoading(true)" in payment_form
+    assert "disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}" in payment_form
+    assert "disabled={receivablesLoading || Boolean(receivablesError) || !receivableId" in payment_form
+
+
 def test_windows_typescript_target_does_not_use_es2022_array_at() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
