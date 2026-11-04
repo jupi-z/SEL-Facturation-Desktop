@@ -39,10 +39,21 @@ jobs:
           toolchain: 1.85.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2 -> target
       - name: Install PostgreSQL backup and restore client tools
         run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl --fail --silent --show-error --location https://www.postgresql.org/media/keys/ACCC4CF8.asc |
+            sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc >/dev/null
+          OS_CODENAME=$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${OS_CODENAME}-pgdg main" |
+            sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update
-          sudo apt-get install --yes postgresql-client
+          sudo apt-get install --yes postgresql-client-16
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+          pg_dump --version | grep --extended-regexp --quiet ' 16\.'
+          pg_restore --version | grep --extended-regexp --quiet ' 16\.'
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
