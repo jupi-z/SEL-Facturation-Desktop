@@ -25,7 +25,7 @@ def test_v2_windows_client_keeps_local_api_credentials_out_of_javascript() -> No
     adapter = (APP / "src" / "api.ts").read_text(encoding="utf-8")
     native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
 
-    assert 'invoke("local_request"' in adapter
+    assert 'invoke<LocalResponse<T>>("local_request"' in adapter
     assert "Authorization" not in adapter
     assert "/local/v1/" in native
     assert "Bearer " in native

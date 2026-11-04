@@ -1892,9 +1892,7 @@ impl LocalStore {
     /// Returns only currently applicable, approved solar products from the
     /// last verified catalog snapshot. Prices remain decimal strings at the
     /// API boundary and are never computed by the desktop client.
-    pub async fn list_active_solar_products(
-        &self,
-    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    pub async fn list_active_solar_products(&self) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT id, sku, label, price_reference, currency,
                     effective_from, effective_to, approval_ref

@@ -31,7 +31,14 @@ async fn local_solar_catalog_exposes_only_current_approved_products() {
         ("KIT-REVOKED", "REVOKED", 0, "SOLAR_KIT", "2026-01-01", None),
         ("NOT-A-KIT", "APPROVED", 1, "OTHER", "2026-01-01", None),
         ("KIT-FUTURE", "APPROVED", 1, "SOLAR_KIT", "2099-01-01", None),
-        ("KIT-EXPIRED", "APPROVED", 1, "SOLAR_KIT", "2020-01-01", Some("2020-12-31")),
+        (
+            "KIT-EXPIRED",
+            "APPROVED",
+            1,
+            "SOLAR_KIT",
+            "2020-01-01",
+            Some("2020-12-31"),
+        ),
     ] {
         sqlx::query(
             "INSERT INTO products
