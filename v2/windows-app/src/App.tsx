@@ -76,8 +76,18 @@ function Table({ headers, data, empty, className = "" }: { headers: string[]; da
 }
 
 function NavIcon({ name }: { name: string }) {
-  void name;
-  return <svg className="nav-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="4" y="4" width="11" height="11" rx="1.5" fill="currentColor" /></svg>;
+  const icons: Record<string, ReactNode> = {
+    grid: <><rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1" /><rect x="11" y="3.5" width="5.5" height="5.5" rx="1" /><rect x="3.5" y="11" width="5.5" height="5.5" rx="1" /><rect x="11" y="11" width="5.5" height="5.5" rx="1" /></>,
+    people: <><circle cx="7" cy="7" r="2.5" /><path d="M2.8 16c.5-2.4 2-3.6 4.2-3.6s3.7 1.2 4.2 3.6" /><path d="M12.1 5a2.3 2.3 0 0 1 0 4.5M13 12.6c1.9.1 3.3 1.2 3.8 3.4" /></>,
+    meter: <><rect x="3.5" y="3.5" width="13" height="13" rx="2" /><circle cx="10" cy="10" r="4.2" /><path d="m10 10 2.5-2" /><path d="M7 15.5h6" /></>,
+    document: <><path d="M5 2.8h6l4 4V17a1.2 1.2 0 0 1-1.2 1.2H5A1.2 1.2 0 0 1 3.8 17V4A1.2 1.2 0 0 1 5 2.8Z" /><path d="M11 3v4h4M6.5 11h6M6.5 14h6" /></>,
+    cash: <><rect x="2.8" y="5" width="14.4" height="10" rx="1.8" /><path d="M5 5V3.8h10V5M5 15v1.2h10V15" /><circle cx="10" cy="10" r="2.2" /><path d="M5.2 8v.1M14.8 12v.1" /></>,
+    sun: <><circle cx="10" cy="10" r="3.2" /><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2m12.8-5.3-1.4 1.4M6.1 13.9l-1.4 1.4m10.6 0-1.4-1.4M6.1 6.1 4.7 4.7" /></>,
+    balance: <><path d="M10 3v13M5 6h10M4 6l-2 4h4L4 6Zm12 0-2 4h4l-2-4Z" /><path d="M6 17h8M7.5 14h5" /></>,
+    sync: <><path d="M15.8 7.5A6.3 6.3 0 0 0 4.4 6L3 7.5" /><path d="M3 4.5v3h3M4.2 12.5A6.3 6.3 0 0 0 15.6 14L17 12.5" /><path d="M17 15.5v-3h-3" /></>,
+    settings: <><path d="m8.6 2.8.4-1h2l.4 1a7.6 7.6 0 0 1 1.6.7l1-.4 1.4 1.4-.4 1a7.6 7.6 0 0 1 .7 1.6l1 .4v2l-1 .4a7.6 7.6 0 0 1-.7 1.6l.4 1-1.4 1.4-1-.4a7.6 7.6 0 0 1-1.6.7l-.4 1h-2l-.4-1a7.6 7.6 0 0 1-1.6-.7l-1 .4-1.4-1.4.4-1a7.6 7.6 0 0 1-.7-1.6l-1-.4v-2l1-.4A7.6 7.6 0 0 1 5 5.5l-.4-1L6 3.1l1 .4a7.6 7.6 0 0 1 1.6-.7Z" transform="translate(1.5 1.5) scale(.85)" /><circle cx="10" cy="10" r="2.5" /></>,
+  };
+  return <svg className="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{icons[name] ?? icons.grid}</svg>;
 }
 
 export default function App() {

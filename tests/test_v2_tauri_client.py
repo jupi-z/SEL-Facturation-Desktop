@@ -94,6 +94,16 @@ def test_v2_windows_shell_preserves_figma_desktop_geometry_and_tokens() -> None:
     assert "width: 20px; height: 20px; color: #98b9e0" in css
 
 
+def test_sidebar_uses_distinct_local_icons_for_each_destination() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    icon = app.split("function NavIcon(", 1)[1].split("\n}\n", 1)[0]
+
+    for name in ("grid", "people", "meter", "document", "cash", "sun", "balance", "sync", "settings"):
+        assert f"    {name}:" in icon
+    assert "void name" not in icon
+    assert "stroke=\"currentColor\"" in icon
+
+
 def test_dashboard_uses_recent_local_operations_without_demo_financial_data() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
