@@ -56,6 +56,7 @@ button { cursor: pointer; }
 .notice button { border: 0; color: inherit; background: transparent; font-size: 20px; }
 .loading-line { margin-top: 10px; color: var(--muted); font-size: 11px; }
 .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; margin: 37px 0 23px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+.page-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
 .page-heading h1 { margin: 6px 0 5px; color: var(--navy); font-size: 24px; font-weight: 690; letter-spacing: -.025em; line-height: 1.2; }
 .page-heading .muted { max-width: 760px; margin: 0; }
 .muted { color: var(--muted); font-size: 12px; line-height: 1.55; }
@@ -69,6 +70,12 @@ button { cursor: pointer; }
 .metric-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .metric-value { margin: 9px 0 3px; overflow-wrap: anywhere; color: #203959; font-size: 23px; font-weight: 680; line-height: 1.2; }
 .metric-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.dossier-metrics { margin: 0 0 18px; }
+.dossier-metrics .metric-value { font-size: 17px; }
+.customer-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; margin: 0; }
+.customer-details div { display: grid; gap: 7px; min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.customer-details dt { color: var(--muted); font-size: 10px; }
+.customer-details dd { margin: 0; color: var(--navy); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
 .columns { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr); gap: 18px; }
 .customer-layout { grid-template-columns: minmax(0, 1.35fr) minmax(330px, .85fr); align-items: start; }
 .payment-workspace { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(285px, .72fr); align-items: stretch; gap: 14px; margin-bottom: 18px; }
@@ -211,6 +218,7 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
   .metric:nth-child(2) { border-right: 0; }
   .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .form-grid, .admin-grid, .product-grid, .quote-summary, .schedule-entry { grid-template-columns: 1fr; }
+  .customer-details { grid-template-columns: 1fr; }
   .page-heading { align-items: center; }
   footer { text-align: left; }
 }

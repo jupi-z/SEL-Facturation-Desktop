@@ -377,6 +377,19 @@ def test_customer_creation_form_is_revealed_from_the_directory_action() -> None:
     assert '"customer-new-1440x900.png"' in visual_review
 
 
+def test_customer_dossier_has_read_only_overview_and_explicit_edit_mode() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+    dossier = app.split('view === "customers" && (selectedCustomer ?', 1)[1].split("</> : <>", 1)[0]
+
+    assert 'customerEditOpen ?' in dossier
+    assert '"Modifier la fiche"' in dossier
+    assert '"Annuler la modification"' in dossier
+    assert 'className="dossier-metrics metrics compact-metrics"' in app
+    assert 'label="Versements" value={rows(statement.payments).length}' in app
+    assert '"customer-edit-1440x900.png"' in visual_review
+
+
 def test_visual_review_captures_customer_record_and_receivable_statement() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
