@@ -271,6 +271,80 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .unwrap();
     assert_eq!(local_payment.status(), axum::http::StatusCode::CREATED);
 
+    let local_account = router_with_store(first.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/customers/{}/service-accounts",
+                    customer.id
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "service_code":"WATER",
+                        "contract_ref":"CONVERGENCE-WATER-1",
+                        "connection_status":"CONNECTED",
+                        "activated_at":"2026-01-01"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(local_account.status(), axum::http::StatusCode::CREATED);
+    let local_account = json_body(local_account).await;
+    let account_id = local_account["id"].as_str().unwrap();
+    let local_meter = router_with_store(first.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/service-accounts/{account_id}/meters"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"serial":"CONVERGENCE-WATER-METER","unit":"M3"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(local_meter.status(), axum::http::StatusCode::CREATED);
+    let local_meter = json_body(local_meter).await;
+    let meter_id = local_meter["id"].as_str().unwrap();
+    let local_reading = router_with_store(first.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/meters/{meter_id}/readings"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"period":"2026-10","previous":"0","current":"0","source":"MANUAL"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(local_reading.status(), axum::http::StatusCode::CREATED);
+    let local_reading = json_body(local_reading).await;
+    let reading_id = local_reading["id"].as_str().unwrap();
+    let local_correction = router_with_store(first.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/meter-readings/{reading_id}/corrections"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"current":"1.25","source":"MANUAL","reason":"Index relu"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(local_correction.status(), axum::http::StatusCode::CREATED);
+    let local_correction = json_body(local_correction).await;
+
     drop(first);
     let mut first = LocalStore::connect(
         &format!("sqlite://{}", path_one.display()),
@@ -301,9 +375,32 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     });
     let endpoint = format!("http://{address}");
     let first_sync = sync_once(&first, &endpoint, &token).await.unwrap();
-    assert_eq!(first_sync.accepted, 3);
+    assert_eq!(first_sync.accepted, 7);
     let second_sync = sync_once(&second, &endpoint, &token).await.unwrap();
-    assert_eq!(second_sync.pulled, 3);
+    assert_eq!(second_sync.pulled, 7);
+    let central_meter_history = central_for_verify
+        .list_meter_readings(meter_id.parse().unwrap(), Some("2026-10"))
+        .await
+        .unwrap();
+    for store in [&first, &second] {
+        let history = store
+            .list_meter_readings(meter_id.parse().unwrap(), Some("2026-10"))
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].id.to_string(), reading_id);
+        assert_eq!(
+            history[1].id,
+            local_correction["id"].as_str().unwrap().parse().unwrap()
+        );
+        assert_eq!(history[1].measured_quantity.to_string(), "1.25");
+    }
+    assert_eq!(central_meter_history.len(), 2);
+    assert_eq!(central_meter_history[0].id.to_string(), reading_id);
+    assert_eq!(
+        central_meter_history[1].id,
+        local_correction["id"].as_str().unwrap().parse().unwrap()
+    );
     let central_invoice = central_for_verify
         .get_invoice_response(local_invoice.invoice_id)
         .await

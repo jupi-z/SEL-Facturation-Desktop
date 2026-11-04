@@ -47,6 +47,67 @@ pub struct UpdateCustomer {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ServiceAccount {
+    pub id: Uuid,
+    pub customer_id: Uuid,
+    pub service_code: String,
+    pub contract_ref: Option<String>,
+    pub connection_status: String,
+    pub activated_at: Option<NaiveDate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreateServiceAccount {
+    pub service_code: String,
+    pub contract_ref: Option<String>,
+    pub connection_status: String,
+    pub activated_at: Option<NaiveDate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Meter {
+    pub id: Uuid,
+    pub service_account_id: Uuid,
+    pub serial: String,
+    pub unit: String,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreateMeter {
+    pub serial: String,
+    pub unit: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MeterReading {
+    pub id: Uuid,
+    pub meter_id: Uuid,
+    pub period: String,
+    pub previous: Decimal,
+    pub current: Decimal,
+    pub measured_quantity: Decimal,
+    pub source: String,
+    pub corrected_from_id: Option<Uuid>,
+    pub correction_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreateMeterReading {
+    pub period: String,
+    pub previous: Decimal,
+    pub current: Decimal,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CorrectMeterReading {
+    pub current: Decimal,
+    pub source: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UtilityServiceInput {
     pub quantity: Decimal,
     pub unit: String,

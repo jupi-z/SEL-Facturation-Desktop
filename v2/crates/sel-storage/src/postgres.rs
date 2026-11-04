@@ -8,17 +8,18 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rust_decimal::Decimal;
 use sel_contracts::{
     offline_grant_canonical_bytes, solar_schedule_id, utility_snapshot_sha256,
-    ActivateSolarContractRequest, CreateCustomer, CreateSolarQuoteRequest, CreateSolarSaleRequest,
-    CreditNoteRequest, CreditNoteSyncPayload, Customer, InvoiceVoidSyncPayload,
-    PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
-    RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarQuoteResponse,
-    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer,
-    UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    ActivateSolarContractRequest, CorrectMeterReading, CreateCustomer, CreateMeter,
+    CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
+    CreditNoteRequest, CreditNoteSyncPayload, Customer, InvoiceVoidSyncPayload, Meter,
+    MeterReading, PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
+    RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, SolarContractSyncPayload,
+    SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult,
+    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
 };
 use sel_domain::billing;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
 use std::collections::BTreeMap;
 use thiserror::Error;
 use uuid::Uuid;
@@ -409,6 +410,32 @@ pub enum SyncApplyError {
     Database(#[from] sqlx::Error),
     #[error("invalid stored sync result: {0}")]
     StoredResult(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum MeterWriteError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("customer was not found in this organization")]
+    CustomerNotFound,
+    #[error("service account was not found in this organization")]
+    ServiceAccountNotFound,
+    #[error("meter was not found in this organization")]
+    MeterNotFound,
+    #[error("service code, connection status, or meter unit is invalid")]
+    InvalidConfiguration,
+    #[error("meter serial, period, or reading source is invalid")]
+    InvalidInput,
+    #[error("meter index must be non-negative and current must not be below previous")]
+    InvalidIndex,
+    #[error("a reading already exists for this meter and period")]
+    DuplicateReading,
+    #[error("the previous index does not match the latest accepted reading")]
+    PreviousIndexMismatch,
+    #[error("only the latest reading can be corrected")]
+    ReadingNotLatest,
+    #[error("a correction reason is required")]
+    CorrectionReasonRequired,
 }
 
 impl CentralStore {
@@ -4787,6 +4814,14 @@ impl CentralStore {
             return Ok(result);
         }
         match event.command_type.as_str() {
+            "SERVICE_ACCOUNT_CREATED"
+            | "METER_CREATED"
+            | "METER_READING_CREATED"
+            | "METER_READING_CORRECTED" => {
+                let result = self.apply_meter_sync_event(&mut tx, event).await?;
+                tx.commit().await?;
+                Ok(result)
+            }
             "CUSTOMER_CREATED" => {
                 let customer_code = event
                     .payload
@@ -5807,12 +5842,328 @@ impl CentralStore {
         tx.commit().await?;
         Ok(result)
     }
+
+    async fn apply_meter_sync_event(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        event: &SyncEnvelope,
+    ) -> Result<SyncEventResult, sqlx::Error> {
+        let rejected = |code: &str, required_action: &str| SyncEventResult::Rejected {
+            code: code.into(),
+            required_action: required_action.into(),
+        };
+        let conflict = |reason: &str| SyncEventResult::Conflict {
+            reason: reason.into(),
+            central_revision: None,
+        };
+        let (entity, payload_id) = match event.command_type.as_str() {
+            "SERVICE_ACCOUNT_CREATED" => {
+                let Ok(account) = serde_json::from_value::<ServiceAccount>(event.payload.clone())
+                else {
+                    let result = rejected(
+                        "SERVICE_ACCOUNT_PAYLOAD_INVALID",
+                        "recreate_the_service_account_command",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                };
+                if account.id != event.aggregate_id
+                    || !matches!(account.service_code.as_str(), "ELECTRICITY" | "WATER")
+                    || !matches!(
+                        account.connection_status.as_str(),
+                        "CONNECTED" | "NOT_CONNECTED" | "UNKNOWN"
+                    )
+                {
+                    let result = rejected(
+                        "SERVICE_ACCOUNT_INVALID",
+                        "provide_a_valid_service_account_snapshot",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                let customer_exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM customers WHERE id = $1 AND organization_id = $2)",
+                )
+                .bind(account.customer_id)
+                .bind(self.organization_id)
+                .fetch_one(&mut **tx)
+                .await?;
+                if !customer_exists {
+                    let result = rejected(
+                        "CUSTOMER_NOT_FOUND",
+                        "sync_the_customer_before_the_service_account",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM service_accounts WHERE id = $1)",
+                )
+                .bind(account.id)
+                .fetch_one(&mut **tx)
+                .await?;
+                if exists {
+                    let result = conflict("SERVICE_ACCOUNT_ALREADY_EXISTS");
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                sqlx::query(
+                    "INSERT INTO service_accounts (id, customer_id, service_code, contract_ref, connection_status, activated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                )
+                .bind(account.id)
+                .bind(account.customer_id)
+                .bind(&account.service_code)
+                .bind(&account.contract_ref)
+                .bind(&account.connection_status)
+                .bind(account.activated_at)
+                .execute(&mut **tx)
+                .await?;
+                ("service_accounts", account.id)
+            }
+            "METER_CREATED" => {
+                let Ok(meter) = serde_json::from_value::<Meter>(event.payload.clone()) else {
+                    let result = rejected("METER_PAYLOAD_INVALID", "recreate_the_meter_command");
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                };
+                if meter.id != event.aggregate_id || meter.serial.trim().is_empty() || !meter.active
+                {
+                    let result = rejected("METER_INVALID", "provide_a_valid_active_meter_snapshot");
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                let expected_unit: Option<String> = sqlx::query_scalar(
+                    "SELECT CASE sa.service_code WHEN 'ELECTRICITY' THEN 'KWH' WHEN 'WATER' THEN 'M3' END
+                     FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
+                     WHERE sa.id = $1 AND c.organization_id = $2",
+                )
+                .bind(meter.service_account_id)
+                .bind(self.organization_id)
+                .fetch_optional(&mut **tx)
+                .await?;
+                let Some(expected_unit) = expected_unit else {
+                    let result = rejected(
+                        "SERVICE_ACCOUNT_NOT_FOUND",
+                        "sync_the_service_account_before_the_meter",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                };
+                if meter.unit != expected_unit {
+                    let result =
+                        rejected("METER_UNIT_MISMATCH", "use_the_unit_defined_by_the_service");
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM meters WHERE id = $1 OR (service_account_id = $2 AND serial = $3))",
+                )
+                .bind(meter.id)
+                .bind(meter.service_account_id)
+                .bind(meter.serial.trim())
+                .fetch_one(&mut **tx)
+                .await?;
+                if exists {
+                    let result = conflict("METER_ALREADY_EXISTS");
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                sqlx::query("INSERT INTO meters (id, service_account_id, serial, unit, active) VALUES ($1, $2, $3, $4, TRUE)")
+                    .bind(meter.id)
+                    .bind(meter.service_account_id)
+                    .bind(meter.serial.trim())
+                    .bind(&meter.unit)
+                    .execute(&mut **tx)
+                    .await?;
+                ("meters", meter.id)
+            }
+            "METER_READING_CREATED" | "METER_READING_CORRECTED" => {
+                let Ok(reading) = serde_json::from_value::<MeterReading>(event.payload.clone())
+                else {
+                    let result = rejected(
+                        "METER_READING_PAYLOAD_INVALID",
+                        "recreate_the_meter_reading_command",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                };
+                let correction = event.command_type == "METER_READING_CORRECTED";
+                let valid_period =
+                    NaiveDate::parse_from_str(&format!("{}-01", reading.period), "%Y-%m-%d")
+                        .is_ok();
+                if reading.id != event.aggregate_id
+                    || !valid_period
+                    || reading.previous < Decimal::ZERO
+                    || reading.current < reading.previous
+                    || reading.measured_quantity != reading.current - reading.previous
+                    || reading.source.trim().is_empty()
+                    || reading.source.trim().chars().count() > 64
+                    || (correction
+                        && (reading.corrected_from_id.is_none()
+                            || reading
+                                .correction_reason
+                                .as_deref()
+                                .unwrap_or_default()
+                                .trim()
+                                .is_empty()))
+                    || (!correction
+                        && (reading.corrected_from_id.is_some()
+                            || reading.correction_reason.is_some()))
+                {
+                    let result = rejected(
+                        "METER_READING_INVALID",
+                        "provide_a_consistent_period_and_meter_index_snapshot",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                let meter = sqlx::query(
+                    "SELECT m.unit, m.active, sa.service_code FROM meters m
+                     JOIN service_accounts sa ON sa.id = m.service_account_id
+                     JOIN customers c ON c.id = sa.customer_id
+                     WHERE m.id = $1 AND c.organization_id = $2 FOR UPDATE OF m",
+                )
+                .bind(reading.meter_id)
+                .bind(self.organization_id)
+                .fetch_optional(&mut **tx)
+                .await?;
+                let Some(meter) = meter else {
+                    let result = rejected("METER_NOT_FOUND", "sync_the_meter_before_its_reading");
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                };
+                let unit: String = meter.try_get("unit")?;
+                let active: bool = meter.try_get("active")?;
+                let service: String = meter.try_get("service_code")?;
+                let correct_unit = (service == "WATER" && unit == "M3")
+                    || (service == "ELECTRICITY" && unit == "KWH");
+                if !active || !correct_unit {
+                    let result = rejected(
+                        "METER_NOT_BILLABLE",
+                        "use_an_active_meter_with_a_matching_service_unit",
+                    );
+                    persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                    return Ok(result);
+                }
+                if correction {
+                    let parent_id = reading
+                        .corrected_from_id
+                        .expect("validated correction parent");
+                    let parent = sqlx::query(
+                        "SELECT r.meter_id, r.period, r.previous, r.current FROM meter_readings r
+                         JOIN meters m ON m.id = r.meter_id JOIN service_accounts sa ON sa.id = m.service_account_id
+                         JOIN customers c ON c.id = sa.customer_id
+                         WHERE r.id = $1 AND c.organization_id = $2 FOR UPDATE OF r",
+                    )
+                    .bind(parent_id)
+                    .bind(self.organization_id)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+                    let Some(parent) = parent else {
+                        let result = rejected(
+                            "METER_READING_PARENT_NOT_FOUND",
+                            "sync_the_original_reading_before_its_correction",
+                        );
+                        persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                        return Ok(result);
+                    };
+                    let parent_meter: Uuid = parent.try_get("meter_id")?;
+                    let parent_period: String = parent.try_get("period")?;
+                    let parent_previous: Decimal = parent.try_get("previous")?;
+                    let has_child: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM meter_readings WHERE corrected_from_id = $1)",
+                    )
+                    .bind(parent_id)
+                    .fetch_one(&mut **tx)
+                    .await?;
+                    let next_previous: Option<Decimal> = sqlx::query_scalar(
+                        "SELECT previous FROM meter_readings WHERE meter_id = $1 AND period > $2 ORDER BY period, created_at, id LIMIT 1",
+                    )
+                    .bind(reading.meter_id)
+                    .bind(&reading.period)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+                    if parent_meter != reading.meter_id
+                        || parent_period != reading.period
+                        || parent_previous != reading.previous
+                        || has_child
+                        || next_previous.is_some_and(|previous| previous != reading.current)
+                    {
+                        let result = conflict("METER_READING_CORRECTION_CONFLICT");
+                        persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                        return Ok(result);
+                    }
+                } else {
+                    if sqlx::query_scalar::<_, bool>(
+                        "SELECT EXISTS(SELECT 1 FROM meter_readings WHERE meter_id = $1 AND period = $2 AND corrected_from_id IS NULL)",
+                    )
+                    .bind(reading.meter_id)
+                    .bind(&reading.period)
+                    .fetch_one(&mut **tx)
+                    .await?
+                    {
+                        let result = conflict("METER_READING_ALREADY_EXISTS");
+                        persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                        return Ok(result);
+                    }
+                    let prior_current: Option<Decimal> = sqlx::query_scalar(
+                        "SELECT current FROM meter_readings r WHERE meter_id = $1 AND period < $2
+                         AND NOT EXISTS (SELECT 1 FROM meter_readings child WHERE child.corrected_from_id = r.id)
+                         ORDER BY period DESC, created_at DESC, id DESC LIMIT 1",
+                    )
+                    .bind(reading.meter_id)
+                    .bind(&reading.period)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+                    if prior_current.is_some_and(|current| current != reading.previous) {
+                        let result = conflict("METER_PREVIOUS_INDEX_CONFLICT");
+                        persist_sync_result(tx, self.organization_id, event, &result, None).await?;
+                        return Ok(result);
+                    }
+                }
+                sqlx::query(
+                    "INSERT INTO meter_readings
+                     (id, meter_id, period, previous, current, measured_quantity, source, corrected_from_id, correction_reason)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                )
+                .bind(reading.id)
+                .bind(reading.meter_id)
+                .bind(&reading.period)
+                .bind(reading.previous)
+                .bind(reading.current)
+                .bind(reading.measured_quantity)
+                .bind(reading.source.trim())
+                .bind(reading.corrected_from_id)
+                .bind(&reading.correction_reason)
+                .execute(&mut **tx)
+                .await?;
+                ("meter_readings", reading.id)
+            }
+            _ => unreachable!("only meter commands are dispatched here"),
+        };
+        let result = persist_sync_result(
+            tx,
+            self.organization_id,
+            event,
+            &SyncEventResult::Accepted {
+                server_sequence: 0,
+                server_entity_id: payload_id,
+            },
+            Some((entity, payload_id, 1, event.payload.clone())),
+        )
+        .await?;
+        Ok(result)
+    }
 }
 
 fn offline_role_allows_command(role: &str, command_type: &str) -> bool {
     match command_type {
         "CUSTOMER_CREATED"
         | "CUSTOMER_UPDATED"
+        | "SERVICE_ACCOUNT_CREATED"
+        | "METER_CREATED"
+        | "METER_READING_CREATED"
         | "UTILITY_INVOICE_ISSUED"
         | "SOLAR_SALE_CREATED"
         | "SOLAR_CONTRACT_ACTIVATED" => {
@@ -5824,6 +6175,7 @@ fn offline_role_allows_command(role: &str, command_type: &str) -> bool {
         "INVOICE_VOIDED" | "CREDIT_NOTE_RECORDED" => {
             matches!(role, "ADMIN" | "SUPERVISOR")
         }
+        "METER_READING_CORRECTED" => matches!(role, "ADMIN" | "SUPERVISOR"),
         _ => false,
     }
 }
@@ -5948,6 +6300,510 @@ async fn limits_allow_event(
         }
     }
     Ok(true)
+}
+
+impl CentralStore {
+    pub async fn create_service_account(
+        &self,
+        customer_id: Uuid,
+        input: &CreateServiceAccount,
+        actor_id: Option<Uuid>,
+    ) -> Result<ServiceAccount, MeterWriteError> {
+        if !matches!(input.service_code.as_str(), "ELECTRICITY" | "WATER")
+            || !matches!(
+                input.connection_status.as_str(),
+                "CONNECTED" | "NOT_CONNECTED" | "UNKNOWN"
+            )
+        {
+            return Err(MeterWriteError::InvalidConfiguration);
+        }
+        let mut tx = self.pool.begin().await?;
+        let customer_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM customers WHERE id = $1 AND organization_id = $2)",
+        )
+        .bind(customer_id)
+        .bind(self.organization_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !customer_exists {
+            return Err(MeterWriteError::CustomerNotFound);
+        }
+        let id = Uuid::new_v4();
+        let row = sqlx::query(
+            "INSERT INTO service_accounts
+             (id, customer_id, service_code, contract_ref, connection_status, activated_at)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING id, customer_id, service_code, contract_ref, connection_status, activated_at",
+        )
+        .bind(id)
+        .bind(customer_id)
+        .bind(&input.service_code)
+        .bind(&input.contract_ref)
+        .bind(&input.connection_status)
+        .bind(input.activated_at)
+        .fetch_one(&mut *tx)
+        .await?;
+        let account = service_account_from_pg_row(&row)?;
+        sqlx::query(
+            "INSERT INTO central_changes (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'service_accounts', $2, 1, $3)",
+        )
+        .bind(self.organization_id)
+        .bind(id)
+        .bind(json!(account))
+        .execute(&mut *tx)
+        .await?;
+        audit_meter_mutation(
+            &mut tx,
+            actor_id,
+            "SERVICE_ACCOUNT_CREATED",
+            id,
+            json!({"service_code": account.service_code, "connection_status": account.connection_status}),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(account)
+    }
+
+    pub async fn list_service_accounts(
+        &self,
+        customer_id: Uuid,
+    ) -> Result<Vec<ServiceAccount>, MeterWriteError> {
+        let rows = sqlx::query(
+            "SELECT sa.id, sa.customer_id, sa.service_code, sa.contract_ref,
+                    sa.connection_status, sa.activated_at
+             FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
+             WHERE sa.customer_id = $1 AND c.organization_id = $2
+             ORDER BY sa.service_code, sa.id",
+        )
+        .bind(customer_id)
+        .bind(self.organization_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(service_account_from_pg_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MeterWriteError::from)
+    }
+
+    pub async fn create_meter(
+        &self,
+        service_account_id: Uuid,
+        input: &CreateMeter,
+        actor_id: Option<Uuid>,
+    ) -> Result<Meter, MeterWriteError> {
+        let serial = input.serial.trim();
+        if serial.is_empty()
+            || serial.chars().count() > 128
+            || !matches!(input.unit.as_str(), "KWH" | "M3")
+        {
+            return Err(MeterWriteError::InvalidInput);
+        }
+        let mut tx = self.pool.begin().await?;
+        let service_code: Option<String> = sqlx::query_scalar(
+            "SELECT sa.service_code FROM service_accounts sa
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE sa.id = $1 AND c.organization_id = $2 FOR UPDATE OF sa",
+        )
+        .bind(service_account_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let service_code = service_code.ok_or(MeterWriteError::ServiceAccountNotFound)?;
+        let expected_unit = match service_code.as_str() {
+            "ELECTRICITY" => "KWH",
+            "WATER" => "M3",
+            _ => return Err(MeterWriteError::InvalidConfiguration),
+        };
+        if input.unit != expected_unit {
+            return Err(MeterWriteError::InvalidConfiguration);
+        }
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO meters (id, service_account_id, serial, unit, active)
+             VALUES ($1, $2, $3, $4, TRUE)",
+        )
+        .bind(id)
+        .bind(service_account_id)
+        .bind(serial)
+        .bind(&input.unit)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            if error
+                .as_database_error()
+                .is_some_and(|database| database.is_unique_violation())
+            {
+                MeterWriteError::InvalidInput
+            } else {
+                MeterWriteError::Database(error)
+            }
+        })?;
+        sqlx::query(
+            "INSERT INTO central_changes (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'meters', $2, 1, $3)",
+        )
+        .bind(self.organization_id)
+        .bind(id)
+        .bind(json!(Meter {
+            id,
+            service_account_id,
+            serial: serial.to_owned(),
+            unit: input.unit.clone(),
+            active: true,
+        }))
+        .execute(&mut *tx)
+        .await?;
+        audit_meter_mutation(
+            &mut tx,
+            actor_id,
+            "METER_CREATED",
+            id,
+            json!({"serial": serial, "unit": input.unit}),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(Meter {
+            id,
+            service_account_id,
+            serial: serial.to_owned(),
+            unit: input.unit.clone(),
+            active: true,
+        })
+    }
+
+    pub async fn list_meters(
+        &self,
+        service_account_id: Uuid,
+    ) -> Result<Vec<Meter>, MeterWriteError> {
+        let rows = sqlx::query(
+            "SELECT m.id, m.service_account_id, m.serial, m.unit, m.active
+             FROM meters m JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE m.service_account_id = $1 AND c.organization_id = $2
+             ORDER BY m.serial, m.id",
+        )
+        .bind(service_account_id)
+        .bind(self.organization_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(meter_from_pg_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MeterWriteError::from)
+    }
+
+    pub async fn list_meter_readings(
+        &self,
+        meter_id: Uuid,
+        period: Option<&str>,
+    ) -> Result<Vec<MeterReading>, MeterWriteError> {
+        let rows = sqlx::query(
+            "SELECT r.id, r.meter_id, r.period, r.previous, r.current,
+                    r.measured_quantity, r.source, r.corrected_from_id, r.correction_reason
+             FROM meter_readings r JOIN meters m ON m.id = r.meter_id
+             JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE r.meter_id = $1 AND c.organization_id = $2
+               AND ($3::text IS NULL OR r.period = $3)
+             ORDER BY r.period, CASE WHEN r.corrected_from_id IS NULL THEN 0 ELSE 1 END,
+                      r.created_at, r.id",
+        )
+        .bind(meter_id)
+        .bind(self.organization_id)
+        .bind(period)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(meter_reading_from_pg_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MeterWriteError::from)
+    }
+
+    pub async fn create_meter_reading(
+        &self,
+        meter_id: Uuid,
+        input: &CreateMeterReading,
+        actor_id: Option<Uuid>,
+    ) -> Result<MeterReading, MeterWriteError> {
+        validate_pg_reading_input(
+            &input.period,
+            &input.previous,
+            &input.current,
+            &input.source,
+        )?;
+        let mut tx = self.pool.begin().await?;
+        let active: Option<bool> = sqlx::query_scalar(
+            "SELECT m.active FROM meters m JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE m.id = $1 AND c.organization_id = $2 FOR UPDATE OF m",
+        )
+        .bind(meter_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if !active.ok_or(MeterWriteError::MeterNotFound)? {
+            return Err(MeterWriteError::InvalidConfiguration);
+        }
+        let previous_current: Option<Decimal> = sqlx::query_scalar(
+            "SELECT r.current FROM meter_readings r
+             WHERE r.meter_id = $1 AND r.period < $2
+               AND NOT EXISTS (SELECT 1 FROM meter_readings child WHERE child.corrected_from_id = r.id)
+             ORDER BY r.period DESC, r.created_at DESC, r.id DESC LIMIT 1",
+        )
+        .bind(meter_id)
+        .bind(&input.period)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if previous_current.is_some_and(|value| value != input.previous) {
+            return Err(MeterWriteError::PreviousIndexMismatch);
+        }
+        let id = Uuid::new_v4();
+        let quantity = input.current - input.previous;
+        let insert = sqlx::query(
+            "INSERT INTO meter_readings
+             (id, meter_id, period, previous, current, measured_quantity, source)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(id)
+        .bind(meter_id)
+        .bind(&input.period)
+        .bind(input.previous)
+        .bind(input.current)
+        .bind(quantity)
+        .bind(input.source.trim())
+        .execute(&mut *tx)
+        .await;
+        if let Err(error) = insert {
+            if error
+                .as_database_error()
+                .is_some_and(|database| database.is_unique_violation())
+            {
+                return Err(MeterWriteError::DuplicateReading);
+            }
+            return Err(MeterWriteError::Database(error));
+        }
+        let reading = MeterReading {
+            id,
+            meter_id,
+            period: input.period.clone(),
+            previous: input.previous,
+            current: input.current,
+            measured_quantity: quantity,
+            source: input.source.trim().to_owned(),
+            corrected_from_id: None,
+            correction_reason: None,
+        };
+        let change = json!(reading);
+        sqlx::query(
+            "INSERT INTO central_changes (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'meter_readings', $2, 1, $3)",
+        )
+        .bind(self.organization_id)
+        .bind(id)
+        .bind(change)
+        .execute(&mut *tx)
+        .await?;
+        audit_meter_mutation(
+            &mut tx,
+            actor_id,
+            "METER_READING_CREATED",
+            id,
+            json!({"period": reading.period, "measured_quantity": reading.measured_quantity}),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(reading)
+    }
+
+    pub async fn correct_meter_reading(
+        &self,
+        reading_id: Uuid,
+        input: &CorrectMeterReading,
+        actor_id: Option<Uuid>,
+    ) -> Result<MeterReading, MeterWriteError> {
+        if input.reason.trim().is_empty() {
+            return Err(MeterWriteError::CorrectionReasonRequired);
+        }
+        if input.reason.trim().chars().count() > 500 || input.source.trim().is_empty() {
+            return Err(MeterWriteError::InvalidInput);
+        }
+        let mut tx = self.pool.begin().await?;
+        let Some(row) = sqlx::query(
+            "SELECT r.id, r.meter_id, r.period, r.previous, r.current,
+                    r.measured_quantity, r.source, r.corrected_from_id, r.correction_reason
+             FROM meter_readings r JOIN meters m ON m.id = r.meter_id
+             JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE r.id = $1 AND c.organization_id = $2 FOR UPDATE OF r",
+        )
+        .bind(reading_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(MeterWriteError::MeterNotFound);
+        };
+        let target = meter_reading_from_pg_row(&row)?;
+        let has_correction: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM meter_readings WHERE corrected_from_id = $1)",
+        )
+        .bind(reading_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_correction {
+            return Err(MeterWriteError::ReadingNotLatest);
+        }
+        if input.current < target.previous {
+            return Err(MeterWriteError::InvalidIndex);
+        }
+        let next_period_previous: Option<Decimal> = sqlx::query_scalar(
+            "SELECT previous FROM meter_readings
+             WHERE meter_id = $1 AND period > $2
+             ORDER BY period, created_at, id LIMIT 1",
+        )
+        .bind(target.meter_id)
+        .bind(&target.period)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if next_period_previous.is_some_and(|value| value != input.current) {
+            return Err(MeterWriteError::PreviousIndexMismatch);
+        }
+        let id = Uuid::new_v4();
+        let quantity = input.current - target.previous;
+        let corrected = MeterReading {
+            id,
+            meter_id: target.meter_id,
+            period: target.period,
+            previous: target.previous,
+            current: input.current,
+            measured_quantity: quantity,
+            source: input.source.trim().to_owned(),
+            corrected_from_id: Some(reading_id),
+            correction_reason: Some(input.reason.trim().to_owned()),
+        };
+        sqlx::query(
+            "INSERT INTO meter_readings
+             (id, meter_id, period, previous, current, measured_quantity, source,
+              corrected_from_id, correction_reason)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(id)
+        .bind(corrected.meter_id)
+        .bind(&corrected.period)
+        .bind(corrected.previous)
+        .bind(corrected.current)
+        .bind(corrected.measured_quantity)
+        .bind(&corrected.source)
+        .bind(reading_id)
+        .bind(&corrected.correction_reason)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            if error
+                .as_database_error()
+                .is_some_and(|database| database.is_unique_violation())
+            {
+                MeterWriteError::ReadingNotLatest
+            } else {
+                MeterWriteError::Database(error)
+            }
+        })?;
+        sqlx::query(
+            "INSERT INTO central_changes (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'meter_readings', $2, 2, $3)",
+        )
+        .bind(self.organization_id)
+        .bind(id)
+        .bind(json!(corrected))
+        .execute(&mut *tx)
+        .await?;
+        audit_meter_mutation(
+            &mut tx,
+            actor_id,
+            "METER_READING_CORRECTED",
+            id,
+            json!({"corrected_from_id": reading_id, "reason": input.reason.trim()}),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(corrected)
+    }
+}
+
+async fn audit_meter_mutation(
+    tx: &mut Transaction<'_, Postgres>,
+    actor_id: Option<Uuid>,
+    event_type: &str,
+    subject_id: Uuid,
+    metadata: serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO audit_events
+         (id, actor, event_type, subject_id, occurred_at, redacted_metadata)
+         VALUES ($1, $2, $3, $4, now(), $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(actor_id)
+    .bind(event_type)
+    .bind(subject_id)
+    .bind(metadata)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+fn validate_pg_reading_input(
+    period: &str,
+    previous: &Decimal,
+    current: &Decimal,
+    source: &str,
+) -> Result<(), MeterWriteError> {
+    if chrono::NaiveDate::parse_from_str(&format!("{period}-01"), "%Y-%m-%d").is_err()
+        || source.trim().is_empty()
+        || source.trim().chars().count() > 64
+    {
+        return Err(MeterWriteError::InvalidInput);
+    }
+    if previous.is_sign_negative() || current < previous {
+        return Err(MeterWriteError::InvalidIndex);
+    }
+    Ok(())
+}
+
+fn service_account_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<ServiceAccount, sqlx::Error> {
+    Ok(ServiceAccount {
+        id: row.try_get("id")?,
+        customer_id: row.try_get("customer_id")?,
+        service_code: row.try_get("service_code")?,
+        contract_ref: row.try_get("contract_ref")?,
+        connection_status: row.try_get("connection_status")?,
+        activated_at: row.try_get("activated_at")?,
+    })
+}
+
+fn meter_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<Meter, sqlx::Error> {
+    Ok(Meter {
+        id: row.try_get("id")?,
+        service_account_id: row.try_get("service_account_id")?,
+        serial: row.try_get("serial")?,
+        unit: row.try_get("unit")?,
+        active: row.try_get("active")?,
+    })
+}
+
+fn meter_reading_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<MeterReading, sqlx::Error> {
+    Ok(MeterReading {
+        id: row.try_get("id")?,
+        meter_id: row.try_get("meter_id")?,
+        period: row.try_get("period")?,
+        previous: row.try_get("previous")?,
+        current: row.try_get("current")?,
+        measured_quantity: row.try_get("measured_quantity")?,
+        source: row.try_get("source")?,
+        corrected_from_id: row.try_get("corrected_from_id")?,
+        correction_reason: row.try_get("correction_reason")?,
+    })
 }
 
 fn customer_from_row(row: &sqlx::postgres::PgRow) -> Result<Customer, sqlx::Error> {

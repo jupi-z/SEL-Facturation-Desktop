@@ -7,14 +7,15 @@ use axum::{
     Json, Router,
 };
 use sel_contracts::{
-    utility_snapshot_sha256, ActivateSolarContractRequest, CatalogSnapshot, CreateCustomer,
-    CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer,
-    InvoiceLineResponse, PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest,
-    SolarSaleResponse, SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer,
-    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    utility_snapshot_sha256, ActivateSolarContractRequest, CatalogSnapshot, CorrectMeterReading,
+    CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest,
+    CreateSolarSaleRequest, CreditNoteRequest, Customer, InvoiceLineResponse,
+    PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
+    SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
-use sel_storage::{LocalSolarSaleError, LocalStore};
+use sel_storage::{LocalMeterError, LocalSolarSaleError, LocalStore};
 use sel_sync::payload_digest;
 use serde_json::json;
 use std::{net::SocketAddr, sync::Arc};
@@ -249,6 +250,22 @@ fn router_with_store_base(store: LocalStore) -> Router {
             get(get_customer).patch(update_customer),
         )
         .route(
+            "/local/v1/customers/:id/service-accounts",
+            get(list_service_accounts).post(create_service_account),
+        )
+        .route(
+            "/local/v1/service-accounts/:id/meters",
+            get(list_meters).post(create_meter),
+        )
+        .route(
+            "/local/v1/meters/:id/readings",
+            get(list_meter_readings).post(create_meter_reading),
+        )
+        .route(
+            "/local/v1/meter-readings/:id/corrections",
+            post(correct_meter_reading),
+        )
+        .route(
             "/local/v1/billing/utility/issue",
             post(issue_utility_invoice),
         )
@@ -459,6 +476,100 @@ async fn update_customer(
                 "customer is missing or its revision has changed".into(),
             )
         })
+}
+
+async fn create_service_account(
+    State(state): State<LocalAppState>,
+    Path(customer_id): Path<Uuid>,
+    Json(input): Json<CreateServiceAccount>,
+) -> Result<(StatusCode, Json<sel_contracts::ServiceAccount>), (StatusCode, String)> {
+    state
+        .store
+        .create_service_account(customer_id, &input)
+        .await
+        .map(|account| (StatusCode::CREATED, Json(account)))
+        .map_err(local_meter_error)
+}
+
+async fn list_service_accounts(
+    State(state): State<LocalAppState>,
+    Path(customer_id): Path<Uuid>,
+) -> Result<Json<Vec<sel_contracts::ServiceAccount>>, (StatusCode, String)> {
+    state
+        .store
+        .list_service_accounts(customer_id)
+        .await
+        .map(Json)
+        .map_err(local_meter_error)
+}
+
+async fn create_meter(
+    State(state): State<LocalAppState>,
+    Path(service_account_id): Path<Uuid>,
+    Json(input): Json<CreateMeter>,
+) -> Result<(StatusCode, Json<sel_contracts::Meter>), (StatusCode, String)> {
+    state
+        .store
+        .create_meter(service_account_id, &input)
+        .await
+        .map(|meter| (StatusCode::CREATED, Json(meter)))
+        .map_err(local_meter_error)
+}
+
+async fn list_meters(
+    State(state): State<LocalAppState>,
+    Path(service_account_id): Path<Uuid>,
+) -> Result<Json<Vec<sel_contracts::Meter>>, (StatusCode, String)> {
+    state
+        .store
+        .list_meters(service_account_id)
+        .await
+        .map(Json)
+        .map_err(local_meter_error)
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct MeterReadingQuery {
+    period: Option<String>,
+}
+
+async fn list_meter_readings(
+    State(state): State<LocalAppState>,
+    Path(meter_id): Path<Uuid>,
+    Query(query): Query<MeterReadingQuery>,
+) -> Result<Json<Vec<sel_contracts::MeterReading>>, (StatusCode, String)> {
+    state
+        .store
+        .list_meter_readings(meter_id, query.period.as_deref())
+        .await
+        .map(Json)
+        .map_err(local_meter_error)
+}
+
+async fn create_meter_reading(
+    State(state): State<LocalAppState>,
+    Path(meter_id): Path<Uuid>,
+    Json(input): Json<CreateMeterReading>,
+) -> Result<(StatusCode, Json<sel_contracts::MeterReading>), (StatusCode, String)> {
+    state
+        .store
+        .create_meter_reading(meter_id, &input)
+        .await
+        .map(|reading| (StatusCode::CREATED, Json(reading)))
+        .map_err(local_meter_error)
+}
+
+async fn correct_meter_reading(
+    State(state): State<LocalAppState>,
+    Path(reading_id): Path<Uuid>,
+    Json(input): Json<CorrectMeterReading>,
+) -> Result<(StatusCode, Json<sel_contracts::MeterReading>), (StatusCode, String)> {
+    state
+        .store
+        .correct_meter_reading(reading_id, &input)
+        .await
+        .map(|reading| (StatusCode::CREATED, Json(reading)))
+        .map_err(local_meter_error)
 }
 
 async fn issue_utility_invoice(
@@ -817,6 +928,25 @@ fn internal_error(error: sqlx::Error) -> (axum::http::StatusCode, String) {
         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         error.to_string(),
     )
+}
+
+fn local_meter_error(error: LocalMeterError) -> (StatusCode, String) {
+    let status = match error {
+        LocalMeterError::CustomerNotFound
+        | LocalMeterError::ServiceAccountNotFound
+        | LocalMeterError::MeterNotFound => StatusCode::NOT_FOUND,
+        LocalMeterError::DuplicateReading
+        | LocalMeterError::PreviousIndexMismatch
+        | LocalMeterError::ReadingNotLatest => StatusCode::CONFLICT,
+        LocalMeterError::InvalidConfiguration
+        | LocalMeterError::InvalidInput
+        | LocalMeterError::InvalidIndex
+        | LocalMeterError::CorrectionReasonRequired => StatusCode::UNPROCESSABLE_ENTITY,
+        LocalMeterError::Database(_) | LocalMeterError::InvalidPayload(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    };
+    (status, error.to_string())
 }
 
 fn local_solar_sale_error(error: LocalSolarSaleError) -> (StatusCode, String) {

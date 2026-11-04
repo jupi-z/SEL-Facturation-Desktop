@@ -2,13 +2,15 @@ use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
     catalog_snapshot_sha256, solar_schedule_id, utility_snapshot_sha256,
-    ActivateSolarContractRequest, CatalogSnapshot, CreateCustomer, CreateSolarQuoteRequest,
+    ActivateSolarContractRequest, CatalogSnapshot, CorrectMeterReading, CreateCustomer,
+    CreateMeter, CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest,
     CreateSolarSaleRequest, CreditNoteRequest, CreditNoteSyncPayload, Customer,
-    InvoiceLineResponse, InvoiceVoidSyncPayload, PaymentAllocationRequest,
+    InvoiceLineResponse, InvoiceVoidSyncPayload, Meter, MeterReading, PaymentAllocationRequest,
     PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
-    RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarQuoteResponse,
-    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse,
-    UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, SolarContractSyncPayload,
+    SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult,
+    SyncPullResponse, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
+    UtilityInvoiceSyncPayload,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -115,6 +117,34 @@ pub enum LocalSolarSaleError {
     PriceMismatch,
     #[error("invalid solar sale JSON: {0}")]
     InvalidPayload(String),
+}
+
+#[derive(Debug, Error)]
+pub enum LocalMeterError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("meter command could not be serialized: {0}")]
+    InvalidPayload(String),
+    #[error("customer was not found locally")]
+    CustomerNotFound,
+    #[error("service account was not found locally")]
+    ServiceAccountNotFound,
+    #[error("meter was not found locally")]
+    MeterNotFound,
+    #[error("service code, connection status, or meter unit is invalid")]
+    InvalidConfiguration,
+    #[error("meter serial, period, or reading source is invalid")]
+    InvalidInput,
+    #[error("meter index must be non-negative and current must not be below previous")]
+    InvalidIndex,
+    #[error("a reading already exists for this meter and period")]
+    DuplicateReading,
+    #[error("the previous index does not match the latest accepted reading")]
+    PreviousIndexMismatch,
+    #[error("only the latest reading can be corrected")]
+    ReadingNotLatest,
+    #[error("a correction reason is required")]
+    CorrectionReasonRequired,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2142,6 +2172,36 @@ impl LocalStore {
                         )
                         .await?;
                     }
+                    "service_accounts" => {
+                        apply_service_account_change(
+                            &mut tx,
+                            self.organization_id,
+                            entity_id,
+                            revision,
+                            &change_json,
+                        )
+                        .await?;
+                    }
+                    "meters" => {
+                        apply_meter_change(
+                            &mut tx,
+                            self.organization_id,
+                            entity_id,
+                            revision,
+                            &change_json,
+                        )
+                        .await?;
+                    }
+                    "meter_readings" => {
+                        apply_meter_reading_change(
+                            &mut tx,
+                            self.organization_id,
+                            entity_id,
+                            revision,
+                            &change_json,
+                        )
+                        .await?;
+                    }
                     "invoices" => {
                         if change_json
                             .get("status")
@@ -2343,6 +2403,459 @@ impl LocalStore {
     }
 }
 
+impl LocalStore {
+    pub async fn create_service_account(
+        &self,
+        customer_id: Uuid,
+        input: &CreateServiceAccount,
+    ) -> Result<ServiceAccount, LocalMeterError> {
+        if !matches!(input.service_code.as_str(), "ELECTRICITY" | "WATER")
+            || !matches!(
+                input.connection_status.as_str(),
+                "CONNECTED" | "NOT_CONNECTED" | "UNKNOWN"
+            )
+        {
+            return Err(LocalMeterError::InvalidConfiguration);
+        }
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let customer_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM customers WHERE id = $1 AND organization_id = $2)",
+        )
+        .bind(customer_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        if !customer_exists {
+            return Err(LocalMeterError::CustomerNotFound);
+        }
+        let id = Uuid::new_v4();
+        let activated_at = input.activated_at.map(|date| date.to_string());
+        sqlx::query(
+            "INSERT INTO service_accounts
+             (id, customer_id, service_code, contract_ref, connection_status, activated_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(id.to_string())
+        .bind(customer_id.to_string())
+        .bind(&input.service_code)
+        .bind(&input.contract_ref)
+        .bind(&input.connection_status)
+        .bind(activated_at)
+        .execute(&mut *tx)
+        .await?;
+        let account = ServiceAccount {
+            id,
+            customer_id,
+            service_code: input.service_code.clone(),
+            contract_ref: input.contract_ref.clone(),
+            connection_status: input.connection_status.clone(),
+            activated_at: input.activated_at,
+        };
+        let payload = serde_json::to_value(&account)
+            .map_err(|error| LocalMeterError::InvalidPayload(error.to_string()))?;
+        let event = local_event(self, Uuid::new_v4(), id, "SERVICE_ACCOUNT_CREATED", payload)?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        tx.commit().await?;
+        Ok(account)
+    }
+
+    pub async fn list_service_accounts(
+        &self,
+        customer_id: Uuid,
+    ) -> Result<Vec<ServiceAccount>, LocalMeterError> {
+        let rows = sqlx::query(
+            "SELECT sa.id, sa.customer_id, sa.service_code, sa.contract_ref,
+                    sa.connection_status, sa.activated_at
+             FROM service_accounts sa JOIN customers c ON c.id = sa.customer_id
+             WHERE sa.customer_id = $1 AND c.organization_id = $2
+             ORDER BY sa.service_code, sa.id",
+        )
+        .bind(customer_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(service_account_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LocalMeterError::from)
+    }
+
+    pub async fn create_meter(
+        &self,
+        service_account_id: Uuid,
+        input: &CreateMeter,
+    ) -> Result<Meter, LocalMeterError> {
+        let serial = input.serial.trim();
+        if serial.is_empty()
+            || serial.chars().count() > 128
+            || !matches!(input.unit.as_str(), "KWH" | "M3")
+        {
+            return Err(LocalMeterError::InvalidInput);
+        }
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let service_code: Option<String> = sqlx::query_scalar(
+            "SELECT sa.service_code FROM service_accounts sa
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE sa.id = $1 AND c.organization_id = $2",
+        )
+        .bind(service_account_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?;
+        let service_code = service_code.ok_or(LocalMeterError::ServiceAccountNotFound)?;
+        let expected_unit = match service_code.as_str() {
+            "ELECTRICITY" => "KWH",
+            "WATER" => "M3",
+            _ => return Err(LocalMeterError::InvalidConfiguration),
+        };
+        if input.unit != expected_unit {
+            return Err(LocalMeterError::InvalidConfiguration);
+        }
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO meters (id, service_account_id, serial, unit, active)
+             VALUES ($1, $2, $3, $4, 1)",
+        )
+        .bind(id.to_string())
+        .bind(service_account_id.to_string())
+        .bind(serial)
+        .bind(&input.unit)
+        .execute(&mut *tx)
+        .await?;
+        let meter = Meter {
+            id,
+            service_account_id,
+            serial: serial.to_owned(),
+            unit: input.unit.clone(),
+            active: true,
+        };
+        let payload = serde_json::to_value(&meter)
+            .map_err(|error| LocalMeterError::InvalidPayload(error.to_string()))?;
+        let event = local_event(self, Uuid::new_v4(), id, "METER_CREATED", payload)?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        tx.commit().await?;
+        Ok(meter)
+    }
+
+    pub async fn list_meters(
+        &self,
+        service_account_id: Uuid,
+    ) -> Result<Vec<Meter>, LocalMeterError> {
+        let rows = sqlx::query(
+            "SELECT m.id, m.service_account_id, m.serial, m.unit, m.active
+             FROM meters m JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE m.service_account_id = $1 AND c.organization_id = $2
+             ORDER BY m.serial, m.id",
+        )
+        .bind(service_account_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(meter_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LocalMeterError::from)
+    }
+
+    pub async fn list_meter_readings(
+        &self,
+        meter_id: Uuid,
+        period: Option<&str>,
+    ) -> Result<Vec<MeterReading>, LocalMeterError> {
+        let rows = sqlx::query(
+            "SELECT r.id, r.meter_id, r.period, r.previous, r.current,
+                    r.measured_quantity, r.source, r.corrected_from_id, r.correction_reason
+             FROM meter_readings r JOIN meters m ON m.id = r.meter_id
+             JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE r.meter_id = $1 AND c.organization_id = $2
+               AND ($3 IS NULL OR r.period = $3)
+             ORDER BY r.period, CASE WHEN r.corrected_from_id IS NULL THEN 0 ELSE 1 END,
+                      r.created_at, r.id",
+        )
+        .bind(meter_id.to_string())
+        .bind(self.organization_id.to_string())
+        .bind(period)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(meter_reading_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LocalMeterError::from)
+    }
+
+    pub async fn create_meter_reading(
+        &self,
+        meter_id: Uuid,
+        input: &CreateMeterReading,
+    ) -> Result<MeterReading, LocalMeterError> {
+        validate_reading_input(
+            &input.period,
+            &input.previous,
+            &input.current,
+            &input.source,
+        )?;
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let active: Option<i64> = sqlx::query_scalar(
+            "SELECT m.active FROM meters m
+             JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE m.id = $1 AND c.organization_id = $2",
+        )
+        .bind(meter_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if active.ok_or(LocalMeterError::MeterNotFound)? == 0 {
+            return Err(LocalMeterError::InvalidConfiguration);
+        }
+        let duplicate: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM meter_readings
+             WHERE meter_id = $1 AND period = $2 AND corrected_from_id IS NULL)",
+        )
+        .bind(meter_id.to_string())
+        .bind(&input.period)
+        .fetch_one(&mut *tx)
+        .await?;
+        if duplicate {
+            return Err(LocalMeterError::DuplicateReading);
+        }
+        let previous_period_current: Option<String> = sqlx::query_scalar(
+            "SELECT current FROM meter_readings
+             WHERE meter_id = $1 AND period < $2
+               AND NOT EXISTS (SELECT 1 FROM meter_readings child WHERE child.corrected_from_id = meter_readings.id)
+             ORDER BY period DESC, created_at DESC, id DESC LIMIT 1",
+        )
+        .bind(meter_id.to_string())
+        .bind(&input.period)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if previous_period_current
+            .as_deref()
+            .and_then(|value| Decimal::from_str(value).ok())
+            .is_some_and(|value| value != input.previous)
+        {
+            return Err(LocalMeterError::PreviousIndexMismatch);
+        }
+        let id = Uuid::new_v4();
+        let quantity = input.current - input.previous;
+        sqlx::query(
+            "INSERT INTO meter_readings
+             (id, meter_id, period, previous, current, measured_quantity, source, corrected_from_id, correction_reason)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL)",
+        )
+        .bind(id.to_string())
+        .bind(meter_id.to_string())
+        .bind(&input.period)
+        .bind(input.previous.to_string())
+        .bind(input.current.to_string())
+        .bind(quantity.to_string())
+        .bind(input.source.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            if error.as_database_error().is_some_and(|database| database.is_unique_violation()) {
+                LocalMeterError::DuplicateReading
+            } else {
+                LocalMeterError::Database(error)
+            }
+        })?;
+        let reading = MeterReading {
+            id,
+            meter_id,
+            period: input.period.clone(),
+            previous: input.previous,
+            current: input.current,
+            measured_quantity: quantity,
+            source: input.source.trim().to_owned(),
+            corrected_from_id: None,
+            correction_reason: None,
+        };
+        let payload = serde_json::to_value(&reading)
+            .map_err(|error| LocalMeterError::InvalidPayload(error.to_string()))?;
+        let event = local_event(self, Uuid::new_v4(), id, "METER_READING_CREATED", payload)?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        tx.commit().await?;
+        Ok(reading)
+    }
+
+    pub async fn correct_meter_reading(
+        &self,
+        reading_id: Uuid,
+        input: &CorrectMeterReading,
+    ) -> Result<MeterReading, LocalMeterError> {
+        let reason = input.reason.trim();
+        if reason.is_empty() {
+            return Err(LocalMeterError::CorrectionReasonRequired);
+        }
+        if reason.chars().count() > 500 || input.source.trim().is_empty() {
+            return Err(LocalMeterError::InvalidInput);
+        }
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let Some(row) = sqlx::query(
+            "SELECT r.id, r.meter_id, r.period, r.previous, r.current,
+                    r.measured_quantity, r.source, r.corrected_from_id, r.correction_reason
+             FROM meter_readings r JOIN meters m ON m.id = r.meter_id
+             JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE r.id = $1 AND c.organization_id = $2",
+        )
+        .bind(reading_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(LocalMeterError::MeterNotFound);
+        };
+        let target = meter_reading_from_row(&row)?;
+        let has_correction: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM meter_readings WHERE corrected_from_id = $1)",
+        )
+        .bind(reading_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_correction {
+            return Err(LocalMeterError::ReadingNotLatest);
+        }
+        if input.current < target.previous {
+            return Err(LocalMeterError::InvalidIndex);
+        }
+        let next_period_previous: Option<String> = sqlx::query_scalar(
+            "SELECT previous FROM meter_readings
+             WHERE meter_id = $1 AND period > $2
+             ORDER BY period, created_at, id LIMIT 1",
+        )
+        .bind(target.meter_id.to_string())
+        .bind(&target.period)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if next_period_previous
+            .as_deref()
+            .and_then(|value| Decimal::from_str(value).ok())
+            .is_some_and(|value| value != input.current)
+        {
+            return Err(LocalMeterError::PreviousIndexMismatch);
+        }
+        let id = Uuid::new_v4();
+        let quantity = input.current - target.previous;
+        sqlx::query(
+            "INSERT INTO meter_readings
+             (id, meter_id, period, previous, current, measured_quantity, source, corrected_from_id, correction_reason)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(id.to_string())
+        .bind(target.meter_id.to_string())
+        .bind(&target.period)
+        .bind(target.previous.to_string())
+        .bind(input.current.to_string())
+        .bind(quantity.to_string())
+        .bind(input.source.trim())
+        .bind(reading_id.to_string())
+        .bind(reason)
+        .execute(&mut *tx)
+        .await?;
+        let correction = MeterReading {
+            id,
+            meter_id: target.meter_id,
+            period: target.period,
+            previous: target.previous,
+            current: input.current,
+            measured_quantity: quantity,
+            source: input.source.trim().to_owned(),
+            corrected_from_id: Some(reading_id),
+            correction_reason: Some(reason.to_owned()),
+        };
+        let payload = serde_json::to_value(&correction)
+            .map_err(|error| LocalMeterError::InvalidPayload(error.to_string()))?;
+        let event = local_event(self, Uuid::new_v4(), id, "METER_READING_CORRECTED", payload)?;
+        insert_command_in_tx(&mut tx, &event).await?;
+        tx.commit().await?;
+        Ok(correction)
+    }
+}
+
+fn validate_reading_input(
+    period: &str,
+    previous: &Decimal,
+    current: &Decimal,
+    source: &str,
+) -> Result<(), LocalMeterError> {
+    if chrono::NaiveDate::parse_from_str(&format!("{period}-01"), "%Y-%m-%d").is_err()
+        || source.trim().is_empty()
+        || source.trim().chars().count() > 64
+    {
+        return Err(LocalMeterError::InvalidInput);
+    }
+    if previous.is_sign_negative() || current < previous {
+        return Err(LocalMeterError::InvalidIndex);
+    }
+    Ok(())
+}
+
+fn service_account_from_row(row: &SqliteRow) -> Result<ServiceAccount, sqlx::Error> {
+    Ok(ServiceAccount {
+        id: parse_local_uuid(row.try_get("id")?, "service account id")?,
+        customer_id: parse_local_uuid(row.try_get("customer_id")?, "service account customer id")?,
+        service_code: row.try_get("service_code")?,
+        contract_ref: row.try_get("contract_ref")?,
+        connection_status: row.try_get("connection_status")?,
+        activated_at: row
+            .try_get::<Option<String>, _>("activated_at")?
+            .map(|value| NaiveDate::parse_from_str(&value, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|error| {
+                sqlx::Error::Protocol(format!("invalid service activation date: {error}"))
+            })?,
+    })
+}
+
+fn meter_from_row(row: &SqliteRow) -> Result<Meter, sqlx::Error> {
+    Ok(Meter {
+        id: parse_local_uuid(row.try_get("id")?, "meter id")?,
+        service_account_id: parse_local_uuid(
+            row.try_get("service_account_id")?,
+            "meter service account id",
+        )?,
+        serial: row.try_get("serial")?,
+        unit: row.try_get("unit")?,
+        active: row.try_get::<i64, _>("active")? != 0,
+    })
+}
+
+fn meter_reading_from_row(row: &SqliteRow) -> Result<MeterReading, sqlx::Error> {
+    let decimal = |name: &str| -> Result<Decimal, sqlx::Error> {
+        let value: String = row.try_get(name)?;
+        Decimal::from_str(&value).map_err(|error| {
+            sqlx::Error::Protocol(format!("invalid meter reading {name}: {error}"))
+        })
+    };
+    Ok(MeterReading {
+        id: parse_local_uuid(row.try_get("id")?, "meter reading id")?,
+        meter_id: parse_local_uuid(row.try_get("meter_id")?, "meter id")?,
+        period: row.try_get("period")?,
+        previous: decimal("previous")?,
+        current: decimal("current")?,
+        measured_quantity: decimal("measured_quantity")?,
+        source: row.try_get("source")?,
+        corrected_from_id: row
+            .try_get::<Option<String>, _>("corrected_from_id")?
+            .map(|value| parse_local_uuid(value, "corrected reading id"))
+            .transpose()?,
+        correction_reason: row.try_get("correction_reason")?,
+    })
+}
+
+fn parse_local_uuid(value: String, label: &str) -> Result<Uuid, sqlx::Error> {
+    value
+        .parse()
+        .map_err(|error| sqlx::Error::Protocol(format!("invalid {label}: {error}")))
+}
+
 async fn mark_local_effect_rejected(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     event_id: String,
@@ -2539,6 +3052,283 @@ async fn insert_invoice_line(
     .bind(line.total.to_string())
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+async fn apply_service_account_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    entity_id: &str,
+    revision: i64,
+    change: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let account_id = change
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("service account change has no id".into()))?;
+    if account_id != entity_id {
+        return Err(sqlx::Error::Protocol(
+            "service account change id does not match its entity id".into(),
+        ));
+    }
+    let customer_id = change
+        .get("customer_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("service account change has no customer id".into()))?;
+    let service_code = change
+        .get("service_code")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            sqlx::Error::Protocol("service account change has no service code".into())
+        })?;
+    let connection_status = change
+        .get("connection_status")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("service account change has no status".into()))?;
+    if !matches!(service_code, "ELECTRICITY" | "WATER")
+        || !matches!(connection_status, "CONNECTED" | "NOT_CONNECTED" | "UNKNOWN")
+    {
+        return Err(sqlx::Error::Protocol(
+            "service account change contains unsupported values".into(),
+        ));
+    }
+    let customer_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM customers WHERE id = $1 AND organization_id = $2)",
+    )
+    .bind(customer_id)
+    .bind(organization_id.to_string())
+    .fetch_one(&mut **tx)
+    .await?;
+    if !customer_exists {
+        return Err(sqlx::Error::Protocol(
+            "service account references a customer not yet synchronized".into(),
+        ));
+    }
+    let contract_ref = change
+        .get("contract_ref")
+        .and_then(serde_json::Value::as_str);
+    let activated_at = change
+        .get("activated_at")
+        .and_then(serde_json::Value::as_str);
+    sqlx::query(
+        "INSERT INTO service_accounts
+         (id, customer_id, service_code, contract_ref, connection_status, activated_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(account_id)
+    .bind(customer_id)
+    .bind(service_code)
+    .bind(contract_ref)
+    .bind(connection_status)
+    .bind(activated_at)
+    .execute(&mut **tx)
+    .await?;
+    let stored: (String, String, Option<String>, String, Option<String>) = sqlx::query_as(
+        "SELECT customer_id, service_code, contract_ref, connection_status, activated_at
+         FROM service_accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if stored
+        != (
+            customer_id.to_owned(),
+            service_code.to_owned(),
+            contract_ref.map(str::to_owned),
+            connection_status.to_owned(),
+            activated_at.map(str::to_owned),
+        )
+    {
+        return Err(sqlx::Error::Protocol(
+            "service account id was reused with different immutable data".into(),
+        ));
+    }
+    let _ = revision;
+    Ok(())
+}
+
+async fn apply_meter_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    entity_id: &str,
+    revision: i64,
+    change: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let meter_id = change
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("meter change has no id".into()))?;
+    if meter_id != entity_id {
+        return Err(sqlx::Error::Protocol(
+            "meter change id does not match its entity id".into(),
+        ));
+    }
+    let account_id = change
+        .get("service_account_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("meter change has no service account id".into()))?;
+    let serial = change
+        .get("serial")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("meter change has no serial".into()))?;
+    let unit = change
+        .get("unit")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| sqlx::Error::Protocol("meter change has no unit".into()))?;
+    let active = change
+        .get("active")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| sqlx::Error::Protocol("meter change has no active flag".into()))?;
+    let service_code: Option<String> = sqlx::query_scalar(
+        "SELECT sa.service_code FROM service_accounts sa
+         JOIN customers c ON c.id = sa.customer_id
+         WHERE sa.id = $1 AND c.organization_id = $2",
+    )
+    .bind(account_id)
+    .bind(organization_id.to_string())
+    .fetch_optional(&mut **tx)
+    .await?;
+    let expected_unit = match service_code.as_deref() {
+        Some("ELECTRICITY") => "KWH",
+        Some("WATER") => "M3",
+        _ => {
+            return Err(sqlx::Error::Protocol(
+                "meter references a service account not yet synchronized".into(),
+            ))
+        }
+    };
+    if unit != expected_unit {
+        return Err(sqlx::Error::Protocol(
+            "meter unit does not match its service account".into(),
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO meters (id, service_account_id, serial, unit, active)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(meter_id)
+    .bind(account_id)
+    .bind(serial)
+    .bind(unit)
+    .bind(i64::from(active))
+    .execute(&mut **tx)
+    .await?;
+    let stored: (String, String, String, i64) =
+        sqlx::query_as("SELECT service_account_id, serial, unit, active FROM meters WHERE id = $1")
+            .bind(meter_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if stored
+        != (
+            account_id.to_owned(),
+            serial.to_owned(),
+            unit.to_owned(),
+            i64::from(active),
+        )
+    {
+        return Err(sqlx::Error::Protocol(
+            "meter id was reused with different immutable data".into(),
+        ));
+    }
+    let _ = revision;
+    Ok(())
+}
+
+async fn apply_meter_reading_change(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    entity_id: &str,
+    _revision: i64,
+    change: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let reading: MeterReading = serde_json::from_value(change.clone())
+        .map_err(|error| sqlx::Error::Protocol(format!("invalid meter reading change: {error}")))?;
+    if reading.id.to_string() != entity_id
+        || chrono::NaiveDate::parse_from_str(&format!("{}-01", reading.period), "%Y-%m-%d").is_err()
+        || reading.previous.is_sign_negative()
+        || reading.current < reading.previous
+        || reading.measured_quantity != reading.current - reading.previous
+        || reading.source.trim().is_empty()
+    {
+        return Err(sqlx::Error::Protocol(
+            "meter reading change violates its immutable invariants".into(),
+        ));
+    }
+    let meter_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM meters m
+         JOIN service_accounts sa ON sa.id = m.service_account_id
+         JOIN customers c ON c.id = sa.customer_id
+         WHERE m.id = $1 AND c.organization_id = $2)",
+    )
+    .bind(reading.meter_id.to_string())
+    .bind(organization_id.to_string())
+    .fetch_one(&mut **tx)
+    .await?;
+    if !meter_exists {
+        return Err(sqlx::Error::Protocol(
+            "meter reading references a meter not yet synchronized".into(),
+        ));
+    }
+    if let Some(parent_id) = reading.corrected_from_id {
+        let parent_valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM meter_readings
+             WHERE id = $1 AND meter_id = $2 AND period = $3)",
+        )
+        .bind(parent_id.to_string())
+        .bind(reading.meter_id.to_string())
+        .bind(&reading.period)
+        .fetch_one(&mut **tx)
+        .await?;
+        if !parent_valid
+            || reading
+                .correction_reason
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+        {
+            return Err(sqlx::Error::Protocol(
+                "meter reading correction has no valid predecessor or reason".into(),
+            ));
+        }
+    }
+    sqlx::query(
+        "INSERT INTO meter_readings
+         (id, meter_id, period, previous, current, measured_quantity, source,
+          corrected_from_id, correction_reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(reading.id.to_string())
+    .bind(reading.meter_id.to_string())
+    .bind(&reading.period)
+    .bind(reading.previous.to_string())
+    .bind(reading.current.to_string())
+    .bind(reading.measured_quantity.to_string())
+    .bind(&reading.source)
+    .bind(reading.corrected_from_id.map(|id| id.to_string()))
+    .bind(&reading.correction_reason)
+    .execute(&mut **tx)
+    .await?;
+    let stored = sqlx::query(
+        "SELECT id, meter_id, period, previous, current, measured_quantity, source,
+                corrected_from_id, correction_reason
+         FROM meter_readings WHERE id = $1",
+    )
+    .bind(reading.id.to_string())
+    .fetch_one(&mut **tx)
+    .await?;
+    let stored_reading = meter_reading_from_row(&stored)?;
+    if serde_json::to_value(stored_reading).map_err(|error| {
+        sqlx::Error::Protocol(format!("invalid stored meter reading JSON: {error}"))
+    })? != serde_json::to_value(reading).map_err(|error| {
+        sqlx::Error::Protocol(format!("invalid pulled meter reading JSON: {error}"))
+    })? {
+        return Err(sqlx::Error::Protocol(
+            "meter reading id was reused with different immutable data".into(),
+        ));
+    }
     Ok(())
 }
 

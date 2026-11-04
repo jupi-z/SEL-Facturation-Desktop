@@ -11,8 +11,9 @@ use axum::{
 use rust_decimal::Decimal;
 use sel_contracts::{
     catalog_snapshot_sha256, utility_snapshot_sha256, CatalogSnapshot, CatalogSnapshotPayload,
-    CreateCustomer, CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer,
-    DocumentData, InvoiceLineResponse, PaymentAllocationRequest, ProblemDetails,
+    CorrectMeterReading, CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount,
+    CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData,
+    InvoiceLineResponse, Meter, MeterReading, PaymentAllocationRequest, ProblemDetails,
     RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse,
     SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
     UtilityBillingResponse, VoidInvoiceRequest,
@@ -315,6 +316,22 @@ pub fn router(state: AppState) -> Router {
             "/v1/customers/:id",
             get(get_customer).patch(update_customer),
         )
+        .route(
+            "/v1/customers/:id/service-accounts",
+            get(list_service_accounts).post(create_service_account),
+        )
+        .route(
+            "/v1/service-accounts/:id/meters",
+            get(list_meters).post(create_meter),
+        )
+        .route(
+            "/v1/meters/:id/readings",
+            get(list_meter_readings).post(create_meter_reading),
+        )
+        .route(
+            "/v1/meter-readings/:id/corrections",
+            post(correct_meter_reading),
+        )
         .route("/v1/billing/utility/preview", post(preview_utility))
         .route("/v1/billing/utility/issue", post(issue_utility))
         .route("/v1/invoices", get(list_invoices))
@@ -439,12 +456,17 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/catalog/fx-rates"
                     | "/v1/catalog/snapshot"
                     | "/v1/customers"
+                    | "/v1/service-accounts/:id/meters"
+                    | "/v1/meters/:id/readings"
                     | "/v1/invoices"
                     | "/v1/sync/pull"
                     | "/v1/sync/status"
                     | "/v1/config/versions"
                     | "/v1/client-resources/manifest"
             ) || path_matches(path, "/v1/customers/:id")
+                || path_matches(path, "/v1/customers/:id/service-accounts")
+                || path_matches(path, "/v1/service-accounts/:id/meters")
+                || path_matches(path, "/v1/meters/:id/readings")
                 || path_matches(path, "/v1/customers/:id/statement")
                 || path_matches(path, "/v1/invoices/:id")
                 || path_matches(path, "/v1/invoices/:id/document-data")
@@ -500,12 +522,18 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 | "/v1/solar/sales"
                 | "/v1/solar/quotes"
                 | "/v1/solar/contracts"
-        ) || path_matches(path, "/v1/solar/contracts/:id/activate")
+        ) || path_matches(path, "/v1/customers/:id/service-accounts")
+            || path_matches(path, "/v1/service-accounts/:id/meters")
+            || path_matches(path, "/v1/meters/:id/readings")
+            || path_matches(path, "/v1/solar/contracts/:id/activate")
         {
             return is_admin || is_supervisor || is_billing;
         }
         if path_matches(path, "/v1/customers/:id") {
             return is_admin || is_supervisor || is_billing;
+        }
+        if path_matches(path, "/v1/meter-readings/:id/corrections") {
+            return is_admin || is_supervisor;
         }
         if path == "/v1/payments"
             || path_matches(path, "/v1/payments/:id/allocate")
@@ -1840,6 +1868,169 @@ async fn update_customer(
     Ok(response)
 }
 
+async fn create_service_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(customer_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateServiceAccount>,
+) -> Result<(StatusCode, Json<sel_contracts::ServiceAccount>), ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .create_service_account(
+            customer_id,
+            &input,
+            principal.map(|Extension(AuthenticatedPrincipal(principal))| principal.user_id),
+        )
+        .await
+        .map(|account| (StatusCode::CREATED, Json(account)))
+        .map_err(meter_write_error)
+}
+
+async fn list_service_accounts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(customer_id): Path<Uuid>,
+) -> Result<Json<Vec<sel_contracts::ServiceAccount>>, ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .list_service_accounts(customer_id)
+        .await
+        .map(Json)
+        .map_err(meter_write_error)
+}
+
+async fn create_meter(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(service_account_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateMeter>,
+) -> Result<(StatusCode, Json<Meter>), ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .create_meter(
+            service_account_id,
+            &input,
+            principal.map(|Extension(AuthenticatedPrincipal(principal))| principal.user_id),
+        )
+        .await
+        .map(|meter| (StatusCode::CREATED, Json(meter)))
+        .map_err(meter_write_error)
+}
+
+async fn list_meters(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(service_account_id): Path<Uuid>,
+) -> Result<Json<Vec<Meter>>, ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .list_meters(service_account_id)
+        .await
+        .map(Json)
+        .map_err(meter_write_error)
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct MeterReadingQuery {
+    period: Option<String>,
+}
+
+async fn list_meter_readings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meter_id): Path<Uuid>,
+    Query(query): Query<MeterReadingQuery>,
+) -> Result<Json<Vec<MeterReading>>, ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .list_meter_readings(meter_id, query.period.as_deref())
+        .await
+        .map(Json)
+        .map_err(meter_write_error)
+}
+
+async fn create_meter_reading(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meter_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateMeterReading>,
+) -> Result<(StatusCode, Json<MeterReading>), ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .create_meter_reading(
+            meter_id,
+            &input,
+            principal.map(|Extension(AuthenticatedPrincipal(principal))| principal.user_id),
+        )
+        .await
+        .map(|reading| (StatusCode::CREATED, Json(reading)))
+        .map_err(meter_write_error)
+}
+
+async fn correct_meter_reading(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(reading_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CorrectMeterReading>,
+) -> Result<(StatusCode, Json<MeterReading>), ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .correct_meter_reading(
+            reading_id,
+            &input,
+            principal.map(|Extension(AuthenticatedPrincipal(principal))| principal.user_id),
+        )
+        .await
+        .map(|reading| (StatusCode::CREATED, Json(reading)))
+        .map_err(meter_write_error)
+}
+
 async fn preview_utility(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3112,6 +3303,47 @@ fn storage_error(error: sqlx::Error) -> ApiError {
     ApiError::internal(error)
 }
 
+fn meter_write_error(error: sel_storage::postgres::MeterWriteError) -> ApiError {
+    use sel_storage::postgres::MeterWriteError;
+    match error {
+        MeterWriteError::CustomerNotFound => {
+            ApiError::not_found("CUSTOMER_NOT_FOUND", "customer not found")
+        }
+        MeterWriteError::ServiceAccountNotFound => {
+            ApiError::not_found("SERVICE_ACCOUNT_NOT_FOUND", "service account not found")
+        }
+        MeterWriteError::MeterNotFound => ApiError::not_found("METER_NOT_FOUND", "meter not found"),
+        MeterWriteError::DuplicateReading => ApiError::conflict(
+            "METER_READING_EXISTS",
+            "a reading already exists for this period",
+        ),
+        MeterWriteError::PreviousIndexMismatch => ApiError::conflict(
+            "METER_PREVIOUS_INDEX_MISMATCH",
+            "previous index does not match the latest accepted reading",
+        ),
+        MeterWriteError::ReadingNotLatest => ApiError::conflict(
+            "METER_READING_NOT_LATEST",
+            "only the latest reading can be corrected",
+        ),
+        MeterWriteError::InvalidConfiguration => ApiError::unprocessable(
+            "METER_CONFIGURATION_INVALID",
+            "service account, connection status, or meter unit is invalid",
+        ),
+        MeterWriteError::InvalidInput => {
+            ApiError::unprocessable("METER_INPUT_INVALID", "meter reading input is invalid")
+        }
+        MeterWriteError::InvalidIndex => ApiError::unprocessable(
+            "METER_INDEX_INVALID",
+            "current meter index must be greater than or equal to previous index",
+        ),
+        MeterWriteError::CorrectionReasonRequired => ApiError::unprocessable(
+            "METER_CORRECTION_REASON_REQUIRED",
+            "a reason is required to correct a reading",
+        ),
+        MeterWriteError::Database(error) => storage_error(error),
+    }
+}
+
 fn utility_issue_error(error: sel_storage::postgres::UtilityIssueError) -> ApiError {
     match error {
         sel_storage::postgres::UtilityIssueError::IdempotencyPayloadMismatch => ApiError::conflict(
@@ -3398,6 +3630,13 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    fn unavailable(code: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code,
+            detail: detail.into(),
+        }
+    }
     fn unauthorized(code: &'static str, detail: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
@@ -3573,6 +3812,34 @@ mod tests {
     #[test]
     fn role_matrix_matches_only_declared_resource_routes() {
         let customer_id = "3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0";
+        let service_account_id = Uuid::new_v4();
+        let meter_id = Uuid::new_v4();
+        let reading_id = Uuid::new_v4();
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/customers/{customer_id}/service-accounts"),
+            "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/service-accounts/{service_account_id}/meters"),
+            "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/meters/{meter_id}/readings"),
+            "BILLING_AGENT"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            &format!("/v1/meter-readings/{reading_id}/corrections"),
+            "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/meter-readings/{reading_id}/corrections"),
+            "SUPERVISOR"
+        ));
         assert!(role_allows_request(
             &Method::PATCH,
             &format!("/v1/customers/{customer_id}"),

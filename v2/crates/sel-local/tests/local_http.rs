@@ -171,6 +171,216 @@ async fn local_customer_search_filters_sqlite_by_name_and_code() {
 }
 
 #[tokio::test]
+async fn local_meter_readings_are_durable_validated_and_corrected_append_only() {
+    let path = std::env::temp_dir().join(format!(
+        "sel-v2-local-meter-readings-{}.sqlite",
+        Uuid::new_v4()
+    ));
+    let database_url = format!("sqlite://{}", path.display());
+    let organization_id = Uuid::new_v4();
+    let device_id = Uuid::new_v4();
+    let store = LocalStore::connect(&database_url, organization_id, device_id)
+        .await
+        .unwrap();
+    let app = router_with_store(store.clone());
+
+    let created_customer = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/local/v1/customers")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"customer_code":"METER-001","legal_name":"Client Compteur"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_customer.status(), axum::http::StatusCode::CREATED);
+    let customer = json_body(created_customer).await;
+    let customer_id = customer["id"].as_str().unwrap();
+
+    let created_account = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/customers/{customer_id}/service-accounts"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "service_code":"WATER",
+                        "contract_ref":"WATER-CONTRACT-001",
+                        "connection_status":"CONNECTED",
+                        "activated_at":"2026-01-01"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_account.status(), axum::http::StatusCode::CREATED);
+    let account = json_body(created_account).await;
+    let account_id = account["id"].as_str().unwrap();
+
+    let created_meter = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/service-accounts/{account_id}/meters"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"serial":"W-M-001","unit":"M3"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_meter.status(), axum::http::StatusCode::CREATED);
+    let meter = json_body(created_meter).await;
+    let meter_id = meter["id"].as_str().unwrap();
+
+    let zero_reading = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/meters/{meter_id}/readings"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "period":"2026-10",
+                        "previous":"0",
+                        "current":"0",
+                        "source":"MANUAL"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(zero_reading.status(), axum::http::StatusCode::CREATED);
+    let zero = json_body(zero_reading).await;
+    assert_eq!(zero["measured_quantity"], "0");
+    let reading_id = zero["id"].as_str().unwrap();
+
+    let correction = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/meter-readings/{reading_id}/corrections"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "current":"1.25",
+                        "source":"MANUAL",
+                        "reason":"Index relu sur le compteur"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(correction.status(), axum::http::StatusCode::CREATED);
+    let corrected = json_body(correction).await;
+    assert_eq!(corrected["previous"], "0");
+    assert_eq!(corrected["current"], "1.25");
+    assert_eq!(corrected["measured_quantity"], "1.25");
+    assert_eq!(corrected["corrected_from_id"], reading_id);
+
+    let history = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/meters/{meter_id}/readings?period=2026-10"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(history.status(), axum::http::StatusCode::OK);
+    let history = json_body(history).await;
+    assert_eq!(history.as_array().unwrap().len(), 2);
+    assert_eq!(history[0]["id"], reading_id);
+    assert_eq!(history[1]["id"], corrected["id"]);
+
+    let queued_meter_commands: Vec<String> = sqlx::query_scalar(
+        "SELECT command_type FROM command_journal
+         WHERE command_type IN ('SERVICE_ACCOUNT_CREATED', 'METER_CREATED',
+                                'METER_READING_CREATED', 'METER_READING_CORRECTED')
+         ORDER BY created_at, rowid",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        queued_meter_commands,
+        [
+            "SERVICE_ACCOUNT_CREATED",
+            "METER_CREATED",
+            "METER_READING_CREATED",
+            "METER_READING_CORRECTED"
+        ]
+    );
+    let queued_outbox_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM outbox o
+         JOIN command_journal j ON j.event_id = o.event_id
+         WHERE j.command_type IN ('SERVICE_ACCOUNT_CREATED', 'METER_CREATED',
+                                  'METER_READING_CREATED', 'METER_READING_CORRECTED')",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(queued_outbox_count, 4);
+
+    let duplicate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/local/v1/meters/{meter_id}/readings"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "period":"2026-10",
+                        "previous":"0",
+                        "current":"2",
+                        "source":"MANUAL"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), axum::http::StatusCode::CONFLICT);
+
+    drop(app);
+    drop(store);
+    let reopened = LocalStore::connect(&database_url, organization_id, device_id)
+        .await
+        .unwrap();
+    let persisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meter_readings")
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+    assert_eq!(persisted, 2);
+    drop(reopened);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn catalog_refresh_fetches_and_persists_verified_snapshot_once() {
     let path =
         std::env::temp_dir().join(format!("sel-v2-catalog-refresh-{}.sqlite", Uuid::new_v4()));

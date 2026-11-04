@@ -9,6 +9,21 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .unwrap();
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices/{id}/document-data")));
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices")));
+    for (path, method) in [
+        ("/v1/customers/{id}/service-accounts", "get"),
+        ("/v1/customers/{id}/service-accounts", "post"),
+        ("/v1/service-accounts/{id}/meters", "get"),
+        ("/v1/service-accounts/{id}/meters", "post"),
+        ("/v1/meters/{id}/readings", "get"),
+        ("/v1/meters/{id}/readings", "post"),
+        ("/v1/meter-readings/{id}/corrections", "post"),
+    ] {
+        let operation = paths
+            .get(serde_yaml::Value::from(path))
+            .and_then(|item| item.get(method))
+            .unwrap_or_else(|| panic!("missing documented {method} {path}"));
+        assert!(operation.get("security").is_some());
+    }
     let customer_list = paths
         .get(serde_yaml::Value::from("/v1/customers"))
         .and_then(|path| path.get("get"))

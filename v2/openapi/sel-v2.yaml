@@ -508,6 +508,72 @@ paths:
       responses:
         '200': { description: Updated customer }
         '409': { $ref: '#/components/responses/Problem' }
+  /v1/customers/{id}/service-accounts:
+    get:
+      operationId: listCustomerServiceAccounts
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Service accounts scoped to the authenticated organization, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ServiceAccount' } } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createCustomerServiceAccount
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateServiceAccount' } } } }
+      responses:
+        '201': { description: Service account created, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceAccount' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/service-accounts/{id}/meters:
+    get:
+      operationId: listServiceAccountMeters
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Meters scoped to the authenticated organization, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Meter' } } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createServiceAccountMeter
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateMeter' } } } }
+      responses:
+        '201': { description: Meter created, content: { application/json: { schema: { $ref: '#/components/schemas/Meter' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/meters/{id}/readings:
+    get:
+      operationId: listMeterReadings
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { name: period, in: query, required: false, schema: { type: string, pattern: '^\d{4}-(0[1-9]|1[0-2])$' } }
+      responses:
+        '200': { description: Append-only meter reading history, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/MeterReading' } } } } }
+    post:
+      operationId: createMeterReading
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateMeterReading' } } } }
+      responses:
+        '201': { description: Reading stored; quantity is calculated by the backend, content: { application/json: { schema: { $ref: '#/components/schemas/MeterReading' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/meter-readings/{id}/corrections:
+    post:
+      operationId: correctMeterReading
+      description: ADMIN or SUPERVISOR only. Creates an append-only correction and preserves the superseded reading.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CorrectMeterReading' } } } }
+      responses:
+        '201': { description: Correction appended, content: { application/json: { schema: { $ref: '#/components/schemas/MeterReading' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
   /v1/billing/utility/preview:
     post:
       operationId: previewUtility
@@ -746,6 +812,71 @@ components:
       description: Stable problem detail
       content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetails' } } }
   schemas:
+    ServiceAccount:
+      type: object
+      required: [id, customer_id, service_code, connection_status]
+      properties:
+        id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        contract_ref: { type: [string, 'null'] }
+        connection_status: { type: string, enum: [CONNECTED, NOT_CONNECTED, UNKNOWN] }
+        activated_at: { type: [string, 'null'], format: date }
+    CreateServiceAccount:
+      type: object
+      additionalProperties: false
+      required: [service_code, connection_status]
+      properties:
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        contract_ref: { type: [string, 'null'] }
+        connection_status: { type: string, enum: [CONNECTED, NOT_CONNECTED, UNKNOWN] }
+        activated_at: { type: [string, 'null'], format: date }
+    Meter:
+      type: object
+      required: [id, service_account_id, serial, unit, active]
+      properties:
+        id: { type: string, format: uuid }
+        service_account_id: { type: string, format: uuid }
+        serial: { type: string }
+        unit: { type: string, enum: [KWH, M3] }
+        active: { type: boolean }
+    CreateMeter:
+      type: object
+      additionalProperties: false
+      required: [serial, unit]
+      properties:
+        serial: { type: string, minLength: 1, maxLength: 128 }
+        unit: { type: string, enum: [KWH, M3] }
+    MeterReading:
+      type: object
+      required: [id, meter_id, period, previous, current, measured_quantity, source]
+      properties:
+        id: { type: string, format: uuid }
+        meter_id: { type: string, format: uuid }
+        period: { type: string, pattern: '^\d{4}-(0[1-9]|1[0-2])$' }
+        previous: { type: string, description: Decimal string }
+        current: { type: string, description: Decimal string }
+        measured_quantity: { type: string, description: Server-calculated current minus previous }
+        source: { type: string }
+        corrected_from_id: { type: [string, 'null'], format: uuid }
+        correction_reason: { type: [string, 'null'] }
+    CreateMeterReading:
+      type: object
+      additionalProperties: false
+      required: [period, previous, current, source]
+      properties:
+        period: { type: string, pattern: '^\d{4}-(0[1-9]|1[0-2])$' }
+        previous: { type: string }
+        current: { type: string }
+        source: { type: string, minLength: 1, maxLength: 64 }
+    CorrectMeterReading:
+      type: object
+      additionalProperties: false
+      required: [current, source, reason]
+      properties:
+        current: { type: string }
+        source: { type: string, minLength: 1, maxLength: 64 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
     CreateAdminUserRequest:
       type: object
       required: [identity_ref, role, password]

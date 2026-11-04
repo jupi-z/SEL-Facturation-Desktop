@@ -7,6 +7,7 @@ use sel_contracts::{
 use sel_local::{spawn_sync_worker, sync_once};
 use sel_storage::LocalStore;
 use sel_sync::payload_digest;
+use serde_json::json;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -31,6 +32,123 @@ async fn empty_pull() -> Json<SyncPullResponse> {
         changes: Vec::new(),
         next_cursor: 0,
     })
+}
+
+#[tokio::test]
+async fn pulled_meter_accounts_meters_and_corrections_project_idempotently() {
+    let path =
+        std::env::temp_dir().join(format!("sel-v2-meter-projection-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("open local database");
+    let (customer, _) = store
+        .create_customer(&sel_contracts::CreateCustomer {
+            customer_code: "METER-PROJECTION-1".into(),
+            legal_name: "Meter projection fixture".into(),
+            address: None,
+            phone: None,
+        })
+        .await
+        .expect("create dependency customer");
+    let account_id = Uuid::new_v4();
+    let meter_id = Uuid::new_v4();
+    let reading_id = Uuid::new_v4();
+    let correction_id = Uuid::new_v4();
+    let correction_reason = "Index relu";
+    let response = SyncPullResponse {
+        changes: vec![
+            json!({
+                "sequence": 1,
+                "entity": "service_accounts",
+                "entity_id": account_id,
+                "revision": 1,
+                "change": {
+                    "id": account_id,
+                    "customer_id": customer.id,
+                    "service_code": "WATER",
+                    "contract_ref": "PROJECTION-CONTRACT",
+                    "connection_status": "CONNECTED",
+                    "activated_at": "2026-01-01"
+                }
+            }),
+            json!({
+                "sequence": 2,
+                "entity": "meters",
+                "entity_id": meter_id,
+                "revision": 1,
+                "change": {
+                    "id": meter_id,
+                    "service_account_id": account_id,
+                    "serial": "PROJECTION-W-1",
+                    "unit": "M3",
+                    "active": true
+                }
+            }),
+            json!({
+                "sequence": 3,
+                "entity": "meter_readings",
+                "entity_id": reading_id,
+                "revision": 1,
+                "change": {
+                    "id": reading_id,
+                    "meter_id": meter_id,
+                    "period": "2026-10",
+                    "previous": "0",
+                    "current": "0",
+                    "measured_quantity": "0",
+                    "source": "MANUAL",
+                    "corrected_from_id": null,
+                    "correction_reason": null
+                }
+            }),
+            json!({
+                "sequence": 4,
+                "entity": "meter_readings",
+                "entity_id": correction_id,
+                "revision": 1,
+                "change": {
+                    "id": correction_id,
+                    "meter_id": meter_id,
+                    "period": "2026-10",
+                    "previous": "0",
+                    "current": "1.25",
+                    "measured_quantity": "1.25",
+                    "source": "MANUAL",
+                    "corrected_from_id": reading_id,
+                    "correction_reason": correction_reason
+                }
+            }),
+        ],
+        next_cursor: 4,
+    };
+    store
+        .apply_pulled_changes(&response)
+        .await
+        .expect("apply pulled meter history");
+    store
+        .apply_pulled_changes(&response)
+        .await
+        .expect("replay pulled meter history");
+    let readings = store
+        .list_meter_readings(meter_id, Some("2026-10"))
+        .await
+        .expect("read projected history");
+    assert_eq!(readings.len(), 2);
+    assert_eq!(readings[0].id, reading_id);
+    assert_eq!(readings[1].id, correction_id);
+    assert_eq!(readings[1].corrected_from_id, Some(reading_id));
+    let meters = store
+        .list_meters(account_id)
+        .await
+        .expect("read projected meter");
+    assert_eq!(meters.len(), 1);
+    assert_eq!(meters[0].id, meter_id);
+    drop(store);
+    let _ = std::fs::remove_file(path);
 }
 
 async fn malformed_then_accept(
