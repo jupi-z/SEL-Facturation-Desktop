@@ -211,6 +211,24 @@ def test_financial_and_sync_statuses_are_shown_in_french() -> None:
     assert 'OVERDUE: "En retard"' in app
 
 
+def test_customer_statement_uses_localized_status_badges() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    statement = app.split("function CustomerStatement(", 1)[1].split("\nfunction AdminCard(", 1)[0]
+
+    assert statement.count("<Status value={item.status} />") == 2
+    assert "text(item.status)" not in statement
+
+
+def test_business_codes_are_localized_before_they_reach_tables() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    labels = app.split("function domainLabel(", 1)[1].split("\n}\n", 1)[0]
+
+    for code in ("UTILITY_INVOICE", "SOLAR_SALE", "CASH", "BANK", "MOBILE_MONEY", "ELECTRICITY", "WATER", "CONNECTED", "DISCONNECTED"):
+        assert f"{code}:" in labels
+    assert "domainLabel(row.method)" in app
+    assert "domainLabel(row.source_type)" in app
+
+
 def test_payment_workspace_uses_two_desktop_columns_and_stacks_below_breakpoint() -> None:
     css = (APP / "src" / "App.css").read_text(encoding="utf-8")
 
