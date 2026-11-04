@@ -53,9 +53,9 @@ async fn invoice_void_is_audited_and_idempotent() {
     .expect("insert tariff");
     sqlx::query(
         "INSERT INTO tax_profile_versions
-         (id, service_code, jurisdiction, base, rate, source, effective_from, status)
+         (id, service_code, jurisdiction, base, rate, source, effective_from, effective_to, status)
          VALUES ($1, 'ELECTRICITY', 'FIXTURE', 'SUBTOTAL', 0.16, 'fixture',
-                 '2000-01-01', 'APPROVED')",
+                 '2000-01-01', '2000-12-31', 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .execute(&store.pool)
