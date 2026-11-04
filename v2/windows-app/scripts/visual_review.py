@@ -62,8 +62,8 @@ SOLAR_PLAN = {
     "overdue_amount": "0.00",
     "currency": "USD",
     "schedule": [
-        {"sequence": 1, "due_date": "2026-12-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
-        {"sequence": 2, "due_date": "2027-01-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
+        {"id": "demo-solar-schedule-0001", "sequence": 1, "due_date": "2026-12-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
+        {"id": "demo-solar-schedule-0002", "sequence": 2, "due_date": "2027-01-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
     ],
 }
 PRODUCTS = [{
@@ -119,7 +119,7 @@ def mock_invoke_script() -> str:
         const path = args.path || '';
         let body = [];
         if (path === '/local/v1/customers') body = fixtures.customers;
-        else if (path.startsWith('/local/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}}]}};
+        else if (path.startsWith('/local/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}};
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/service-accounts')) body = fixtures.serviceAccounts;
         else if (path.startsWith('/local/v1/service-accounts/') && path.endsWith('/meters')) body = fixtures.meters;
         else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings')) body = fixtures.readings;
@@ -206,6 +206,15 @@ async def capture_views() -> None:
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")
+            await page.get_by_role("button", name="Encaissements", exact=True).click()
+            await page.get_by_label("Abonné").select_option("demo-customer-0001")
+            await page.locator('select[name="receivable_id"] option[value="demo-receivable-solar-0001"]').wait_for()
+            await page.locator('select[name="receivable_id"]').select_option("demo-receivable-solar-0001")
+            await page.locator('select[name="schedule_id"] option[value="demo-solar-schedule-0001"]').wait_for()
+            await page.locator('select[name="schedule_id"]').select_option("demo-solar-schedule-0001")
+            await page.evaluate("window.scrollTo(0, 0)")
+            await page.wait_for_timeout(120)
+            await page.screenshot(path=str(OUTPUT / "payments-solar-1440x900.png"))
             await browser.close()
     finally:
         process.terminate()

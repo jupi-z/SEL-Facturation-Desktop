@@ -183,6 +183,15 @@ def test_windows_typescript_target_does_not_use_es2022_array_at() -> None:
     assert "readings[readings.length - 1]" in app
 
 
+def test_visual_review_captures_solar_payment_allocation() -> None:
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert '"payments-solar-1440x900.png"' in visual_review
+    assert 'select_option("demo-receivable-solar-0001")' in visual_review
+    assert 'select_option("demo-solar-schedule-0001")' in visual_review
+    assert '"id": "demo-solar-schedule-0001"' in visual_review
+
+
 def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     history_view = app.split("{selectedInvoice &&", 1)[1].split("</>}", 1)[0]
