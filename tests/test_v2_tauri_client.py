@@ -157,3 +157,14 @@ def test_tauri_windows_bundle_creates_sidecar_resource_directory() -> None:
 
     assert "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination)" in workflow
     assert "Copy-Item -LiteralPath $source -Destination $destination -Force" in workflow
+
+
+def test_figma_visual_review_uses_only_marked_synthetic_fixtures() -> None:
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "sel-v2-tauri-windows.yml").read_text(encoding="utf-8")
+
+    assert '"SEL-DÉMO-0001"' in visual_review
+    assert '"Client Alpha"' in visual_review
+    assert "viewport={\"width\": 1440, \"height\": 900}" in visual_review
+    assert "document.documentElement.scrollWidth" in visual_review
+    assert "SEL-V2-Figma-Desktop-Review-${{ github.run_number }}" in workflow
