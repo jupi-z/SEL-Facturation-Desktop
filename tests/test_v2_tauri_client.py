@@ -306,6 +306,12 @@ def test_payment_workspace_uses_two_desktop_columns_and_stacks_below_breakpoint(
     assert 'title="Récapitulatif"' in app
     assert 'formatMoney(selectedReceivable.balance, selectedReceivable.currency)' in app
     assert 'formatMoney(receivedAmount, currency)' in app
+    payment_form = app.split("function PaymentForm(", 1)[1].split("\nfunction MeterReadingsView(", 1)[0]
+    assert 'label>Abonné<select name="customer_id" value={customerId}' in payment_form
+    assert 'name="occurred_at" type="datetime-local"' in payment_form
+    assert 'new Date(String(form.get("occurred_at"))).toISOString()' in payment_form
+    assert 'label>Référence interne<input value="Générée par Rust à l’enregistrement" readOnly' in payment_form
+    assert 'await page.locator(\'input[name="occurred_at"]\').fill("2026-11-04T10:00")' in (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     assert ".payment-workspace { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(285px, .72fr);" in css
     assert "@media (max-width: 1280px)" in css
     assert ".payment-workspace { grid-template-columns: 1fr; }" in css

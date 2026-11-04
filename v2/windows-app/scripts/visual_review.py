@@ -196,6 +196,7 @@ async def capture_views() -> None:
                     await page.locator('select[name="receivable_id"] option[value="demo-receivable-0001"]').wait_for(state="attached")
                     await page.locator('select[name="receivable_id"]').select_option("demo-receivable-0001")
                     await page.locator('input[name="received_amount"]').fill("3.00")
+                    await page.locator('input[name="occurred_at"]').fill("2026-11-04T10:00")
                 if slug == "solar":
                     await page.get_by_label("Vente à financer").select_option("demo-sale-0001")
                     await page.get_by_label("Échéance 1 · Date").fill("2026-12-01")

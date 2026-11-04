@@ -54,6 +54,11 @@ function formatDateTime(value: unknown): string {
   }).format(date);
 }
 
+function localDateTimeValue(date = new Date()): string {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
+}
+
 function domainLabel(value: unknown): string {
   const raw = text(value, "");
   const labels: Record<string, string> = {
@@ -574,6 +579,7 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
   const [scheduleError, setScheduleError] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [receivedAmount, setReceivedAmount] = useState("");
+  const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
   useEffect(() => {
     if (!customerId) { setReceivables([]); setReceivableId(""); setReceivablesLoading(false); setReceivablesError(""); setCurrency("USD"); return; }
     let active = true;
@@ -609,13 +615,17 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
   const paymentBlocked = receivablesLoading || Boolean(receivablesError) || !receivableId || scheduleLoading || Boolean(scheduleError) || (scheduleRequired && (!openScheduleRows.length || !scheduleId));
 
   return <div className="payment-workspace"><Panel title="Informations du règlement"><form id="local-payment-form" className="form-grid" onSubmit={async (event) => { const form = new FormData(event.currentTarget); const saved = await onSubmit(event, "/local/v1/payments", {
-    customer_id: form.get("customer_id"), received_amount: form.get("received_amount"), currency: form.get("currency"), method: form.get("method"), occurred_at: new Date().toISOString(),
+    customer_id: form.get("customer_id"), received_amount: form.get("received_amount"), currency: form.get("currency"), method: form.get("method"), occurred_at: new Date(String(form.get("occurred_at"))).toISOString(),
     allocations: [{ receivable_id: form.get("receivable_id"), amount: form.get("received_amount"), schedule_id: form.get("schedule_id") || null }],
-  }, "Règlement enregistré sur ce poste."); if (saved) { setCustomerId(""); setReceivableId(""); setScheduleId(""); setCurrency("USD"); setReceivedAmount(""); } }}>
-    <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setReceivableId(""); setScheduleId(""); setCurrency("USD"); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-    <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)} required /></label><label>Devise<input name="currency" value={currency} readOnly required /></label>
-    <label>Mode<select name="method"><option value="CASH">Espèces</option><option value="BANK">Banque</option><option value="MOBILE_MONEY">Mobile Money</option><option value="OTHER">Autre</option></select></label>
+  }, "Règlement enregistré sur ce poste."); if (saved) { setCustomerId(""); setReceivableId(""); setScheduleId(""); setCurrency("USD"); setReceivedAmount(""); setOccurredAt(localDateTimeValue()); } }}>
+    <label>Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setReceivableId(""); setScheduleId(""); setCurrency("USD"); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
     <label>Créance à affecter<select name="receivable_id" value={receivableId} onChange={(event) => { setReceivableId(event.target.value); setScheduleId(""); const selected = receivables.find((item) => text(item.receivable_id ?? item.id) === event.target.value); setCurrency(text(selected?.currency, "USD")); }} required disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}><option value="">{!customerId ? "Sélectionnez d’abord un abonné" : receivablesLoading ? "Chargement des créances…" : "Sélectionner une créance"}</option>{receivables.map((item) => <option key={text(item.receivable_id ?? item.id)} value={text(item.receivable_id ?? item.id)}>{domainLabel(item.source_type ?? item.status)} · {formatMoney(item.balance, item.currency)}</option>)}</select></label>
+    <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)} required /></label>
+    <label>Mode<select name="method"><option value="CASH">Espèces</option><option value="BANK">Banque</option><option value="MOBILE_MONEY">Mobile Money</option><option value="OTHER">Autre</option></select></label>
+    <label>Date du règlement<input name="occurred_at" type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} required /></label>
+    <label>Devise<input name="currency" value={currency} readOnly required /></label>
+    <label>Affectation<input value={receivableId ? "Créance sélectionnée" : "À définir avec la créance"} readOnly /></label>
+    <label>Référence interne<input value="Générée par Rust à l’enregistrement" readOnly /></label>
     {receivablesError && <p className="help error-text span-two" role="alert">Impossible de charger les créances : {receivablesError}</p>}
     {scheduleRequired && <label className="span-two">Échéance solaire<select name="schedule_id" value={scheduleId} onChange={(event) => setScheduleId(event.target.value)} required disabled={scheduleLoading || Boolean(scheduleError)}><option value="">{scheduleLoading ? "Chargement de l’échéancier…" : "Sélectionner une échéance…"}</option>{openScheduleRows.map((item) => <option key={text(item.id)} value={text(item.id)}>N° {text(item.sequence)} · {text(item.due_date)} · restant {formatMoney(item.remaining, scheduleCurrency)}</option>)}</select></label>}
     {scheduleMessage && <p className="help span-two" role="status">{scheduleMessage}</p>}
