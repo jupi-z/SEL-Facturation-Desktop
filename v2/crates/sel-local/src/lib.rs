@@ -462,6 +462,26 @@ async fn update_customer(
     headers: axum::http::HeaderMap,
     Json(input): Json<UpdateCustomer>,
 ) -> Result<Json<Customer>, (StatusCode, String)> {
+    if input
+        .legal_name
+        .as_deref()
+        .is_some_and(|legal_name| legal_name.trim().is_empty())
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "legal name cannot be empty".into(),
+        ));
+    }
+    if input
+        .status
+        .as_deref()
+        .is_some_and(|status| !matches!(status, "ACTIVE" | "ARCHIVED"))
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "status must be ACTIVE or ARCHIVED".into(),
+        ));
+    }
     let expected_revision = headers
         .get("if-match")
         .and_then(|value| value.to_str().ok())

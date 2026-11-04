@@ -47,7 +47,12 @@ async fn sync_ack_is_durable_and_only_follows_business_commit() {
         .unwrap();
     let aggregate_id = Uuid::new_v4();
     let event_id = Uuid::new_v4();
-    let payload = json!({"customer_code":"SYNC-PG-1","legal_name":"Sync customer"});
+    let payload = json!({
+        "customer_code":"SYNC-PG-1",
+        "legal_name":"Sync customer",
+        "address":"Sync address",
+        "phone":"+243000000001"
+    });
     let event = json!({
         "protocol_version": 1,
         "event_id": event_id,
@@ -83,6 +88,94 @@ async fn sync_ack_is_durable_and_only_follows_business_commit() {
     let retry = app.clone().oneshot(push()).await.unwrap();
     assert_eq!(retry.status(), StatusCode::OK);
     assert_eq!(json_body(retry).await["results"][0]["status"], "DUPLICATE");
+
+    let legacy_payload = json!({"phone": null});
+    let legacy_event = json!({
+        "protocol_version": 1,
+        "event_id": Uuid::new_v4(),
+        "device_id": device_id,
+        "organization_id": organization_id,
+        "actor_id": actor_id,
+        "command_type": "CUSTOMER_UPDATED",
+        "aggregate_id": aggregate_id,
+        "aggregate_expected_version": 1,
+        "occurred_at": "2026-11-02T10:01:00Z",
+        "offline_grant_id": grant_id,
+        "payload": legacy_payload.clone(),
+        "payload_sha256": payload_digest(&legacy_payload),
+        "client_schema_version": 1
+    });
+    let legacy = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/sync/push")
+                .header("authorization", "Bearer test")
+                .header("Idempotency-Key", "pg-sync-customer-legacy-update")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"device_id": device_id, "events": [legacy_event]}))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(legacy.status(), StatusCode::OK);
+    assert_eq!(json_body(legacy).await["results"][0]["status"], "ACCEPTED");
+    let legacy_fields: serde_json::Value =
+        sqlx::query_scalar("SELECT contact_fields FROM customers WHERE id = $1")
+            .bind(aggregate_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(legacy_fields["phone"], "+243000000001");
+
+    let update_payload = json!({"phone": null, "patch_format_version": 2});
+    let update_event = json!({
+        "protocol_version": 1,
+        "event_id": Uuid::new_v4(),
+        "device_id": device_id,
+        "organization_id": organization_id,
+        "actor_id": actor_id,
+        "command_type": "CUSTOMER_UPDATED",
+        "aggregate_id": aggregate_id,
+        "aggregate_expected_version": 2,
+        "occurred_at": "2026-11-02T10:02:00Z",
+        "offline_grant_id": grant_id,
+        "payload": update_payload.clone(),
+        "payload_sha256": payload_digest(&update_payload),
+        "client_schema_version": 1
+    });
+    let update = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/sync/push")
+                .header("authorization", "Bearer test")
+                .header("Idempotency-Key", "pg-sync-customer-update-v2")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"device_id": device_id, "events": [update_event]}))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+    assert_eq!(json_body(update).await["results"][0]["status"], "ACCEPTED");
+    let contact_fields: serde_json::Value =
+        sqlx::query_scalar("SELECT contact_fields FROM customers WHERE id = $1")
+            .bind(aggregate_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(contact_fields["address"], "Sync address");
+    assert!(contact_fields["phone"].is_null());
+
     let mut conflicting_event = event.clone();
     conflicting_event["payload"] = json!({
         "customer_code": "SYNC-PG-1",
@@ -143,7 +236,7 @@ async fn sync_ack_is_durable_and_only_follows_business_commit() {
     assert_eq!(pulled.status(), StatusCode::OK);
     assert_eq!(
         json_body(pulled).await["changes"].as_array().unwrap().len(),
-        1
+        3
     );
     let status = app
         .oneshot(

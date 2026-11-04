@@ -24,7 +24,9 @@ async fn customer_api_reads_from_postgres_after_new_app_state() {
     let app = router(AppState::with_central_store(store.clone()));
     let body = serde_json::to_vec(&json!({
         "customer_code": "PG-API-1",
-        "legal_name": "Postgres API fixture"
+        "legal_name": "Postgres API fixture",
+        "address": "Central address",
+        "phone": "+243000000001"
     }))
     .unwrap();
     let request = Request::builder()
@@ -39,6 +41,22 @@ async fn customer_api_reads_from_postgres_after_new_app_state() {
     let created: serde_json::Value =
         serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let customer_id = created["id"].as_str().expect("customer id");
+    let clear_phone = Request::builder()
+        .method("PATCH")
+        .uri(format!("/v1/customers/{customer_id}"))
+        .header("authorization", "Bearer test")
+        .header("if-match", "1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"phone": null})).unwrap(),
+        ))
+        .unwrap();
+    let updated = app.clone().oneshot(clear_phone).await.unwrap();
+    assert_eq!(updated.status(), axum::http::StatusCode::OK);
+    let updated: serde_json::Value =
+        serde_json::from_slice(&updated.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(updated["address"], "Central address");
+    assert!(updated["phone"].is_null());
     drop(app);
     drop(store);
 
@@ -53,6 +71,10 @@ async fn customer_api_reads_from_postgres_after_new_app_state() {
         .unwrap();
     let loaded = app.oneshot(request).await.unwrap();
     assert_eq!(loaded.status(), axum::http::StatusCode::OK);
+    let loaded: serde_json::Value =
+        serde_json::from_slice(&loaded.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(loaded["address"], "Central address");
+    assert!(loaded["phone"].is_null());
 
     let search = Request::builder()
         .uri("/v1/customers?q=FIXTURE")

@@ -10,7 +10,7 @@ use sel_contracts::{
     RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, SolarContractSyncPayload,
     SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult,
     SyncPullResponse, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
-    UtilityInvoiceSyncPayload, UtilityMeterReadingRefs,
+    UtilityInvoiceSyncPayload, UtilityMeterReadingRefs, CUSTOMER_PATCH_FORMAT_VERSION,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -332,8 +332,8 @@ impl LocalStore {
             .legal_name
             .clone()
             .unwrap_or(current_customer.legal_name.clone());
-        let address = input.address.clone().or(current_customer.address);
-        let phone = input.phone.clone().or(current_customer.phone);
+        let address = input.address.apply_to(current_customer.address);
+        let phone = input.phone.apply_to(current_customer.phone);
         let status = input
             .status
             .clone()
@@ -351,8 +351,9 @@ impl LocalStore {
         .bind(expected_revision)
         .execute(&mut *tx)
         .await?;
-        let payload = serde_json::to_value(input)
+        let mut payload = serde_json::to_value(input)
             .map_err(|error| sqlx::Error::Protocol(format!("invalid customer JSON: {error}")))?;
+        payload["patch_format_version"] = json!(CUSTOMER_PATCH_FORMAT_VERSION);
         let event = local_event(self, Uuid::new_v4(), id, "CUSTOMER_UPDATED", payload)?;
         insert_command_in_tx(&mut tx, &event).await?;
         let customer = load_customer_from_tx(&mut tx, id, self.organization_id).await?;
@@ -3564,30 +3565,69 @@ async fn apply_customer_change(
     revision: i64,
     change: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
-    let existing: Option<i64> =
-        sqlx::query_scalar("SELECT revision FROM customers WHERE id = $1 AND organization_id = $2")
-            .bind(customer_id)
-            .bind(organization_id.to_string())
-            .fetch_optional(&mut **tx)
-            .await?;
-    if existing.is_some_and(|current| current >= revision) {
+    let existing = sqlx::query(
+        "SELECT revision, customer_code, legal_name, contact_fields_json, status
+         FROM customers WHERE id = $1 AND organization_id = $2",
+    )
+    .bind(customer_id)
+    .bind(organization_id.to_string())
+    .fetch_optional(&mut **tx)
+    .await?;
+    if existing
+        .as_ref()
+        .is_some_and(|row| row.get::<i64, _>("revision") >= revision)
+    {
         return Ok(());
     }
     let customer_code = change
         .get("customer_code")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or(customer_id);
+        .map(str::to_owned)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|row| row.try_get::<String, _>("customer_code").ok())
+        })
+        .unwrap_or_else(|| customer_id.to_owned());
+    let current_contact = existing
+        .as_ref()
+        .and_then(|row| row.try_get::<String, _>("contact_fields_json").ok())
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
+        .unwrap_or_else(|| json!({}));
+    let supports_explicit_clear = change
+        .get("patch_format_version")
+        .and_then(serde_json::Value::as_u64)
+        == Some(u64::from(CUSTOMER_PATCH_FORMAT_VERSION));
+    let customer_contact_value = |key: &str| match change.get(key) {
+        Some(value) if !value.is_null() || supports_explicit_clear => value.clone(),
+        Some(_) | None => current_contact
+            .get(key)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    };
     let legal_name = change
         .get("legal_name")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("Client synchronisé");
+        .map(str::to_owned)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|row| row.try_get::<String, _>("legal_name").ok())
+        })
+        .unwrap_or_else(|| "Client synchronisé".into());
     let status = change
         .get("status")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("ACTIVE");
+        .map(str::to_owned)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|row| row.try_get::<String, _>("status").ok())
+        })
+        .unwrap_or_else(|| "ACTIVE".into());
     let contact = json!({
-        "address": change.get("address").cloned().unwrap_or(serde_json::Value::Null),
-        "phone": change.get("phone").cloned().unwrap_or(serde_json::Value::Null)
+        "address": customer_contact_value("address"),
+        "phone": customer_contact_value("phone")
     });
     sqlx::query(
         "INSERT INTO customers
@@ -3599,10 +3639,10 @@ async fn apply_customer_change(
     )
     .bind(customer_id)
     .bind(organization_id.to_string())
-    .bind(customer_code)
-    .bind(legal_name)
+    .bind(&customer_code)
+    .bind(&legal_name)
     .bind(contact.to_string())
-    .bind(status)
+    .bind(&status)
     .bind(revision)
     .execute(&mut **tx)
     .await?;

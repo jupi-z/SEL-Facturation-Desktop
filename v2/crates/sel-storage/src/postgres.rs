@@ -1166,8 +1166,8 @@ impl CentralStore {
             return Ok(None);
         };
         let legal_name = input.legal_name.clone().unwrap_or(current.legal_name);
-        let address = input.address.clone().or(current.address);
-        let phone = input.phone.clone().or(current.phone);
+        let address = input.address.apply_to(current.address);
+        let phone = input.phone.apply_to(current.phone);
         let status = input.status.clone().unwrap_or(current.status);
         let contact_fields = json!({"address": address, "phone": phone});
         let row = sqlx::query(
@@ -4992,31 +4992,26 @@ impl CentralStore {
                     tx.commit().await?;
                     return Ok(result);
                 }
-                let legal_name = event
-                    .payload
-                    .get("legal_name")
-                    .and_then(serde_json::Value::as_str);
-                let address = event
-                    .payload
-                    .get("address")
-                    .and_then(serde_json::Value::as_str);
-                let phone = event
-                    .payload
-                    .get("phone")
-                    .and_then(serde_json::Value::as_str);
-                let status = event
-                    .payload
-                    .get("status")
-                    .and_then(serde_json::Value::as_str);
-                let contact_fields = json!({"address": address, "phone": phone});
                 sqlx::query(
-                    "UPDATE customers SET legal_name = COALESCE($1, legal_name),
-                         contact_fields = $2, status = COALESCE($3, status), revision = revision + 1
-                     WHERE id = $4 AND organization_id = $5",
+                    "UPDATE customers SET
+                         legal_name = CASE
+                           WHEN $1 ? 'legal_name' AND jsonb_typeof($1->'legal_name') <> 'null'
+                           THEN $1->>'legal_name' ELSE legal_name END,
+                         contact_fields = jsonb_build_object(
+                           'address', CASE
+                             WHEN $1 ? 'address' AND ($1->>'patch_format_version' = '2' OR jsonb_typeof($1->'address') <> 'null')
+                             THEN $1->'address' ELSE contact_fields->'address' END,
+                           'phone', CASE
+                             WHEN $1 ? 'phone' AND ($1->>'patch_format_version' = '2' OR jsonb_typeof($1->'phone') <> 'null')
+                             THEN $1->'phone' ELSE contact_fields->'phone' END
+                         ),
+                         status = CASE
+                           WHEN $1 ? 'status' AND jsonb_typeof($1->'status') <> 'null'
+                           THEN $1->>'status' ELSE status END,
+                         revision = revision + 1
+                     WHERE id = $2 AND organization_id = $3",
                 )
-                .bind(legal_name)
-                .bind(contact_fields)
-                .bind(status)
+                .bind(&event.payload)
                 .bind(event.aggregate_id)
                 .bind(self.organization_id)
                 .execute(&mut *tx)

@@ -526,8 +526,29 @@ Les listes `GET /local/v1/invoices` et `GET /v1/invoices` acceptent maintenant l
 | Contrat HTTP et documentation | PASS local | `cargo test -p sel-contracts --test openapi_contract` ; le paramètre `status` et ses états sont documentés. |
 | Régression workspace | PASS local | `cargo test --workspace` : tous les tests exécutés passent. Les tests marqués `ignored` qui exigent `TEST_DATABASE_URL` ne sont pas tous inclus dans cette commande ; le test PostgreSQL de ce lot a été lancé séparément. |
 | Analyse statique et format | PASS local | `cargo clippy --workspace --all-targets -- -D warnings` et `cargo fmt --all -- --check`. |
-| CI GitHub du commit fonctionnel | À exécuter | La CI du commit à venir doit réussir avant de considérer le lot confirmé à distance. |
+| CI GitHub du commit fonctionnel `a21a2846f92d3730a73ee9e6ffa8a0cbfca2062a` | PASS | Backend run `41788841797`, build Windows Desktop `41788841693`, paquet serveur `41788841800`, candidat Windows `41788841648` ; les quatre workflows ont réussi sur ce commit. La signature Authenticode et la publication sont restées ignorées. |
 
 Le test HTTP local a d'abord échoué comme attendu : il renvoyait 2 factures pour une requête filtrée qui devait en retourner 1. Après implémentation, le test passe. Une base PostgreSQL 16.4 isolée a ensuite confirmé le filtre central ; le conteneur a été arrêté, sans accéder aux données réelles de SEL.
 
 **Progression estimée : Phase 2 100 % ; Phase 3 68 %.** La prochaine tranche Phase 3 vise la cohérence du relevé client et de l'historique complet des factures côté local/central, puis les lacunes restantes de création, modification et archivage client. L'interface Windows V2, l'administration visuelle, la recette sur le poste SEL et l'approbation métier des paramètres réels restent à réaliser ou confirmer.
+
+### Phase 3 — PATCH client à champs tri-état et compatibilité de synchronisation (4 novembre 2026)
+
+Le contrat de modification d'un client distingue désormais un champ omis (conserver sa valeur), un champ explicitement `null` (effacer la valeur) et une valeur fournie (remplacer). Cette distinction s'applique aux coordonnées adresse/téléphone, dans l'API locale et centrale, ainsi que dans les projections SQLite/PostgreSQL. Les nouvelles commandes locales portent `patch_format_version: 2`. Pour préserver les anciens clients qui sérialisent parfois une valeur absente en `null`, les événements non versionnés gardent la valeur existante ; seuls les payloads explicitement versionnés en V2 peuvent demander un effacement.
+
+Les routes locale et centrale rejettent également un nom légal vide et tout statut autre que `ACTIVE` ou `ARCHIVED`. Les mises à jour conservent la vérification de révision/`If-Match`; les données financières et factures historiques ne sont pas concernées.
+
+| Critère | Statut | Preuve |
+|---|---|---|
+| Tri-état du contrat PATCH | PASS local | `PatchValue<T>` et test HTTP local : champ omis conservé, `null` explicite effacé, valeur définie remplacée. |
+| Événement local et outbox | PASS local | Le stockage SQLite écrit le marqueur de format 2 dans le payload de synchronisation dans la même transaction que la modification. |
+| Projection SQLite rétrocompatible | PASS local | Test de pull : ancien payload non versionné avec `phone:null` conserve le téléphone ; payload versionné V2 l'efface, sans perdre l'adresse omise. |
+| API PostgreSQL réelle | PASS local | `postgres_customer_api` exécuté sur PostgreSQL 16.4 jetable ; le PATCH `null` persiste et les champs non fournis sont préservés après nouvelle instance de l'application. |
+| Synchronisation PostgreSQL réelle | PASS local | `postgres_sync` exécuté sur PostgreSQL 16.4 jetable ; ancien événement non versionné préserve le téléphone, événement V2 l'efface, les accusés sont acceptés et le pull contient les trois changements. |
+| Régression workspace | PASS local | `cargo test --workspace` réussit. Les tests d'intégration qui requièrent PostgreSQL sont ignorés par défaut ; les deux tests PostgreSQL affectés ont été lancés séparément et réussissent. Les autres tests PostgreSQL ignorés ne sont pas revendiqués comme exécutés dans cette tranche. |
+| Formatage / Clippy | PASS local | `cargo fmt --all -- --check` et `cargo clippy --workspace --all-targets -- -D warnings` réussissent. `git diff --check` passe. |
+| CI GitHub du nouveau commit | EN ATTENTE | À vérifier après commit/push ; aucun résultat CI n'est revendiqué pour cette tranche avant la fin des workflows. |
+
+Le test local a été d'abord exécuté en rouge pour reproduire le défaut : un PATCH contenant `phone:null` ne supprimait pas le téléphone. Après correction et ajout de la version de payload, les tests SQLite et PostgreSQL ci-dessus passent. L'image PostgreSQL utilisée est `postgres:16`, dans un conteneur temporaire `sel-phase3-customer-pg` sur le port local 55432 ; aucune donnée SEL réelle n'a été utilisée. Le conteneur doit être arrêté après la validation.
+
+**Progression estimée maintenue : Phase 2 100 % ; Phase 3 68 % en attente de la CI de cette tranche.** Le code, les tests locaux et les deux parcours PostgreSQL touchés sont validés ; le pourcentage n'est pas encore relevé tant que les workflows du commit final ne sont pas terminés. Le CRUD client est encore partiel : recherche, création, lecture et modification sont disponibles côté APIs, mais l'expérience complète dans le nouveau client Windows, les opérations restantes et la recette sur poste SEL ne sont pas validées.

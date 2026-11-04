@@ -407,27 +407,49 @@ async fn pulled_customer_changes_are_applied_with_a_durable_cursor() {
     let customer_id = Uuid::new_v4();
     store
         .apply_pulled_changes(&SyncPullResponse {
-            changes: vec![serde_json::json!({
-                "sequence": 5,
-                "entity": "customers",
-                "entity_id": customer_id,
-                "revision": 1,
-                "change": {"customer_code":"PULLED-1","legal_name":"Pulled customer","status":"ACTIVE"}
-            })],
-            next_cursor: 5,
+            changes: vec![
+                serde_json::json!({
+                    "sequence": 5,
+                    "entity": "customers",
+                    "entity_id": customer_id,
+                    "revision": 1,
+                    "change": {
+                        "customer_code":"PULLED-1",
+                        "legal_name":"Pulled customer",
+                        "address":"Initial address",
+                        "phone":"+243000000001",
+                        "status":"ACTIVE"
+                    }
+                }),
+                serde_json::json!({
+                    "sequence": 6,
+                    "entity": "customers",
+                    "entity_id": customer_id,
+                    "revision": 2,
+                    "change": {"legal_name":"Legacy update","phone":null}
+                }),
+                serde_json::json!({
+                    "sequence": 7,
+                    "entity": "customers",
+                    "entity_id": customer_id,
+                    "revision": 3,
+                    "change": {
+                        "legal_name":"Updated customer",
+                        "phone":null,
+                        "patch_format_version":2
+                    }
+                }),
+            ],
+            next_cursor: 7,
         })
         .await
         .expect("apply pulled change");
-    assert_eq!(store.central_cursor().await.unwrap(), 5);
-    assert_eq!(
-        store
-            .get_customer(customer_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .customer_code,
-        "PULLED-1"
-    );
+    assert_eq!(store.central_cursor().await.unwrap(), 7);
+    let projected = store.get_customer(customer_id).await.unwrap().unwrap();
+    assert_eq!(projected.customer_code, "PULLED-1");
+    assert_eq!(projected.legal_name, "Updated customer");
+    assert_eq!(projected.address.as_deref(), Some("Initial address"));
+    assert!(projected.phone.is_none());
     let _ = std::fs::remove_file(path);
 }
 

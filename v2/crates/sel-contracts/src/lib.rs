@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const DOCUMENT_SCHEMA_VERSION: u32 = 1;
+pub const CUSTOMER_PATCH_FORMAT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProblemDetails {
@@ -38,11 +39,55 @@ pub struct CreateCustomer {
     pub phone: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum PatchValue<T> {
+    #[default]
+    Missing,
+    Null,
+    Value(T),
+}
+
+impl<T> PatchValue<T> {
+    pub fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+}
+
+impl<T: Clone> PatchValue<T> {
+    pub fn apply_to(&self, current: Option<T>) -> Option<T> {
+        match self {
+            Self::Missing => current,
+            Self::Null => None,
+            Self::Value(value) => Some(value.clone()),
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PatchValue<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Self::Value(value),
+            None => Self::Null,
+        })
+    }
+}
+
+impl<T: Serialize> Serialize for PatchValue<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Missing | Self::Null => serializer.serialize_none(),
+            Self::Value(value) => value.serialize(serializer),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpdateCustomer {
     pub legal_name: Option<String>,
-    pub address: Option<String>,
-    pub phone: Option<String>,
+    #[serde(default, skip_serializing_if = "PatchValue::is_missing")]
+    pub address: PatchValue<String>,
+    #[serde(default, skip_serializing_if = "PatchValue::is_missing")]
+    pub phone: PatchValue<String>,
     pub status: Option<String>,
 }
 

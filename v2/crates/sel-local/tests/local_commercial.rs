@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use sel_contracts::{CreateCustomer, UpdateCustomer};
+use sel_contracts::CreateCustomer;
 use sel_local::router_with_store;
 use sel_storage::LocalStore;
 use serde_json::json;
@@ -58,8 +58,8 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
                     serde_json::to_vec(&CreateCustomer {
                         customer_code: "LOCAL-001".into(),
                         legal_name: "Local customer".into(),
-                        address: None,
-                        phone: None,
+                        address: Some("Local address".into()),
+                        phone: Some("+243000000000".into()),
                     })
                     .unwrap(),
                 ))
@@ -81,12 +81,10 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
                 .header("content-type", "application/json")
                 .header("if-match", "1")
                 .body(Body::from(
-                    serde_json::to_vec(&UpdateCustomer {
-                        legal_name: Some("Updated local customer".into()),
-                        address: Some("Local address".into()),
-                        phone: None,
-                        status: None,
-                    })
+                    serde_json::to_vec(&json!({
+                        "legal_name": "Updated local customer",
+                        "phone": null
+                    }))
                     .unwrap(),
                 ))
                 .unwrap(),
@@ -110,6 +108,8 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         serde_json::from_slice(&updated_customer_body).unwrap();
     assert_eq!(updated_customer["legal_name"], "Updated local customer");
     assert_eq!(updated_customer["revision"], 2);
+    assert_eq!(updated_customer["address"], "Local address");
+    assert!(updated_customer["phone"].is_null());
     let invoice_request = json!({
         "customer_id": customer["id"],
         "billing_period": "2026-11",

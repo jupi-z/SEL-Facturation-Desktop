@@ -1815,6 +1815,26 @@ async fn update_customer(
     Json(input): Json<UpdateCustomer>,
 ) -> Result<Response, ApiError> {
     require_auth(&headers)?;
+    if input
+        .legal_name
+        .as_deref()
+        .is_some_and(|legal_name| legal_name.trim().is_empty())
+    {
+        return Err(ApiError::unprocessable(
+            "CUSTOMER_REQUIRED",
+            "legal name cannot be empty",
+        ));
+    }
+    if input
+        .status
+        .as_deref()
+        .is_some_and(|status| !matches!(status, "ACTIVE" | "ARCHIVED"))
+    {
+        return Err(ApiError::unprocessable(
+            "CUSTOMER_STATUS_INVALID",
+            "status must be ACTIVE or ARCHIVED",
+        ));
+    }
     let expected = headers
         .get("if-match")
         .and_then(|value| value.to_str().ok())
@@ -1864,12 +1884,8 @@ async fn update_customer(
         }
         customer.legal_name = legal_name;
     }
-    if input.address.is_some() {
-        customer.address = input.address;
-    }
-    if input.phone.is_some() {
-        customer.phone = input.phone;
-    }
+    customer.address = input.address.apply_to(customer.address.clone());
+    customer.phone = input.phone.apply_to(customer.phone.clone());
     if let Some(status) = input.status {
         if !matches!(status.as_str(), "ACTIVE" | "ARCHIVED") {
             return Err(ApiError::unprocessable(
