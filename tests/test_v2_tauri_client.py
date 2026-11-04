@@ -282,8 +282,10 @@ def test_native_central_admin_bridge_is_allowlisted_and_never_uses_sync_token_as
 
 def test_admin_reference_writes_use_native_idempotency_and_require_explicit_approval() -> None:
     native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+    manifest = (APP / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
+    assert 'tokio = { version = "1", features = ["sync"] }' in manifest
     assert 'header("Idempotency-Key", uuid::Uuid::new_v4().to_string())' in native
     assert "effective_to: values.effective_to || null" in app
     assert 'approval_ref: approvalRef' in app
