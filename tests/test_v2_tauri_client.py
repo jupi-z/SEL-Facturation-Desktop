@@ -68,6 +68,7 @@ def test_meter_reading_screen_uses_local_routes_and_displays_rust_measurements()
     assert "Le relevé initial est conservé." in app
     assert '"readings", "Relevés"' in visual_review
     assert '"DEMO-KWH-001"' in visual_review
+    assert 'title={isWaterMeter ? "Relevé d’eau au m³" : "Relevés de compteurs"}' in app
 
 
 def test_v2_windows_client_has_local_brand_assets_and_no_remote_runtime_assets() -> None:
@@ -393,6 +394,20 @@ def test_visual_review_captures_rust_validated_meter_preview() -> None:
     assert 'name="current"' in visual_review
     assert 'name="Prévisualiser les index"' in visual_review
     assert 'get_by_text("100 KWH", exact=True).wait_for()' in visual_review
+
+
+def test_visual_review_covers_water_meter_and_positive_water_invoice() -> None:
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert '"service_code": "WATER"' in visual_review
+    assert '"unit": "M3"' in visual_review
+    assert '"demo-meter-water-0001"' in visual_review
+    assert '"water-reading-preview-1440x900.png"' in visual_review
+    assert '"invoice-preview-water-positive-1440x900.png"' in visual_review
+    assert "Number(args.body?.water?.quantity ?? 0)" in visual_review
+    assert 'get_by_text("5.00 M3", exact=True).wait_for()' in visual_review
+    assert 'get_by_text("18,56 USD", exact=True).wait_for()' in visual_review
+    assert 'await page.get_by_label("Eau consommée (m³)").fill("5")' in visual_review
 
 
 def test_customer_creation_form_is_revealed_from_the_directory_action() -> None:

@@ -734,11 +734,12 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   const latestReading = readings.length ? readings[readings.length - 1] : null;
 
   const selectedMeter = meters.find((meter) => text(meter.id) === meterId);
+  const isWaterMeter = text(selectedMeter?.unit).toUpperCase() === "M3";
 
   return <>
-    <PageHeading eyebrow="CORE / RELEVÉS" title="Relevés de compteurs" description="Consultez l’historique et enregistrez les index. La consommation mesurée est calculée et validée par Rust." />
+    <PageHeading eyebrow="CORE / RELEVÉS" title={isWaterMeter ? "Relevé d’eau au m³" : "Relevés de compteurs"} description={isWaterMeter ? "Calculer la consommation d’eau à partir des index du compteur." : "Consultez l’historique et enregistrez les index. La consommation mesurée est calculée et validée par Rust."} />
     <div className="reading-workspace">
-      <Panel title="Paramètres de facturation">
+      <Panel title={isWaterMeter ? "Saisie du relevé · Eau" : "Paramètres de facturation"}>
         <div className="form-grid reading-filters">
           <label>Abonné<select value={customerId} onChange={(event) => { setCustomerId(event.target.value); setPreview(null); setPreviewInput(null); }}><option value="">Sélectionner…</option>{customers.map((customer) => <option key={text(customer.customer_id ?? customer.id)} value={text(customer.customer_id ?? customer.id)}>{text(customer.customer_code)} — {text(customer.legal_name)}</option>)}</select></label>
           <label>Service<select value={accountId} onChange={(event) => { setAccountId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{domainLabel(account.service_code)} · {domainLabel(account.connection_status)}</option>)}</select></label>

@@ -80,12 +80,23 @@ SERVICE_ACCOUNTS = [{
     "customer_id": "demo-customer-0001",
     "service_code": "ELECTRICITY",
     "connection_status": "CONNECTED",
+}, {
+    "id": "demo-service-account-water-0001",
+    "customer_id": "demo-customer-0001",
+    "service_code": "WATER",
+    "connection_status": "CONNECTED",
 }]
 METERS = [{
     "id": "demo-meter-0001",
     "service_account_id": "demo-service-account-0001",
     "serial": "DEMO-KWH-001",
     "unit": "KWH",
+    "active": True,
+}, {
+    "id": "demo-meter-water-0001",
+    "service_account_id": "demo-service-account-water-0001",
+    "serial": "DEMO-M3-001",
+    "unit": "M3",
     "active": True,
 }]
 READINGS = [{
@@ -95,6 +106,14 @@ READINGS = [{
     "previous": "1000",
     "current": "1100",
     "measured_quantity": "100",
+    "source": "MANUAL",
+}, {
+    "id": "demo-reading-water-0001",
+    "meter_id": "demo-meter-water-0001",
+    "period": "2026-10",
+    "previous": "0",
+    "current": "5",
+    "measured_quantity": "5",
     "source": "MANUAL",
 }]
 
@@ -119,12 +138,17 @@ def mock_invoke_script() -> str:
         const path = args.path || '';
         let body = [];
         if (path === '/local/v1/customers') body = fixtures.customers;
-        else if (path === '/local/v1/billing/utility/preview') body = {{currency:'USD',subtotal:'9.50',tax:'1.52',total:'11.02',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}}]}};
+        else if (path === '/local/v1/billing/utility/preview') {{
+          const waterQuantity = Number(args.body?.water?.quantity ?? 0);
+          body = waterQuantity > 0
+            ? {{currency:'USD',subtotal:'16.00',tax:'2.56',total:'18.56',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'1.30',subtotal:'6.50',tax:'1.04',total:'7.54'}}]}}
+            : {{currency:'USD',subtotal:'9.50',tax:'1.52',total:'11.02',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}}]}};
+        }}
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}};
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/service-accounts')) body = fixtures.serviceAccounts;
-        else if (path.startsWith('/local/v1/service-accounts/') && path.endsWith('/meters')) body = fixtures.meters;
-        else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings/preview')) body = {{meter_id:'demo-meter-0001',period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}};
-        else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings')) body = fixtures.readings;
+        else if (path.startsWith('/local/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[4]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
+        else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[4]; body = meterId === 'demo-meter-water-0001' ? {{meter_id:meterId,period:'2026-11',previous:'5',current:'10',measured_quantity:'5',source:'MANUAL'}} : {{meter_id:meterId,period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}}; }}
+        else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings')) {{ const meterId = path.split('/')[4]; body = fixtures.readings.filter((reading) => reading.meter_id === meterId); }}
         else if (path.startsWith('/local/v1/customers/')) body = fixtures.customers[0];
         else if (path.startsWith('/local/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
         else if (path.startsWith('/local/v1/invoices')) body = fixtures.invoices;
@@ -191,6 +215,18 @@ async def capture_views() -> None:
                     await page.locator('.reading-entry input[name="current"]').fill("1200")
                     await page.get_by_role("button", name="Prévisualiser les index").click()
                     await page.locator(".reading-quantity").get_by_text("100 KWH", exact=True).wait_for()
+                    await page.locator(".reading-filters select").nth(1).select_option("demo-service-account-water-0001")
+                    await page.locator('.reading-filters select option[value="demo-meter-water-0001"]').wait_for(state="attached")
+                    await page.locator(".reading-filters select").nth(2).select_option("demo-meter-water-0001")
+                    await page.get_by_role("heading", name="Relevé d’eau au m³").wait_for()
+                    await page.wait_for_function("document.querySelector('.reading-entry input[name=previous]')?.value === '5'")
+                    await page.locator('.reading-entry input[name="period"]').fill("2026-11")
+                    await page.locator('.reading-entry input[name="current"]').fill("10")
+                    await page.get_by_role("button", name="Prévisualiser les index").click()
+                    await page.locator(".reading-quantity").get_by_text("5 M3", exact=True).wait_for()
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "water-reading-preview-1440x900.png"))
                 if slug == "payments":
                     await page.locator('.payment-workspace form select[name="customer_id"]').select_option("demo-customer-0001")
                     await page.locator('select[name="receivable_id"] option[value="demo-receivable-0001"]').wait_for(state="attached")
@@ -254,6 +290,14 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Modifier la saisie").click()
                     if await page.locator('input[name="electricity_quantity"]').input_value() != "100":
                         raise AssertionError("Invoice input was not preserved when returning from the preview")
+                    await page.get_by_label("Eau consommée (m³)").fill("5")
+                    await page.get_by_role("button", name="Prévisualiser la facture").click()
+                    await page.get_by_role("heading", name="Prévisualisation de facture").wait_for()
+                    await page.get_by_text("5.00 M3", exact=True).wait_for()
+                    await page.get_by_text("18,56 USD", exact=True).wait_for()
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "invoice-preview-water-positive-1440x900.png"))
                 if slug == "solar":
                     await page.get_by_role("button", name="Créer une vente").click()
                     await page.get_by_role("heading", name="Nouvelle vente solaire").wait_for()
