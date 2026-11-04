@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+from io import BytesIO
 import json
 import os
 import subprocess
@@ -9,11 +11,12 @@ import urllib.request
 from pathlib import Path
 
 from playwright.async_api import async_playwright
+from pypdf import PdfReader
 
 
 ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / "v2" / "windows-app"
-OUTPUT = ROOT / "artifacts" / "phase7-visual"
+OUTPUT = ROOT / "artifacts" / "phase8-documents-figma"
 URL = "http://127.0.0.1:1420"
 
 CUSTOMERS = [{
@@ -166,9 +169,26 @@ def mock_invoke_script() -> str:
         else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[4]; body = meterId === 'demo-meter-water-0001' ? {{meter_id:meterId,period:'2026-11',previous:'5',current:'10',measured_quantity:'5',source:'MANUAL'}} : {{meter_id:meterId,period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}}; }}
         else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings')) {{ const meterId = path.split('/')[4]; body = fixtures.readings.filter((reading) => reading.meter_id === meterId); }}
         else if (path.startsWith('/local/v1/customers/')) body = fixtures.customers[0];
+        else if (path.startsWith('/local/v1/invoices/') && path.endsWith('/document-data')) {{
+          const positiveWater = window.__invoicePdfWaterPositive === true;
+          const invoiceLines = [
+            {{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},
+            positiveWater
+              ? {{service_code:'WATER',quantity:'5',unit:'M3',unit_price:'1.30',subtotal:'6.50',tax:'1.04',total:'7.54'}}
+              : {{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}}
+          ];
+          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',origin:'LOCAL_PENDING',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'SEL V2 local organization',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'16.00':'9.50',tax:positiveWater?'2.56':'1.52',total:positiveWater?'18.56':'11.02',lines:invoiceLines}}}};
+        }}
         else if (path.startsWith('/local/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
         else if (path.startsWith('/local/v1/invoices')) body = fixtures.invoices;
+        else if (path.startsWith('/local/v1/payments/') && path.endsWith('/document-data')) body = {{document_schema_version:1,document_reference:'SEL-PAY-DEMO-0001',qr_internal_reference:'SEL:PAYMENT:demo-payment-0001',payment:{{payment_id:'demo-payment-0001',amount_received:'3.00',currency:'USD',method:'CASH',paid_at:'2026-11-04T08:00:00Z',status:'LOCAL_PENDING'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},allocations:[{{receivable_id:'demo-receivable-0001',amount:'3.00',currency:'USD'}}],reversals:[],origin:'LOCAL'}};
         else if (path.startsWith('/local/v1/payments')) body = fixtures.payments;
+        else if (path.startsWith('/local/v1/solar/sales/') && path.endsWith('/document-data')) {{
+          const longSchedule = window.__solarDocumentLongSchedule === true
+            ? Array.from({{length:36}},(_,index)=>({{sequence:index+1,due_date:`2027-${{String(Math.floor(index/12)+1).padStart(2,'0')}}-${{String((index%12)+1).padStart(2,'0')}}`,amount_due:'5.00',status:'UPCOMING'}}))
+            : fixtures.solarPlan.schedule;
+          body = {{document_schema_version:1,document_type:'SOLAR_SALE_CONFIRMATION',document_reference:'SEL-SOLAR-DEMO-0001',qr_internal_reference:'SEL:SOLAR-SALE:demo-sale-0001',sale:{{sale_id:'demo-sale-0001',receivable_id:'demo-receivable-solar-0001',customer_id:'demo-customer-0001',principal:'120.00',currency:'USD',sold_at:'2026-11-04T08:00:00Z',status:'LOCAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},lines:[{{product_reference:'KIT-DÉMO',quantity:'1',unit_price:'120.00',total:'120.00'}}],installment_plan:{{currency:'USD',schedule:longSchedule}},origin:'LOCAL_ACCEPTED'}};
+        }}
         else if (path.startsWith('/local/v1/solar/sales')) body = fixtures.sales;
         else if (path.startsWith('/local/v1/solar/products')) body = fixtures.products;
         else if (path.startsWith('/local/v1/solar/contracts')) {{ fixtures.sales[0].installment_plan_id = 'demo-plan-0001'; body = {{installment_plan_id:'demo-plan-0001',contract_id:'demo-contract-0001'}}; }}
@@ -194,6 +214,75 @@ async def wait_for_server(process: subprocess.Popen[bytes]) -> None:
     raise TimeoutError("Vite did not start within 60 seconds")
 
 
+async def assert_pdf_rendered(page, label: str, expected_pages: int | None = 1) -> str:
+    await page.wait_for_function("document.querySelector('.document-pdf-page[data-render-state=complete]') || (document.querySelector('.document-pdf-status')?.textContent && !document.querySelector('.document-pdf-status').textContent.startsWith('Préparation'))", timeout=15000)
+    page_count = await page.locator(".document-pdf-page").count()
+    if not page_count:
+        status = await page.locator(".document-pdf-status").inner_text()
+        raise AssertionError(f"{label} PDF could not be rendered: {status}")
+    if expected_pages is not None and page_count != expected_pages:
+        raise AssertionError(f"{label} should render {expected_pages} A4 page(s), got {page_count}")
+    if expected_pages is None and page_count < 2:
+        raise AssertionError(f"{label} long-document fixture should paginate, got {page_count} page(s)")
+    canvas = page.locator(".document-pdf-page").first
+    result = await canvas.evaluate("canvas => { const ctx = canvas.getContext('2d'); const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data; let ink = 0; for (let i = 0; i < data.length; i += 64) if (data[i] < 225 || data[i + 1] < 225 || data[i + 2] < 225) ink++; return {width:canvas.width,height:canvas.height,ink,status:document.querySelector('.document-pdf-status')?.textContent}; }")
+    if result["width"] < 850 or result["height"] < 1200 or result["ink"] < 100:
+        raise AssertionError(f"{label} PDF page was not visibly rendered: {result}")
+    image_data = await canvas.evaluate("canvas => canvas.toDataURL('image/png')")
+    return hashlib.sha256(image_data.encode("ascii")).hexdigest()
+
+
+async def assert_generated_pdf_contract(page, label: str, expected_pages: int | None, required_text: tuple[str, ...]) -> PdfReader:
+    captured = await page.evaluate("() => window.__SEL_PDF_CAPTURE || null")
+    if not captured:
+        raise AssertionError(f"{label}: the app-generated PDF bytes were not captured")
+    reader = PdfReader(BytesIO(bytes(captured)))
+    if expected_pages is not None and len(reader.pages) != expected_pages:
+        raise AssertionError(f"{label}: expected {expected_pages} generated PDF page(s), got {len(reader.pages)}")
+    if expected_pages is None and len(reader.pages) < 2:
+        raise AssertionError(f"{label}: long document did not paginate")
+    for index, pdf_page in enumerate(reader.pages, start=1):
+        width, height = float(pdf_page.mediabox.width), float(pdf_page.mediabox.height)
+        if not (590 <= width <= 600 and 837 <= height <= 847):
+            raise AssertionError(f"{label}: page {index} is not A4 ({width:.2f} x {height:.2f} pt)")
+    text = "\n".join(pdf_page.extract_text() or "" for pdf_page in reader.pages)
+    for token in required_text:
+        if token.casefold() not in text.casefold():
+            raise AssertionError(f"{label}: expected PDF text {token!r} was missing")
+    if "Référence interne SEL" not in text or "sans authentification fiscale" not in text:
+        raise AssertionError(f"{label}: the QR is not clearly identified as an internal reference")
+    for page_index, pdf_page in enumerate(reader.pages, start=1):
+        fonts = pdf_page.get("/Resources", {}).get("/Font", {})
+        embedded_fonts = []
+        for font_ref in fonts.values():
+            font = font_ref.get_object()
+            candidates = [font]
+            candidates.extend(
+                descendant.get_object()
+                for descendant in font.get("/DescendantFonts", [])
+            )
+            for candidate in candidates:
+                descriptor_ref = candidate.get("/FontDescriptor")
+                if descriptor_ref:
+                    descriptor = descriptor_ref.get_object()
+                    if any(descriptor.get(key) for key in ("/FontFile", "/FontFile2", "/FontFile3")):
+                        embedded_fonts.append(candidate.get("/BaseFont", font.get("/BaseFont", "unknown")))
+        if not embedded_fonts:
+            raise AssertionError(f"{label}: page {page_index} has no embedded font program")
+    return reader
+
+
+async def assert_print_layout(page, label: str, expected_pages: int) -> None:
+    print_bytes = await page.pdf(format="A4", print_background=True, prefer_css_page_size=True)
+    reader = PdfReader(BytesIO(print_bytes))
+    if len(reader.pages) != expected_pages:
+        raise AssertionError(f"{label}: Windows/WebView print layout produced {len(reader.pages)} pages, expected {expected_pages}")
+    for index, pdf_page in enumerate(reader.pages, start=1):
+        width, height = float(pdf_page.mediabox.width), float(pdf_page.mediabox.height)
+        if not (590 <= width <= 600 and 837 <= height <= 847):
+            raise AssertionError(f"{label}: printed page {index} is not A4 ({width:.2f} x {height:.2f} pt)")
+
+
 async def capture_views() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(
@@ -208,6 +297,14 @@ async def capture_views() -> None:
             browser = await playwright.chromium.launch(headless=True)
             page = await browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=1, locale="fr-CD")
             await page.add_init_script(mock_invoke_script())
+            await page.add_init_script("""(() => {
+              const original = Blob.prototype.arrayBuffer;
+              Blob.prototype.arrayBuffer = async function() {
+                const bytes = await original.call(this);
+                if (this.type.toLowerCase().includes('pdf')) window.__SEL_PDF_CAPTURE = Array.from(new Uint8Array(bytes));
+                return bytes;
+              };
+            })();""")
             await page.goto(URL, wait_until="domcontentloaded")
             await page.get_by_role("heading", name="Vue d’ensemble").wait_for()
             views = [
@@ -315,13 +412,69 @@ async def capture_views() -> None:
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "invoice-preview-water-positive-1440x900.png"))
+                    await page.get_by_role("button", name="Retour à l’historique des factures", exact=True).click()
+                    await page.get_by_role("heading", name="Factures eau + électricité").wait_for()
+                    await page.get_by_role("button", name="Document PDF").first.click()
+                    try:
+                        await page.get_by_role("dialog", name="Facture eau + électricité").wait_for(timeout=5000)
+                    except Exception as error:
+                        notice = await page.locator(".notice").inner_text() if await page.locator(".notice").count() else "aucune erreur affichée"
+                        raise AssertionError(f"Invoice PDF preview did not open: {notice}") from error
+                    await page.screenshot(path=str(OUTPUT / "invoice-pdf-diagnostic.png"))
+                    zero_water_pdf = await assert_pdf_rendered(page, "Invoice with 0 m³ of water")
+                    await assert_generated_pdf_contract(page, "Invoice with 0 m³ of water", 1, ("Électricité", "Eau", "0 m³", "11,02 USD"))
+                    await assert_print_layout(page, "Invoice with 0 m³ of water", 1)
+                    await page.screenshot(path=str(OUTPUT / "invoice-pdf-preview-1440x900.png"))
+                    await page.locator(".document-pdf-stage").evaluate("element => element.scrollTop = element.scrollHeight")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "invoice-pdf-lower-zero-water.png"))
+                    await page.get_by_role("button", name="Fermer l’aperçu").click()
+                    await page.evaluate("window.__invoicePdfWaterPositive = true")
+                    await page.get_by_role("button", name="Document PDF").first.click()
+                    await page.get_by_role("dialog", name="Facture eau + électricité").wait_for()
+                    positive_water_pdf = await assert_pdf_rendered(page, "Invoice with 5 m³ of water")
+                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "18,56 USD"))
+                    await assert_print_layout(page, "Invoice with 5 m³ of water", 1)
+                    if positive_water_pdf == zero_water_pdf:
+                        raise AssertionError("0 m³ and 5 m³ invoice PDFs rendered identically")
+                    await page.screenshot(path=str(OUTPUT / "invoice-water-positive-pdf-preview-1440x900.png"))
+                    await page.locator(".document-pdf-stage").evaluate("element => element.scrollTop = element.scrollHeight")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "invoice-pdf-lower-water-positive.png"))
+                    await page.get_by_role("button", name="Fermer l’aperçu").click()
                 if slug == "solar":
+                    await page.get_by_role("button", name="Confirmation PDF").first.click()
+                    try:
+                        await page.get_by_role("dialog", name="Facture de vente solaire").wait_for(timeout=5000)
+                    except Exception as error:
+                        notice = await page.locator(".notice").inner_text() if await page.locator(".notice").count() else "aucune erreur affichée"
+                        raise AssertionError(f"Solar PDF preview did not open: {notice}") from error
+                    await assert_pdf_rendered(page, "Solar sale")
+                    await assert_generated_pdf_contract(page, "Solar sale", 1, ("Facture de vente", "KIT-DÉMO", "120,00 USD"))
+                    await assert_print_layout(page, "Solar sale", 1)
+                    await page.screenshot(path=str(OUTPUT / "solar-pdf-preview-1440x900.png"))
+                    await page.get_by_role("button", name="Fermer l’aperçu").click()
+                    await page.evaluate("window.__solarDocumentLongSchedule = true")
+                    await page.get_by_role("button", name="Confirmation PDF").first.click()
+                    await page.get_by_role("dialog", name="Facture de vente solaire").wait_for()
+                    await assert_pdf_rendered(page, "Solar sale with 36 installments", expected_pages=None)
+                    long_solar_pages = await page.locator(".document-pdf-page").count()
+                    long_solar_pdf = await assert_generated_pdf_contract(page, "Solar sale with 36 installments", long_solar_pages, ("Facture de vente", "KIT-DÉMO", "ÉCHÉANCES", "mars 2027"))
+                    if len(long_solar_pdf.pages) != 2 or "SYNTHÈSE FINANCIÈRE" not in (long_solar_pdf.pages[-1].extract_text() or "") or "Référence interne SEL" not in (long_solar_pdf.pages[-1].extract_text() or ""):
+                        raise AssertionError("Long solar schedule must keep its financial summary and internal QR reference together on the final page")
+                    await assert_print_layout(page, "Solar sale with 36 installments", long_solar_pages)
+                    await page.screenshot(path=str(OUTPUT / "solar-pdf-multipage-1440x900.png"))
+                    await page.locator(".document-pdf-stage").evaluate("element => element.scrollTop = element.scrollHeight")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "solar-pdf-multipage-last-page-1440x900.png"))
+                    await page.get_by_role("button", name="Fermer l’aperçu").click()
+                    await page.evaluate("window.__solarDocumentLongSchedule = false")
                     await page.get_by_role("button", name="Créer une vente").click()
                     await page.get_by_role("heading", name="Nouvelle vente solaire").wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "solar-new-sale-1440x900.png"))
-                    await page.get_by_role("button", name="Fermer").click()
+                    await page.get_by_role("button", name="Fermer", exact=True).click()
                 if slug == "admin":
                     await page.get_by_role("heading", name="Connexion administrateur centrale").wait_for()
                     await page.screenshot(path=str(OUTPUT / "admin-login-1440x900.png"))
@@ -345,6 +498,17 @@ async def capture_views() -> None:
             await page.locator('.allocation-card input[type="number"]').nth(0).fill("1.00")
             await page.locator('.allocation-card input[type="number"]').nth(1).fill("2.00")
             await page.locator('input[name="received_amount"]').fill("3.00")
+            await page.get_by_role("button", name="Reçu PDF").first.click()
+            try:
+                await page.get_by_role("dialog", name="Reçu de paiement").wait_for(timeout=5000)
+            except Exception as error:
+                notice = await page.locator(".notice").inner_text() if await page.locator(".notice").count() else "aucune erreur affichée"
+                raise AssertionError(f"Payment receipt PDF preview did not open: {notice}") from error
+            await assert_pdf_rendered(page, "Payment receipt")
+            await assert_generated_pdf_contract(page, "Payment receipt", 1, ("Reçu de paiement", "3,00 USD", "CASH"))
+            await assert_print_layout(page, "Payment receipt", 1)
+            await page.screenshot(path=str(OUTPUT / "payment-receipt-pdf-preview-1440x900.png"))
+            await page.get_by_role("button", name="Fermer l’aperçu").click()
             await page.evaluate("window.scrollTo(0, 0)")
             await page.wait_for_timeout(120)
             await page.screenshot(path=str(OUTPUT / "payments-solar-1440x900.png"))

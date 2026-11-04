@@ -13,10 +13,10 @@ use sel_contracts::{
     catalog_snapshot_sha256, utility_snapshot_sha256, CatalogSnapshot, CatalogSnapshotPayload,
     CorrectMeterReading, CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount,
     CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData,
-    InvoiceLineResponse, Meter, MeterReading, PaymentAllocationRequest, ProblemDetails,
-    RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse,
-    SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount,
-    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    InvoiceIdentitySnapshot, InvoiceLineResponse, Meter, MeterReading, PaymentAllocationRequest,
+    ProblemDetails, RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse,
+    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
+    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -2460,9 +2460,18 @@ async fn get_document_data(
         let reference = format!("SEL-V2-{id}");
         return Ok(Json(DocumentData {
             document_schema_version: 1,
-            template_version: "v2-a4-1".into(),
+            template_version: "v2-a4-2".into(),
             document_reference: reference.clone(),
             invoice,
+            identity_snapshot: store
+                .get_invoice_identity_snapshot(id)
+                .await
+                .map_err(storage_error)?
+                .unwrap_or_default(),
+            issued_at: store
+                .get_invoice_issued_at(id)
+                .await
+                .map_err(storage_error)?,
             qr_internal_reference: reference,
             origin: "CENTRAL_ACCEPTED".into(),
         }));
@@ -2477,9 +2486,11 @@ async fn get_document_data(
     let reference = format!("SEL-V2-{id}");
     Ok(Json(DocumentData {
         document_schema_version: 1,
-        template_version: "v2-a4-1".into(),
+        template_version: "v2-a4-2".into(),
         document_reference: reference.clone(),
         invoice: invoice.response,
+        identity_snapshot: InvoiceIdentitySnapshot::default(),
+        issued_at: None,
         qr_internal_reference: reference,
         origin: "CENTRAL_ACCEPTED".into(),
     }))

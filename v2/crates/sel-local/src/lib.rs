@@ -316,6 +316,10 @@ fn router_with_store_base(store: LocalStore) -> Router {
             "/local/v1/solar/sales",
             get(list_solar_sales).post(create_solar_sale),
         )
+        .route(
+            "/local/v1/solar/sales/:id/document-data",
+            get(solar_sale_document_data),
+        )
         .route("/local/v1/solar/products", get(list_solar_products))
         .route("/local/v1/solar/quotes", post(create_solar_quote))
         .route("/local/v1/solar/contracts", post(create_solar_contract))
@@ -857,14 +861,40 @@ async fn get_invoice_document_data(
     } else {
         "CENTRAL_ACCEPTED"
     };
+    let identity_snapshot = state
+        .store
+        .get_invoice_identity_snapshot(id)
+        .await
+        .map_err(internal_error)?
+        .unwrap_or_default();
+    let issued_at = state
+        .store
+        .get_invoice_issued_at(id)
+        .await
+        .map_err(internal_error)?;
     Ok(Json(DocumentData {
         document_schema_version: 1,
-        template_version: "v2-a4-1".into(),
+        template_version: "v2-a4-2".into(),
         document_reference: reference.clone(),
         invoice,
+        identity_snapshot,
+        issued_at,
         qr_internal_reference: reference,
         origin: origin.into(),
     }))
+}
+
+async fn solar_sale_document_data(
+    State(state): State<LocalAppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    state
+        .store
+        .solar_sale_document_data(id)
+        .await
+        .map_err(internal_error)?
+        .map(Json)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "solar sale not found".into()))
 }
 
 async fn list_invoices(

@@ -46,7 +46,7 @@ jobs:
 
       - name: Capture desktop views against the Figma frame size
         run: |
-          python -m pip install playwright
+          python -m pip install playwright pypdf
           python -m playwright install chromium
           python v2/windows-app/scripts/visual_review.py
 
@@ -56,7 +56,7 @@ jobs:
           name: SEL-V2-Figma-Desktop-Review-${{ github.run_number }}
           if-no-files-found: error
           retention-days: 14
-          path: artifacts/phase7-visual/*.png
+          path: artifacts/phase8-documents-figma/*.png
 
       - name: Compile the local Rust agent
         run: cargo build --manifest-path v2/Cargo.toml -p sel-local --release --target x86_64-pc-windows-msvc
@@ -77,9 +77,25 @@ jobs:
       - name: Test native session and central admin route allowlist
         run: cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib --target x86_64-pc-windows-msvc
 
+      - name: Build previous NSIS package for isolated upgrade test
+        working-directory: v2/windows-app
+        run: |
+          npm run tauri -- build --bundles nsis --config '{ "version": "0.3.99" }'
+          $setup = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'Previous-version NSIS setup was not produced.' }
+          Copy-Item $setup.FullName (Join-Path $env:RUNNER_TEMP 'sel-v2-previous-setup.exe')
+
       - name: Build MSI and NSIS setup
         working-directory: v2/windows-app
         run: npm run tauri -- build --bundles msi,nsis
+
+      - name: Verify user install and upgrade preserve profile data
+        run: |
+          $current = Get-ChildItem v2/windows-app/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' |
+            Where-Object { $_.Name -notmatch '0\.3\.99' } | Select-Object -First 1
+          if (-not $current) { throw 'Current-version NSIS setup was not produced.' }
+          python v2/windows-app/scripts/installer_lifecycle_smoke.py `
+            (Join-Path $env:RUNNER_TEMP 'sel-v2-previous-setup.exe') $current.FullName
 
       - name: Upload unsigned Windows candidate
         uses: actions/upload-artifact@v4

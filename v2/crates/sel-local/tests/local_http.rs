@@ -890,17 +890,57 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
     )
     .await;
     assert_eq!(document["document_schema_version"], 1);
-    assert_eq!(document["template_version"], "v2-a4-1");
+    assert_eq!(document["template_version"], "v2-a4-2");
     assert_eq!(document["origin"], "LOCAL_PENDING");
     assert_eq!(document["invoice"]["billing_period"], "2026-11");
     assert_eq!(document["invoice"]["due_date"], "2026-12-15");
+    assert!(document["issued_at"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert_eq!(
         document["invoice"]["snapshot_sha256"],
         invoice["snapshot_sha256"]
     );
     assert_eq!(
+        document["identity_snapshot"]["customer_code"],
+        "READING-001"
+    );
+    assert_eq!(document["identity_snapshot"]["legal_name"], "Client Relevé");
+    assert_eq!(
         document["qr_internal_reference"],
         format!("SEL-V2-{invoice_id}")
+    );
+    let rename_customer = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/local/v1/customers/{}", customer_id))
+                .header("content-type", "application/json")
+                .header("if-match", "1")
+                .body(Body::from(
+                    json!({"legal_name":"Nom modifié après émission"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rename_customer.status(), axum::http::StatusCode::OK);
+    let reprinted_document = json_body(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/local/v1/invoices/{invoice_id}/document-data"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        reprinted_document["identity_snapshot"]["legal_name"],
+        "Client Relevé"
     );
 
     let bindings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoice_meter_readings")

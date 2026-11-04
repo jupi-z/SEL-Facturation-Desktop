@@ -12,13 +12,14 @@
   "app": {
     "windows": [{ "label": "main", "title": "SEL Facturation — Société d’Énergie du Lualaba", "width": 1440, "height": 900, "minWidth": 1120, "minHeight": 700, "center": true }],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; font-src 'self' asset: http://asset.localhost; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; font-src 'self' asset: http://asset.localhost; frame-src 'self' blob:; connect-src ipc: http://ipc.localhost blob:"
     }
   },
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis"],
     "icon": ["icons/icon.ico"],
-    "resources": { "resources/sel-local.exe": "sel-local.exe" }
+    "resources": { "resources/sel-local.exe": "sel-local.exe" },
+    "windows": { "nsis": { "installMode": "currentUser" } }
   }
 }

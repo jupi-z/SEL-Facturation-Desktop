@@ -21,6 +21,21 @@ def test_v2_windows_client_uses_the_approved_tauri_react_stack() -> None:
     assert config["app"]["windows"][0]["width"] == 1440
 
 
+def test_tauri_installer_is_per_user_and_windows_ci_exercises_profile_preservation() -> None:
+    config = json.loads((APP / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
+    workflow = (ROOT / ".github" / "workflows" / "sel-v2-tauri-windows.yml").read_text(encoding="utf-8")
+    smoke = (APP / "scripts" / "installer_lifecycle_smoke.py").read_text(encoding="utf-8")
+
+    assert config["bundle"]["windows"]["nsis"]["installMode"] == "currentUser"
+    assert '"version": "0.3.99"' in workflow
+    assert "installer_lifecycle_smoke.py" in workflow
+    assert 'Path(os.environ["LOCALAPPDATA"]) / APP_IDENTIFIER' in smoke
+    assert "sel-local-v2.sqlite" in smoke
+    assert "synthetic-pending-event" in smoke
+    assert "synthetic-historical-document.marker" in smoke
+    assert '"repair/reinstall"' in smoke
+
+
 def test_v2_windows_client_keeps_local_api_credentials_out_of_javascript() -> None:
     adapter = (APP / "src" / "api.ts").read_text(encoding="utf-8")
     native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")

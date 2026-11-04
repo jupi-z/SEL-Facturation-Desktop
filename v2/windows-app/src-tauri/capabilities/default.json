@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "SEL Facturation desktop client",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-save", "fs:allow-write-file"]
 }

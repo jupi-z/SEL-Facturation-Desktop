@@ -10,12 +10,13 @@ use sel_contracts::{
     offline_grant_canonical_bytes, solar_schedule_id, utility_snapshot_sha256,
     ActivateSolarContractRequest, CorrectMeterReading, CreateCustomer, CreateMeter,
     CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
-    CreditNoteRequest, CreditNoteSyncPayload, Customer, InvoiceVoidSyncPayload, Meter,
-    MeterReading, PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
-    RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, ServiceAccountUpdateSyncPayload,
-    SolarContractSyncPayload, SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload,
-    SyncEnvelope, SyncEventResult, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
-    UtilityBillingResponse, UtilityInvoiceSyncPayload, UtilityMeterReadingRefs,
+    CreditNoteRequest, CreditNoteSyncPayload, Customer, InvoiceIdentitySnapshot,
+    InvoiceVoidSyncPayload, Meter, MeterReading, PaymentAllocationSyncPayload,
+    PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest,
+    ServiceAccount, ServiceAccountUpdateSyncPayload, SolarContractSyncPayload, SolarQuoteResponse,
+    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer,
+    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    UtilityMeterReadingRefs,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -2941,7 +2942,14 @@ impl CentralStore {
     ) -> Result<UtilityIssueOutcome, UtilityIssueError> {
         let mut tx = self.pool.begin().await?;
         let outcome = self
-            .issue_utility_invoice_in_tx(&mut tx, input, response, idempotency_key, request_digest)
+            .issue_utility_invoice_in_tx(
+                &mut tx,
+                input,
+                response,
+                None,
+                idempotency_key,
+                request_digest,
+            )
             .await?;
         tx.commit().await?;
         Ok(outcome)
@@ -2952,6 +2960,7 @@ impl CentralStore {
         tx: &mut sqlx::PgConnection,
         input: &UtilityBillingRequest,
         response: &UtilityBillingResponse,
+        identity_snapshot: Option<&InvoiceIdentitySnapshot>,
         idempotency_key: &str,
         request_digest: &str,
     ) -> Result<UtilityIssueOutcome, UtilityIssueError> {
@@ -3020,19 +3029,27 @@ impl CentralStore {
         let receivable_id = response
             .receivable_id
             .expect("issued utility response must contain a receivable id");
+        let identity_snapshot = match identity_snapshot {
+            Some(snapshot) => snapshot.clone(),
+            None => {
+                load_invoice_identity_snapshot(tx, self.organization_id, input.customer_id).await?
+            }
+        };
+        let document_snapshot = serde_json::to_value(&identity_snapshot)?;
         let snapshot = serde_json::to_value(response)?;
         let invoice_insert = sqlx::query(
             "INSERT INTO invoices
-             (id, customer_id, period, issued_at, currency, total, template_version, immutable_snapshot, status, version)
-             VALUES ($1, $2, $3, now(), $4, $5, $6, $7, 'CENTRAL_ACCEPTED', 1)",
+             (id, customer_id, period, issued_at, currency, total, template_version, immutable_snapshot, status, version, document_snapshot)
+             VALUES ($1, $2, $3, now(), $4, $5, $6, $7, 'CENTRAL_ACCEPTED', 1, $8)",
         )
         .bind(response.invoice_id)
         .bind(input.customer_id)
         .bind(&input.billing_period)
         .bind(&response.currency)
         .bind(response.total)
-        .bind("v2-a4-1")
+        .bind("v2-a4-2")
         .bind(snapshot.clone())
+        .bind(document_snapshot.clone())
         .execute(&mut *tx)
         .await;
         match invoice_insert {
@@ -3136,6 +3153,40 @@ impl CentralStore {
             Ok(response)
         })
         .transpose()
+    }
+
+    pub async fn get_invoice_identity_snapshot(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<InvoiceIdentitySnapshot>, sqlx::Error> {
+        let snapshot: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT document_snapshot FROM invoices
+             WHERE id = $1 AND customer_id IN
+               (SELECT id FROM customers WHERE organization_id = $2)",
+        )
+        .bind(id)
+        .bind(self.organization_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        snapshot
+            .map(|value| {
+                serde_json::from_value(value).map_err(|error| {
+                    sqlx::Error::Protocol(format!("invalid invoice identity snapshot: {error}"))
+                })
+            })
+            .transpose()
+    }
+
+    pub async fn get_invoice_issued_at(&self, id: Uuid) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT to_char(issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
+             FROM invoices WHERE id = $1 AND customer_id IN
+             (SELECT id FROM customers WHERE organization_id = $2)",
+        )
+        .bind(id)
+        .bind(self.organization_id)
+        .fetch_optional(&self.pool)
+        .await
     }
 
     pub async fn list_invoice_responses(
@@ -3243,10 +3294,11 @@ impl CentralStore {
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let payment = sqlx::query(
             "SELECT p.id, p.customer_id, p.amount_received, p.currency, p.method,
-                    p.paid_at, p.status, c.customer_code, c.legal_name,
+                    p.paid_at, p.status, c.customer_code, c.legal_name, o.legal_name AS organization_name,
                     c.contact_fields::text AS contact_fields_json
              FROM payments p
              JOIN customers c ON c.id = p.customer_id
+             JOIN organizations o ON o.id = c.organization_id
              WHERE p.id = $1 AND c.organization_id = $2",
         )
         .bind(payment_id)
@@ -3262,8 +3314,13 @@ impl CentralStore {
             )?;
 
         let allocation_rows = sqlx::query(
-            "SELECT receivable_id, schedule_id, allocated_amount, currency
-             FROM payment_allocations WHERE payment_id = $1 ORDER BY id",
+            "SELECT pa.receivable_id, pa.schedule_id, pa.allocated_amount, pa.currency,
+                    CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number::text, r.source_id::text)
+                         ELSE r.source_id::text END AS source_reference
+             FROM payment_allocations pa
+             JOIN receivables r ON r.id = pa.receivable_id
+             LEFT JOIN invoices i ON i.id = r.source_id AND r.source_type = 'INVOICE'
+             WHERE pa.payment_id = $1 ORDER BY pa.id",
         )
         .bind(payment_id)
         .fetch_all(&self.pool)
@@ -3276,7 +3333,8 @@ impl CentralStore {
                     "receivable_id": row.try_get::<Uuid, _>("receivable_id")?,
                     "schedule_id": row.try_get::<Option<Uuid>, _>("schedule_id")?,
                     "amount": format!("{:.2}", amount.round_dp(2)),
-                    "currency": row.try_get::<String, _>("currency")?
+                    "currency": row.try_get::<String, _>("currency")?,
+                    "source_reference": row.try_get::<String, _>("source_reference")?
                 }))
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
@@ -3308,6 +3366,7 @@ impl CentralStore {
             "document_type": "PAYMENT_RECEIPT",
             "document_reference": format!("SEL-PAY-{}", payment_id.simple().to_string().to_uppercase()),
             "qr_internal_reference": format!("SEL:PAYMENT:{payment_id}"),
+            "organization_name": payment.try_get::<String, _>("organization_name")?,
             "payment": {
                 "payment_id": payment_id,
                 "customer_id": customer_id,
@@ -5295,6 +5354,7 @@ impl CentralStore {
                     request: input,
                     invoice_id,
                     receivable_id,
+                    identity_snapshot,
                 } = payload;
                 if input.electricity.unit != "KWH" || input.water.unit != "M3" {
                     return self
@@ -5409,6 +5469,7 @@ impl CentralStore {
                         &mut tx,
                         &input,
                         &response,
+                        identity_snapshot.as_ref(),
                         &operation_key,
                         &event.payload_sha256,
                     )
@@ -5440,7 +5501,8 @@ impl CentralStore {
                         1,
                         json!({
                             "request": input,
-                            "response": accepted_response
+                            "response": accepted_response,
+                            "identity_snapshot": identity_snapshot
                         }),
                     )),
                 )
@@ -7385,6 +7447,40 @@ fn customer_from_row(row: &sqlx::postgres::PgRow) -> Result<Customer, sqlx::Erro
             .map(ToOwned::to_owned),
         status: row.try_get("status")?,
         revision: row.try_get("revision")?,
+    })
+}
+
+async fn load_invoice_identity_snapshot(
+    tx: &mut sqlx::PgConnection,
+    organization_id: Uuid,
+    customer_id: Uuid,
+) -> Result<InvoiceIdentitySnapshot, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT o.legal_name AS organization_name, c.customer_code, c.legal_name,
+                c.contact_fields::text AS contact_fields_json
+         FROM organizations o JOIN customers c ON c.organization_id = o.id
+         WHERE o.id = $1 AND c.id = $2",
+    )
+    .bind(organization_id)
+    .bind(customer_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let contacts: serde_json::Value = serde_json::from_str(
+        &row.try_get::<String, _>("contact_fields_json")?,
+    )
+    .map_err(|error| sqlx::Error::Protocol(format!("invalid customer contacts: {error}")))?;
+    Ok(InvoiceIdentitySnapshot {
+        organization_name: row.try_get("organization_name")?,
+        customer_code: row.try_get("customer_code")?,
+        legal_name: row.try_get("legal_name")?,
+        address: contacts
+            .get("address")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        phone: contacts
+            .get("phone")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
     })
 }
 

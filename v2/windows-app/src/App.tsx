@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
+import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, localRequest, localStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
+import { buildLocalPdf, renderLocalPdfPreview } from "./documents";
 import "./App.css";
 
 type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "sync" | "admin";
 type Row = Record<string, unknown>;
 type Notice = { message: string; error?: boolean } | null;
+type PreviewDocument = { title: string; filename: string; blob: Blob };
 
 const navigation: { id: View; label: string; icon: string }[] = [
   { id: "dashboard", label: "Vue d’ensemble", icon: "grid" },
@@ -161,6 +165,8 @@ export default function App() {
   const [invoiceFilter, setInvoiceFilter] = useState("");
   const [customerFilter, setCustomerFilter] = useState("");
   const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
+  const [documentPreview, setDocumentPreview] = useState<PreviewDocument | null>(null);
+  const [documentBusy, setDocumentBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -309,6 +315,42 @@ export default function App() {
       const details = await localRequest<Row>(`/local/v1/invoices/${encodeURIComponent(id)}`);
       setSelectedInvoice(details);
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  async function openDocument(kind: "invoice" | "payment" | "solar", id: unknown) {
+    const key = text(id, "");
+    if (!key) return;
+    setDocumentBusy(true);
+    try {
+      const route = kind === "invoice"
+        ? `/local/v1/invoices/${encodeURIComponent(key)}/document-data`
+        : kind === "payment"
+          ? `/local/v1/payments/${encodeURIComponent(key)}/document-data`
+          : `/local/v1/solar/sales/${encodeURIComponent(key)}/document-data`;
+      const data = await localRequest<Row>(route);
+      const generated = await buildLocalPdf(kind, data);
+      setDocumentPreview({ title: generated.title, filename: generated.filename, blob: generated.blob });
+      setNotice({ message: `${generated.title} préparé localement depuis les données du poste.` });
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { setDocumentBusy(false); }
+  }
+
+  async function saveDocument() {
+    if (!documentPreview) return;
+    try {
+      const selectedPath = await saveFileDialog({
+        title: "Enregistrer le document SEL",
+        defaultPath: documentPreview.filename,
+        filters: [{ name: "Document PDF", extensions: ["pdf"] }],
+      });
+      if (!selectedPath) return;
+      await writeFile(selectedPath, new Uint8Array(await documentPreview.blob.arrayBuffer()));
+      setNotice({ message: `Document enregistré : ${selectedPath}` });
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  function closeDocumentPreview() {
+    setDocumentPreview(null);
   }
 
   async function updateCustomer(event: FormEvent<HTMLFormElement>) {
@@ -472,7 +514,7 @@ export default function App() {
             </aside>
           </div>
           <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
-            <Table headers={["Référence", "Abonné", "Période", "État", "Action"]} empty="Aucune facture locale." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <button className="text-button" onClick={() => void openInvoice(row)}>Consulter</button>])} />
+            <Table headers={["Référence", "Abonné", "Période", "État", "Actions"]} empty="Aucune facture locale." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", row.invoice_id ?? row.id)}>Document PDF</Button></div>])} />
           </Panel>
           {selectedInvoice && <>
             <p className="muted">Période {text(selectedInvoice.billing_period)} · Échéance {text(selectedInvoice.due_date)} · <Status value={selectedInvoice.status} /></p>
@@ -480,7 +522,7 @@ export default function App() {
           </>}
         </div>
         {preview && <>
-          <PageHeading eyebrow="CORE / FACTURATION" title="Prévisualisation de facture" description="Vérifier les lignes, les taxes et les références avant d’émettre." action={<div className="page-actions"><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Modifier la saisie</Button><Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button></div>} />
+          <PageHeading eyebrow="CORE / FACTURATION" title="Prévisualisation de facture" description="Vérifier les lignes, les taxes et les références avant d’émettre." action={<div className="page-actions"><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Modifier la saisie</Button><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Retour à l’historique des factures</Button><Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button></div>} />
           <div className="invoice-preview-metrics metrics">
             <Metric label="Électricité" value={previewElectricity ? formatQuantity(previewElectricity.quantity, previewElectricity.unit) : "—"} note={previewElectricity ? `${formatMoney(previewElectricity.subtotal, preview.currency)} hors taxe` : "Ligne indisponible"} />
             <Metric label="Eau" value={previewWater ? formatQuantity(previewWater.quantity, previewWater.unit) : "—"} note={previewWater ? formatMoney(previewWater.total, preview.currency) : "Ligne indisponible"} />
@@ -495,7 +537,7 @@ export default function App() {
       {view === "payments" && <>
         <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
         <PaymentForm customers={customers} sales={sales} onSubmit={submit} />
-        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), domainLabel(row.method), <Status value={row.status} />])} /></Panel>
+        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État", "Document"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), domainLabel(row.method), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("payment", row.payment_id ?? row.id)}>Reçu PDF</Button>])} /></Panel>
       </>}
 
       {view === "solar" && <>
@@ -518,7 +560,7 @@ export default function App() {
         <Panel title="Catalogue approuvé">
           <Table headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]} empty="Aucun produit solaire approuvé et applicable n’est disponible sur ce poste." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), product.category ? domainLabel(product.category) : "—", formatMoney(product.price_reference, product.currency), <span className="status-badge success">Disponible</span>])} />
         </Panel>
-        <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />])} /></Panel>
+        <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
         <SolarContractManager sales={sales} customers={customers} onCreated={refresh} />
       </>}
 
@@ -541,8 +583,39 @@ export default function App() {
         <AdminConsole />
       </>}
 
+      {documentPreview && <div className="document-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDocumentPreview(); }}>
+        <section className="document-preview-dialog" role="dialog" aria-modal="true" aria-label={documentPreview.title}>
+          <header className="document-preview-toolbar"><div><p className="eyebrow">DOCUMENT LOCAL · A4</p><h2>{documentPreview.title}</h2><p className="muted">Aperçu généré localement depuis les données enregistrées sur ce poste.</p></div><div className="page-actions"><Button onClick={() => window.print()}>Imprimer</Button><Button primary onClick={() => void saveDocument()}>Enregistrer le PDF</Button><Button aria-label="Fermer l’aperçu" onClick={closeDocumentPreview}>Fermer</Button></div></header>
+          <LocalPdfPreview blob={documentPreview.blob} />
+        </section>
+      </div>}
       <footer>Application développée et sécurisée par LTEX · <button className="footer-link" onClick={() => void openMonarqueSite().catch((error: unknown) => setNotice({ message: humanError(error), error: true }))}>MonarQue Group</button></footer>
     </main>
+  </div>;
+}
+
+function LocalPdfPreview({ blob }: { blob: Blob }) {
+  const container = useRef<HTMLDivElement>(null);
+  const [pageCount, setPageCount] = useState(0);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    let dispose = () => {};
+    const controller = new AbortController();
+    setPageCount(0);
+    setError("");
+    const element = container.current;
+    if (!element) return;
+    void renderLocalPdfPreview(blob, element, setPageCount, controller.signal)
+      .then((cleanup) => { if (active) dispose = cleanup; else cleanup(); })
+      .catch((reason: unknown) => { if (active) setError(humanError(reason)); });
+    return () => { active = false; controller.abort(); dispose(); };
+  }, [blob]);
+
+  return <div className="document-pdf-stage">
+    <p className="document-pdf-status" role="status">{error || (pageCount ? `${pageCount} page${pageCount > 1 ? "s" : ""} · aperçu PDF hors ligne` : "Préparation de l’aperçu PDF…")}</p>
+    <div ref={container} className="document-pdf-pages" aria-label="Pages du document PDF" />
   </div>;
 }
 

@@ -5,7 +5,7 @@ use sel_contracts::{utility_snapshot_sha256, InvoiceLineResponse, UtilityBilling
 use sel_storage::{migrate_postgres, CentralStore};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -368,14 +368,18 @@ async fn migration_apply(path: &Path) -> Result<serde_json::Value> {
         .await?;
         insert_legacy_map(&mut tx, batch_id, "INVOICE", number, invoice_id).await?;
         insert_legacy_map(&mut tx, batch_id, "RECEIVABLE", number, receivable_id).await?;
-        invoice_ids.insert(number.to_owned(), (invoice_id, receivable_id));
+        invoice_ids.insert(
+            number.to_owned(),
+            (invoice_id, receivable_id, currency.to_owned()),
+        );
     }
 
     for payment in payments {
         let invoice_number = required_string(payment, "invoice_number")?;
-        let (_invoice_id, receivable_id) = *invoice_ids.get(invoice_number).ok_or_else(|| {
-            anyhow::anyhow!("payment references unknown invoice {invoice_number}")
-        })?;
+        let (_invoice_id, receivable_id, invoice_currency) =
+            invoice_ids.get(invoice_number).ok_or_else(|| {
+                anyhow::anyhow!("payment references unknown invoice {invoice_number}")
+            })?;
         let legacy_id = payment
             .get("id")
             .map(|value| value.to_string())
@@ -389,7 +393,11 @@ async fn migration_apply(path: &Path) -> Result<serde_json::Value> {
         let currency = payment
             .get("currency")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("USD");
+            .unwrap_or(invoice_currency);
+        anyhow::ensure!(
+            currency == invoice_currency,
+            "payment {legacy_id} currency {currency} does not match invoice {invoice_number} currency {invoice_currency}; an approved conversion snapshot is required"
+        );
         let paid_at = payment
             .get("paid_on")
             .and_then(serde_json::Value::as_str)
@@ -502,19 +510,30 @@ async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
     }
 
     let mut missing_invoices = 0usize;
-    let mut source_invoice_total = Decimal::ZERO;
-    let mut stored_invoice_total = Decimal::ZERO;
+    let mut missing_receivables = 0usize;
+    let mut source_invoice_totals = BTreeMap::new();
+    let mut stored_invoice_totals = BTreeMap::new();
+    let mut source_outstanding_totals = BTreeMap::new();
+    let mut stored_outstanding_totals = BTreeMap::new();
+    let mut invoice_currencies = HashMap::new();
     for invoice in invoices {
         let number = required_string(invoice, "number")?;
-        let invoice_id = stable_legacy_uuid("INVOICE", number);
-        source_invoice_total += decimal_field(
+        let currency = invoice
+            .get("currency")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("USD");
+        let total = decimal_field(
             invoice
                 .get("calc_snapshot")
                 .ok_or_else(|| anyhow::anyhow!("invoice {number} has no calc_snapshot"))?,
             "total",
         )?;
-        let found: Option<Decimal> = sqlx::query_scalar(
-            "SELECT total FROM invoices WHERE id = $1 AND customer_id IN
+        add_currency_total(&mut source_invoice_totals, currency, total);
+        add_currency_total(&mut source_outstanding_totals, currency, total);
+        invoice_currencies.insert(number, currency.to_owned());
+        let invoice_id = stable_legacy_uuid("INVOICE", number);
+        let found: Option<(String, Decimal)> = sqlx::query_as(
+            "SELECT currency, total FROM invoices WHERE id = $1 AND customer_id IN
              (SELECT id FROM customers WHERE organization_id = $2)",
         )
         .bind(invoice_id)
@@ -522,14 +541,38 @@ async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
         .fetch_optional(&store.pool)
         .await?;
         match found {
-            Some(total) => stored_invoice_total += total,
+            Some((stored_currency, stored_total)) => {
+                add_currency_total(&mut stored_invoice_totals, &stored_currency, stored_total);
+            }
             None => missing_invoices += 1,
+        }
+
+        let receivable_id = stable_legacy_uuid("RECEIVABLE", number);
+        let stored_balance: Option<(String, Decimal)> = sqlx::query_as(
+            "SELECT r.currency,
+                    r.principal_total - COALESCE(SUM(a.allocated_amount), 0)
+             FROM receivables r
+             LEFT JOIN payment_allocations a ON a.receivable_id = r.id
+             WHERE r.id = $1 AND r.customer_id IN
+               (SELECT id FROM customers WHERE organization_id = $2)
+             GROUP BY r.id, r.currency, r.principal_total",
+        )
+        .bind(receivable_id)
+        .bind(organization_id)
+        .fetch_optional(&store.pool)
+        .await?;
+        match stored_balance {
+            Some((stored_currency, balance)) => {
+                add_currency_total(&mut stored_outstanding_totals, &stored_currency, balance)
+            }
+            None => missing_receivables += 1,
         }
     }
 
     let mut missing_payments = 0usize;
-    let mut source_payment_total = Decimal::ZERO;
-    let mut stored_payment_total = Decimal::ZERO;
+    let mut currency_mismatches = 0usize;
+    let mut source_payment_totals = BTreeMap::new();
+    let mut stored_payment_totals = BTreeMap::new();
     for payment in payments {
         let invoice_number = required_string(payment, "invoice_number")?;
         let legacy_id = payment
@@ -542,9 +585,22 @@ async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("payment {legacy_id} has no amount"))?
             .parse::<Decimal>()?;
-        source_payment_total += amount;
-        let found: Option<Decimal> = sqlx::query_scalar(
-            "SELECT amount_received FROM payments WHERE id = $1 AND customer_id IN
+        let invoice_currency = invoice_currencies
+            .get(invoice_number)
+            .map(String::as_str)
+            .unwrap_or("USD");
+        let currency = payment
+            .get("currency")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(invoice_currency);
+        add_currency_total(&mut source_payment_totals, currency, amount);
+        if currency != invoice_currency {
+            currency_mismatches += 1;
+        } else if let Some(balance) = source_outstanding_totals.get_mut(currency) {
+            *balance -= amount;
+        }
+        let found: Option<(String, Decimal)> = sqlx::query_as(
+            "SELECT currency, amount_received FROM payments WHERE id = $1 AND customer_id IN
              (SELECT id FROM customers WHERE organization_id = $2)",
         )
         .bind(payment_id)
@@ -552,14 +608,23 @@ async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
         .fetch_optional(&store.pool)
         .await?;
         match found {
-            Some(amount) => stored_payment_total += amount,
+            Some((stored_currency, stored_amount)) => {
+                add_currency_total(&mut stored_payment_totals, &stored_currency, stored_amount)
+            }
             None => missing_payments += 1,
         }
     }
 
-    let invoices_match = missing_invoices == 0 && source_invoice_total == stored_invoice_total;
-    let payments_match = missing_payments == 0 && source_payment_total == stored_payment_total;
-    let status = if missing_clients == 0 && invoices_match && payments_match {
+    let invoices_match = missing_invoices == 0 && source_invoice_totals == stored_invoice_totals;
+    let payments_match = missing_payments == 0 && source_payment_totals == stored_payment_totals;
+    let balances_match =
+        missing_receivables == 0 && source_outstanding_totals == stored_outstanding_totals;
+    let status = if missing_clients == 0
+        && invoices_match
+        && payments_match
+        && balances_match
+        && currency_mismatches == 0
+    {
         "MATCH"
     } else {
         "MISMATCH"
@@ -577,15 +642,30 @@ async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
             "payments": payments.len(),
             "missing_clients": missing_clients,
             "missing_invoices": missing_invoices,
-            "missing_payments": missing_payments
+            "missing_payments": missing_payments,
+            "missing_receivables": missing_receivables,
+            "currency_mismatches": currency_mismatches
         },
         "totals": {
-            "source_invoice_total": source_invoice_total.normalize().to_string(),
-            "stored_invoice_total": stored_invoice_total.normalize().to_string(),
-            "source_payment_total": source_payment_total.normalize().to_string(),
-            "stored_payment_total": stored_payment_total.normalize().to_string()
+            "source_invoice_by_currency": normalized_currency_totals(&source_invoice_totals),
+            "stored_invoice_by_currency": normalized_currency_totals(&stored_invoice_totals),
+            "source_payment_by_currency": normalized_currency_totals(&source_payment_totals),
+            "stored_payment_by_currency": normalized_currency_totals(&stored_payment_totals),
+            "source_outstanding_by_currency": normalized_currency_totals(&source_outstanding_totals),
+            "stored_outstanding_by_currency": normalized_currency_totals(&stored_outstanding_totals)
         }
     }))
+}
+
+fn add_currency_total(totals: &mut BTreeMap<String, Decimal>, currency: &str, amount: Decimal) {
+    *totals.entry(currency.to_owned()).or_default() += amount;
+}
+
+fn normalized_currency_totals(totals: &BTreeMap<String, Decimal>) -> BTreeMap<String, String> {
+    totals
+        .iter()
+        .map(|(currency, amount)| (currency.clone(), amount.normalize().to_string()))
+        .collect()
 }
 
 fn create_pg_backup(database_url: &str, path: &Path) -> Result<()> {
@@ -768,6 +848,7 @@ fn migration_dry_run(path: &Path) -> Result<serde_json::Value> {
     let payments = array(data, "payments")?;
     let client_codes = unique_values(clients, "code")?;
     let invoice_numbers = unique_values(invoices, "number")?;
+    let mut currency_mismatches = 0usize;
     let missing_payment_invoices = payments
         .iter()
         .filter(|payment| {
@@ -777,10 +858,38 @@ fn migration_dry_run(path: &Path) -> Result<serde_json::Value> {
                 .is_some_and(|number| !invoice_numbers.contains(number))
         })
         .count();
+    for payment in payments {
+        let Some(invoice_number) = payment
+            .get("invoice_number")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(invoice) = invoices.iter().find(|invoice| {
+            invoice.get("number").and_then(serde_json::Value::as_str) == Some(invoice_number)
+        }) else {
+            continue;
+        };
+        let invoice_currency = invoice
+            .get("currency")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("USD");
+        let payment_currency = payment
+            .get("currency")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(invoice_currency);
+        if payment_currency != invoice_currency {
+            currency_mismatches += 1;
+        }
+    }
+    let blocked = missing_payment_invoices > 0
+        || currency_mismatches > 0
+        || clients.len() != client_codes.len()
+        || invoices.len() != invoice_numbers.len();
     Ok(serde_json::json!({
         "dry_run": true,
         "writes": 0,
-        "status": if missing_payment_invoices == 0 { "READY_FOR_APPROVED_MANIFEST" } else { "BLOCKED_MISSING_REFERENCES" },
+        "status": if currency_mismatches > 0 { "BLOCKED_CURRENCY_MISMATCH" } else if blocked { "BLOCKED_VALIDATION" } else { "READY_FOR_APPROVED_MANIFEST" },
         "source_file": path.display().to_string(),
         "source_file_sha256": source_file_sha256,
         "source_schema_version": 1,
@@ -788,6 +897,7 @@ fn migration_dry_run(path: &Path) -> Result<serde_json::Value> {
         "duplicate_client_codes": clients.len().saturating_sub(client_codes.len()),
         "duplicate_invoice_numbers": invoices.len().saturating_sub(invoice_numbers.len()),
         "missing_payment_invoice_references": missing_payment_invoices,
+        "currency_mismatches": currency_mismatches,
         "operator_approval_required": true,
         "source_untouched": true
     }))
@@ -815,11 +925,13 @@ fn unique_values(items: &[serde_json::Value], key: &str) -> Result<HashSet<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        migration_apply, migration_dry_run, migration_source_path, require_restore_approval,
+        create_pg_backup, migration_apply, migration_dry_run, migration_reconcile,
+        migration_source_path, require_restore_approval, restore_pg_backup,
     };
     use serde_json::json;
     use std::{
         fs,
+        str::FromStr,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -847,10 +959,111 @@ mod tests {
     }
 
     #[test]
+    fn migration_dry_run_blocks_payment_currency_mismatch() {
+        let path = std::env::temp_dir().join(format!(
+            "sel-v1-currency-fixture-{}.json",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::write(
+            &path,
+            r#"{"format":"sel-facturation-portable","schema_version":1,"data":{"clients":[{"code":"C-1"}],"invoices":[{"number":"INV-1","currency":"USD"}],"payments":[{"invoice_number":"INV-1","amount":"5.00","currency":"CDF"}]}}"#,
+        )
+        .expect("write fixture");
+
+        let report = migration_dry_run(&path).expect("dry run should return a blocking report");
+
+        assert_eq!(report["status"], "BLOCKED_CURRENCY_MISMATCH");
+        assert_eq!(report["currency_mismatches"], 1);
+        assert_eq!(report["writes"], 0);
+        fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
     fn postgres_restore_is_fail_closed_without_explicit_approval() {
         assert!(require_restore_approval(None).is_err());
         assert!(require_restore_approval(Some("yes")).is_err());
         assert!(require_restore_approval(Some("I_UNDERSTAND")).is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL and PostgreSQL client tools"]
+    async fn postgres_backup_restore_round_trip_uses_isolated_database() {
+        use sqlx::{postgres::PgConnectOptions, Connection, Executor, PgConnection};
+
+        let test_database_url = std::env::var("TEST_DATABASE_URL")
+            .expect("TEST_DATABASE_URL must be configured for PostgreSQL restore integration");
+        let database_name = format!("sel_restore_{}", uuid::Uuid::new_v4().simple());
+        let path_query = test_database_url
+            .find('?')
+            .unwrap_or(test_database_url.len());
+        let database_separator = test_database_url[..path_query]
+            .rfind('/')
+            .expect("PostgreSQL URL must include a database path");
+        let isolated_database_url = format!(
+            "{}{database_name}{}",
+            &test_database_url[..=database_separator],
+            &test_database_url[path_query..]
+        );
+        let backup_path = std::env::temp_dir().join(format!("{database_name}.dump"));
+        let admin_options = PgConnectOptions::from_str(&test_database_url)
+            .expect("parse test PostgreSQL URL")
+            .database("postgres");
+        // A database name is generated only from a fixed prefix and a UUID.
+        let mut admin = PgConnection::connect_with(&admin_options)
+            .await
+            .expect("connect to PostgreSQL test server");
+        sqlx::query(&format!("CREATE DATABASE {database_name}"))
+            .execute(&mut admin)
+            .await
+            .expect("create isolated restore database");
+
+        let result: anyhow::Result<()> = async {
+            let mut isolated = PgConnection::connect(&isolated_database_url).await?;
+            isolated
+                .execute(
+                    "CREATE TABLE restore_probe (id integer PRIMARY KEY, value text NOT NULL);
+                     INSERT INTO restore_probe (id, value) VALUES (1, 'before-backup');",
+                )
+                .await?;
+            isolated.close().await?;
+
+            create_pg_backup(&isolated_database_url, &backup_path)?;
+            anyhow::ensure!(fs::metadata(&backup_path)?.len() > 0, "backup is empty");
+
+            let mut isolated = PgConnection::connect(&isolated_database_url).await?;
+            sqlx::query("UPDATE restore_probe SET value = 'after-backup' WHERE id = 1")
+                .execute(&mut isolated)
+                .await?;
+            isolated.close().await?;
+
+            restore_pg_backup(&isolated_database_url, &backup_path)?;
+
+            let mut restored = PgConnection::connect(&isolated_database_url).await?;
+            let value: String = sqlx::query_scalar("SELECT value FROM restore_probe WHERE id = 1")
+                .fetch_one(&mut restored)
+                .await?;
+            anyhow::ensure!(
+                value == "before-backup",
+                "restore did not recover the backup state"
+            );
+            restored.close().await?;
+            Ok(())
+        }
+        .await;
+
+        let drop_result = sqlx::query(&format!("DROP DATABASE IF EXISTS {database_name}"))
+            .execute(&mut admin)
+            .await;
+        admin
+            .close()
+            .await
+            .expect("close PostgreSQL admin connection");
+        let _ = fs::remove_file(&backup_path);
+        drop_result.expect("drop isolated restore database");
+        result.expect("PostgreSQL backup/restore round trip");
     }
 
     #[test]
@@ -936,6 +1149,18 @@ mod tests {
             .expect("replay migration fixture");
         assert_eq!(second["status"], "ALREADY_APPLIED");
         assert_eq!(second["writes"], 0);
+        let reconciliation = migration_reconcile(&path)
+            .await
+            .expect("reconcile migrated invoices, payments, and receivable balances");
+        assert_eq!(reconciliation["status"], "MATCH");
+        assert_eq!(
+            reconciliation["totals"]["source_outstanding_by_currency"]["USD"],
+            "6.6"
+        );
+        assert_eq!(
+            reconciliation["totals"]["stored_outstanding_by_currency"]["USD"],
+            "6.6"
+        );
 
         let store = sel_storage::CentralStore::connect(&database_url, organization_id)
             .await

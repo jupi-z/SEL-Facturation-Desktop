@@ -459,6 +459,20 @@ pub struct UtilityInvoiceSyncPayload {
     pub request: UtilityBillingRequest,
     pub invoice_id: Uuid,
     pub receivable_id: Uuid,
+    #[serde(default)]
+    pub identity_snapshot: Option<InvoiceIdentitySnapshot>,
+}
+
+/// Non-financial identity data captured when the document is issued. This is
+/// deliberately excluded from the invoice's financial SHA-256 canonical form.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct InvoiceIdentitySnapshot {
+    pub organization_name: String,
+    pub customer_code: String,
+    pub legal_name: String,
+    pub address: Option<String>,
+    pub phone: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -737,6 +751,10 @@ pub struct DocumentData {
     pub template_version: String,
     pub document_reference: String,
     pub invoice: UtilityBillingResponse,
+    #[serde(default)]
+    pub identity_snapshot: InvoiceIdentitySnapshot,
+    #[serde(default)]
+    pub issued_at: Option<String>,
     pub qr_internal_reference: String,
     pub origin: String,
 }

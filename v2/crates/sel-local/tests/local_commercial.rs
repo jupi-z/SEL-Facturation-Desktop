@@ -814,6 +814,36 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .expect("solar sale remains visible after contract activation");
     assert_eq!(sale_summary["contract_id"], contract_body["contract_id"]);
     assert_eq!(sale_summary["installment_plan_id"], plan_id.to_string());
+    let sale_document = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/solar/sales/{}/document-data",
+                    sale["sale_id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let sale_document_status = sale_document.status();
+    let sale_document = json_body(sale_document).await;
+    assert_eq!(sale_document_status, StatusCode::OK, "{sale_document}");
+    assert_eq!(sale_document["document_type"], "SOLAR_SALE_CONFIRMATION");
+    assert_eq!(sale_document["sale"]["sale_id"], sale["sale_id"]);
+    assert_eq!(sale_document["sale"]["principal"], "120.00");
+    assert_eq!(
+        sale_document["lines"][0]["product_reference"],
+        "KIT-LOCAL-1"
+    );
+    assert_eq!(
+        sale_document["installment_plan"]["schedule"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     let plan = app
         .clone()
         .oneshot(
