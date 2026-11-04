@@ -365,9 +365,8 @@ def test_visual_review_captures_solar_payment_allocation() -> None:
     assert 'select_option("demo-receivable-solar-0001")' in visual_review
     assert 'select_option("demo-solar-schedule-0001")' in visual_review
     assert '"id": "demo-solar-schedule-0001"' in visual_review
-    assert "element.closest('.panel').getBoundingClientRect().top" in visual_review
+    assert "element.scrollIntoView({ block: 'start' })" in visual_review
     assert '"solar-contracts-1440x900.png"' in visual_review
-    assert 'path=str(OUTPUT / "solar-contracts-1440x900.png"), full_page=True' in visual_review
 
 
 def test_visual_review_captures_rust_validated_meter_preview() -> None:
@@ -431,6 +430,17 @@ def test_visual_review_captures_customer_record_and_receivable_statement() -> No
     assert 'view === "customers" && (selectedCustomer ? <>' in app
     assert 'page.get_by_role("heading", name="Dossier abonné")' in visual_review
     assert 'await page.evaluate("window.scrollTo(0, 0)")' in visual_review
+
+
+def test_solar_contract_visual_evidence_uses_a_desktop_viewport() -> None:
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+    solar_capture = visual_review.split('if slug == "solar":', 1)[1].split(
+        'await page.evaluate("window.scrollTo(0, 0)")', 1
+    )[0]
+
+    assert "element.scrollIntoView({ block: 'start' })" in solar_capture
+    assert 'path=str(OUTPUT / "solar-contracts-1440x900.png")' in solar_capture
+    assert "full_page=True" not in solar_capture
 
 
 def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> None:
