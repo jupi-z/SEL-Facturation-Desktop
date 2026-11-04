@@ -119,6 +119,7 @@ def mock_invoke_script() -> str:
         const path = args.path || '';
         let body = [];
         if (path === '/local/v1/customers') body = fixtures.customers;
+        else if (path === '/local/v1/billing/utility/preview') body = {{currency:'USD',subtotal:'9.50',tax:'1.52',total:'11.02',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}}]}};
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}};
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/service-accounts')) body = fixtures.serviceAccounts;
         else if (path.startsWith('/local/v1/service-accounts/') && path.endsWith('/meters')) body = fixtures.meters;
@@ -215,6 +216,18 @@ async def capture_views() -> None:
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "receivables-statement-1440x900.png"))
+                if slug == "invoices":
+                    await page.get_by_label("Abonné").select_option("demo-customer-0001")
+                    await page.get_by_label("Période de facturation").fill("2026-10")
+                    await page.get_by_label("Électricité consommée (kWh)").fill("100")
+                    await page.get_by_label("Eau consommée (m³)").fill("0")
+                    await page.get_by_label("Révision tarifaire approuvée").fill("DÉMO — DONNÉE FICTIVE")
+                    await page.get_by_label("Je confirme que le relevé d’eau est exactement de 0 m³.").check()
+                    await page.get_by_role("button", name="Prévisualiser la facture").click()
+                    await page.get_by_text("Calcul validé par Rust · facture non émise").wait_for()
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "invoice-preview-1440x900.png"))
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")

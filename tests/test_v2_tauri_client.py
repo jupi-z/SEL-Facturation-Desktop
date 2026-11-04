@@ -165,6 +165,20 @@ def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
     assert "<NavIcon" in app
 
 
+def test_invoice_workspace_matches_figma_two_column_preview_flow() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'className="invoice-workspace"' in app
+    assert 'className="panel invoice-summary"' in app
+    assert 'form="utility-invoice-form"' in app
+    assert "formatMoney(preview.total, preview.currency)" in app
+    assert ".invoice-workspace { display: grid; grid-template-columns:" in css
+    assert "invoice-preview-1440x900.png" in visual_review
+    assert "path === '/local/v1/billing/utility/preview'" in visual_review
+
+
 def test_solar_sales_show_customer_names_instead_of_internal_ids() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 

@@ -133,6 +133,7 @@ export default function App() {
   const [invoiceDraft, setInvoiceDraft] = useState<Row | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Row | null>(null);
   const [zeroConfirmed, setZeroConfirmed] = useState(false);
+  const [invoiceFormKey, setInvoiceFormKey] = useState(0);
   const [invoiceFilter, setInvoiceFilter] = useState("");
   const [customerFilter, setCustomerFilter] = useState("");
 
@@ -255,6 +256,7 @@ export default function App() {
     try {
       await localRequest("/local/v1/billing/utility/issue", "POST", invoiceDraft);
       setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
+      setInvoiceFormKey((key) => key + 1);
       setNotice({ message: "Facture émise et enregistrée sur ce poste." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
@@ -392,18 +394,36 @@ export default function App() {
 
       {view === "invoices" && <>
         <div className="page-heading"><div><p className="eyebrow">CORE / FACTURATION</p><h1>Factures eau + électricité</h1><p className="muted">Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust.</p></div><span className="tag">USD</span></div>
-        <Panel title="Nouvelle facture">
-          <form className="form-grid" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
-            <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-            <label>Période<input name="billing_period" type="month" required /></label><label>Date limite<input name="due_date" type="date" /></label>
-            <label>Électricité (kWh)<input name="electricity_quantity" type="number" min="0" step="0.01" defaultValue="0" required /></label>
-            <label>Eau (m³)<input name="water_quantity" type="number" min="0" step="0.01" defaultValue="0" required onChange={(event) => { if (Number(event.target.value) !== 0) setZeroConfirmed(false); }} /></label>
-            <label>Révision approuvée<input name="tariff_revision" required /></label>
-            <label className="check-row"><input type="checkbox" checked={zeroConfirmed} onChange={(event) => setZeroConfirmed(event.target.checked)} /> Je confirme que le relevé d’eau est exactement de 0 m³.</label>
-            <div className="form-actions span-two"><Button primary type="submit">Prévisualiser la facture</Button></div>
-          </form>
-        </Panel>
-        {preview && <Preview data={preview} onConfirm={() => void confirmInvoice()} />}
+        <div className="invoice-workspace">
+          <Panel title="Paramètres de facturation">
+            <form id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
+              <label>Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
+              <label>Période de facturation<input name="billing_period" type="month" required /></label>
+              <label>Électricité consommée (kWh)<input name="electricity_quantity" type="number" min="0" step="0.01" defaultValue="0" required /></label>
+              <label>Eau consommée (m³)<input name="water_quantity" type="number" min="0" step="0.01" defaultValue="0" required onChange={(event) => { if (Number(event.target.value) !== 0) setZeroConfirmed(false); }} /></label>
+              <label>Révision tarifaire approuvée<input name="tariff_revision" required /></label>
+              <label>Date limite de paiement<input name="due_date" type="date" /></label>
+              <label className="check-row invoice-zero-confirm"><input type="checkbox" checked={zeroConfirmed} onChange={(event) => setZeroConfirmed(event.target.checked)} /> Je confirme que le relevé d’eau est exactement de 0 m³.</label>
+            </form>
+          </Panel>
+          <aside className="panel invoice-summary" aria-label="Récapitulatif de la facture">
+            <p className="eyebrow">RÉCAPITULATIF</p>
+            <h2>Facture combinée</h2>
+            <p className="muted">Électricité + eau · deux lignes obligatoires</p>
+            {preview ? <>
+              <div className="invoice-summary-lines">{rows<Row>(preview.lines).map((line, index) => <div key={`${text(line.service_code)}-${index}`}><span>{domainLabel(line.service_code)} · {text(line.quantity)} {text(line.unit)}</span><strong>{formatMoney(line.total, preview.currency)}</strong></div>)}</div>
+              <p className="eyebrow invoice-total-label">MONTANT À CONFIRMER</p>
+              <strong className="invoice-total">{formatMoney(preview.total, preview.currency)}</strong>
+              <span className="status-badge success">Calcul validé par Rust · facture non émise</span>
+            </> : <>
+              <div className="invoice-summary-empty"><strong>À calculer</strong><span>Le montant s’affichera après vérification par le moteur Rust.</span></div>
+              <span className="status-badge">En attente du calcul</span>
+            </>}
+            <p className="help invoice-summary-help">Les calculs et l’autorisation restent gérés par le moteur Rust.</p>
+            {preview ? <Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button> : <Button primary type="submit" form="utility-invoice-form">Prévisualiser la facture</Button>}
+          </aside>
+        </div>
+        {preview && <Preview data={preview} title="Détail du calcul retourné par Rust" />}
         <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
           <Table headers={["Référence", "Abonné", "Période", "État", "Action"]} empty="Aucune facture locale." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <button className="text-button" onClick={() => void openInvoice(row)}>Consulter</button>])} />
         </Panel>
