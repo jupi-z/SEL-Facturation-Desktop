@@ -402,6 +402,12 @@ export default function App() {
         <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} customerCode={text(selectedCustomerData?.customer_code)} statement={statement} />
       </> : <>
         <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => setCustomerCreateOpen((open) => !open)}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
+        <div className="metrics customer-metrics">
+          <Metric label="Abonnés enregistrés" value={customers.length} note="Dossiers disponibles sur ce poste" />
+          <Metric label="Factures locales" value={invoices.length} note="Documents présents sur ce poste" />
+          <Metric label="Versements locaux" value={payments.length} note="Règlements enregistrés localement" />
+          <Metric label="À synchroniser" value={pending} note={pending ? "En attente de confirmation centrale" : "État renvoyé par l’agent local"} />
+        </div>
         {customerCreateOpen && <Panel title="Nouvel abonné"><form className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
             <label>Code abonné<input name="customer_code" required /></label><label>Nom / raison sociale<input name="legal_name" required /></label>
             <label>Adresse<input name="address" /></label><label>Téléphone<input name="phone" /></label>

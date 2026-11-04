@@ -390,6 +390,22 @@ def test_customer_dossier_has_read_only_overview_and_explicit_edit_mode() -> Non
     assert '"customer-edit-1440x900.png"' in visual_review
 
 
+def test_customer_directory_surfaces_truthful_local_metrics_before_the_table() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    directory = app.split('title="Répertoire des abonnés"', 1)[1].split(
+        '{view === "readings"', 1
+    )[0]
+
+    assert 'className="metrics customer-metrics"' in directory
+    assert 'label="Abonnés enregistrés" value={customers.length}' in directory
+    assert 'label="Factures locales" value={invoices.length}' in directory
+    assert 'label="Versements locaux" value={payments.length}' in directory
+    assert 'label="À synchroniser" value={pending}' in directory
+    assert directory.index('className="metrics customer-metrics"') < directory.index(
+        'title="Abonnés enregistrés"'
+    )
+
+
 def test_visual_review_captures_customer_record_and_receivable_statement() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
