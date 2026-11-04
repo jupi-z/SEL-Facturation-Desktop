@@ -611,3 +611,23 @@ Le point de service peut désormais être consulté et modifié dans les API loc
 Le test HTTP local a été exécuté avant correction et échouait avec HTTP 404 ; après ajout de la route, il réussit. Toutes les données utilisées sont des fixtures et une base PostgreSQL éphémère ; aucune donnée SEL réelle n’a été lue ou modifiée.
 
 **Progression estimée : Phase 2 100 % ; Phase 3 77 %.** Le lot « modification des points de service et synchronisation » est validé sur SQLite et PostgreSQL, et les quatre workflows GitHub du commit `1df34e46bc563e54472aca8a1b6ab75c87e6491d` sont réussis. Les parcours UI du nouveau frontend, PDF/impression, administration visuelle, autres besoins CRUD et recette matérielle SEL restent ouverts. Le pourcentage est une estimation des critères Phase 3 et ne signifie pas que le produit est prêt pour pilote ou production.
+
+### Phase 3 — dossier financier client complet et validation de sortie backend (4 novembre 2026)
+
+Le relevé client exposait auparavant seulement les créances. Les réponses locale et centrale incluent maintenant, en plus de ce champ rétrocompatible, les 100 factures les plus récentes du client et les 100 paiements les plus récents, avec leurs affectations, échéances éventuelles et contre-écritures append-only. Les montants viennent des snapshots et tables financières conservés ; aucun montant n'est recalculé côté interface. Les lectures sont bornées et les affectations/contre-écritures sont chargées en lots pour éviter une requête par paiement. Le contrat OpenAPI décrit la structure de réponse.
+
+| Critère | Statut | Preuve |
+|---|---|---|
+| Reproduction du manque du dossier client | PASS (RED) | L'assertion du test HTTP local échouait sur l'absence de `invoices` dans la réponse `statement` avant l'implémentation. |
+| Dossier local compatible | PASS | `cargo test -p sel-local --test local_commercial local_commercial_operations_are_persisted_and_offline_pending -- --exact` ; le dossier conserve les 2 créances attendues et présente la facture, le paiement et l'affectation correspondante. |
+| Dossier central réel | PASS | `utility_issue_is_atomic_idempotent_and_survives_restart` exécuté contre PostgreSQL 16 jetable via l'API HTTP ; facture et paiement affecté apparaissent dans le dossier. |
+| CRUD client central, relevés et synchronisation | PASS | `postgres_customer_api_reads_from_postgres_after_new_app_state`, `meter_readings_are_persisted_scoped_and_corrected_append_only_over_http` et `offline_meter_account_and_reading_events_apply_atomically_and_idempotently` exécutés contre le même PostgreSQL jetable. |
+| Convergence commerciale multi-postes | PASS | `two_sqlite_devices_converge_through_real_postgres_and_http` exécuté : deux SQLite distinctes convergent via HTTP et PostgreSQL, sans doublon sur les opérations couvertes. |
+| Contrat, format et analyse statique | PASS local | Test `openapi_contract`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings` et `git diff --check`. |
+| Suite workspace | PASS local | `cargo test --workspace` : tous les tests actifs réussissent. Les tests PostgreSQL marqués `ignored` sont exclus de cette commande et seuls les parcours cités ci-dessus sont revendiqués comme exécutés manuellement contre le service jetable. |
+| CI GitHub du commit de cet incrément | NOT_TESTED | À exécuter après push ; aucun statut CI anticipé n'est revendiqué. |
+| Client Windows complet et recette SEL | NOT_TESTED / BLOCKED_EXTERNAL | Le client visuel complet appartient à la phase 7 ; aucun écran complet ni poste Windows/imprimante SEL n'a été validé par ce lot. |
+
+Les tests PostgreSQL ont utilisé `postgres:16-alpine` dans un conteneur supprimé après validation et des organisations/clients générés pour les tests. Aucune donnée, facture, identité ou configuration réelle SEL n'a été lue ou modifiée. Aucun fichier de facture n'a été ajouté au stockage central.
+
+**Progression de phase : Phase 2 backend 100 % ; Phase 3 backend 97 % (CI de ce commit en attente).** Les critères de sortie API locale/centrale de la phase 3 sont couverts ; la CI exacte du commit reste la dernière preuve logicielle requise avant clôture. Ce statut ne couvre pas le nouveau frontend (phase 7), les documents PDF côté client (phase 8) ni la recette matérielle et métier SEL (phase 10).

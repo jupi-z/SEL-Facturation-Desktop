@@ -9,6 +9,21 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .unwrap();
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices/{id}/document-data")));
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices")));
+    let statement_operation = paths
+        .get(serde_yaml::Value::from("/v1/customers/{id}/statement"))
+        .and_then(|path| path.get("get"))
+        .expect("customer statement route is documented");
+    assert_eq!(
+        statement_operation
+            .get("responses")
+            .and_then(|responses| responses.get("200"))
+            .and_then(|response| response.get("content"))
+            .and_then(|content| content.get("application/json"))
+            .and_then(|json| json.get("schema"))
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("#/components/schemas/CustomerStatement")
+    );
     let invoice_list = paths
         .get(serde_yaml::Value::from("/v1/invoices"))
         .and_then(|path| path.get("get"))
@@ -128,6 +143,8 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         "CatalogSnapshot",
         "CatalogSnapshotPayload",
         "TariffDraft",
+        "CustomerStatement",
+        "CustomerStatementPayment",
     ] {
         assert!(schemas.contains_key(serde_yaml::Value::from(schema)));
     }

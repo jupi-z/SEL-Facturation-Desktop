@@ -225,6 +225,38 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(receivable["paid"], "3.00");
     assert_eq!(receivable["balance"], "8.02");
 
+    let statement = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/customers/{}/statement",
+                    customer["id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(statement.status(), StatusCode::OK);
+    let statement = json_body(statement).await;
+    assert!(statement["invoices"].as_array().is_some_and(|invoices| {
+        invoices
+            .iter()
+            .any(|entry| entry["invoice_id"] == invoice["invoice_id"])
+    }));
+    assert!(statement["payments"].as_array().is_some_and(|payments| {
+        payments.iter().any(|entry| {
+            entry["payment_id"] == payment["payment_id"]
+                && entry["allocations"].as_array().is_some_and(|allocations| {
+                    allocations
+                        .iter()
+                        .any(|allocation| allocation["receivable_id"] == invoice["receivable_id"])
+                })
+        })
+    }));
+
     let reversal_request = json!({
         "amount": "1.00",
         "reason": "fixture correction"
@@ -298,6 +330,36 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(final_reversal.status(), StatusCode::CREATED);
     let final_reversal = json_body(final_reversal).await;
     assert_eq!(final_reversal["remaining_reversible_amount"], "0.00");
+    let statement_after_reversals = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/customers/{}/statement",
+                    customer["id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(statement_after_reversals.status(), StatusCode::OK);
+    let statement_after_reversals = json_body(statement_after_reversals).await;
+    let payment_history = statement_after_reversals["payments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["payment_id"] == payment["payment_id"])
+        .unwrap();
+    let mut reversal_amounts = payment_history["reversals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|reversal| reversal["amount"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    reversal_amounts.sort();
+    assert_eq!(reversal_amounts, ["1.00", "2.00"]);
 
     let after_full = app
         .clone()

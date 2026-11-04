@@ -312,6 +312,21 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     let statement = json_body(statement).await;
     assert_eq!(statement["customer_id"], customer["id"]);
     assert_eq!(statement["receivables"].as_array().unwrap().len(), 2);
+    assert!(statement["invoices"].as_array().is_some_and(|invoices| {
+        invoices
+            .iter()
+            .any(|entry| entry["invoice_id"] == invoice["invoice_id"])
+    }));
+    assert!(statement["payments"].as_array().is_some_and(|payments| {
+        payments.iter().any(|entry| {
+            entry["payment_id"] == payment["payment_id"]
+                && entry["allocations"].as_array().is_some_and(|allocations| {
+                    allocations
+                        .iter()
+                        .any(|allocation| allocation["receivable_id"] == invoice["receivable_id"])
+                })
+        })
+    }));
     assert!(statement["receivables"]
         .as_array()
         .unwrap()
@@ -461,6 +476,31 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     let after_reversal: serde_json::Value = serde_json::from_slice(&after_reversal_body).unwrap();
     assert_eq!(after_reversal["paid"], "3.00");
     assert_eq!(after_reversal["balance"], "8.02");
+    let statement_after_reversal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/local/v1/customers/{}/statement",
+                    customer["id"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let statement_after_reversal = json_body(statement_after_reversal).await;
+    let payment_history = statement_after_reversal["payments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["payment_id"] == payment["payment_id"])
+        .unwrap();
+    assert_eq!(payment_history["reversals"][0]["amount"], "1.00");
+    assert_eq!(
+        payment_history["reversals"][0]["reason"],
+        "local correction"
+    );
 
     let credit = app
         .clone()

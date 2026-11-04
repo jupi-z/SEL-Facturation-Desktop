@@ -19,7 +19,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow},
     Row, SqlitePool,
 };
-use std::{str::FromStr, sync::Arc};
+use std::{collections::BTreeMap, str::FromStr, sync::Arc};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -1363,9 +1363,127 @@ impl LocalStore {
                 receivables.push(summary);
             }
         }
+        let invoice_rows = sqlx::query(
+            "SELECT i.id, i.invoice_number, i.period, i.issued_at, i.status,
+                    i.immutable_snapshot_json
+             FROM invoices i JOIN customers c ON c.id = i.customer_id
+             WHERE i.customer_id = $1 AND c.organization_id = $2
+             ORDER BY i.issued_at DESC, i.id DESC LIMIT 100",
+        )
+        .bind(customer_id.to_string())
+        .bind(self.organization_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let invoices = invoice_rows
+            .iter()
+            .map(|row| {
+                let snapshot: String = row.try_get("immutable_snapshot_json")?;
+                let mut response: UtilityBillingResponse = serde_json::from_str(&snapshot)
+                    .map_err(|error| {
+                        sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
+                    })?;
+                response.status = row.try_get("status")?;
+                response.invoice_number = row.try_get("invoice_number")?;
+                if response.billing_period.is_empty() {
+                    response.billing_period = row.try_get("period")?;
+                }
+                let mut value = serde_json::to_value(response).map_err(|error| {
+                    sqlx::Error::Protocol(format!("invalid invoice response JSON: {error}"))
+                })?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    sqlx::Error::Protocol("invoice response is not a JSON object".into())
+                })?;
+                object.insert(
+                    "period".into(),
+                    serde_json::Value::String(row.try_get("period")?),
+                );
+                object.insert(
+                    "issued_at".into(),
+                    serde_json::Value::String(row.try_get("issued_at")?),
+                );
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        let payment_rows = sqlx::query(
+            "SELECT id, amount_received, currency, method, paid_at, status
+             FROM payments WHERE customer_id = $1
+             ORDER BY paid_at DESC, id DESC LIMIT 100",
+        )
+        .bind(customer_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let allocation_rows = sqlx::query(
+            "SELECT pa.payment_id, pa.receivable_id, pa.schedule_id,
+                    pa.allocated_amount, pa.currency
+             FROM payment_allocations pa
+             JOIN payments p ON p.id = pa.payment_id
+             WHERE p.customer_id = $1
+               AND p.id IN (SELECT id FROM payments WHERE customer_id = $1
+                            ORDER BY paid_at DESC, id DESC LIMIT 100)
+             ORDER BY pa.payment_id, pa.id",
+        )
+        .bind(customer_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut allocations_by_payment: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+        for allocation in allocation_rows {
+            let payment_id: String = allocation.try_get("payment_id")?;
+            allocations_by_payment
+                .entry(payment_id)
+                .or_default()
+                .push(json!({
+                    "receivable_id": parse_uuid_column(&allocation, "receivable_id", "allocation receivable")?,
+                    "schedule_id": allocation.try_get::<Option<String>, _>("schedule_id")?
+                        .map(|id| id.parse::<Uuid>().map_err(|error| sqlx::Error::Protocol(format!("invalid schedule id: {error}"))))
+                        .transpose()?,
+                    "amount": format!("{:.2}", decimal_text(&allocation, "allocated_amount")?.round_dp(2)),
+                    "currency": allocation.try_get::<String, _>("currency")?
+                }));
+        }
+        let reversal_rows = sqlx::query(
+            "SELECT pr.payment_id, pr.amount, pr.reason, pr.created_at
+             FROM payment_reversals pr
+             JOIN payments p ON p.id = pr.payment_id
+             WHERE p.customer_id = $1
+               AND p.id IN (SELECT id FROM payments WHERE customer_id = $1
+                            ORDER BY paid_at DESC, id DESC LIMIT 100)
+             ORDER BY pr.payment_id, pr.created_at, pr.id",
+        )
+        .bind(customer_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut reversals_by_payment: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+        for reversal in reversal_rows {
+            let payment_id: String = reversal.try_get("payment_id")?;
+            reversals_by_payment
+                .entry(payment_id)
+                .or_default()
+                .push(json!({
+                    "amount": format!("{:.2}", decimal_text(&reversal, "amount")?.round_dp(2)),
+                    "reason": reversal.try_get::<String, _>("reason")?,
+                    "created_at": reversal.try_get::<String, _>("created_at")?
+                }));
+        }
+        let mut payments = Vec::with_capacity(payment_rows.len());
+        for row in payment_rows {
+            let payment_id = parse_uuid_column(&row, "id", "payment")?;
+            let payment_key = payment_id.to_string();
+            payments.push(json!({
+                "payment_id": payment_id,
+                "amount_received": format!("{:.2}", decimal_text(&row, "amount_received")?.round_dp(2)),
+                "currency": row.try_get::<String, _>("currency")?,
+                "method": row.try_get::<String, _>("method")?,
+                "paid_at": row.try_get::<String, _>("paid_at")?,
+                "status": row.try_get::<String, _>("status")?,
+                "allocations": allocations_by_payment.remove(&payment_key).unwrap_or_default(),
+                "reversals": reversals_by_payment.remove(&payment_key).unwrap_or_default()
+            }));
+        }
         Ok(Some(json!({
             "customer_id": customer_id,
-            "receivables": receivables
+            "receivables": receivables,
+            "invoices": invoices,
+            "payments": payments
         })))
     }
 

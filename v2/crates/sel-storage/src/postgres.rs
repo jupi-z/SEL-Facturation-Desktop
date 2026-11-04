@@ -4474,9 +4474,92 @@ impl CentralStore {
                 }))
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
-        Ok(Some(
-            json!({"customer_id": customer_id, "receivables": receivables}),
-        ))
+        let invoices = self
+            .list_invoice_responses(Some(customer_id), None, None, 100)
+            .await?;
+        let payment_rows = sqlx::query(
+            "SELECT id, amount_received, currency, method, paid_at, status
+             FROM payments WHERE customer_id = $1
+             ORDER BY paid_at DESC, id DESC LIMIT 100",
+        )
+        .bind(customer_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let allocation_rows = sqlx::query(
+            "SELECT pa.payment_id, pa.receivable_id, pa.schedule_id,
+                    pa.allocated_amount, pa.currency
+             FROM payment_allocations pa
+             JOIN payments p ON p.id = pa.payment_id
+             WHERE p.customer_id = $1
+               AND p.id IN (SELECT id FROM payments WHERE customer_id = $1
+                            ORDER BY paid_at DESC, id DESC LIMIT 100)
+             ORDER BY pa.payment_id, pa.id",
+        )
+        .bind(customer_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut allocations_by_payment: BTreeMap<Uuid, Vec<serde_json::Value>> = BTreeMap::new();
+        for allocation in allocation_rows {
+            let payment_id: Uuid = allocation.try_get("payment_id")?;
+            let amount: Decimal = allocation.try_get("allocated_amount")?;
+            allocations_by_payment
+                .entry(payment_id)
+                .or_default()
+                .push(json!({
+                    "receivable_id": allocation.try_get::<Uuid, _>("receivable_id")?,
+                    "schedule_id": allocation.try_get::<Option<Uuid>, _>("schedule_id")?,
+                    "amount": format!("{:.2}", amount.round_dp(2)),
+                    "currency": allocation.try_get::<String, _>("currency")?
+                }));
+        }
+        let reversal_rows = sqlx::query(
+            "SELECT pr.payment_id, pr.amount, pr.reason, pr.created_at
+             FROM payment_reversals pr
+             JOIN payments p ON p.id = pr.payment_id
+             WHERE p.customer_id = $1
+               AND p.id IN (SELECT id FROM payments WHERE customer_id = $1
+                            ORDER BY paid_at DESC, id DESC LIMIT 100)
+             ORDER BY pr.payment_id, pr.created_at, pr.id",
+        )
+        .bind(customer_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut reversals_by_payment: BTreeMap<Uuid, Vec<serde_json::Value>> = BTreeMap::new();
+        for reversal in reversal_rows {
+            let payment_id: Uuid = reversal.try_get("payment_id")?;
+            let amount: Decimal = reversal.try_get("amount")?;
+            let created_at: DateTime<Utc> = reversal.try_get("created_at")?;
+            reversals_by_payment
+                .entry(payment_id)
+                .or_default()
+                .push(json!({
+                    "amount": format!("{:.2}", amount.round_dp(2)),
+                    "reason": reversal.try_get::<String, _>("reason")?,
+                    "created_at": created_at.to_rfc3339()
+                }));
+        }
+        let mut payments = Vec::with_capacity(payment_rows.len());
+        for row in payment_rows {
+            let payment_id: Uuid = row.try_get("id")?;
+            let amount_received: Decimal = row.try_get("amount_received")?;
+            let paid_at: DateTime<Utc> = row.try_get("paid_at")?;
+            payments.push(json!({
+                "payment_id": payment_id,
+                "amount_received": format!("{:.2}", amount_received.round_dp(2)),
+                "currency": row.try_get::<String, _>("currency")?,
+                "method": row.try_get::<String, _>("method")?,
+                "paid_at": paid_at.to_rfc3339(),
+                "status": row.try_get::<String, _>("status")?,
+                "allocations": allocations_by_payment.remove(&payment_id).unwrap_or_default(),
+                "reversals": reversals_by_payment.remove(&payment_id).unwrap_or_default()
+            }));
+        }
+        Ok(Some(json!({
+            "customer_id": customer_id,
+            "receivables": receivables,
+            "invoices": invoices,
+            "payments": payments
+        })))
     }
 
     pub async fn create_solar_sale(

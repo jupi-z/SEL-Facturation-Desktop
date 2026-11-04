@@ -745,7 +745,11 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters: [{ $ref: '#/components/parameters/UuidPath' }]
       responses:
-        '200': { description: Customer receivables statement }
+        '200':
+          description: Customer financial statement with immutable invoice history, receipts, allocations, reversals and current receivable summaries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerStatement' }
   /v1/sync/push:
     post:
       operationId: syncPush
@@ -1191,6 +1195,51 @@ components:
         tax: { type: string }
         total: { type: string }
         snapshot_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    CustomerStatement:
+      type: object
+      required: [customer_id, receivables, invoices, payments]
+      properties:
+        customer_id: { type: string, format: uuid }
+        receivables:
+          type: array
+          items:
+            type: object
+            description: Current receivable summary from the local or central financial ledger.
+        invoices:
+          type: array
+          items: { $ref: '#/components/schemas/UtilityBillingResponse' }
+        payments:
+          type: array
+          items: { $ref: '#/components/schemas/CustomerStatementPayment' }
+    CustomerStatementPayment:
+      type: object
+      required: [payment_id, amount_received, currency, method, paid_at, status, allocations, reversals]
+      properties:
+        payment_id: { type: string, format: uuid }
+        amount_received: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        method: { type: string }
+        paid_at: { type: string, format: date-time }
+        status: { type: string }
+        allocations:
+          type: array
+          items:
+            type: object
+            required: [receivable_id, amount, currency]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              schedule_id: { type: [string, 'null'], format: uuid }
+              amount: { type: string }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+        reversals:
+          type: array
+          items:
+            type: object
+            required: [amount, reason, created_at]
+            properties:
+              amount: { type: string }
+              reason: { type: string }
+              created_at: { type: string, format: date-time }
     PaymentAllocation:
       type: object
       required: [receivable_id, amount]
