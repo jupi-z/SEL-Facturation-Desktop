@@ -529,7 +529,11 @@ async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
             "total",
         )?;
         add_currency_total(&mut source_invoice_totals, currency, total);
-        add_currency_total(&mut source_outstanding_totals, currency, total);
+        add_currency_total(
+            &mut source_outstanding_totals,
+            currency,
+            legacy_open_balance(invoice, total),
+        );
         invoice_currencies.insert(number, currency.to_owned());
         let invoice_id = stable_legacy_uuid("INVOICE", number);
         let found: Option<(String, Decimal)> = sqlx::query_as(
@@ -550,7 +554,9 @@ async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
         let receivable_id = stable_legacy_uuid("RECEIVABLE", number);
         let stored_balance: Option<(String, Decimal)> = sqlx::query_as(
             "SELECT r.currency,
-                    r.principal_total - COALESCE(SUM(a.allocated_amount), 0)
+                    CASE WHEN r.status = 'VOID' THEN 0
+                         ELSE r.principal_total - COALESCE(SUM(a.allocated_amount), 0)
+                    END
              FROM receivables r
              LEFT JOIN payment_allocations a ON a.receivable_id = r.id
              WHERE r.id = $1 AND r.customer_id IN
@@ -659,6 +665,14 @@ async fn migration_reconcile(path: &Path) -> Result<serde_json::Value> {
 
 fn add_currency_total(totals: &mut BTreeMap<String, Decimal>, currency: &str, amount: Decimal) {
     *totals.entry(currency.to_owned()).or_default() += amount;
+}
+
+fn legacy_open_balance(invoice: &serde_json::Value, principal: Decimal) -> Decimal {
+    if invoice.get("status").and_then(serde_json::Value::as_str) == Some("VOID") {
+        Decimal::ZERO
+    } else {
+        principal
+    }
 }
 
 fn normalized_currency_totals(totals: &BTreeMap<String, Decimal>) -> BTreeMap<String, String> {
@@ -982,6 +996,20 @@ mod tests {
     }
 
     #[test]
+    fn void_legacy_invoice_has_no_open_balance() {
+        let invoice = json!({"status": "VOID"});
+        assert_eq!(
+            super::legacy_open_balance(&invoice, rust_decimal::Decimal::new(1160, 2)),
+            rust_decimal::Decimal::ZERO
+        );
+        let issued_invoice = json!({"status": "ISSUED"});
+        assert_eq!(
+            super::legacy_open_balance(&issued_invoice, rust_decimal::Decimal::new(1160, 2)),
+            rust_decimal::Decimal::new(1160, 2)
+        );
+    }
+
+    #[test]
     fn postgres_restore_is_fail_closed_without_explicit_approval() {
         assert!(require_restore_approval(None).is_err());
         assert!(require_restore_approval(Some("yes")).is_err());
@@ -1111,6 +1139,20 @@ mod tests {
                         "vat": "1.60",
                         "total": "11.60"
                     }
+                }, {
+                    "number": format!("V1-VOID-{suffix}"),
+                    "client_code": source_code,
+                    "currency": "USD",
+                    "billing_period": "2026-10",
+                    "issue_date": "2026-10-03",
+                    "status": "VOID",
+                    "calc_snapshot": {
+                        "kwh": "2.00",
+                        "energy": "3.00",
+                        "unit_price": "1.50",
+                        "vat": "0.48",
+                        "total": "3.48"
+                    }
                 }],
                 "payments": [{
                     "id": "payment-1",
@@ -1142,7 +1184,7 @@ mod tests {
         assert_eq!(first["status"], "APPLIED");
         assert_eq!(
             first["counts"],
-            json!({"clients": 1, "invoices": 1, "payments": 1})
+            json!({"clients": 1, "invoices": 2, "payments": 1})
         );
         let second = migration_apply(&path)
             .await
@@ -1161,6 +1203,10 @@ mod tests {
             reconciliation["totals"]["stored_outstanding_by_currency"]["USD"],
             "6.6"
         );
+        assert_eq!(
+            reconciliation["totals"]["source_invoice_by_currency"]["USD"],
+            "15.08"
+        );
 
         let store = sel_storage::CentralStore::connect(&database_url, organization_id)
             .await
@@ -1175,7 +1221,7 @@ mod tests {
         .fetch_one(&store.pool)
         .await
         .expect("read imported counts");
-        assert_eq!(counts, (1, 1, 1));
+        assert_eq!(counts, (1, 2, 1));
         assert!(backup.is_file(), "migration backup should be created");
 
         let failed_organization_id = uuid::Uuid::new_v4();
