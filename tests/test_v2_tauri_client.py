@@ -241,7 +241,15 @@ def test_customer_statement_uses_localized_status_badges() -> None:
     assert "text(item.status)" not in statement
     assert "customerName: string" in statement
     assert "Situation du compte · ${customerName}" in statement
-    assert '<CustomerStatement customerId={selectedCustomer} customerName={text(selectedCustomerData?.legal_name, selectedCustomer)}' in app
+    assert '<CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)}' in app
+
+
+def test_solar_contract_choices_and_history_show_customer_names() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    manager = app.split("function SolarContractManager(", 1)[1].split("\nfunction CustomerStatement(", 1)[0]
+
+    assert "customerLabel(sale.customer_id, customers)" in manager
+    assert "<th>Abonné</th><th>Vente</th>" in manager
 
 
 def test_meter_service_codes_are_localized_for_operators() -> None:
