@@ -10,6 +10,8 @@ use sel_local::router_with_store;
 use sel_local::sync_once;
 use sel_storage::{migrate_postgres, CentralStore, LocalStore};
 use serde_json::json;
+use sqlx::postgres::PgPoolOptions;
+use std::str::FromStr;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -95,6 +97,33 @@ async fn seed_central_catalog(store: &CentralStore, effective_from: chrono::Naiv
     .unwrap();
 }
 
+async fn isolated_central_store(
+    database_url: &str,
+    organization_id: Uuid,
+) -> (CentralStore, String) {
+    let schema = format!("convergence_{}", Uuid::new_v4().simple());
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+
+    let options = sqlx::postgres::PgConnectOptions::from_str(database_url)
+        .unwrap()
+        .options([("search_path", schema.as_str())]);
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect_with(options)
+        .await
+        .unwrap();
+    admin_pool.close().await;
+    (CentralStore::from_pool(pool, organization_id), schema)
+}
+
 async fn seed_local_customer(store: &LocalStore) -> sel_contracts::Customer {
     store
         .create_customer(&CreateCustomer {
@@ -122,9 +151,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     let device_two = Uuid::new_v4();
     let grant_one = Uuid::new_v4();
     let grant_two = Uuid::new_v4();
-    let central = CentralStore::connect(&database_url, organization_id)
-        .await
-        .unwrap();
+    let (central, schema) = isolated_central_store(&database_url, organization_id).await;
     migrate_postgres(&central.pool).await.unwrap();
     central
         .ensure_organization("two-device convergence")
@@ -163,6 +190,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .unwrap();
     }
     seed_central_catalog(&central, effective_from).await;
+    let central_for_verify = central.clone();
 
     let base = std::env::temp_dir().join(format!("sel-v2-convergence-{}", Uuid::new_v4()));
     let path_one = base.with_extension("one.sqlite");
@@ -276,9 +304,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     assert_eq!(first_sync.accepted, 3);
     let second_sync = sync_once(&second, &endpoint, &token).await.unwrap();
     assert_eq!(second_sync.pulled, 3);
-    let central_invoice = sel_storage::CentralStore::connect(&database_url, organization_id)
-        .await
-        .unwrap()
+    let central_invoice = central_for_verify
         .get_invoice_response(local_invoice.invoice_id)
         .await
         .unwrap()
@@ -408,9 +434,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     assert_eq!(first_sync.rejected + second_sync.rejected, 1);
     assert_eq!(first.pending_count().await.unwrap(), 0);
     assert_eq!(second.pending_count().await.unwrap(), 0);
-    let central = CentralStore::connect(&database_url, organization_id)
-        .await
-        .unwrap();
+    let central = central_for_verify;
     let payment_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM payments p
          JOIN payment_allocations pa ON pa.payment_id = p.id
@@ -463,10 +487,22 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     assert_eq!(second_balance["paid"], "70.00");
     assert_eq!(second_balance["balance"], "50.00");
     server.abort();
+    let _ = server.await;
     std::env::remove_var("SEL_API_AUTH_TOKEN");
     std::env::remove_var("SEL_ALLOW_LEGACY_TOKEN");
     drop(first);
     drop(second);
+    central.pool.close().await;
+    let cleanup_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&cleanup_pool)
+        .await
+        .unwrap();
+    cleanup_pool.close().await;
     let _ = std::fs::remove_file(path_one);
     let _ = std::fs::remove_file(path_two);
 }
