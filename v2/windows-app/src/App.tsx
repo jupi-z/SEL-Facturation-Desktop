@@ -313,7 +313,8 @@ export default function App() {
           <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné disponible sur ce poste." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); }}>Ouvrir le dossier →</button>])} /></Panel>
           <Panel title="Nouvel abonné"><form className="form-grid" onSubmit={(event) => submit(event, "/local/v1/customers", Object.fromEntries(new FormData(event.currentTarget)) as Row, "Abonné enregistré localement.")}>
             <label>Code abonné<input name="customer_code" required /></label><label>Nom / raison sociale<input name="legal_name" required /></label>
-            <label className="span-two">Adresse<input name="address" /></label><label>Téléphone<input name="phone" /></label><label>NIF client<input name="tax_id" /></label>
+            <label className="span-two">Adresse<input name="address" /></label><label className="span-two">Téléphone<input name="phone" /></label>
+            <p className="help span-two">Le dossier local enregistre le code abonné, le nom, l’adresse et le téléphone.</p>
             <div className="form-actions span-two"><Button primary type="submit">Enregistrer l’abonné</Button></div>
           </form></Panel>
         </div>

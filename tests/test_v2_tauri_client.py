@@ -49,6 +49,9 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
     ):
         assert label in app
 
+    assert 'name="tax_id"' not in app
+    assert "Le dossier local enregistre le code abonné, le nom, l’adresse et le téléphone." in app
+
 
 def test_v2_windows_client_has_local_brand_assets_and_no_remote_runtime_assets() -> None:
     html = (APP / "index.html").read_text(encoding="utf-8")
