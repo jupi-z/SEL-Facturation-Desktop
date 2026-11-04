@@ -56,6 +56,7 @@ def test_v2_windows_client_has_local_brand_assets_and_no_remote_runtime_assets()
 
     assert (APP / "public" / "assets" / "sel-logo-dark.svg").is_file()
     assert (APP / "public" / "assets" / "geist-variable.woff2").is_file()
+    assert (APP / "src" / "vite-env.d.ts").is_file()
     assert "https://" not in html
     assert "https://" not in css
     assert "prefers-reduced-motion" in css
