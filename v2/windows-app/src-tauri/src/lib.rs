@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Manager, State};
 
+const MAX_LOCAL_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Debug, Deserialize)]
 struct DeviceConfig {
     organization_id: String,
@@ -178,7 +180,13 @@ fn request_local(agent: &LocalAgent, path: &str, method: &str, body: Option<Valu
     );
     stream.write_all(request.as_bytes()).and_then(|_| stream.write_all(&payload)).map_err(|error| error.to_string())?;
     let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).map_err(|error| error.to_string())?;
+    stream
+        .take((MAX_LOCAL_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut raw)
+        .map_err(|error| error.to_string())?;
+    if raw.len() > MAX_LOCAL_RESPONSE_BYTES {
+        return Err("la réponse du service local dépasse la taille autorisée".into());
+    }
     let split = raw.windows(4).position(|window| window == b"\r\n\r\n").ok_or("réponse HTTP locale mal formée")?;
     let headers = String::from_utf8_lossy(&raw[..split]);
     let status = headers.lines().next().and_then(|line| line.split_whitespace().nth(1))

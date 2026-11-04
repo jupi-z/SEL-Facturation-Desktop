@@ -130,6 +130,8 @@ def test_tauri_bridge_fails_closed_and_offloads_local_http() -> None:
 
     assert "start_agent(app.handle(), &data_dir).ok()" not in native
     assert "spawn_blocking" in native
+    assert "MAX_LOCAL_RESPONSE_BYTES: usize = 16 * 1024 * 1024" in native
+    assert "take((MAX_LOCAL_RESPONSE_BYTES + 1) as u64)" in native
     assert "env_clear()" in native
     assert "https://monarquegrp.com" in native
     assert "open_monarque_site" in native
