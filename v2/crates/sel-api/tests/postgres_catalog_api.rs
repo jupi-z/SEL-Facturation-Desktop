@@ -75,9 +75,9 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
     let unapproved_fx = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO fx_rate_versions
-         (id, from_currency, to_currency, value, effective_from, source, approved)
-         VALUES ($1, 'USD', 'CDF', 2360, '2026-01-01', 'fixture', TRUE),
-                ($2, 'USD', 'CDF', 9999, '2026-01-01', 'fixture', FALSE)",
+         (id, from_currency, to_currency, value, effective_from, source, approved, status)
+         VALUES ($1, 'USD', 'CDF', 2360, '2026-01-01', 'fixture', TRUE, 'APPROVED'),
+                ($2, 'USD', 'CDF', 9999, '2026-01-01', 'fixture', FALSE, 'DRAFT')",
     )
     .bind(approved_fx)
     .bind(unapproved_fx)
@@ -265,7 +265,7 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
             "unit": "M3",
             "unit_price": "9.99",
             "currency": "USD",
-            "effective_from": "2026-11-04",
+            "effective_from": chrono::Utc::now().date_naive().to_string(),
             "effective_to": null
         }),
     )
@@ -326,7 +326,7 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
             "unit": "KWH",
             "unit_price": "0.000001",
             "currency": "USD",
-            "effective_from": "2026-11-04",
+            "effective_from": chrono::Utc::now().date_naive().to_string(),
             "effective_to": null
         }),
     )
@@ -478,7 +478,7 @@ async fn tariff_versions_can_be_superseded_and_revoked_without_deleting_history(
             "unit": "M3",
             "unit_price": "1.30",
             "currency": "USD",
-            "effective_from": "2026-11-04",
+            "effective_from": chrono::Utc::now().date_naive().to_string(),
             "effective_to": null
         }),
     )
@@ -497,7 +497,9 @@ async fn tariff_versions_can_be_superseded_and_revoked_without_deleting_history(
         }),
     )
     .await;
-    assert_eq!(approve.status(), axum::http::StatusCode::OK);
+    if approve.status() != axum::http::StatusCode::OK {
+        panic!("tariff approval failed: {}", json_body(approve).await);
+    }
     assert_eq!(json_body(approve).await["status"], "APPROVED");
 
     let prior_end = sqlx::query_scalar::<_, Option<chrono::NaiveDate>>(
@@ -795,8 +797,17 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
 
     let future = today + chrono::Duration::days(20);
     let fx_pair = Uuid::new_v4().simple().to_string().to_ascii_uppercase();
-    let from_currency = format!("X{}", &fx_pair[0..2]);
-    let to_currency = format!("Y{}", &fx_pair[2..4]);
+    let alpha_pair = |value: &str| {
+        value
+            .chars()
+            .map(|character| match character {
+                '0'..='9' => char::from(b'A' + (character as u8 - b'0')),
+                _ => character,
+            })
+            .collect::<String>()
+    };
+    let from_currency = format!("X{}", alpha_pair(&fx_pair[0..2]));
+    let to_currency = format!("Y{}", alpha_pair(&fx_pair[2..4]));
     let fx_request = json!({
         "from_currency": from_currency, "to_currency": to_currency, "value": "2375.50",
         "source": "SEL approved exchange bulletin", "effective_from": today.to_string(),
@@ -810,7 +821,12 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
         fx_request,
     )
     .await;
-    assert_eq!(fx_draft_response.status(), axum::http::StatusCode::CREATED);
+    if fx_draft_response.status() != axum::http::StatusCode::CREATED {
+        panic!(
+            "FX draft creation failed: {}",
+            json_body(fx_draft_response).await
+        );
+    }
     let fx_draft = json_body(fx_draft_response).await;
     let fx_id = fx_draft["id"].as_str().unwrap().to_owned();
 
