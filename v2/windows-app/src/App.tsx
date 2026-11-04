@@ -54,17 +54,8 @@ function Table({ headers, data, empty }: { headers: string[]; data: ReactNode[][
 }
 
 function NavIcon({ name }: { name: string }) {
-  const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
-  return <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" {...common}>
-    {name === "grid" && <><rect x="3.5" y="3.5" width="7" height="7" rx="1" /><rect x="13.5" y="3.5" width="7" height="7" rx="1" /><rect x="3.5" y="13.5" width="7" height="7" rx="1" /><rect x="13.5" y="13.5" width="7" height="7" rx="1" /></>}
-    {name === "people" && <><circle cx="9" cy="8" r="3" /><path d="M3.5 20c.4-3.3 2.2-5 5.5-5s5.1 1.7 5.5 5M16 5.5a3 3 0 0 1 0 5.8M17 15c2.2.5 3.4 2.1 3.6 5" /></>}
-    {name === "document" && <><path d="M7 3.5h7l4 4V20.5H7z" /><path d="M14 3.5v4h4M10 12h5M10 16h5" /></>}
-    {name === "cash" && <><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="12" cy="12" r="3" /><path d="M6.5 9a2 2 0 0 0 0-2M17.5 15a2 2 0 0 0 0 2" /></>}
-    {name === "sun" && <><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M4.4 4.4l1.4 1.4m12.4 12.4 1.4 1.4M2.5 12h2m15 0h2M4.4 19.6l1.4-1.4M18.2 5.8l1.4-1.4" /></>}
-    {name === "balance" && <><path d="M12 3v18M5 7h14M5 7l-3 6h6zM19 7l-3 6h6zM7 21h10" /></>}
-    {name === "sync" && <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6 9a6.5 6.5 0 0 1 11-2l3 3M4 14l3 3a6.5 6.5 0 0 0 11-2" /></>}
-    {name === "settings" && <><circle cx="12" cy="12" r="3" /><path d="m19.4 15 .1.1 1.1 1.8-1.7 2.9-2.1-.6a8 8 0 0 1-1.5.9l-.4 2.2h-3.4l-.4-2.2a8 8 0 0 1-1.5-.9l-2.1.6-1.7-2.9 1.1-1.8a8 8 0 0 1 0-1.8l-1.1-1.8 1.7-2.9 2.1.6a8 8 0 0 1 1.5-.9l.4-2.2h3.4l.4 2.2a8 8 0 0 1 1.5.9l2.1-.6 1.7 2.9-1.1 1.8a8 8 0 0 1 0 1.8z" transform="translate(0 -1) scale(.9) translate(1.3 1.3)" /></>}
-  </svg>;
+  void name;
+  return <svg className="nav-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="4" y="4" width="11" height="11" rx="1.5" fill="currentColor" /></svg>;
 }
 
 export default function App() {
@@ -141,6 +132,30 @@ export default function App() {
     return !query || [customer.customer_code, customer.legal_name, customer.address, customer.phone]
       .some((value) => text(value, "").toLocaleLowerCase("fr").includes(query));
   }), [customers, customerFilter]);
+  const recentActivity = useMemo(() => {
+    const customerNames = new Map(customers.map((customer) => [
+      text(customer.customer_id ?? customer.id, ""),
+      text(customer.legal_name, text(customer.customer_code)),
+    ]));
+    const activity = [
+      ...invoices.map((row) => ({
+        row, kind: "Eau + électricité", reference: text(row.invoice_number ?? row.invoice_id),
+        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
+        amount: text(row.total), date: text(row.issued_at ?? row.created_at),
+      })),
+      ...payments.map((row) => ({
+        row, kind: "Encaissement", reference: text(row.payment_number ?? row.payment_id),
+        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
+        amount: text(row.amount_received ?? row.received_amount), date: text(row.paid_at ?? row.occurred_at),
+      })),
+      ...sales.map((row) => ({
+        row, kind: "Kit solaire", reference: text(row.sale_number ?? row.sale_id),
+        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
+        amount: text(row.principal), date: text(row.sold_at ?? row.created_at),
+      })),
+    ];
+    return activity.sort((left, right) => Date.parse(right.date) - Date.parse(left.date)).slice(0, 8);
+  }, [customers, invoices, payments, sales]);
 
   async function submit(event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) {
     event.preventDefault();
@@ -280,21 +295,16 @@ export default function App() {
       {loading && <div className="loading-line" role="status">Actualisation des données locales…</div>}
 
       {view === "dashboard" && <>
-        <div className="page-heading"><div><p className="eyebrow">ACTIVITÉ DU POSTE</p><h1>Vue d’ensemble</h1><p className="muted">Opérations enregistrées localement et état de leur synchronisation.</p></div><Button onClick={() => void refresh()}>Actualiser</Button></div>
+        <div className="page-heading"><div><p className="eyebrow">ACTIVITÉ DU POSTE</p><h1>Vue d’ensemble</h1><p className="muted">Opérations enregistrées localement et état de leur synchronisation.</p></div><Button primary onClick={() => setView("invoices")}>Nouvelle facture</Button></div>
         <div className="metrics">
           <Metric label="Abonnés" value={customers.length} note="Dossiers disponibles sur ce poste" />
           <Metric label="Factures" value={invoices.length} note="Documents présents localement" />
           <Metric label="Encaissements" value={payments.length} note="Règlements enregistrés" />
           <Metric label="À synchroniser" value={pending} note={pending ? "En attente de confirmation centrale" : "État renvoyé par l’agent local"} />
         </div>
-        <div className="columns">
-          <Panel title="Factures récentes" action={link("invoices", "Tout l’historique →")}>
-            <Table headers={["Référence", "Période", "État"]} empty="Aucune facture locale." data={invoices.slice(0, 6).map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.period ?? row.billing_period), <Status value={row.status} />])} />
-          </Panel>
-          <Panel title="Synchronisation" action={link("sync", "Détails →")}>
-            <div className="summary-state"><Status value={pending ? "LOCAL_PENDING" : text(sync?.status, "LOCAL_ONLY")} /><p>{pending ? `${pending} opération(s) attendent leur accusé central.` : "L’agent local ne signale aucune opération en attente."}</p></div>
-          </Panel>
-        </div>
+        <Panel title="Dossiers / activité récente" action={link("sync", "État de synchronisation →")}>
+          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune opération enregistrée sur ce poste." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, amount === "—" ? amount : `${amount} ${text(row.currency)}`, <Status value={row.status} />])} />
+        </Panel>
       </>}
 
       {view === "customers" && <>

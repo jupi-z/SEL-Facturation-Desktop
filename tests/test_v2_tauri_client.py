@@ -61,6 +61,34 @@ def test_v2_windows_client_has_local_brand_assets_and_no_remote_runtime_assets()
     assert "prefers-reduced-motion" in css
 
 
+def test_v2_windows_shell_preserves_figma_desktop_geometry_and_tokens() -> None:
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+
+    assert "--navy: #012a5e" in css
+    assert "--blue: #075bbb" in css
+    assert "--yellow: #fddc02" in css
+    assert ".sidebar { position: sticky" in css
+    assert "flex: 0 0 250px" in css
+    assert ".topbar { display: flex; flex: 0 0 76px" in css
+    assert "height: 93px" in css
+    assert "width: 20px; height: 20px; color: #98b9e0" in css
+
+
+def test_dashboard_uses_recent_local_operations_without_demo_financial_data() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert 'title="Dossiers / activité récente"' in app
+    assert 'headers={["Référence", "Abonné", "Opération", "Montant", "État"]}' in app
+    assert "...invoices.map" in app
+    assert "...payments.map" in app
+    assert "...sales.map" in app
+    assert "value={customers.length}" in app
+    assert "value={invoices.length}" in app
+    assert 'onClick={() => setView("invoices")}>Nouvelle facture' in app
+    assert "218,40" not in app
+    assert "1 124,20" not in app
+
+
 def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     local_api = (ROOT / "v2" / "crates" / "sel-local" / "src" / "lib.rs").read_text(encoding="utf-8")

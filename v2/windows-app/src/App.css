@@ -33,14 +33,14 @@ button { cursor: pointer; }
 
 .app-shell { display: flex; min-height: 100vh; background: var(--canvas); }
 .sidebar { position: sticky; top: 0; display: flex; flex: 0 0 250px; flex-direction: column; width: 250px; height: 100vh; padding: 7px 13px 25px; overflow-y: auto; color: #f7faff; background: var(--navy); border-top: 7px solid var(--yellow); }
-.brand { display: flex; align-items: center; justify-content: center; width: 100%; height: 120px; margin: 4px 0 20px; padding: 8px; border: 0; background: transparent; }
-.brand img { display: block; width: 188px; height: 104px; object-fit: contain; }
+.brand { display: flex; align-items: center; justify-content: center; width: 100%; height: 93px; margin: 4px 0 20px; padding: 0; border: 0; background: transparent; }
+.brand img { display: block; width: 188px; height: 96px; object-fit: contain; }
 .sidebar nav { display: grid; gap: 7px; }
 .nav-item { position: relative; display: flex; align-items: center; gap: 13px; width: 100%; min-height: 43px; padding: 0 13px; border: 0; border-radius: 4px; color: #c6d9f1; background: transparent; text-align: left; font-size: 13px; font-weight: 450; }
 .nav-item:hover { background: #0b396d; }
 .nav-item.active { color: #fff; background: #174779; font-weight: 690; }
 .nav-item.active::before { position: absolute; top: 0; bottom: 0; left: 0; width: 4px; background: var(--yellow); content: ""; }
-.nav-icon { display: block; flex: 0 0 18px; width: 18px; height: 18px; color: #a9c3e0; }
+.nav-icon { display: block; flex: 0 0 20px; width: 20px; height: 20px; color: #98b9e0; }
 .nav-item.active .nav-icon { color: var(--yellow); }
 .sidebar-foot { margin: auto 12px 0; padding-top: 18px; border-top: 1px solid #31557d; color: #c6d9f1; }
 .sidebar-foot p { margin: 8px 0 0; font-size: 11px; line-height: 1.55; }
