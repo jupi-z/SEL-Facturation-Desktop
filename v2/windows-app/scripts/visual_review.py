@@ -337,7 +337,7 @@ async def capture_views() -> None:
             await page.get_by_role("button", name="Encaissements", exact=True).click()
             await page.locator('.payment-workspace form select[name="customer_id"]').select_option("demo-customer-0001")
             await page.get_by_role("button", name="+ Ajouter une créance").click()
-            await page.locator('.allocation-card select option[value="demo-receivable-0001"]').wait_for(state="attached")
+            await page.locator('.allocation-card select').first.locator('option[value="demo-receivable-0001"]').wait_for(state="attached")
             await page.locator('.allocation-card select').nth(0).select_option("demo-receivable-0001")
             await page.locator('.allocation-card select').nth(1).select_option("demo-receivable-solar-0001")
             await page.locator('.allocation-card select option[value="demo-solar-schedule-0001"]').wait_for(state="attached")

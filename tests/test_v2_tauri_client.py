@@ -355,6 +355,7 @@ def test_payment_form_can_allocate_one_receipt_to_multiple_real_receivables() ->
     assert "Toutes les créances d’un même règlement doivent utiliser la même devise." in payment_form
     review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     assert "payments-solar-1440x900.png" in review
+    assert "page.locator('.allocation-card select').first.locator('option[value=\"demo-receivable-0001\"]')" in review
     assert "page.locator('.allocation-card select').nth(2).select_option" in review
 
 
