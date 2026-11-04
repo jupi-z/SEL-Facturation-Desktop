@@ -393,7 +393,7 @@ def test_visual_review_captures_rust_validated_meter_preview() -> None:
     assert 'name="period"' in visual_review
     assert 'name="current"' in visual_review
     assert 'name="Prévisualiser les index"' in visual_review
-    assert 'get_by_text("100 KWH", exact=True).wait_for()' in visual_review
+    assert 'get_by_text("100 kWh", exact=True).wait_for()' in visual_review
 
 
 def test_visual_review_covers_water_meter_and_positive_water_invoice() -> None:
@@ -405,9 +405,10 @@ def test_visual_review_covers_water_meter_and_positive_water_invoice() -> None:
     assert '"water-reading-preview-1440x900.png"' in visual_review
     assert '"invoice-preview-water-positive-1440x900.png"' in visual_review
     assert "Number(args.body?.water?.quantity ?? 0)" in visual_review
-    assert 'get_by_text("5.00 M3", exact=True).wait_for()' in visual_review
+    assert 'get_by_text("5 m³", exact=True).wait_for()' in visual_review
     assert 'get_by_text("18,56 USD", exact=True).wait_for()' in visual_review
     assert 'await page.get_by_label("Eau consommée (m³)").fill("5")' in visual_review
+    assert 'unitCode === "KWH" ? "kWh" : unitCode === "M3" ? "m³"' in (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
 
 def test_customer_creation_form_is_revealed_from_the_directory_action() -> None:

@@ -43,6 +43,22 @@ function formatMoney(value: unknown, currency: unknown): string {
   return `${sign}${grouped},${fraction.padEnd(2, "0")} ${text(currency, "")}`.trim();
 }
 
+function formatUnit(unit: unknown): string {
+  const unitCode = text(unit, "").toUpperCase();
+  return unitCode === "KWH" ? "kWh" : unitCode === "M3" ? "m³" : text(unit, "");
+}
+
+function formatQuantity(value: unknown, unit: unknown): string {
+  const raw = text(value, "").trim();
+  const match = /^(-?)(\d+)(?:[.,](\d+))?$/.exec(raw);
+  const unitLabel = formatUnit(unit);
+  if (!match) return raw ? `${raw} ${unitLabel}`.trim() : "—";
+  const [, sign, integer, rawFraction = ""] = match;
+  const fraction = rawFraction.replace(/0+$/, "");
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, "\u202f");
+  return `${sign}${grouped}${fraction ? `,${fraction}` : ""} ${unitLabel}`.trim();
+}
+
 function formatDateTime(value: unknown): string {
   const raw = text(value, "");
   const date = new Date(raw);
@@ -463,8 +479,8 @@ export default function App() {
         {preview && <>
           <PageHeading eyebrow="CORE / FACTURATION" title="Prévisualisation de facture" description="Vérifier les lignes, les taxes et les références avant d’émettre." action={<div className="page-actions"><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Modifier la saisie</Button><Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button></div>} />
           <div className="invoice-preview-metrics metrics">
-            <Metric label="Électricité" value={previewElectricity ? `${text(previewElectricity.quantity)} ${text(previewElectricity.unit)}` : "—"} note={previewElectricity ? `${formatMoney(previewElectricity.subtotal, preview.currency)} hors taxe` : "Ligne indisponible"} />
-            <Metric label="Eau" value={previewWater ? `${text(previewWater.quantity)} ${text(previewWater.unit)}` : "—"} note={previewWater ? formatMoney(previewWater.total, preview.currency) : "Ligne indisponible"} />
+            <Metric label="Électricité" value={previewElectricity ? formatQuantity(previewElectricity.quantity, previewElectricity.unit) : "—"} note={previewElectricity ? `${formatMoney(previewElectricity.subtotal, preview.currency)} hors taxe` : "Ligne indisponible"} />
+            <Metric label="Eau" value={previewWater ? formatQuantity(previewWater.quantity, previewWater.unit) : "—"} note={previewWater ? formatMoney(previewWater.total, preview.currency) : "Ligne indisponible"} />
             <Metric label="Taxes" value={formatMoney(preview.tax, preview.currency)} note="Calcul retourné par Rust" />
             <Metric label="Montant total" value={formatMoney(preview.total, preview.currency)} note="À confirmer avant émission" />
           </div>
@@ -567,7 +583,7 @@ function Status({ value }: { value: unknown }) {
 function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rust", action }: { data: Row; onConfirm?: () => void; title?: string; action?: ReactNode }) {
   const lines = rows<Row>(data.lines);
   return <Panel title={title} action={action}>{onConfirm && <p className="help">Vérifiez les deux services, les taxes et le total. Cette prévisualisation ne crée pas de facture.</p>}
-      <Table headers={["Service", "Quantité", "Prix unitaire", "Sous-total", "Taxe", "Total"]} empty="Le moteur n’a retourné aucune ligne." data={lines.map((line) => [domainLabel(line.service_code), `${text(line.quantity)} ${text(line.unit)}`, formatMoney(line.unit_price, data.currency), formatMoney(line.subtotal, data.currency), formatMoney(line.tax, data.currency), formatMoney(line.total, data.currency)])} />
+      <Table headers={["Service", "Quantité", "Prix unitaire", "Sous-total", "Taxe", "Total"]} empty="Le moteur n’a retourné aucune ligne." data={lines.map((line) => [domainLabel(line.service_code), formatQuantity(line.quantity, line.unit), formatMoney(line.unit_price, data.currency), formatMoney(line.subtotal, data.currency), formatMoney(line.tax, data.currency), formatMoney(line.total, data.currency)])} />
       <div className="totals"><span>Sous-total <strong>{formatMoney(data.subtotal, data.currency)}</strong></span><span>Taxes <strong>{formatMoney(data.tax, data.currency)}</strong></span><span>Total <strong>{formatMoney(data.total, data.currency)}</strong></span></div>
     {onConfirm && <div className="form-actions"><Button primary onClick={onConfirm}>Émettre cette facture</Button></div>}
   </Panel>;
@@ -743,7 +759,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
         <div className="form-grid reading-filters">
           <label>Abonné<select value={customerId} onChange={(event) => { setCustomerId(event.target.value); setPreview(null); setPreviewInput(null); }}><option value="">Sélectionner…</option>{customers.map((customer) => <option key={text(customer.customer_id ?? customer.id)} value={text(customer.customer_id ?? customer.id)}>{text(customer.customer_code)} — {text(customer.legal_name)}</option>)}</select></label>
           <label>Service<select value={accountId} onChange={(event) => { setAccountId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{domainLabel(account.service_code)} · {domainLabel(account.connection_status)}</option>)}</select></label>
-          <label className="span-two">Compteur<select value={meterId} onChange={(event) => { setMeterId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {text(meter.unit)}</option>)}</select></label>
+          <label className="span-two">Compteur<select value={meterId} onChange={(event) => { setMeterId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {formatUnit(meter.unit)}</option>)}</select></label>
         </div>
         {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void previewReading(event)} onChange={() => { setPreview(null); setPreviewInput(null); }}>
           <label>Période<input name="period" type="month" value={readingPeriod} onChange={(event) => { const selectedPeriod = event.target.value; setReadingPeriod(selectedPeriod); const preceding = readings.filter((reading) => text(reading.period) < selectedPeriod); setPreviousIndex(preceding.length ? text(preceding[preceding.length - 1].current) : ""); }} required /></label>
@@ -762,17 +778,17 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
         <div className="reading-summary">
           <p className="eyebrow">PRÉPARATION DU RELEVÉ</p>
           <h2>{preview ? "Index vérifiés" : "À vérifier"}</h2>
-          <p className="muted">{preview ? `${domainLabel(selectedMeter?.unit)} · ${text(preview.period)}` : "Le moteur calcule la différence entre les index avant l’enregistrement."}</p>
-          <dl><div><dt>Compteur</dt><dd>{selectedMeter ? text(selectedMeter.serial) : "—"}</dd></div><div><dt>Index précédent</dt><dd>{preview ? `${text(preview.previous)} ${text(selectedMeter?.unit)}` : "—"}</dd></div><div><dt>Index actuel</dt><dd>{preview ? `${text(preview.current)} ${text(selectedMeter?.unit)}` : "—"}</dd></div></dl>
+          <p className="muted">{preview ? `${formatUnit(selectedMeter?.unit)} · ${text(preview.period)}` : "Le moteur calcule la différence entre les index avant l’enregistrement."}</p>
+          <dl><div><dt>Compteur</dt><dd>{selectedMeter ? text(selectedMeter.serial) : "—"}</dd></div><div><dt>Index précédent</dt><dd>{preview ? formatQuantity(preview.previous, selectedMeter?.unit) : "—"}</dd></div><div><dt>Index actuel</dt><dd>{preview ? formatQuantity(preview.current, selectedMeter?.unit) : "—"}</dd></div></dl>
           <p className="eyebrow">CONSOMMATION MESURÉE</p>
-          <strong className="reading-quantity">{preview ? `${text(preview.measured_quantity)} ${text(selectedMeter?.unit)}` : "—"}</strong>
+          <strong className="reading-quantity">{preview ? formatQuantity(preview.measured_quantity, selectedMeter?.unit) : "—"}</strong>
           <span className={`status-badge${preview ? " pending" : ""}`}>{preview ? "Brouillon local · non enregistré" : "En attente de vérification"}</span>
           <p className="help">Les index sont revalidés par Rust au moment de l’enregistrement.</p>
           {preview && <Button primary onClick={() => void saveReading()} disabled={saving}>{saving ? "Enregistrement…" : "Valider les index"}</Button>}
         </div>
       </Panel>
     </div>
-    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), `${text(reading.previous)} ${text(selectedMeter?.unit)}`, `${text(reading.current)} ${text(selectedMeter?.unit)}`, `${text(reading.measured_quantity)} ${text(selectedMeter?.unit)}`, text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
+    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), formatQuantity(reading.previous, selectedMeter?.unit), formatQuantity(reading.current, selectedMeter?.unit), formatQuantity(reading.measured_quantity, selectedMeter?.unit), text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
     {correctingReading && <Panel title={`Correction du relevé · ${text(correctingReading.period)}`}><form className="form-grid" onSubmit={(event) => void correctReading(event)}>
       <label>Nouvel index corrigé<input name="current" type="number" min="0" step="0.001" defaultValue={text(correctingReading.current, "")} required /></label>
       <label className="span-two">Motif de correction<input name="reason" maxLength={500} required /></label>
