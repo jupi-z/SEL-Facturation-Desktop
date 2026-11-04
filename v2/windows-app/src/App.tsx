@@ -248,6 +248,7 @@ export default function App() {
 
   async function previewInvoice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setNotice(null);
     const form = new FormData(event.currentTarget);
     const water = String(form.get("water_quantity") ?? "0");
     if (Number(water) === 0 && !zeroConfirmed) {
@@ -268,7 +269,6 @@ export default function App() {
       const result = await localRequest<Row>("/local/v1/billing/utility/preview", "POST", payload);
       setInvoiceDraft(payload);
       setPreview(result);
-      setNotice({ message: "Calcul reçu du moteur Rust. La facture n’est pas encore émise." });
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
 
@@ -359,6 +359,9 @@ export default function App() {
   const activePage = pageTitle[view];
   const pending = Number(sync?.pending ?? 0);
   const link = (id: View, label: string) => <button className="text-button" onClick={() => navigateTo(id)}>{label}</button>;
+  const previewLines = rows<Row>(preview?.lines);
+  const previewElectricity = previewLines.find((line) => text(line.service_code).toUpperCase() === "ELECTRICITY");
+  const previewWater = previewLines.find((line) => text(line.service_code).toUpperCase() === "WATER");
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -425,43 +428,48 @@ export default function App() {
       {view === "readings" && <MeterReadingsView customers={customers} />}
 
       {view === "invoices" && <>
-        <div className="page-heading"><div><p className="eyebrow">CORE / FACTURATION</p><h1>Factures eau + électricité</h1><p className="muted">Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust.</p></div><span className="tag">USD</span></div>
-        <div className="invoice-workspace">
-          <Panel title="Paramètres de facturation">
-            <form id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
-              <label>Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-              <label>Période de facturation<input name="billing_period" type="month" required /></label>
-              <label>Électricité consommée (kWh)<input name="electricity_quantity" type="number" min="0" step="0.01" defaultValue="0" required /></label>
-              <label>Eau consommée (m³)<input name="water_quantity" type="number" min="0" step="0.01" defaultValue="0" required onChange={(event) => { if (Number(event.target.value) !== 0) setZeroConfirmed(false); }} /></label>
-              <label>Révision tarifaire approuvée<input name="tariff_revision" required /></label>
-              <label>Date limite de paiement<input name="due_date" type="date" /></label>
-              <label className="check-row invoice-zero-confirm"><input type="checkbox" checked={zeroConfirmed} onChange={(event) => setZeroConfirmed(event.target.checked)} /> Je confirme que le relevé d’eau est exactement de 0 m³.</label>
-            </form>
-          </Panel>
-          <aside className="panel invoice-summary" aria-label="Récapitulatif de la facture">
-            <p className="eyebrow">RÉCAPITULATIF</p>
-            <h2>Facture combinée</h2>
-            <p className="muted">Électricité + eau · deux lignes obligatoires</p>
-            {preview ? <>
-              <div className="invoice-summary-lines">{rows<Row>(preview.lines).map((line, index) => <div key={`${text(line.service_code)}-${index}`}><span>{domainLabel(line.service_code)} · {text(line.quantity)} {text(line.unit)}</span><strong>{formatMoney(line.total, preview.currency)}</strong></div>)}</div>
-              <p className="eyebrow invoice-total-label">MONTANT À CONFIRMER</p>
-              <strong className="invoice-total">{formatMoney(preview.total, preview.currency)}</strong>
-              <span className="status-badge success">Calcul validé par Rust · facture non émise</span>
-            </> : <>
+        <div hidden={Boolean(preview)}>
+          <div className="page-heading"><div><p className="eyebrow">CORE / FACTURATION</p><h1>Factures eau + électricité</h1><p className="muted">Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust.</p></div><span className="tag">USD</span></div>
+          <div className="invoice-workspace">
+            <Panel title="Paramètres de facturation">
+              <form id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
+                <label>Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
+                <label>Période de facturation<input name="billing_period" type="month" required /></label>
+                <label>Électricité consommée (kWh)<input name="electricity_quantity" type="number" min="0" step="0.01" defaultValue="0" required /></label>
+                <label>Eau consommée (m³)<input name="water_quantity" type="number" min="0" step="0.01" defaultValue="0" required onChange={(event) => { if (Number(event.target.value) !== 0) setZeroConfirmed(false); }} /></label>
+                <label>Révision tarifaire approuvée<input name="tariff_revision" required /></label>
+                <label>Date limite de paiement<input name="due_date" type="date" /></label>
+                <label className="check-row invoice-zero-confirm"><input type="checkbox" checked={zeroConfirmed} onChange={(event) => setZeroConfirmed(event.target.checked)} /> Je confirme que le relevé d’eau est exactement de 0 m³.</label>
+              </form>
+            </Panel>
+            <aside className="panel invoice-summary" aria-label="Récapitulatif de la facture">
+              <p className="eyebrow">RÉCAPITULATIF</p>
+              <h2>Facture combinée</h2>
+              <p className="muted">Électricité + eau · deux lignes obligatoires</p>
               <div className="invoice-summary-empty"><strong>À calculer</strong><span>Le montant s’affichera après vérification par le moteur Rust.</span></div>
               <span className="status-badge">En attente du calcul</span>
-            </>}
-            <p className="help invoice-summary-help">Les calculs et l’autorisation restent gérés par le moteur Rust.</p>
-            {preview ? <Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button> : <Button primary type="submit" form="utility-invoice-form">Prévisualiser la facture</Button>}
-          </aside>
+              <p className="help invoice-summary-help">Les calculs et l’autorisation restent gérés par le moteur Rust.</p>
+              <Button primary type="submit" form="utility-invoice-form">Prévisualiser la facture</Button>
+            </aside>
+          </div>
+          <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
+            <Table headers={["Référence", "Abonné", "Période", "État", "Action"]} empty="Aucune facture locale." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <button className="text-button" onClick={() => void openInvoice(row)}>Consulter</button>])} />
+          </Panel>
+          {selectedInvoice && <>
+            <p className="muted">Période {text(selectedInvoice.billing_period)} · Échéance {text(selectedInvoice.due_date)} · <Status value={selectedInvoice.status} /></p>
+            <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />
+          </>}
         </div>
-        {preview && <Preview data={preview} title="Détail du calcul retourné par Rust" />}
-        <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
-          <Table headers={["Référence", "Abonné", "Période", "État", "Action"]} empty="Aucune facture locale." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <button className="text-button" onClick={() => void openInvoice(row)}>Consulter</button>])} />
-        </Panel>
-        {selectedInvoice && <>
-          <p className="muted">Période {text(selectedInvoice.billing_period)} · Échéance {text(selectedInvoice.due_date)} · <Status value={selectedInvoice.status} /></p>
-          <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />
+        {preview && <>
+          <PageHeading eyebrow="CORE / FACTURATION" title="Prévisualisation de facture" description="Vérifier les lignes, les taxes et les références avant d’émettre." action={<div className="page-actions"><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Modifier la saisie</Button><Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button></div>} />
+          <div className="invoice-preview-metrics metrics">
+            <Metric label="Électricité" value={previewElectricity ? `${text(previewElectricity.quantity)} ${text(previewElectricity.unit)}` : "—"} note={previewElectricity ? `${formatMoney(previewElectricity.subtotal, preview.currency)} hors taxe` : "Ligne indisponible"} />
+            <Metric label="Eau" value={previewWater ? `${text(previewWater.quantity)} ${text(previewWater.unit)}` : "—"} note={previewWater ? formatMoney(previewWater.total, preview.currency) : "Ligne indisponible"} />
+            <Metric label="Taxes" value={formatMoney(preview.tax, preview.currency)} note="Calcul retourné par Rust" />
+            <Metric label="Montant total" value={formatMoney(preview.total, preview.currency)} note="À confirmer avant émission" />
+          </div>
+          <Preview data={preview} title="Lignes de la facture" />
+          <p className="help invoice-preview-status" role="status">Le calcul et les taxes viennent du moteur Rust. Cette prévisualisation n’a pas encore créé de facture.</p>
         </>}
       </>}
 

@@ -181,6 +181,22 @@ def test_invoice_workspace_matches_figma_two_column_preview_flow() -> None:
     assert "path === '/local/v1/billing/utility/preview'" in visual_review
 
 
+def test_invoice_preview_is_a_distinct_figma_aligned_step_before_emission() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+    invoice_view = app.split('{view === "invoices"', 1)[1].split('{view === "payments"', 1)[0]
+
+    assert 'hidden={Boolean(preview)}' in invoice_view
+    assert 'title="Prévisualisation de facture"' in invoice_view
+    assert 'className="invoice-preview-metrics metrics"' in invoice_view
+    assert 'label="Électricité"' in invoice_view
+    assert 'label="Eau"' in invoice_view
+    assert 'onClick={() => { setPreview(null); setInvoiceDraft(null); }}' in invoice_view
+    assert 'onClick={() => void confirmInvoice()}>Émettre la facture' in invoice_view
+    assert 'get_by_role("heading", name="Prévisualisation de facture")' in visual_review
+    assert 'get_by_role("button", name="Modifier la saisie")' in visual_review
+
+
 def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     css = (APP / "src" / "App.css").read_text(encoding="utf-8")

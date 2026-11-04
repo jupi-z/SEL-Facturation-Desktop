@@ -247,9 +247,13 @@ async def capture_views() -> None:
                     await page.get_by_label("Je confirme que le relevé d’eau est exactement de 0 m³.").check()
                     await page.get_by_role("button", name="Prévisualiser la facture").click()
                     await page.get_by_text("Calcul validé par Rust · facture non émise").wait_for()
+                    await page.get_by_role("heading", name="Prévisualisation de facture").wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "invoice-preview-1440x900.png"))
+                    await page.get_by_role("button", name="Modifier la saisie").click()
+                    if await page.locator('input[name="electricity_quantity"]').input_value() != "100":
+                        raise AssertionError("Invoice input was not preserved when returning from the preview")
                 if slug == "solar":
                     await page.get_by_role("button", name="Créer une vente").click()
                     await page.get_by_role("heading", name="Nouvelle vente solaire").wait_for()
