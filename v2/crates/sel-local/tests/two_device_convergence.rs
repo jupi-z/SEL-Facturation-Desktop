@@ -44,7 +44,7 @@ async fn seed_local_catalog(store: &LocalStore) {
         "INSERT INTO products
          (id, sku, product_type, label, price_reference, currency, active)
          VALUES ($1, 'KIT-CONVERGENCE-1', 'SOLAR_KIT', 'Convergence kit', '120.00', 'USD', 1)
-         ON CONFLICT(sku) DO NOTHING",
+         ON CONFLICT(sku, effective_from) DO NOTHING",
     )
     .bind(Uuid::new_v4().to_string())
     .execute(&store.pool)
@@ -79,7 +79,7 @@ async fn seed_central_catalog(store: &CentralStore) {
         "INSERT INTO products
          (id, sku, product_type, label, price_reference, currency, active)
          VALUES ($1, 'KIT-CONVERGENCE-1', 'SOLAR_KIT', 'Convergence kit', 120.00, 'USD', TRUE)
-         ON CONFLICT(sku) DO NOTHING",
+         ON CONFLICT(sku, effective_from) DO NOTHING",
     )
     .bind(Uuid::new_v4())
     .execute(&store.pool)
