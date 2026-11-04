@@ -1856,12 +1856,13 @@ impl LocalStore {
         limit: u32,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT s.id, s.customer_id, s.contract_id, s.currency,
+            "SELECT s.id, s.customer_id, s.contract_id, ip.id AS installment_plan_id, s.currency,
                     s.sold_at, s.sale_type, s.status, r.id AS receivable_id,
                     r.principal_total
              FROM sales s
              JOIN customers c ON c.id = s.customer_id
              LEFT JOIN receivables r ON r.source_type = 'SALE' AND r.source_id = s.id
+             LEFT JOIN installment_plans ip ON ip.contract_id = s.contract_id
              WHERE c.organization_id = $1
              ORDER BY s.sold_at DESC, s.id DESC
              LIMIT $2",
@@ -1876,6 +1877,7 @@ impl LocalStore {
                     "sale_id": parse_uuid_column(&row, "id", "solar sale")?,
                     "customer_id": parse_uuid_column(&row, "customer_id", "solar customer")?,
                     "contract_id": row.try_get::<Option<String>, _>("contract_id")?.and_then(|value| value.parse::<Uuid>().ok()),
+                    "installment_plan_id": row.try_get::<Option<String>, _>("installment_plan_id")?.and_then(|value| value.parse::<Uuid>().ok()),
                     "receivable_id": row.try_get::<Option<String>, _>("receivable_id")?.and_then(|value| value.parse::<Uuid>().ok()),
                     "principal": format!("{:.2}", decimal_text(&row, "principal_total")?.round_dp(2)),
                     "currency": row.try_get::<String, _>("currency")?,
