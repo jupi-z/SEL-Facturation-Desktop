@@ -74,7 +74,8 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         "water": {"quantity": "0", "unit": "M3"},
         "water_zero_confirmed": true,
         "currency": "USD",
-        "tariff_revision": "fixture-approved-v1"
+        "tariff_revision": "fixture-approved-v1",
+        "due_date": "2026-12-15"
     });
     let issue_request = || {
         Request::builder()
@@ -92,6 +93,8 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
     assert_eq!(invoice["lines"][1]["quantity"], "0");
     assert_eq!(invoice["total"], "11.02");
+    assert_eq!(invoice["billing_period"], "2026-11");
+    assert_eq!(invoice["due_date"], "2026-12-15");
 
     let history = app
         .clone()
@@ -113,6 +116,8 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(history[0]["invoice_id"], invoice["invoice_id"]);
     assert_eq!(history[0]["status"], "CENTRAL_ACCEPTED");
     assert_eq!(history[0]["period"], "2026-11");
+    assert_eq!(history[0]["billing_period"], "2026-11");
+    assert_eq!(history[0]["due_date"], "2026-12-15");
     assert!(history[0]["issued_at"].as_str().is_some());
 
     let retry = app.clone().oneshot(issue_request()).await.unwrap();

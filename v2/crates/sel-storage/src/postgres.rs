@@ -2971,6 +2971,12 @@ impl CentralStore {
             let original: serde_json::Value = row.try_get("response_json")?;
             return Ok(UtilityIssueOutcome::Replay(serde_json::from_value(original)?));
         }
+        if response.billing_period != input.billing_period || response.due_date != input.due_date {
+            return Err(sqlx::Error::Protocol(
+                "invoice document metadata does not match the billing request".into(),
+            )
+            .into());
+        }
         let duplicate = sqlx::query(
             "SELECT id FROM invoices WHERE customer_id = $1 AND period = $2 AND status <> 'VOID' FOR UPDATE",
         )
@@ -3108,7 +3114,7 @@ impl CentralStore {
         id: Uuid,
     ) -> Result<Option<UtilityBillingResponse>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT immutable_snapshot FROM invoices WHERE id = $1 AND customer_id IN
+            "SELECT immutable_snapshot, period FROM invoices WHERE id = $1 AND customer_id IN
              (SELECT id FROM customers WHERE organization_id = $2)",
         )
         .bind(id)
@@ -3118,9 +3124,14 @@ impl CentralStore {
         row.map(|row| {
             let snapshot: serde_json::Value = row.try_get("immutable_snapshot")?;
             let document = snapshot.get("v2_document").cloned().unwrap_or(snapshot);
-            serde_json::from_value(document).map_err(|error| {
-                sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
-            })
+            let mut response: UtilityBillingResponse =
+                serde_json::from_value(document).map_err(|error| {
+                    sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
+                })?;
+            if response.billing_period.is_empty() {
+                response.billing_period = row.try_get("period")?;
+            }
+            Ok(response)
         })
         .transpose()
     }
@@ -3161,6 +3172,9 @@ impl CentralStore {
                     })?;
                 response.status = row.try_get("status")?;
                 response.invoice_number = row.try_get("invoice_number")?;
+                if response.billing_period.is_empty() {
+                    response.billing_period = row.try_get::<String, _>("period")?;
+                }
                 let mut value = serde_json::to_value(response).map_err(|error| {
                     sqlx::Error::Protocol(format!("invalid invoice JSON: {error}"))
                 })?;
@@ -5149,6 +5163,8 @@ impl CentralStore {
                     receivable_id: Some(receivable_id),
                     invoice_number: None,
                     status: "CENTRAL_ACCEPTED".into(),
+                    billing_period: input.billing_period.clone(),
+                    due_date: input.due_date,
                     currency: calculated.currency,
                     lines,
                     subtotal: calculated.subtotal,

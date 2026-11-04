@@ -34,6 +34,8 @@ fn fixture_invoice(
         receivable_id: Some(receivable_id),
         invoice_number: None,
         status: "CENTRAL_ACCEPTED".into(),
+        billing_period: request.billing_period.clone(),
+        due_date: request.due_date,
         currency: "USD".into(),
         lines: vec![
             InvoiceLineResponse {

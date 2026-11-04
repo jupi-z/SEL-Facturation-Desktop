@@ -1585,6 +1585,7 @@ name = "sel-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "hex",
  "rpassword",
  "rust_decimal",

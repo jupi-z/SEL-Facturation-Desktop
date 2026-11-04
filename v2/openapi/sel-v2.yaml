@@ -1143,12 +1143,14 @@ components:
         total: { type: string }
     UtilityBillingResponse:
       type: object
-      required: [invoice_id, receivable_id, status, currency, lines, subtotal, tax, total, snapshot_sha256]
+      required: [invoice_id, receivable_id, status, billing_period, due_date, currency, lines, subtotal, tax, total, snapshot_sha256]
       properties:
         invoice_id: { type: string, format: uuid }
         receivable_id: { type: [string, 'null'], format: uuid }
         invoice_number: { type: [string, 'null'] }
         status: { type: string }
+        billing_period: { type: string, description: Billing period in YYYY-MM format }
+        due_date: { type: [string, 'null'], format: date }
         currency: { type: string }
         lines: { type: array, minItems: 2, maxItems: 2, items: { $ref: '#/components/schemas/InvoiceLine' } }
         subtotal: { type: string }

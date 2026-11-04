@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 hex.workspace = true
 rust_decimal.workspace = true
 rpassword.workspace = true

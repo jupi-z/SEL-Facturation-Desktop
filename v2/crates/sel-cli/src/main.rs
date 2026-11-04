@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use sel_contracts::{utility_snapshot_sha256, InvoiceLineResponse, UtilityBillingResponse};
 use sel_storage::{migrate_postgres, CentralStore};
@@ -709,6 +710,15 @@ fn legacy_invoice_response(
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
         status: "CENTRAL_ACCEPTED".into(),
+        billing_period: invoice
+            .get("period")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        due_date: invoice
+            .get("due_date")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()),
         currency: invoice
             .get("currency")
             .and_then(serde_json::Value::as_str)

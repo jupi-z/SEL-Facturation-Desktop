@@ -570,3 +570,24 @@ L'agent local expose désormais `GET /local/v1/invoices/{id}/document-data`, en 
 Le test HTTP a d'abord échoué parce que l'endpoint local n'existait pas ; après ajout, il a réussi. Une première exécution intermédiaire du test utilisait une URL mal formée construite à partir de la valeur JSON avec guillemets ; le test a été corrigé pour extraire l'identifiant en chaîne et passe maintenant. Aucun PDF, base réelle ni donnée SEL n'a été créé ou modifié.
 
 **Progression déclarée : Phase 2 100 % ; Phase 3 74 %.** Les tests locaux et les quatre workflows du commit `dd3da811ea72a5961edac46419cf0a88392fbe4e` réussissent. Le client Windows pourra consommer l'enveloppe locale, mais la définition de toutes les données administratives nécessaires au document, la génération PDF et l'impression doivent encore être implémentées et vérifiées dans la phase frontend dédiée.
+
+### Phase 3 — conservation de la période et de l’échéance de facture (4 novembre 2026)
+
+Le contrat de réponse `UtilityBillingResponse` inclut maintenant la période facturée (`YYYY-MM`) et la date limite de paiement. Ces métadonnées accompagnent l’aperçu, l’émission, le snapshot documentaire, la liste d’historique, le document JSON local et les projections de synchronisation. SQLite et PostgreSQL les vérifient contre la requête de facturation avant d’accepter une nouvelle facture. Lors de la confirmation d’une facture locale, la projection vérifie ces valeurs, garde les montants/lignes/empreinte inchangés et complète uniquement les métadonnées manquantes d’un ancien snapshot à partir de sa période en base et de la commande source. Une échéance historique inconnue demeure inconnue ; aucune date n’est inférée.
+
+Les anciens snapshots restent désérialisables grâce aux valeurs par défaut des nouveaux champs. Pour ceux-ci, la période est relue de la colonne `invoices.period` ; une date d’échéance absente du snapshot ancien n’est jamais fabriquée. L’outil de conversion V1 conserve une échéance seulement si le manifeste source en fournit une. Le schéma OpenAPI décrit les deux champs. Aucune migration de tables n’est nécessaire.
+
+| Critère | Statut | Preuve |
+|---|---|---|
+| Reproduction HTTP du défaut local | PASS | `utility_invoice_uses_and_binds_the_selected_meter_readings` vérifie qu’une échéance fournie apparaît dans la réponse et dans `/document-data` SQLite. Le test ciblé passe. |
+| Persistance centrale après reconnexion du store | PASS | `utility_issue_is_atomic_idempotent_and_survives_restart` exécuté, sans `ignore`, contre PostgreSQL 16 jetable ; vérifie la réponse, l’historique, l’idempotence et la relecture après recréation du store, échéance `2026-12-15` comprise. |
+| Convergence offline → PostgreSQL → second SQLite | PASS | `two_sqlite_devices_converge_through_real_postgres_and_http` exécuté contre le même PostgreSQL jetable ; les périodes et dates d’échéance sont comparées entre la facture initiale et les réponses des deux postes et du serveur. |
+| Suite workspace | PASS | `cargo test --workspace` : tous les tests actifs passent. Les tests PostgreSQL non inclus par défaut restent explicitement signalés `ignored` ; les deux parcours critiques ci-dessus ont été exécutés séparément sur une base réelle jetable. |
+| Format et analyse statique | PASS | `cargo fmt --all -- --check` et `cargo clippy --workspace --all-targets -- -D warnings` passent après le changement. |
+| OpenAPI et compatibilité des snapshots historiques | PASS code/tests | Le contrat OpenAPI valide ; `billing_period` et `due_date` ont des valeurs Serde par défaut. Le chemin PostgreSQL complète la période via la colonne existante et laisse la date inconnue à `null`. |
+| CI GitHub sur le commit de cet incrément | IN_PROGRESS | À vérifier après le push ; aucun statut CI n’est revendiqué ici. |
+| PDF/impression et recette du client Windows | NOT_TESTED | Hors de ce correctif backend ; aucune impression, recette matérielle SEL ni validation de l’interface Windows réalisée. |
+
+Les tests ont utilisé uniquement PostgreSQL `postgres:16-alpine` jetable (`sel-phase3-due-date-pg`, port local 55432) et des bases SQLite éphémères. Aucune donnée SEL réelle n’a été lue ou modifiée. Conteneur arrêté et supprimé après exécution.
+
+**Progression estimée : Phase 2 100 % ; Phase 3 75 %.** Ce point de phase 3 progresse d’un pour cent car le parcours de facturation conserve désormais période et échéance sur le poste local, le serveur PostgreSQL et un second poste, après reconnexion et redémarrage du store central. Les parcours UI du nouveau client, la génération/impression PDF, les workflows d’administration et la recette sur poste SEL restent à faire ou à vérifier. Ce pourcentage mesure les critères de développement de phase, pas l’aptitude à exploiter ou livrer le système.

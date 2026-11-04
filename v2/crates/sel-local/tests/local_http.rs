@@ -692,7 +692,8 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
                         },
                         "water_zero_confirmed":false,
                         "currency":"USD",
-                        "tariff_revision":"meter-billing-v1"
+                        "tariff_revision":"meter-billing-v1",
+                        "due_date":"2026-12-15"
                     })
                     .to_string(),
                 ))
@@ -703,6 +704,8 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
     assert_eq!(response.status(), axum::http::StatusCode::CREATED);
     let invoice = json_body(response).await;
     assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(invoice["billing_period"], "2026-11");
+    assert_eq!(invoice["due_date"], "2026-12-15");
     assert!(invoice["lines"]
         .as_array()
         .unwrap()
@@ -730,6 +733,8 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
     assert_eq!(document["document_schema_version"], 1);
     assert_eq!(document["template_version"], "v2-a4-1");
     assert_eq!(document["origin"], "LOCAL_PENDING");
+    assert_eq!(document["invoice"]["billing_period"], "2026-11");
+    assert_eq!(document["invoice"]["due_date"], "2026-12-15");
     assert_eq!(
         document["invoice"]["snapshot_sha256"],
         invoice["snapshot_sha256"]

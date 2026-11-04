@@ -582,6 +582,14 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     assert_eq!(local_invoice.total, first_invoice.total);
     assert_eq!(local_invoice.total, second_invoice.total);
     assert_eq!(first_invoice.invoice_id, second_invoice.invoice_id);
+    assert_eq!(local_invoice.billing_period, billing_period);
+    assert_eq!(first_invoice.billing_period, local_invoice.billing_period);
+    assert_eq!(second_invoice.billing_period, local_invoice.billing_period);
+    assert_eq!(central_invoice.billing_period, local_invoice.billing_period);
+    assert_eq!(local_invoice.due_date, Some(due_date.parse().unwrap()));
+    assert_eq!(first_invoice.due_date, local_invoice.due_date);
+    assert_eq!(second_invoice.due_date, local_invoice.due_date);
+    assert_eq!(central_invoice.due_date, local_invoice.due_date);
     assert_eq!(first_invoice.total, central_invoice.total);
     assert_eq!(
         first_invoice.snapshot_sha256,

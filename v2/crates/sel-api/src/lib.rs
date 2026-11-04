@@ -2196,6 +2196,12 @@ async fn calculate_utility(
             "utility units must be KWH and M3",
         ));
     }
+    if input.billing_period.trim().is_empty() {
+        return Err(ApiError::unprocessable(
+            "BILLING_PERIOD_INVALID",
+            "billing period is required",
+        ));
+    }
     let tariffs = if let Some(store) = &state.central {
         let snapshot = store
             .load_tariffs(
@@ -2276,6 +2282,8 @@ async fn calculate_utility(
         receivable_id: None,
         invoice_number: None,
         status: "LOCAL_PREVIEW".into(),
+        billing_period: input.billing_period.clone(),
+        due_date: input.due_date,
         currency: result.currency,
         lines,
         subtotal: result.subtotal,

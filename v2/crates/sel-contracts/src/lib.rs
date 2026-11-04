@@ -195,6 +195,10 @@ pub struct UtilityBillingResponse {
     pub receivable_id: Option<Uuid>,
     pub invoice_number: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub billing_period: String,
+    #[serde(default)]
+    pub due_date: Option<NaiveDate>,
     pub currency: String,
     pub lines: Vec<InvoiceLineResponse>,
     pub subtotal: Decimal,
@@ -293,6 +297,8 @@ mod tests {
             receivable_id: Some(Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap()),
             invoice_number: None,
             status: "LOCAL_PENDING".into(),
+            billing_period: String::new(),
+            due_date: None,
             currency: "USD".into(),
             lines: vec![InvoiceLineResponse {
                 service_code: "ELECTRICITY".into(),
@@ -329,6 +335,8 @@ mod tests {
             receivable_id: Some(Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap()),
             invoice_number: None,
             status: "LOCAL_PENDING".into(),
+            billing_period: String::new(),
+            due_date: None,
             currency: "USD".into(),
             lines: vec![InvoiceLineResponse {
                 service_code: "ELECTRICITY".into(),
@@ -390,6 +398,8 @@ mod tests {
             receivable_id: None,
             invoice_number: None,
             status: "LOCAL_PENDING".into(),
+            billing_period: String::new(),
+            due_date: None,
             currency: "USD".into(),
             lines: vec![electricity.clone(), water.clone()],
             subtotal: Decimal::new(10, 0),

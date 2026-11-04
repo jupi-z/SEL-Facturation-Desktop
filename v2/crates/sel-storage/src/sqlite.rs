@@ -661,6 +661,11 @@ impl LocalStore {
         response: &UtilityBillingResponse,
     ) -> Result<SyncEnvelope, sqlx::Error> {
         let _guard = self.write_lock.lock().await;
+        if response.billing_period != input.billing_period || response.due_date != input.due_date {
+            return Err(sqlx::Error::Protocol(
+                "invoice document metadata does not match the billing request".into(),
+            ));
+        }
         let receivable_id = response.receivable_id.ok_or_else(|| {
             sqlx::Error::Protocol("local utility invoice requires a receivable id".into())
         })?;
@@ -1092,7 +1097,7 @@ impl LocalStore {
         id: Uuid,
     ) -> Result<Option<UtilityBillingResponse>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT immutable_snapshot_json, status FROM invoices
+            "SELECT immutable_snapshot_json, status, period FROM invoices
              WHERE id = $1 AND customer_id IN (SELECT id FROM customers WHERE organization_id = $2)",
         )
         .bind(id.to_string())
@@ -1106,7 +1111,11 @@ impl LocalStore {
                     sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
                 })?;
             let status: String = row.try_get("status")?;
+            let period: String = row.try_get("period")?;
             response.status = status;
+            if response.billing_period.is_empty() {
+                response.billing_period = period;
+            }
             Ok(response)
         })
         .transpose()
@@ -3663,7 +3672,7 @@ async fn apply_invoice_change(
             .ok_or_else(|| sqlx::Error::Protocol("invoice sync request is missing".into()))?,
     )
     .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice sync request: {error}")))?;
-    let response: UtilityBillingResponse = serde_json::from_value(
+    let mut response: UtilityBillingResponse = serde_json::from_value(
         change
             .get("response")
             .cloned()
@@ -3675,6 +3684,18 @@ async fn apply_invoice_change(
             "invoice sync entity id does not match response id".into(),
         ));
     }
+    if !response.billing_period.is_empty() && response.billing_period != request.billing_period {
+        return Err(sqlx::Error::Protocol(
+            "invoice sync period does not match its request".into(),
+        ));
+    }
+    if response.due_date.is_some() && response.due_date != request.due_date {
+        return Err(sqlx::Error::Protocol(
+            "invoice sync due date does not match its request".into(),
+        ));
+    }
+    response.billing_period = request.billing_period.clone();
+    response.due_date = request.due_date;
     let customer_exists: Option<String> =
         sqlx::query_scalar("SELECT id FROM customers WHERE id = $1 AND organization_id = $2")
             .bind(request.customer_id.to_string())
@@ -3721,18 +3742,32 @@ async fn apply_invoice_change(
     {
         let existing_customer: String = existing.try_get("customer_id")?;
         let existing_snapshot: String = existing.try_get("immutable_snapshot_json")?;
-        let existing_response: UtilityBillingResponse = serde_json::from_str(&existing_snapshot)
-            .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}")))?;
+        let mut existing_response: UtilityBillingResponse =
+            serde_json::from_str(&existing_snapshot).map_err(|error| {
+                sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}"))
+            })?;
         let existing_hash = utility_snapshot_sha256(&existing_response)
             .map_err(|error| sqlx::Error::Protocol(format!("invalid invoice snapshot: {error}")))?;
-        if existing_customer != request.customer_id.to_string() || existing_hash != expected_hash {
+        if existing_customer != request.customer_id.to_string()
+            || existing_hash != expected_hash
+            || (!existing_response.billing_period.is_empty()
+                && existing_response.billing_period != request.billing_period)
+            || (existing_response.due_date.is_some()
+                && existing_response.due_date != request.due_date)
+        {
             return Err(sqlx::Error::Protocol(
                 "conflicting local invoice projection".into(),
             ));
         }
+        existing_response.billing_period = request.billing_period.clone();
+        existing_response.due_date = request.due_date;
         sqlx::query(
-            "UPDATE invoices SET status = $1, version = CASE WHEN version < $2 THEN $2 ELSE version END WHERE id = $3",
+            "UPDATE invoices SET immutable_snapshot_json = $1, status = $2,
+             version = CASE WHEN version < $3 THEN $3 ELSE version END WHERE id = $4",
         )
+        .bind(serde_json::to_string(&existing_response).map_err(|error| {
+            sqlx::Error::Protocol(format!("invalid reconciled invoice snapshot: {error}"))
+        })?)
         .bind(&response.status)
         .bind(revision)
         .bind(entity_id)

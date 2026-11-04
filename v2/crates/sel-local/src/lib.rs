@@ -656,6 +656,12 @@ async fn calculate_utility_response(
             "utility units must be KWH and M3".into(),
         ));
     }
+    if input.billing_period.trim().is_empty() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "billing period is required".into(),
+        ));
+    }
     if input.water.quantity.is_zero() && !input.water_zero_confirmed {
         return Err((
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -713,6 +719,8 @@ async fn calculate_utility_response(
         receivable_id,
         invoice_number: None,
         status: status.into(),
+        billing_period: input.billing_period.clone(),
+        due_date: input.due_date,
         currency: result.currency,
         lines,
         subtotal: result.subtotal,
