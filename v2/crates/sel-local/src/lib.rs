@@ -576,6 +576,7 @@ async fn issue_utility_invoice(
     State(state): State<LocalAppState>,
     Json(input): Json<UtilityBillingRequest>,
 ) -> Result<(StatusCode, Json<UtilityBillingResponse>), (StatusCode, String)> {
+    let input = resolve_utility_input(&state.store, input).await?;
     let response =
         calculate_utility_response(&state.store, &input, "LOCAL_PENDING", Some(Uuid::new_v4()))
             .await?;
@@ -591,8 +592,24 @@ async fn preview_utility_invoice(
     State(state): State<LocalAppState>,
     Json(input): Json<UtilityBillingRequest>,
 ) -> Result<Json<UtilityBillingResponse>, (StatusCode, String)> {
+    let input = resolve_utility_input(&state.store, input).await?;
     let response = calculate_utility_response(&state.store, &input, "LOCAL_PREVIEW", None).await?;
     Ok(Json(response))
+}
+
+async fn resolve_utility_input(
+    store: &LocalStore,
+    mut input: UtilityBillingRequest,
+) -> Result<UtilityBillingRequest, (StatusCode, String)> {
+    if let Some(refs) = &input.meter_readings {
+        let (electricity, water) = store
+            .utility_meter_reading_quantities(input.customer_id, &input.billing_period, refs)
+            .await
+            .map_err(local_meter_error)?;
+        input.electricity.quantity = electricity;
+        input.water.quantity = water;
+    }
+    Ok(input)
 }
 
 async fn calculate_utility_response(
@@ -937,11 +954,13 @@ fn local_meter_error(error: LocalMeterError) -> (StatusCode, String) {
         | LocalMeterError::MeterNotFound => StatusCode::NOT_FOUND,
         LocalMeterError::DuplicateReading
         | LocalMeterError::PreviousIndexMismatch
-        | LocalMeterError::ReadingNotLatest => StatusCode::CONFLICT,
+        | LocalMeterError::ReadingNotLatest
+        | LocalMeterError::ReadingAlreadyInvoiced => StatusCode::CONFLICT,
         LocalMeterError::InvalidConfiguration
         | LocalMeterError::InvalidInput
         | LocalMeterError::InvalidIndex
-        | LocalMeterError::CorrectionReasonRequired => StatusCode::UNPROCESSABLE_ENTITY,
+        | LocalMeterError::CorrectionReasonRequired
+        | LocalMeterError::ReadingUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
         LocalMeterError::Database(_) | LocalMeterError::InvalidPayload(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
         }

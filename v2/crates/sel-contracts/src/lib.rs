@@ -123,6 +123,14 @@ pub struct UtilityBillingRequest {
     pub currency: String,
     pub tariff_revision: String,
     pub due_date: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meter_readings: Option<UtilityMeterReadingRefs>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UtilityMeterReadingRefs {
+    pub electricity_reading_id: Uuid,
+    pub water_reading_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

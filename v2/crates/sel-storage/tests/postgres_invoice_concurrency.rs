@@ -27,6 +27,7 @@ fn fixture_invoice(
         currency: "USD".into(),
         tariff_revision: "fixture".into(),
         due_date: Some(NaiveDate::from_ymd_opt(2026, 11, 30).unwrap()),
+        meter_readings: None,
     };
     let mut response = UtilityBillingResponse {
         invoice_id,

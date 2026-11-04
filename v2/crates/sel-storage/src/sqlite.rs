@@ -10,7 +10,7 @@ use sel_contracts::{
     RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, SolarContractSyncPayload,
     SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult,
     SyncPullResponse, UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse,
-    UtilityInvoiceSyncPayload,
+    UtilityInvoiceSyncPayload, UtilityMeterReadingRefs,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -143,6 +143,10 @@ pub enum LocalMeterError {
     PreviousIndexMismatch,
     #[error("only the latest reading can be corrected")]
     ReadingNotLatest,
+    #[error("a meter reading already used by an issued invoice cannot be corrected")]
+    ReadingAlreadyInvoiced,
+    #[error("selected meter readings must be current, unbilled, and match the customer, period, and service")]
+    ReadingUnavailable,
     #[error("a correction reason is required")]
     CorrectionReasonRequired,
 }
@@ -673,6 +677,25 @@ impl LocalStore {
             payload,
         )?;
         let mut tx = self.pool.begin().await?;
+        if let Some(refs) = &input.meter_readings {
+            let quantities = load_invoice_meter_readings(
+                &mut tx,
+                self.organization_id,
+                input.customer_id,
+                &input.billing_period,
+                refs,
+            )
+            .await?;
+            if response_line_quantity(response, "ELECTRICITY") != Some(quantities.0)
+                || response_line_quantity(response, "WATER") != Some(quantities.1)
+                || input.electricity.quantity != quantities.0
+                || input.water.quantity != quantities.1
+            {
+                return Err(sqlx::Error::Protocol(
+                    "invoice quantities do not match the selected meter readings".into(),
+                ));
+            }
+        }
         sqlx::query(
             "INSERT INTO invoices
              (id, customer_id, period, issued_at, currency, total, template_version, immutable_snapshot_json, status, version)
@@ -690,6 +713,17 @@ impl LocalStore {
         .await?;
         for line in &response.lines {
             insert_invoice_line(&mut tx, response.invoice_id, line).await?;
+        }
+        if let Some(refs) = &input.meter_readings {
+            sqlx::query(
+                "INSERT INTO invoice_meter_readings (invoice_id, meter_reading_id, service_code)
+                 VALUES ($1, $2, 'ELECTRICITY'), ($1, $3, 'WATER')",
+            )
+            .bind(response.invoice_id.to_string())
+            .bind(refs.electricity_reading_id.to_string())
+            .bind(refs.water_reading_id.to_string())
+            .execute(&mut *tx)
+            .await?;
         }
         sqlx::query(
             "INSERT INTO receivables
@@ -2587,6 +2621,26 @@ impl LocalStore {
             .map_err(LocalMeterError::from)
     }
 
+    pub async fn utility_meter_reading_quantities(
+        &self,
+        customer_id: Uuid,
+        period: &str,
+        refs: &UtilityMeterReadingRefs,
+    ) -> Result<(Decimal, Decimal), LocalMeterError> {
+        let mut tx = self.pool.begin().await?;
+        let quantities =
+            load_invoice_meter_readings(&mut tx, self.organization_id, customer_id, period, refs)
+                .await
+                .map_err(|error| match error {
+                    sqlx::Error::Protocol(_) | sqlx::Error::RowNotFound => {
+                        LocalMeterError::ReadingUnavailable
+                    }
+                    other => LocalMeterError::Database(other),
+                })?;
+        tx.commit().await?;
+        Ok(quantities)
+    }
+
     pub async fn create_meter_reading(
         &self,
         meter_id: Uuid,
@@ -2713,6 +2767,15 @@ impl LocalStore {
             return Err(LocalMeterError::MeterNotFound);
         };
         let target = meter_reading_from_row(&row)?;
+        let invoiced: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM invoice_meter_readings WHERE meter_reading_id = $1)",
+        )
+        .bind(reading_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        if invoiced {
+            return Err(LocalMeterError::ReadingAlreadyInvoiced);
+        }
         let has_correction: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM meter_readings WHERE corrected_from_id = $1)",
         )
@@ -2795,6 +2858,159 @@ fn validate_reading_input(
         return Err(LocalMeterError::InvalidIndex);
     }
     Ok(())
+}
+
+async fn load_invoice_meter_readings(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    customer_id: Uuid,
+    period: &str,
+    refs: &UtilityMeterReadingRefs,
+) -> Result<(Decimal, Decimal), sqlx::Error> {
+    if refs.electricity_reading_id == refs.water_reading_id {
+        return Err(sqlx::Error::Protocol(
+            "electricity and water must use distinct meter readings".into(),
+        ));
+    }
+    // Validate the caller's organization scope and service identity for both readings.
+    let electricity = sqlx::query(
+        "SELECT r.measured_quantity FROM meter_readings r
+         JOIN meters m ON m.id = r.meter_id
+         JOIN service_accounts sa ON sa.id = m.service_account_id
+         JOIN customers c ON c.id = sa.customer_id
+         WHERE r.id = $1 AND c.id = $2 AND c.organization_id = $3
+           AND sa.service_code = 'ELECTRICITY' AND m.unit = 'KWH' AND r.period = $4
+           AND NOT EXISTS (SELECT 1 FROM meter_readings child WHERE child.corrected_from_id = r.id)
+           AND NOT EXISTS (SELECT 1 FROM invoice_meter_readings imr WHERE imr.meter_reading_id = r.id)",
+    )
+    .bind(refs.electricity_reading_id.to_string())
+    .bind(customer_id.to_string())
+    .bind(organization_id.to_string())
+    .bind(period)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| sqlx::Error::Protocol("selected electricity reading is unavailable".into()))?;
+    let water = sqlx::query(
+        "SELECT r.measured_quantity FROM meter_readings r
+         JOIN meters m ON m.id = r.meter_id
+         JOIN service_accounts sa ON sa.id = m.service_account_id
+         JOIN customers c ON c.id = sa.customer_id
+         WHERE r.id = $1 AND c.id = $2 AND c.organization_id = $3
+           AND sa.service_code = 'WATER' AND m.unit = 'M3' AND r.period = $4
+           AND NOT EXISTS (SELECT 1 FROM meter_readings child WHERE child.corrected_from_id = r.id)
+           AND NOT EXISTS (SELECT 1 FROM invoice_meter_readings imr WHERE imr.meter_reading_id = r.id)",
+    )
+    .bind(refs.water_reading_id.to_string())
+    .bind(customer_id.to_string())
+    .bind(organization_id.to_string())
+    .bind(period)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| sqlx::Error::Protocol("selected water reading is unavailable".into()))?;
+    let parse = |row: sqlx::sqlite::SqliteRow| -> Result<Decimal, sqlx::Error> {
+        let value: String = row.try_get("measured_quantity")?;
+        Decimal::from_str(&value)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid meter quantity: {error}")))
+    };
+    Ok((parse(electricity)?, parse(water)?))
+}
+
+async fn verify_invoice_readings_projection(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    organization_id: Uuid,
+    customer_id: Uuid,
+    period: &str,
+    invoice_id: Uuid,
+    refs: &UtilityMeterReadingRefs,
+) -> Result<(Decimal, Decimal), sqlx::Error> {
+    if refs.electricity_reading_id == refs.water_reading_id {
+        return Err(sqlx::Error::Protocol(
+            "electricity and water meter readings must be distinct".into(),
+        ));
+    }
+    let mut quantities = [Decimal::ZERO; 2];
+    for (index, (reading_id, service, unit)) in [
+        (refs.electricity_reading_id, "ELECTRICITY", "KWH"),
+        (refs.water_reading_id, "WATER", "M3"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let row = sqlx::query(
+            "SELECT r.measured_quantity FROM meter_readings r
+             JOIN meters m ON m.id = r.meter_id
+             JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE r.id = $1 AND c.id = $2 AND c.organization_id = $3
+               AND sa.service_code = $4 AND m.unit = $5 AND r.period = $6
+               AND NOT EXISTS (SELECT 1 FROM meter_readings child WHERE child.corrected_from_id = r.id)
+               AND NOT EXISTS (SELECT 1 FROM invoice_meter_readings imr
+                               WHERE imr.meter_reading_id = r.id AND imr.invoice_id <> $7)",
+        )
+        .bind(reading_id.to_string())
+        .bind(customer_id.to_string())
+        .bind(organization_id.to_string())
+        .bind(service)
+        .bind(unit)
+        .bind(period)
+        .bind(invoice_id.to_string())
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| {
+            sqlx::Error::Protocol(format!("{service} meter reading cannot be projected"))
+        })?;
+        let raw: String = row.try_get("measured_quantity")?;
+        quantities[index] = Decimal::from_str(&raw)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid meter quantity: {error}")))?;
+    }
+    Ok((quantities[0], quantities[1]))
+}
+
+async fn bind_invoice_meter_readings(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    invoice_id: Uuid,
+    refs: &UtilityMeterReadingRefs,
+) -> Result<(), sqlx::Error> {
+    for (reading_id, service_code) in [
+        (refs.electricity_reading_id, "ELECTRICITY"),
+        (refs.water_reading_id, "WATER"),
+    ] {
+        sqlx::query(
+            "INSERT INTO invoice_meter_readings (invoice_id, meter_reading_id, service_code)
+             VALUES ($1, $2, $3) ON CONFLICT(invoice_id, service_code) DO NOTHING",
+        )
+        .bind(invoice_id.to_string())
+        .bind(reading_id.to_string())
+        .bind(service_code)
+        .execute(&mut **tx)
+        .await?;
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT meter_reading_id FROM invoice_meter_readings
+             WHERE invoice_id = $1 AND service_code = $2",
+        )
+        .bind(invoice_id.to_string())
+        .bind(service_code)
+        .fetch_optional(&mut **tx)
+        .await?;
+        let expected = reading_id.to_string();
+        if stored.as_deref() != Some(expected.as_str()) {
+            return Err(sqlx::Error::Protocol(
+                "invoice meter reading projection conflicts with local provenance".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn response_line_quantity(
+    response: &UtilityBillingResponse,
+    service_code: &str,
+) -> Option<Decimal> {
+    response
+        .lines
+        .iter()
+        .find(|line| line.service_code == service_code)
+        .map(|line| line.quantity)
 }
 
 fn service_account_from_row(row: &SqliteRow) -> Result<ServiceAccount, sqlx::Error> {
@@ -3428,6 +3644,26 @@ async fn apply_invoice_change(
             "invoice sync snapshot hash is invalid".into(),
         ));
     }
+    if let Some(refs) = &request.meter_readings {
+        let quantities = verify_invoice_readings_projection(
+            tx,
+            organization_id,
+            request.customer_id,
+            &request.billing_period,
+            response.invoice_id,
+            refs,
+        )
+        .await?;
+        if response_line_quantity(&response, "ELECTRICITY") != Some(quantities.0)
+            || response_line_quantity(&response, "WATER") != Some(quantities.1)
+            || request.electricity.quantity != quantities.0
+            || request.water.quantity != quantities.1
+        {
+            return Err(sqlx::Error::Protocol(
+                "synced invoice quantities do not match the meter readings".into(),
+            ));
+        }
+    }
     if let Some(existing) =
         sqlx::query("SELECT customer_id, immutable_snapshot_json FROM invoices WHERE id = $1")
             .bind(entity_id)
@@ -3493,6 +3729,9 @@ async fn apply_invoice_change(
                 insert_invoice_line(tx, response.invoice_id, line).await?;
             }
         }
+        if let Some(refs) = &request.meter_readings {
+            bind_invoice_meter_readings(tx, response.invoice_id, refs).await?;
+        }
         return Ok(());
     }
     sqlx::query(
@@ -3514,6 +3753,9 @@ async fn apply_invoice_change(
     .await?;
     for line in &response.lines {
         insert_invoice_line(tx, response.invoice_id, line).await?;
+    }
+    if let Some(refs) = &request.meter_readings {
+        bind_invoice_meter_readings(tx, response.invoice_id, refs).await?;
     }
     let receivable_id = response
         .receivable_id

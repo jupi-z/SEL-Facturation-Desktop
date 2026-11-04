@@ -4,11 +4,12 @@ use chrono::Utc;
 use http_body_util::BodyExt;
 use sel_api::{router, AppState};
 use sel_contracts::{
-    solar_schedule_id, CreateCustomer, RecordPaymentRequest, UtilityBillingResponse,
+    solar_schedule_id, CorrectMeterReading, CreateCustomer, RecordPaymentRequest,
+    UtilityBillingResponse,
 };
 use sel_local::router_with_store;
 use sel_local::sync_once;
-use sel_storage::{migrate_postgres, CentralStore, LocalStore};
+use sel_storage::{migrate_postgres, postgres::MeterWriteError, CentralStore, LocalStore};
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use std::str::FromStr;
@@ -137,6 +138,103 @@ async fn seed_local_customer(store: &LocalStore) -> sel_contracts::Customer {
         .0
 }
 
+async fn create_local_reading(
+    store: &LocalStore,
+    customer_id: Uuid,
+    service_code: &str,
+    serial: &str,
+    unit: &str,
+    period: &str,
+    current: &str,
+) -> Uuid {
+    let app = router_with_store(store.clone());
+    let account = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/customers/{customer_id}/service-accounts"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "service_code":service_code,
+                        "contract_ref":format!("{serial}-CONTRACT"),
+                        "connection_status":"CONNECTED",
+                        "activated_at":"2026-01-01"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(account.status(), axum::http::StatusCode::CREATED);
+    let account = json_body(account).await;
+    let meter = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/service-accounts/{}/meters",
+                    account["id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"serial":serial,"unit":unit}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meter.status(), axum::http::StatusCode::CREATED);
+    let meter = json_body(meter).await;
+    let reading = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/meters/{}/readings",
+                    meter["id"].as_str().unwrap()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "period":period,
+                        "previous":"0",
+                        "current":current,
+                        "source":"MANUAL"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reading.status(), axum::http::StatusCode::CREATED);
+    json_body(reading).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+fn assert_same_invoice_lines(
+    expected: &[sel_contracts::InvoiceLineResponse],
+    actual: &[sel_contracts::InvoiceLineResponse],
+) {
+    assert_eq!(expected.len(), actual.len());
+    for (expected, actual) in expected.iter().zip(actual) {
+        assert_eq!(expected.service_code, actual.service_code);
+        assert_eq!(expected.unit, actual.unit);
+        assert_eq!(expected.quantity, actual.quantity);
+        assert_eq!(expected.unit_price, actual.unit_price);
+        assert_eq!(expected.subtotal, actual.subtotal);
+        assert_eq!(expected.tax, actual.tax);
+        assert_eq!(expected.total, actual.total);
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
 async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
@@ -221,12 +319,36 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     seed_local_catalog(&second, effective_from).await;
 
     let customer = seed_local_customer(&first).await;
+    let electricity_reading_id = create_local_reading(
+        &first,
+        customer.id,
+        "ELECTRICITY",
+        "CONV-ELECTRICITY-1",
+        "KWH",
+        &billing_period,
+        "100",
+    )
+    .await;
+    let water_reading_id = create_local_reading(
+        &first,
+        customer.id,
+        "WATER",
+        "CONV-WATER-BILLED-1",
+        "M3",
+        &billing_period,
+        "2.5",
+    )
+    .await;
     let invoice_request = json!({
         "customer_id": customer.id,
         "billing_period": billing_period,
         "electricity": {"quantity":"100","unit":"KWH"},
-        "water": {"quantity":"0","unit":"M3"},
-        "water_zero_confirmed": true,
+        "water": {"quantity":"2.5","unit":"M3"},
+        "meter_readings": {
+            "electricity_reading_id":electricity_reading_id,
+            "water_reading_id":water_reading_id
+        },
+        "water_zero_confirmed": false,
         "currency":"USD",
         "tariff_revision":"convergence-v1",
         "due_date":due_date
@@ -375,9 +497,9 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     });
     let endpoint = format!("http://{address}");
     let first_sync = sync_once(&first, &endpoint, &token).await.unwrap();
-    assert_eq!(first_sync.accepted, 7);
+    assert_eq!(first_sync.accepted, 13);
     let second_sync = sync_once(&second, &endpoint, &token).await.unwrap();
-    assert_eq!(second_sync.pulled, 7);
+    assert_eq!(second_sync.pulled, 13);
     let central_meter_history = central_for_verify
         .list_meter_readings(meter_id.parse().unwrap(), Some("2026-10"))
         .await
@@ -416,6 +538,49 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .await
         .unwrap()
         .unwrap();
+    for (store_name, store) in [("first", &first), ("second", &second)] {
+        let bound_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT meter_reading_id FROM invoice_meter_readings
+             WHERE invoice_id = $1 ORDER BY service_code",
+        )
+        .bind(local_invoice.invoice_id.to_string())
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(bound_ids.len(), 2, "{store_name} invoice provenance");
+        assert!(bound_ids.contains(&electricity_reading_id.to_string()));
+        assert!(bound_ids.contains(&water_reading_id.to_string()));
+    }
+    let central_bound_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT meter_reading_id FROM invoice_meter_readings
+         WHERE invoice_id = $1 ORDER BY service_code",
+    )
+    .bind(local_invoice.invoice_id)
+    .fetch_all(&central_for_verify.pool)
+    .await
+    .unwrap();
+    assert_eq!(central_bound_ids.len(), 2);
+    assert!(central_bound_ids.contains(&electricity_reading_id));
+    assert!(central_bound_ids.contains(&water_reading_id));
+    let correction_after_billing = central_for_verify
+        .correct_meter_reading(
+            water_reading_id,
+            &CorrectMeterReading {
+                current: "3".parse().unwrap(),
+                source: "MANUAL".into(),
+                reason: "Tentative après facturation".into(),
+            },
+            Some(actor_id),
+        )
+        .await;
+    assert!(matches!(
+        correction_after_billing,
+        Err(MeterWriteError::ReadingAlreadyInvoiced)
+    ));
+    assert_same_invoice_lines(&local_invoice.lines, &first_invoice.lines);
+    assert_same_invoice_lines(&local_invoice.lines, &second_invoice.lines);
+    assert_eq!(local_invoice.total, first_invoice.total);
+    assert_eq!(local_invoice.total, second_invoice.total);
     assert_eq!(first_invoice.invoice_id, second_invoice.invoice_id);
     assert_eq!(first_invoice.total, central_invoice.total);
     assert_eq!(
@@ -434,7 +599,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
             .unwrap()
             .unwrap();
         assert_eq!(balance["paid"], "3.00");
-        assert_eq!(balance["balance"], "8.02");
+        assert_eq!(balance["balance"], "9.47");
     }
 
     let (sale, _) = first

@@ -15,6 +15,7 @@ use sel_contracts::{
     RecordPaymentRequest, ReversePaymentRequest, ServiceAccount, SolarContractSyncPayload,
     SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult,
     UpdateCustomer, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
+    UtilityMeterReadingRefs,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -259,6 +260,10 @@ pub enum UtilityIssueError {
     IdempotencyPayloadMismatch,
     #[error("invoice period already exists")]
     InvoicePeriodExists,
+    #[error(
+        "selected meter readings are invalid, already invoiced, or do not match invoice quantities"
+    )]
+    MeterReadingInvalid,
     #[error("stored idempotency response is invalid: {0}")]
     StoredResponse(#[from] serde_json::Error),
 }
@@ -434,6 +439,8 @@ pub enum MeterWriteError {
     PreviousIndexMismatch,
     #[error("only the latest reading can be corrected")]
     ReadingNotLatest,
+    #[error("a meter reading already used by an issued invoice cannot be corrected")]
+    ReadingAlreadyInvoiced,
     #[error("a correction reason is required")]
     CorrectionReasonRequired,
 }
@@ -1178,6 +1185,29 @@ impl CentralStore {
         .fetch_optional(&self.pool)
         .await?;
         row.map(|row| customer_from_row(&row)).transpose()
+    }
+
+    pub async fn utility_meter_reading_quantities(
+        &self,
+        customer_id: Uuid,
+        period: &str,
+        refs: &UtilityMeterReadingRefs,
+    ) -> Result<(Decimal, Decimal), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let quantities = load_invoice_meter_readings_in_tx(
+            &mut tx,
+            self.organization_id,
+            customer_id,
+            period,
+            refs,
+        )
+        .await
+        .map_err(|error| match error {
+            UtilityIssueError::Database(database) => database,
+            other => sqlx::Error::Protocol(other.to_string()),
+        })?;
+        tx.commit().await?;
+        Ok(quantities)
     }
 
     pub async fn load_tariffs(
@@ -2962,6 +2992,23 @@ impl CentralStore {
         if !customer_exists {
             return Err(sqlx::Error::RowNotFound.into());
         }
+        if let Some(refs) = &input.meter_readings {
+            let quantities = load_invoice_meter_readings_in_tx(
+                tx,
+                self.organization_id,
+                input.customer_id,
+                &input.billing_period,
+                refs,
+            )
+            .await?;
+            if response_line_quantity(response, "ELECTRICITY") != Some(quantities.0)
+                || response_line_quantity(response, "WATER") != Some(quantities.1)
+                || input.electricity.quantity != quantities.0
+                || input.water.quantity != quantities.1
+            {
+                return Err(UtilityIssueError::MeterReadingInvalid);
+            }
+        }
         let receivable_id = response
             .receivable_id
             .expect("issued utility response must contain a receivable id");
@@ -3006,6 +3053,27 @@ impl CentralStore {
             .bind(line.total)
             .execute(&mut *tx)
             .await?;
+        }
+        if let Some(refs) = &input.meter_readings {
+            sqlx::query(
+                "INSERT INTO invoice_meter_readings (invoice_id, meter_reading_id, service_code)
+                 VALUES ($1, $2, 'ELECTRICITY'), ($1, $3, 'WATER')",
+            )
+            .bind(response.invoice_id)
+            .bind(refs.electricity_reading_id)
+            .bind(refs.water_reading_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| {
+                if error
+                    .as_database_error()
+                    .is_some_and(|db| db.is_unique_violation())
+                {
+                    UtilityIssueError::MeterReadingInvalid
+                } else {
+                    UtilityIssueError::Database(error)
+                }
+            })?;
         }
         sqlx::query(
             "INSERT INTO receivables
@@ -6071,6 +6139,12 @@ impl CentralStore {
                     let parent_meter: Uuid = parent.try_get("meter_id")?;
                     let parent_period: String = parent.try_get("period")?;
                     let parent_previous: Decimal = parent.try_get("previous")?;
+                    let parent_invoiced: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM invoice_meter_readings WHERE meter_reading_id = $1)",
+                    )
+                    .bind(parent_id)
+                    .fetch_one(&mut **tx)
+                    .await?;
                     let has_child: bool = sqlx::query_scalar(
                         "SELECT EXISTS(SELECT 1 FROM meter_readings WHERE corrected_from_id = $1)",
                     )
@@ -6087,6 +6161,7 @@ impl CentralStore {
                     if parent_meter != reading.meter_id
                         || parent_period != reading.period
                         || parent_previous != reading.previous
+                        || parent_invoiced
                         || has_child
                         || next_previous.is_some_and(|previous| previous != reading.current)
                     {
@@ -6645,6 +6720,15 @@ impl CentralStore {
             return Err(MeterWriteError::MeterNotFound);
         };
         let target = meter_reading_from_pg_row(&row)?;
+        let invoiced: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM invoice_meter_readings WHERE meter_reading_id = $1)",
+        )
+        .bind(reading_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if invoiced {
+            return Err(MeterWriteError::ReadingAlreadyInvoiced);
+        }
         let has_correction: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM meter_readings WHERE corrected_from_id = $1)",
         )
@@ -6790,6 +6874,60 @@ fn meter_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<Meter, sqlx::Error> 
         unit: row.try_get("unit")?,
         active: row.try_get("active")?,
     })
+}
+
+async fn load_invoice_meter_readings_in_tx(
+    tx: &mut sqlx::PgConnection,
+    organization_id: Uuid,
+    customer_id: Uuid,
+    period: &str,
+    refs: &UtilityMeterReadingRefs,
+) -> Result<(Decimal, Decimal), UtilityIssueError> {
+    if refs.electricity_reading_id == refs.water_reading_id {
+        return Err(UtilityIssueError::MeterReadingInvalid);
+    }
+    let mut quantities = [Decimal::ZERO; 2];
+    for (index, (reading_id, service, unit)) in [
+        (refs.electricity_reading_id, "ELECTRICITY", "KWH"),
+        (refs.water_reading_id, "WATER", "M3"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let quantity = sqlx::query_scalar::<_, Decimal>(
+            "SELECT r.measured_quantity FROM meter_readings r
+             JOIN meters m ON m.id = r.meter_id
+             JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE r.id = $1 AND c.id = $2 AND c.organization_id = $3
+               AND sa.service_code = $4 AND m.unit = $5 AND r.period = $6
+               AND NOT EXISTS (SELECT 1 FROM meter_readings child WHERE child.corrected_from_id = r.id)
+               AND NOT EXISTS (SELECT 1 FROM invoice_meter_readings imr WHERE imr.meter_reading_id = r.id)
+             FOR UPDATE OF r",
+        )
+        .bind(reading_id)
+        .bind(customer_id)
+        .bind(organization_id)
+        .bind(service)
+        .bind(unit)
+        .bind(period)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(UtilityIssueError::MeterReadingInvalid)?;
+        quantities[index] = quantity;
+    }
+    Ok((quantities[0], quantities[1]))
+}
+
+fn response_line_quantity(
+    response: &UtilityBillingResponse,
+    service_code: &str,
+) -> Option<Decimal> {
+    response
+        .lines
+        .iter()
+        .find(|line| line.service_code == service_code)
+        .map(|line| line.quantity)
 }
 
 fn meter_reading_from_pg_row(row: &sqlx::postgres::PgRow) -> Result<MeterReading, sqlx::Error> {

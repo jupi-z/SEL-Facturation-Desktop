@@ -344,6 +344,7 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
         currency: "USD".into(),
         tariff_revision: "UTILITY-TEST-1".into(),
         due_date: Some(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()),
+        meter_readings: None,
     };
     let payload = serde_json::json!({
         "request": request,
@@ -410,6 +411,7 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
         currency: "USD".into(),
         tariff_revision: "UTILITY-TEST-1".into(),
         due_date: Some(NaiveDate::from_ymd_opt(2026, 11, 30).unwrap()),
+        meter_readings: None,
     };
     let positive_payload = serde_json::json!({
         "request": positive_request,

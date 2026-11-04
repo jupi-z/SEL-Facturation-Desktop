@@ -522,3 +522,223 @@ async fn utility_preview_returns_both_services_without_persisting_financial_data
     assert_eq!(after, before);
     let _ = std::fs::remove_file(path);
 }
+
+#[tokio::test]
+async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
+    let path = std::env::temp_dir().join(format!("sel-v2-meter-billing-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
+    let app = router_with_store(store.clone());
+    sqlx::query(
+        "INSERT INTO tariff_versions (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
+         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', '2026-01-01', 'meter-billing-v1', 'APPROVED'),
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', '1.30', 'USD', '2026-01-01', 'meter-billing-v1', 'APPROVED')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status)
+         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED'),
+                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+
+    let customer = json_body(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/local/v1/customers")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"customer_code":"READING-001","legal_name":"Client Relevé"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let customer_id = customer["id"].as_str().unwrap();
+
+    async fn create_reading(
+        app: &axum::Router,
+        customer_id: &str,
+        service_code: &str,
+        serial: &str,
+        unit: &str,
+        previous: &str,
+        current: &str,
+    ) -> String {
+        let account = json_body(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/local/v1/customers/{customer_id}/service-accounts"
+                        ))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "service_code":service_code,
+                                "contract_ref":format!("{serial}-CONTRACT"),
+                                "connection_status":"CONNECTED",
+                                "activated_at":"2026-01-01"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let meter = json_body(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/local/v1/service-accounts/{}/meters",
+                            account["id"].as_str().unwrap()
+                        ))
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({"serial":serial,"unit":unit}).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let reading = json_body(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/local/v1/meters/{}/readings",
+                            meter["id"].as_str().unwrap()
+                        ))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "period":"2026-11",
+                                "previous":previous,
+                                "current":current,
+                                "source":"MANUAL"
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        reading["id"].as_str().unwrap().to_owned()
+    }
+
+    let electricity_reading = create_reading(
+        &app,
+        customer_id,
+        "ELECTRICITY",
+        "E-METER-001",
+        "KWH",
+        "100",
+        "150",
+    )
+    .await;
+    let water_reading = create_reading(
+        &app,
+        customer_id,
+        "WATER",
+        "W-METER-001",
+        "M3",
+        "20",
+        "22.5",
+    )
+    .await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/local/v1/billing/utility/issue")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "customer_id":customer_id,
+                        "billing_period":"2026-11",
+                        "electricity":{"quantity":"999","unit":"KWH"},
+                        "water":{"quantity":"999","unit":"M3"},
+                        "meter_readings":{
+                            "electricity_reading_id":electricity_reading,
+                            "water_reading_id":water_reading
+                        },
+                        "water_zero_confirmed":false,
+                        "currency":"USD",
+                        "tariff_revision":"meter-billing-v1"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::CREATED);
+    let invoice = json_body(response).await;
+    assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
+    assert!(invoice["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| { line["service_code"] == "ELECTRICITY" && line["quantity"] == "50" }));
+    assert!(invoice["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| { line["service_code"] == "WATER" && line["quantity"] == "2.5" }));
+
+    let bindings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoice_meter_readings")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(bindings, 2);
+    let correction = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/local/v1/meter-readings/{water_reading}/corrections"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "current":"23",
+                        "source":"MANUAL",
+                        "reason":"Tentative après émission"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(correction.status(), axum::http::StatusCode::CONFLICT);
+    let _ = std::fs::remove_file(path);
+}

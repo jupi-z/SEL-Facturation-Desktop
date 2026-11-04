@@ -1116,6 +1116,13 @@ components:
         currency: { type: string }
         tariff_revision: { type: string }
         due_date: { type: [string, 'null'], format: date }
+        meter_readings:
+          type: [object, 'null']
+          description: Optional source indexes; when present, the server derives both billed quantities from current readings and prevents reuse.
+          required: [electricity_reading_id, water_reading_id]
+          properties:
+            electricity_reading_id: { type: string, format: uuid }
+            water_reading_id: { type: string, format: uuid }
     ServiceInput:
       type: object
       required: [quantity, unit]

@@ -2037,6 +2037,7 @@ async fn preview_utility(
     Json(input): Json<UtilityBillingRequest>,
 ) -> Result<Json<UtilityBillingResponse>, ApiError> {
     require_auth(&headers)?;
+    let input = resolve_utility_request(&state, input).await?;
     let response = calculate_utility(&state, &input).await?;
     Ok(Json(response))
 }
@@ -2067,14 +2068,15 @@ async fn issue_utility(
             return Ok((original.response_status, Json(original.response.clone())).into_response());
         }
     }
-    let response = calculate_utility(&state, &input).await?;
+    let resolved_input = resolve_utility_request(&state, input).await?;
+    let response = calculate_utility(&state, &resolved_input).await?;
     let mut committed = response.clone();
     committed.status = "CENTRAL_ACCEPTED".into();
     let receivable_id = Uuid::new_v4();
     committed.receivable_id = Some(receivable_id);
     if let Some(store) = &state.central {
         return match store
-            .issue_utility_invoice(&input, &committed, key, &digest)
+            .issue_utility_invoice(&resolved_input, &committed, key, &digest)
             .await
             .map_err(utility_issue_error)?
         {
@@ -2088,7 +2090,8 @@ async fn issue_utility(
     }
     let mut invoices = state.invoices.write().await;
     if invoices.values().any(|invoice| {
-        invoice.customer_id == input.customer_id && invoice.period == input.billing_period
+        invoice.customer_id == resolved_input.customer_id
+            && invoice.period == resolved_input.billing_period
     }) {
         return Err(ApiError::conflict(
             "INVOICE_PERIOD_EXISTS",
@@ -2099,8 +2102,8 @@ async fn issue_utility(
     invoices.insert(
         invoice_id,
         InvoiceRecord {
-            customer_id: input.customer_id,
-            period: input.billing_period.clone(),
+            customer_id: resolved_input.customer_id,
+            period: resolved_input.billing_period.clone(),
             response: committed.clone(),
         },
     );
@@ -2109,8 +2112,8 @@ async fn issue_utility(
         receivable_id,
         ReceivableRecord {
             id: receivable_id,
-            customer_id: input.customer_id,
-            currency: input.currency.clone(),
+            customer_id: resolved_input.customer_id,
+            currency: resolved_input.currency.clone(),
             principal: committed.total,
         },
     );
@@ -2123,6 +2126,27 @@ async fn issue_utility(
         },
     );
     Ok((StatusCode::CREATED, Json(committed)).into_response())
+}
+
+async fn resolve_utility_request(
+    state: &AppState,
+    mut input: UtilityBillingRequest,
+) -> Result<UtilityBillingRequest, ApiError> {
+    if let Some(refs) = &input.meter_readings {
+        let store = state.central.as_ref().ok_or_else(|| {
+            ApiError::unprocessable(
+                "METER_READINGS_REQUIRE_CENTRAL_STORE",
+                "meter-based billing requires the configured central store",
+            )
+        })?;
+        let (electricity, water) = store
+            .utility_meter_reading_quantities(input.customer_id, &input.billing_period, refs)
+            .await
+            .map_err(|error| ApiError::conflict("METER_READING_NOT_BILLABLE", error.to_string()))?;
+        input.electricity.quantity = electricity;
+        input.water.quantity = water;
+    }
+    Ok(input)
 }
 
 async fn calculate_utility(
@@ -3325,6 +3349,10 @@ fn meter_write_error(error: sel_storage::postgres::MeterWriteError) -> ApiError 
             "METER_READING_NOT_LATEST",
             "only the latest reading can be corrected",
         ),
+        MeterWriteError::ReadingAlreadyInvoiced => ApiError::conflict(
+            "METER_READING_ALREADY_INVOICED",
+            "an invoiced meter reading cannot be corrected; issue a financial correction",
+        ),
         MeterWriteError::InvalidConfiguration => ApiError::unprocessable(
             "METER_CONFIGURATION_INVALID",
             "service account, connection status, or meter unit is invalid",
@@ -3353,6 +3381,10 @@ fn utility_issue_error(error: sel_storage::postgres::UtilityIssueError) -> ApiEr
         sel_storage::postgres::UtilityIssueError::InvoicePeriodExists => ApiError::conflict(
             "INVOICE_PERIOD_EXISTS",
             "an active invoice already exists for this customer and period",
+        ),
+        sel_storage::postgres::UtilityIssueError::MeterReadingInvalid => ApiError::conflict(
+            "METER_READING_NOT_BILLABLE",
+            "selected meter readings are stale, already invoiced, or do not match the invoice",
         ),
         sel_storage::postgres::UtilityIssueError::Database(sqlx::Error::RowNotFound) => {
             ApiError::not_found("CUSTOMER_NOT_FOUND", "customer not found")
