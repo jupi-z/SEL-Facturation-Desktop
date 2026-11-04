@@ -714,6 +714,31 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
         .iter()
         .any(|line| { line["service_code"] == "WATER" && line["quantity"] == "2.5" }));
 
+    let invoice_id = invoice["invoice_id"].as_str().unwrap();
+    let document = json_body(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/local/v1/invoices/{invoice_id}/document-data"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(document["document_schema_version"], 1);
+    assert_eq!(document["template_version"], "v2-a4-1");
+    assert_eq!(document["origin"], "LOCAL_PENDING");
+    assert_eq!(
+        document["invoice"]["snapshot_sha256"],
+        invoice["snapshot_sha256"]
+    );
+    assert_eq!(
+        document["qr_internal_reference"],
+        format!("SEL-V2-{invoice_id}")
+    );
+
     let bindings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoice_meter_readings")
         .fetch_one(&store.pool)
         .await

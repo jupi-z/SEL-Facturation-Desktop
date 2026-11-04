@@ -9,7 +9,7 @@ use axum::{
 use sel_contracts::{
     utility_snapshot_sha256, ActivateSolarContractRequest, CatalogSnapshot, CorrectMeterReading,
     CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest,
-    CreateSolarSaleRequest, CreditNoteRequest, Customer, InvoiceLineResponse,
+    CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData, InvoiceLineResponse,
     PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
     SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
     UtilityBillingResponse, VoidInvoiceRequest,
@@ -283,6 +283,10 @@ fn router_with_store_base(store: LocalStore) -> Router {
         )
         .route("/local/v1/invoices", get(list_invoices))
         .route("/local/v1/invoices/:id", get(get_invoice))
+        .route(
+            "/local/v1/invoices/:id/document-data",
+            get(get_invoice_document_data),
+        )
         .route("/local/v1/invoices/:id/void", post(void_invoice))
         .route("/local/v1/receivables/:id", get(get_receivable))
         .route("/local/v1/customers/:id/statement", get(get_statement))
@@ -732,6 +736,32 @@ async fn get_invoice(
         .map_err(internal_error)?
         .map(Json)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "invoice not found".into()))
+}
+
+async fn get_invoice_document_data(
+    State(state): State<LocalAppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DocumentData>, (StatusCode, String)> {
+    let invoice = state
+        .store
+        .get_invoice_response(id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "invoice not found".into()))?;
+    let reference = format!("SEL-V2-{id}");
+    let origin = if invoice.status == "LOCAL_PENDING" {
+        "LOCAL_PENDING"
+    } else {
+        "CENTRAL_ACCEPTED"
+    };
+    Ok(Json(DocumentData {
+        document_schema_version: 1,
+        template_version: "v2-a4-1".into(),
+        document_reference: reference.clone(),
+        invoice,
+        qr_internal_reference: reference,
+        origin: origin.into(),
+    }))
 }
 
 async fn list_invoices(

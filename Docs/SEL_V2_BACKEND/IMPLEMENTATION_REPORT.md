@@ -552,3 +552,21 @@ Les routes locale et centrale rejettent également un nom légal vide et tout st
 Le test local a été d'abord exécuté en rouge pour reproduire le défaut : un PATCH contenant `phone:null` ne supprimait pas le téléphone. Après correction et ajout de la version de payload, les tests SQLite et PostgreSQL ci-dessus passent. L'image PostgreSQL utilisée est `postgres:16`, dans un conteneur temporaire `sel-phase3-customer-pg` sur le port local 55432 ; aucune donnée SEL réelle n'a été utilisée. Le conteneur doit être arrêté après la validation.
 
 **Progression estimée : Phase 2 100 % ; Phase 3 71 %.** Le code, les tests locaux, les deux parcours PostgreSQL touchés et les quatre workflows GitHub du commit `34f7665ba0d1f80537da292f6b7e2ed57f7e7566` sont validés. Le CRUD client est encore partiel : recherche, création, lecture et modification sont disponibles côté APIs, mais l'expérience complète dans le nouveau client Windows, les opérations restantes et la recette sur poste SEL ne sont pas validées. Ce pourcentage est un suivi des critères de Phase 3, pas une déclaration de disponibilité opérationnelle.
+
+### Phase 3 — données de document disponibles hors connexion (4 novembre 2026)
+
+L'agent local expose désormais `GET /local/v1/invoices/{id}/document-data`, en parité avec l'enveloppe centrale. Il retourne le snapshot métier conservé dans SQLite, le schéma de document versionné, le modèle `v2-a4-1`, une référence QR interne `SEL-V2-{invoice_id}` et l'origine `LOCAL_PENDING` tant que l'opération n'est pas acceptée centralement (puis `CENTRAL_ACCEPTED`). La route ne génère ni ne stocke de PDF et ne prétend à aucune authentification fiscale. Elle permet au client de préparer le document sans Internet à partir de la même empreinte financière immuable.
+
+| Critère | Statut | Preuve |
+|---|---|---|
+| Route locale de document-data | PASS local | Le test HTTP émet une facture eau + électricité fondée sur les relevés, puis lit l'enveloppe depuis SQLite. |
+| Cohérence du snapshot | PASS local | L'empreinte `snapshot_sha256` retournée par l'enveloppe est égale à celle de la facture persistée. |
+| Référence et état d'origine | PASS local | Test vérifie schéma 1, modèle `v2-a4-1`, référence QR interne stable et `LOCAL_PENDING`. |
+| Régression de l'agent local | PASS local | `cargo test -p sel-local --test local_http` : 7 tests réussis ; `cargo test --workspace` passe, les tests qui exigent PostgreSQL sont ignorés par défaut. |
+| Format et Clippy | PASS local | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings` et `git diff --check`. |
+| CI GitHub du commit contenant cette route | EN ATTENTE | À vérifier après commit/push. |
+| Impression réelle et PDF client | NOT_TESTED | Aucun nouveau frontend/générateur PDF n'est raccordé dans ce lot ; aucune imprimante n'a été utilisée. |
+
+Le test HTTP a d'abord échoué parce que l'endpoint local n'existait pas ; après ajout, il a réussi. Une première exécution intermédiaire du test utilisait une URL mal formée construite à partir de la valeur JSON avec guillemets ; le test a été corrigé pour extraire l'identifiant en chaîne et passe maintenant. Aucun PDF, base réelle ni donnée SEL n'a été créé ou modifié.
+
+**Progression déclarée pour cette tranche : Phase 2 100 % ; Phase 3 maintenue à 71 % en attendant la CI.** Le client Windows pourra consommer l'enveloppe locale, mais sa génération et son impression doivent encore être implémentées et vérifiées dans la phase frontend dédiée.
