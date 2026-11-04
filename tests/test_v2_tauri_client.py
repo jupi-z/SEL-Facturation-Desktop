@@ -51,7 +51,8 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
         assert label in app
 
     assert 'name="tax_id"' not in app
-    assert "Le dossier local enregistre le code abonné, le nom, l’adresse et le téléphone." in app
+    assert 'customerCreateOpen && <Panel title="Nouvel abonné"' in app
+    assert '"+ Ajouter un abonné"' in app
 
 
 def test_meter_reading_screen_uses_local_routes_and_displays_rust_measurements() -> None:
@@ -347,6 +348,16 @@ def test_visual_review_captures_rust_validated_meter_preview() -> None:
     assert 'name="current"' in visual_review
     assert 'name="Prévisualiser les index"' in visual_review
     assert 'get_by_text("100 KWH", exact=True).wait_for()' in visual_review
+
+
+def test_customer_creation_form_is_revealed_from_the_directory_action() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'customerCreateOpen && <Panel title="Nouvel abonné"' in app
+    assert 'setCustomerCreateOpen((open) => !open)' in app
+    assert '"+ Ajouter un abonné"' in app
+    assert '"customer-new-1440x900.png"' in visual_review
 
 
 def test_visual_review_captures_customer_record_and_receivable_statement() -> None:

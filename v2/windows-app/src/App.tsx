@@ -137,6 +137,7 @@ export default function App() {
   const [invoiceFormKey, setInvoiceFormKey] = useState(0);
   const [invoiceFilter, setInvoiceFilter] = useState("");
   const [customerFilter, setCustomerFilter] = useState("");
+  const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -222,6 +223,18 @@ export default function App() {
       await localRequest(path, "POST", payload);
       setNotice({ message: success });
       form.reset();
+      await refresh();
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  async function createCustomer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      await localRequest("/local/v1/customers", "POST", Object.fromEntries(new FormData(form)) as Row);
+      setNotice({ message: "Abonné enregistré localement." });
+      form.reset();
+      setCustomerCreateOpen(false);
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
@@ -385,16 +398,14 @@ export default function App() {
         </Panel>
         <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} statement={statement} />
       </> : <>
-        <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier, le consulter et enregistrer un nouvel abonné." />
-        <div className="columns customer-layout">
-          <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné disponible sur ce poste." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); }}>Ouvrir le dossier →</button>])} /></Panel>
-          <Panel title="Nouvel abonné"><form className="form-grid" onSubmit={(event) => submit(event, "/local/v1/customers", Object.fromEntries(new FormData(event.currentTarget)) as Row, "Abonné enregistré localement.")}>
+        <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => setCustomerCreateOpen((open) => !open)}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
+        {customerCreateOpen && <Panel title="Nouvel abonné"><form className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
             <label>Code abonné<input name="customer_code" required /></label><label>Nom / raison sociale<input name="legal_name" required /></label>
-            <label className="span-two">Adresse<input name="address" /></label><label className="span-two">Téléphone<input name="phone" /></label>
-            <p className="help span-two">Le dossier local enregistre le code abonné, le nom, l’adresse et le téléphone.</p>
+            <label>Adresse<input name="address" /></label><label>Téléphone<input name="phone" /></label>
+            <p className="help span-two">Les informations pourront être complétées dans le dossier de l’abonné.</p>
             <div className="form-actions span-two"><Button primary type="submit">Enregistrer l’abonné</Button></div>
-          </form></Panel>
-        </div>
+          </form></Panel>}
+        <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné disponible sur ce poste." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); }}>Ouvrir le dossier →</button>])} /></Panel>
       </>)}
 
       {view === "readings" && <MeterReadingsView customers={customers} />}

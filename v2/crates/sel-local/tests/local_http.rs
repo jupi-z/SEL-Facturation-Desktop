@@ -342,7 +342,11 @@ async fn local_meter_readings_are_durable_validated_and_corrected_append_only() 
         )
         .await
         .unwrap();
-    assert!(json_body(readings_before_save).await.as_array().unwrap().is_empty());
+    assert!(json_body(readings_before_save)
+        .await
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let zero_reading = app
         .clone()

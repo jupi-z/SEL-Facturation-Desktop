@@ -190,7 +190,7 @@ async def capture_views() -> None:
                     await page.locator('.reading-entry input[name="period"]').fill("2026-11")
                     await page.locator('.reading-entry input[name="current"]').fill("1100")
                     await page.get_by_role("button", name="Prévisualiser les index").click()
-                    await page.get_by_text("100 KWH", exact=True).wait_for()
+                    await page.locator(".reading-quantity").get_by_text("100 KWH", exact=True).wait_for()
                 if slug == "solar":
                     await page.get_by_label("Vente à financer").select_option("demo-sale-0001")
                     await page.get_by_label("Échéance 1 · Date").fill("2026-12-01")
@@ -210,6 +210,11 @@ async def capture_views() -> None:
                 await page.wait_for_timeout(120)
                 await page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"))
                 if slug == "customers":
+                    await page.get_by_role("button", name="+ Ajouter un abonné").click()
+                    await page.get_by_role("heading", name="Nouvel abonné").wait_for()
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "customer-new-1440x900.png"))
+                    await page.get_by_role("button", name="Fermer le formulaire").click()
                     await page.get_by_role("button", name="Ouvrir le dossier →").click()
                     await page.get_by_role("heading", name="Dossier abonné").wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
