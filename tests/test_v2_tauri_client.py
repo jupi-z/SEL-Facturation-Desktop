@@ -165,6 +165,17 @@ def test_solar_catalog_route_uses_local_api_error_contract() -> None:
     assert "storage_error" not in handler
 
 
+def test_solar_payment_form_clears_stale_schedules_and_fails_closed() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    payment_form = app.split("function PaymentForm(", 1)[1].split("\n}\n\nfunction MeterReadingsView", 1)[0]
+
+    assert "setScheduleRows([]); setScheduleId(\"\"); setScheduleCurrency(\"\")" in payment_form
+    assert "setScheduleLoading(true)" in payment_form
+    assert "setScheduleError(humanError(error))" in payment_form
+    assert "disabled={scheduleLoading || Boolean(scheduleError)" in payment_form
+    assert "schedule_id: form.get(\"schedule_id\") || null" in payment_form
+
+
 def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     history_view = app.split("{selectedInvoice &&", 1)[1].split("</>}", 1)[0]

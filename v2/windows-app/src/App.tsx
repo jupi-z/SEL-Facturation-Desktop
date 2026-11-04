@@ -382,7 +382,7 @@ export default function App() {
       {view === "payments" && <>
         <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
         <div className="payment-layout">
-          <Panel title="Nouvel encaissement"><PaymentForm customers={customers} onSubmit={submit} /></Panel>
+          <Panel title="Nouvel encaissement"><PaymentForm customers={customers} sales={sales} onSubmit={submit} /></Panel>
           <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), text(row.method), <Status value={row.status} />])} /></Panel>
         </div>
       </>}
@@ -459,26 +459,58 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, onSubmit }: { customers: Row[]; onSubmit: (event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) => Promise<void> }) {
+function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: Row[]; onSubmit: (event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) => Promise<void> }) {
   const [customerId, setCustomerId] = useState("");
+  const [receivableId, setReceivableId] = useState("");
   const [receivables, setReceivables] = useState<Row[]>([]);
+  const [scheduleRows, setScheduleRows] = useState<Row[]>([]);
+  const [scheduleId, setScheduleId] = useState("");
+  const [scheduleMessage, setScheduleMessage] = useState("");
+  const [scheduleCurrency, setScheduleCurrency] = useState("");
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState("");
+  const [currency, setCurrency] = useState("USD");
   useEffect(() => {
-    if (!customerId) { setReceivables([]); return; }
+    if (!customerId) { setReceivables([]); setReceivableId(""); setCurrency("USD"); return; }
     let active = true;
     localRequest<Row>(`/local/v1/customers/${encodeURIComponent(customerId)}/statement`).then((result) => {
-      if (active) setReceivables(rows<Row>(result.receivables).filter((item) => Number(item.balance) > 0));
-    }).catch(() => { if (active) setReceivables([]); });
+      if (active) { setReceivables(rows<Row>(result.receivables).filter((item) => Number(item.balance) > 0)); setReceivableId(""); }
+    }).catch(() => { if (active) { setReceivables([]); setReceivableId(""); } });
     return () => { active = false; };
   }, [customerId]);
+
+  useEffect(() => {
+    const sale = sales.find((item) => text(item.receivable_id) === receivableId && item.installment_plan_id);
+    if (!sale?.installment_plan_id) { setScheduleRows([]); setScheduleId(""); setScheduleCurrency(""); setScheduleMessage(""); setScheduleLoading(false); setScheduleError(""); return; }
+    let active = true;
+    setScheduleRows([]);
+    setScheduleId("");
+    setScheduleCurrency("");
+    setScheduleMessage("");
+    setScheduleError("");
+    setScheduleLoading(true);
+    localRequest<Row>(`/local/v1/installment-plans/${encodeURIComponent(text(sale.installment_plan_id))}`)
+      .then((result) => { if (active) { const installments = rows<Row>(result.schedule); setScheduleRows(installments); setScheduleCurrency(text(result.currency, "")); setCurrency(text(result.currency, "USD")); if (!installments.some((item) => text(item.status).toUpperCase() !== "PAID")) { setScheduleError("Aucune échéance ouverte n’est disponible pour cette créance."); setScheduleMessage("Le règlement est bloqué tant qu’une échéance payable n’est pas disponible."); } } })
+      .catch((error: unknown) => { if (active) { setScheduleRows([]); setScheduleCurrency(""); setScheduleError(humanError(error)); setScheduleMessage("Impossible de vérifier l’échéancier. Le règlement est bloqué."); } })
+      .finally(() => { if (active) setScheduleLoading(false); });
+    return () => { active = false; };
+  }, [receivableId, sales]);
+
+  const selectedSale = sales.find((item) => text(item.receivable_id) === receivableId && item.installment_plan_id);
+  const scheduleRequired = Boolean(selectedSale?.installment_plan_id);
+  const openScheduleRows = scheduleRows.filter((item) => text(item.status).toUpperCase() !== "PAID");
+
   return <form className="form-grid" onSubmit={(event) => { const form = new FormData(event.currentTarget); void onSubmit(event, "/local/v1/payments", {
     customer_id: form.get("customer_id"), received_amount: form.get("received_amount"), currency: form.get("currency"), method: form.get("method"), occurred_at: new Date().toISOString(),
-    allocations: [{ receivable_id: form.get("receivable_id"), amount: form.get("received_amount") }],
+    allocations: [{ receivable_id: form.get("receivable_id"), amount: form.get("received_amount"), schedule_id: form.get("schedule_id") || null }],
   }, "Règlement enregistré sur ce poste."); }}>
-    <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => setCustomerId(event.target.value)} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-    <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" required /></label><label>Devise<input name="currency" defaultValue="USD" required /></label>
+    <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setReceivableId(""); setScheduleId(""); setCurrency("USD"); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
+    <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" required /></label><label>Devise<input name="currency" value={currency} readOnly required /></label>
     <label>Mode<select name="method"><option value="CASH">Espèces</option><option value="BANK">Banque</option><option value="MOBILE_MONEY">Mobile Money</option><option value="OTHER">Autre</option></select></label>
-    <label>Créance à affecter<select name="receivable_id" required disabled={!customerId || !receivables.length}><option value="">{customerId ? "Sélectionner une créance" : "Sélectionnez d’abord un abonné"}</option>{receivables.map((item) => <option key={text(item.receivable_id ?? item.id)} value={text(item.receivable_id ?? item.id)}>{text(item.status)} · {formatMoney(item.balance, item.currency)}</option>)}</select></label>
-    <div className="form-actions span-two"><Button primary type="submit">Enregistrer le règlement</Button></div>
+    <label>Créance à affecter<select name="receivable_id" value={receivableId} onChange={(event) => { setReceivableId(event.target.value); setScheduleId(""); const selected = receivables.find((item) => text(item.receivable_id ?? item.id) === event.target.value); setCurrency(text(selected?.currency, "USD")); }} required disabled={!customerId || !receivables.length}><option value="">{customerId ? "Sélectionner une créance" : "Sélectionnez d’abord un abonné"}</option>{receivables.map((item) => <option key={text(item.receivable_id ?? item.id)} value={text(item.receivable_id ?? item.id)}>{text(item.source_type ?? item.status)} · {formatMoney(item.balance, item.currency)}</option>)}</select></label>
+    {scheduleRequired && <label className="span-two">Échéance solaire<select name="schedule_id" value={scheduleId} onChange={(event) => setScheduleId(event.target.value)} required disabled={scheduleLoading || Boolean(scheduleError)}><option value="">{scheduleLoading ? "Chargement de l’échéancier…" : "Sélectionner une échéance…"}</option>{openScheduleRows.map((item) => <option key={text(item.id)} value={text(item.id)}>N° {text(item.sequence)} · {text(item.due_date)} · restant {formatMoney(item.remaining, scheduleCurrency)}</option>)}</select></label>}
+    {scheduleMessage && <p className="help span-two" role="status">{scheduleMessage}</p>}
+    <div className="form-actions span-two"><Button primary type="submit" disabled={scheduleLoading || Boolean(scheduleError) || (scheduleRequired && (!openScheduleRows.length || !scheduleId))}>Enregistrer le règlement</Button></div>
   </form>;
 }
 
