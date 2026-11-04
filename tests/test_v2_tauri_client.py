@@ -114,7 +114,7 @@ def test_dashboard_uses_recent_local_operations_without_demo_financial_data() ->
     assert "...sales.map" in app
     assert "value={customers.length}" in app
     assert "value={invoices.length}" in app
-    assert 'onClick={() => setView("invoices")}>Nouvelle facture' in app
+    assert 'onClick={() => navigateTo("invoices")}>Nouvelle facture' in app
     assert "218,40" not in app
     assert "1 124,20" not in app
 
@@ -192,6 +192,17 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
     assert ".solar-metrics { grid-template-columns: repeat(4, minmax(0, 1fr));" in css
     assert "solar-1440x900.png" in visual_review
     assert "solar-new-sale-1440x900.png" in visual_review
+
+
+def test_navigation_clears_transient_notices_from_the_previous_screen() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert "function navigateTo(nextView: View)" in app
+    navigation = app.split("function navigateTo(nextView: View)", 1)[1].split("\n  }", 1)[0]
+    assert "setNotice(null)" in navigation
+    assert "setView(nextView)" in navigation
+    assert "onClick={() => navigateTo(item.id)}" in app
+    assert 'onClick={() => navigateTo("invoices")}>Nouvelle facture' in app
 
 
 def test_solar_sales_show_customer_names_instead_of_internal_ids() -> None:

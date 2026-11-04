@@ -330,15 +330,20 @@ export default function App() {
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
 
+  function navigateTo(nextView: View) {
+    setNotice(null);
+    setView(nextView);
+  }
+
   const activePage = pageTitle[view];
   const pending = Number(sync?.pending ?? 0);
-  const link = (id: View, label: string) => <button className="text-button" onClick={() => setView(id)}>{label}</button>;
+  const link = (id: View, label: string) => <button className="text-button" onClick={() => navigateTo(id)}>{label}</button>;
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <button className="brand" aria-label="Accueil SEL" onClick={() => setView("dashboard")}><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /></button>
+      <button className="brand" aria-label="Accueil SEL" onClick={() => navigateTo("dashboard")}><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /></button>
       <nav aria-label="Navigation principale">
-        {navigation.map((item) => <button key={item.id} className={`nav-item${view === item.id ? " active" : ""}`} aria-current={view === item.id ? "page" : undefined} onClick={() => setView(item.id)}>
+        {navigation.map((item) => <button key={item.id} className={`nav-item${view === item.id ? " active" : ""}`} aria-current={view === item.id ? "page" : undefined} onClick={() => navigateTo(item.id)}>
           <NavIcon name={item.icon} /><span>{item.label}</span>
         </button>)}
       </nav>
@@ -355,7 +360,7 @@ export default function App() {
       {loading && <div className="loading-line" role="status">Actualisation des données locales…</div>}
 
       {view === "dashboard" && <>
-        <div className="page-heading"><div><p className="eyebrow">ACTIVITÉ DU POSTE</p><h1>Vue d’ensemble</h1><p className="muted">Opérations enregistrées localement et état de leur synchronisation.</p></div><Button primary onClick={() => setView("invoices")}>Nouvelle facture</Button></div>
+        <div className="page-heading"><div><p className="eyebrow">ACTIVITÉ DU POSTE</p><h1>Vue d’ensemble</h1><p className="muted">Opérations enregistrées localement et état de leur synchronisation.</p></div><Button primary onClick={() => navigateTo("invoices")}>Nouvelle facture</Button></div>
         <div className="metrics">
           <Metric label="Abonnés" value={customers.length} note="Dossiers disponibles sur ce poste" />
           <Metric label="Factures" value={invoices.length} note="Documents présents localement" />
