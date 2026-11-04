@@ -179,6 +179,21 @@ def test_invoice_workspace_matches_figma_two_column_preview_flow() -> None:
     assert "path === '/local/v1/billing/utility/preview'" in visual_review
 
 
+def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'title="Catalogue des kits solaires"' in app
+    assert "Créer une vente" in app
+    assert 'className="metrics solar-metrics"' in app
+    assert 'headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]}' in app
+    assert "solarSaleOpen &&" in app
+    assert ".solar-metrics { grid-template-columns: repeat(4, minmax(0, 1fr));" in css
+    assert "solar-1440x900.png" in visual_review
+    assert "solar-new-sale-1440x900.png" in visual_review
+
+
 def test_solar_sales_show_customer_names_instead_of_internal_ids() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 

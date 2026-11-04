@@ -228,6 +228,13 @@ async def capture_views() -> None:
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "invoice-preview-1440x900.png"))
+                if slug == "solar":
+                    await page.get_by_role("button", name="Créer une vente").click()
+                    await page.get_by_role("heading", name="Nouvelle vente solaire").wait_for()
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "solar-new-sale-1440x900.png"))
+                    await page.get_by_role("button", name="Fermer").click()
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")

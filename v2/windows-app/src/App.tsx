@@ -123,6 +123,7 @@ export default function App() {
   const [solarProducts, setSolarProducts] = useState<Row[]>([]);
   const [solarQuote, setSolarQuote] = useState<Row | null>(null);
   const [solarSaleDraft, setSolarSaleDraft] = useState<Row | null>(null);
+  const [solarSaleOpen, setSolarSaleOpen] = useState(false);
   const [sync, setSync] = useState<Row | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [loading, setLoading] = useState(false);
@@ -323,6 +324,7 @@ export default function App() {
       await localRequest("/local/v1/solar/sales", "POST", solarSaleDraft);
       setSolarQuote(null);
       setSolarSaleDraft(null);
+      setSolarSaleOpen(false);
       setNotice({ message: "Vente enregistrée localement avec sa créance. Un paiement comptant se saisit dans le journal de caisse." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
@@ -442,21 +444,26 @@ export default function App() {
       </>}
 
       {view === "solar" && <>
-        <PageHeading eyebrow="FINANCE / SOLAIRE" title="Catalogue et ventes solaires" description="Les produits et prix affichés proviennent du dernier catalogue validé et disponible localement." />
+        <PageHeading eyebrow="COMMERCE / FINANCE" title="Catalogue des kits solaires" description="Consultez les produits approuvés et les ventes enregistrées sur ce poste." action={<Button primary onClick={() => setSolarSaleOpen(true)}>Créer une vente</Button>} />
+        <div className="metrics solar-metrics">
+          <Metric label="Produits disponibles" value={solarProducts.length} note="Catalogue local approuvé" />
+          <Metric label="Ventes enregistrées" value={sales.length} note="Historique de ce poste" />
+          <Metric label="Contrats à échéances" value={sales.filter((sale) => Boolean(sale.installment_plan_id)).length} note="Échéanciers associés" />
+          <Metric label="À synchroniser" value={pending} note="Opérations en attente" />
+        </div>
         <Panel title="Catalogue approuvé">
-          <div className="product-grid">{solarProducts.map((product) => <article className="product-card" key={text(product.id)}><p className="eyebrow">{text(product.sku)}</p><h3>{text(product.label)}</h3><p>{formatMoney(product.price_reference, product.currency)}</p><span className="product-meta">Valide depuis le {text(product.effective_from)} · {text(product.approval_ref)}</span></article>)}</div>
-          {!solarProducts.length && <div className="empty-state">Aucun produit solaire approuvé et applicable n’est disponible sur ce poste.</div>}
+          <Table headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]} empty="Aucun produit solaire approuvé et applicable n’est disponible sur ce poste." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), product.category ? domainLabel(product.category) : "—", formatMoney(product.price_reference, product.currency), <span className="status-badge success">Disponible</span>])} />
         </Panel>
-        <Panel title="Nouvelle vente solaire"><form className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
+        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); }}>Fermer</Button>}><form className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
           <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
           <label>Produit approuvé<select name="product_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
           <label>Devise du catalogue<select name="currency" defaultValue={text(solarProducts[0]?.currency, "USD")} required>{[...new Set(solarProducts.map((product) => text(product.currency, "")))].filter(Boolean).map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label>
           <label className="span-two">Révision des conditions approuvées<input name="terms_revision" required /></label>
           <p className="help span-two">Le prix est relu et vérifié par le moteur Rust avant l’émission. La vente crée une créance ; enregistrez tout règlement dans le journal de caisse.</p>
           <div className="form-actions span-two"><Button primary type="submit">Vérifier le devis</Button></div>
-        </form></Panel>
+        </form></Panel>}
         {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
-        <Panel title="Ventes locales"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />])} /></Panel>
+        <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />])} /></Panel>
         <SolarContractManager sales={sales} customers={customers} onCreated={refresh} />
       </>}
 
