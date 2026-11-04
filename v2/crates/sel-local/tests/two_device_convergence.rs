@@ -57,7 +57,7 @@ async fn seed_central_catalog(store: &CentralStore) {
         "INSERT INTO tariff_versions
          (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
          VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', 0.095, 'USD', '2000-01-01', 'convergence-v1', 'APPROVED'),
-                ($2, 'WATER', 'RESIDENTIAL', 'M3', 0.50, 'USD', '2000-01-01', 'APPROVED')",
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', 0.50, 'USD', '2000-01-01', 'convergence-v1', 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())
