@@ -199,7 +199,7 @@ async def capture_views() -> None:
                         "element => window.scrollTo(0, element.closest('.panel').getBoundingClientRect().top + window.scrollY)"
                     )
                     await page.wait_for_timeout(120)
-                    await page.screenshot(path=str(OUTPUT / "solar-contracts-1440x900.png"))
+                    await page.screenshot(path=str(OUTPUT / "solar-contracts-1440x900.png"), full_page=True)
                 await page.evaluate("window.scrollTo(0, 0)")
                 await page.wait_for_timeout(120)
                 await page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"))

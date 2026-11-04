@@ -274,6 +274,8 @@ def test_visual_review_captures_solar_payment_allocation() -> None:
     assert 'select_option("demo-solar-schedule-0001")' in visual_review
     assert '"id": "demo-solar-schedule-0001"' in visual_review
     assert "element.closest('.panel').getBoundingClientRect().top" in visual_review
+    assert '"solar-contracts-1440x900.png"' in visual_review
+    assert 'path=str(OUTPUT / "solar-contracts-1440x900.png"), full_page=True' in visual_review
 
 
 def test_visual_review_captures_customer_record_and_receivable_statement() -> None:
