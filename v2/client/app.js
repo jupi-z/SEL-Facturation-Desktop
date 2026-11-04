@@ -220,21 +220,27 @@
     const sync = state.sync || {};
     const pending = sync.pending ?? 0;
     const status = sync.status || "LOCAL_ONLY";
+    const stateLabel = pending
+      ? "En attente de synchronisation"
+      : status === "LOCAL_READY" ? "Service local prêt" : "Mode local";
     const summary = pending ? `${pending} opération(s) en attente de confirmation centrale.` : "Aucune opération en attente de synchronisation.";
     const summaryTarget = $("#sync-summary");
     const detailsTarget = $("#sync-details");
     clear(summaryTarget);
     clear(detailsTarget);
-    summaryTarget.appendChild(element("strong", "", status));
+    summaryTarget.appendChild(element("strong", "", stateLabel));
     summaryTarget.appendChild(document.createElement("br"));
     summaryTarget.appendChild(textNode(summary));
-    detailsTarget.appendChild(element("strong", "", `État local : ${status}`));
+    detailsTarget.appendChild(element("strong", "", `État local : ${stateLabel}`));
     detailsTarget.appendChild(document.createElement("br"));
     detailsTarget.appendChild(textNode(summary));
     detailsTarget.appendChild(document.createElement("br"));
     detailsTarget.appendChild(element("small", "", "Une confirmation locale n’est jamais présentée comme une validation centrale."));
-    $("#connection-label").textContent = status === "LOCAL_ONLY" ? "Local · hors ligne" : "Service local prêt";
-    $(".status-dot").classList.toggle("offline", Boolean(pending));
+    $("#connection-label").textContent = pending
+      ? `${pending} opération(s) en attente de synchronisation`
+      : "Service local prêt · aucune opération en attente";
+    $(".status-dot").classList.toggle("pending", Boolean(pending));
+    $(".connection-status").classList.toggle("pending", Boolean(pending));
   }
 
   function renderPreview(response) {
@@ -325,9 +331,13 @@
   function setupNavigation() {
     $$('[data-view]').forEach((button) => button.addEventListener("click", () => {
       const view = button.dataset.view;
-      $$('[data-view]').forEach((item) => item.classList.toggle("active", item.dataset.view === view));
+      $$('.nav-item[data-view]').forEach((item) => {
+        const isCurrent = item.dataset.view === view;
+        item.classList.toggle("active", isCurrent);
+        if (isCurrent) item.setAttribute("aria-current", "page");
+        else item.removeAttribute("aria-current");
+      });
       $$('.view').forEach((item) => { item.hidden = item.id !== `view-${view}`; item.classList.toggle("active-view", item.id === `view-${view}`); });
-      $("#page-title").textContent = button.textContent;
       if (view === "dashboard") refresh();
     }));
     $$('[data-action="refresh"]').forEach((button) => button.addEventListener("click", refresh));

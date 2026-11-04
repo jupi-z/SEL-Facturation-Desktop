@@ -12,11 +12,33 @@ def test_v2_client_assets_are_complete_and_local() -> None:
     assert desktop_v2.client_asset("index.html").is_file()
     assert desktop_v2.client_asset("app.css").is_file()
     assert desktop_v2.client_asset("app.js").is_file()
+    assert desktop_v2.client_asset("assets/sel-logo-dark.svg").is_file()
+    assert desktop_v2.client_asset("assets/geist-variable.woff2").is_file()
+    assert desktop_v2.client_asset("assets/OFL-Geist.txt").is_file()
+    assert desktop_v2.client_asset("assets/ASSET-NOTICES.txt").is_file()
     html = desktop_v2.client_asset("index.html").read_text(encoding="utf-8")
+    css = desktop_v2.client_asset("app.css").read_text(encoding="utf-8")
     assert "https://" not in html
+    assert 'src="assets/sel-logo-dark.svg"' in html
+    assert 'url("assets/geist-variable.woff2")' in css
+    assert 'font-family: "Geist"' in css
     assert "window.pywebview.api" in desktop_v2.client_asset("app.js").read_text(
         encoding="utf-8"
     )
+
+
+def test_v2_navigation_uses_local_icons_and_accessible_current_state() -> None:
+    html = desktop_v2.client_asset("index.html").read_text(encoding="utf-8")
+
+    assert 'aria-label="Navigation principale"' in html
+    assert 'class="nav-section-label"' not in html
+    assert html.count('class="nav-icon"') == 6
+    assert 'aria-current="page"' in html
+    assert "https://" not in html
+    script = desktop_v2.client_asset("app.js").read_text(encoding="utf-8")
+    assert 'setAttribute("aria-current", "page")' in script
+    assert 'classList.toggle("pending", Boolean(pending))' in script
+    assert '"En attente de synchronisation"' in script
 
 
 def test_first_launch_configuration_persists_stable_identity(tmp_path: Path) -> None:
@@ -45,7 +67,7 @@ def test_local_bridge_rejects_non_local_paths() -> None:
 def test_packaging_smoke_does_not_require_rust_binary() -> None:
     assert desktop_v2.packaging_smoke() == {
         "ok": True,
-        "client_assets": 3,
+        "client_assets": 7,
         "native_binary": "deferred-to-build",
     }
 

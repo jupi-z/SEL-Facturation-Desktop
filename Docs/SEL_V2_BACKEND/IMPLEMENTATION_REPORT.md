@@ -690,3 +690,22 @@ L'écart identifié concernait l'historique local : après activation d'un contr
 La validation finale du commit `ceb5e44a6f04364cb14d3f1b7d99868759055e10` est verte : [SEL V2 Backend — run 41817030731](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41817030731), [paquet serveur — run 41817030886](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41817030886), [Build Windows Desktop — run 41817030930](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41817030930) et [Windows candidate — run 41817030806](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41817030806) ont terminé `success`. Cela valide le code et la construction des paquets, pas l'installation ni l'acceptation utilisateur sur le poste SEL.
 
 **Progression Phase 6 : 100 % pour le périmètre backend solaire.** L'interface et les documents client sont explicitement suivis en phases 7 et 8 ; ils ne sont pas déclarés livrés par cette clôture.
+
+### Phase 7 — frontend Windows V2 conforme au fichier Figma (en cours, 4 novembre 2026)
+
+L'audit de conception a porté sur la page Figma « Windows / Core operations » et ses vues Répertoire des abonnés (`7:96`), Nouvelle facture (`7:282`), Prévisualisation (`7:357`) et Encaissement (`7:433`), ainsi que sur les tokens typographiques et fonctionnels des fondations (`4:2`) et les composants (`6:2`). Le frontend existant reste une application HTML/CSS/JavaScript intégrée à pywebview ; cette tranche n'ajoute ni React, ni Tailwind, ni ressource chargée depuis Internet.
+
+| Critère | Statut | Preuve / limite |
+|---|---|---|
+| Audit des composants communs Figma | PARTIAL | Structure commune, couleurs, barre latérale, marqueurs de navigation, typographie et vues centrales consultés. Les autres écrans Figma de solaire, créances, administration et documents ne sont pas encore audités en détail. |
+| Shell Windows aligné aux fondations | IN_PROGRESS | `v2/client/index.html` et `v2/client/app.css` reprennent le bleu nuit `#012A5E`, le jaune `#FDDC02`, la largeur 250 px, le bandeau de 7 px, l'état de navigation et la grille générale. La validation visuelle dans l'application n'a pas été exécutée. |
+| Marque et typographie locales | PASS code | Le logo officiel SEL exporté de Figma est dans `v2/client/assets/sel-logo-dark.svg`. Geist variable est local dans `v2/client/assets/geist-variable.woff2`; sa licence OFL est jointe. Le client ne dépend pas d'un CDN. |
+| Navigation accessible | IN_PROGRESS | Six destinations déjà fonctionnelles sont conservées; l'état actif expose `aria-current`. Les entrées Créances et Administration de Figma ne sont pas affichées avant d'avoir leurs écrans opérationnels. |
+| Empaquetage des ressources | IN_PROGRESS | `desktop_v2.py` autorise et contrôle sept ressources locales; le build PyInstaller inclut déjà le répertoire `v2/client`. Le smoke test Windows doit encore confirmer l'artefact complet. |
+| Vérification de code locale | PASS limité | `git diff --check` ne signale aucun espace blanc invalide. Aucun test Python, build, lancement de WebView ou capture locale n'a été exécuté pour protéger le poste contre la surchauffe. |
+| CI après cette tranche | NOT_TESTED | En attente du workflow GitHub Actions déclenché par le commit de cette tranche. |
+| Recette visuelle sur Windows SEL | BLOCKED_EXTERNAL | Nécessite un poste représentatif et une capture réelle de l'application. |
+
+Les valeurs de démonstration visibles sur les écrans Figma ne sont pas reprises dans l'application. Le bandeau d'état indique uniquement l'état du service local et le nombre d'opérations en attente ; il ne prétend pas que le serveur est en ligne ou que les données sont synchronisées. Cette première tranche ne clôt pas la phase 7 : les écrans métier détaillés, le catalogue/contrat solaire, les créances et l'administration restent à intégrer.
+
+**Progression Phase 7 : 25 %** (socle visuel et navigation seulement ; aucun parcours Windows n'est déclaré validé visuellement). Les tests CI et la vérification du paquet resteront nécessaires avant d'augmenter ce pourcentage.

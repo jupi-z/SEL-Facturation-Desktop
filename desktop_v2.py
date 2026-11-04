@@ -24,7 +24,17 @@ from uuid import uuid4
 
 APP_TITLE = "SEL Facturation V2"
 CONFIG_SCHEMA_VERSION = 1
-CLIENT_ASSETS = frozenset({"index.html", "app.css", "app.js"})
+CLIENT_ASSETS = frozenset(
+    {
+        "index.html",
+        "app.css",
+        "app.js",
+        "assets/sel-logo-dark.svg",
+        "assets/geist-variable.woff2",
+        "assets/OFL-Geist.txt",
+        "assets/ASSET-NOTICES.txt",
+    }
+)
 
 
 def application_root() -> Path:

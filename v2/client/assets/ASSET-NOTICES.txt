@@ -1,0 +1,11 @@
+SEL V2 client asset notices
+
+SEL official logo
+- Source: SEL V2 Figma design, component 86:39, Theme=Dark, Layout=Full.
+- Exported as SVG and stored locally as sel-logo-dark.svg.
+
+Geist Sans variable font
+- Source: https://github.com/vercel/geist-font
+- Pinned repository revision: a2357c1398c81d88ff84823a2f50af3152ee8733
+- Source file: fonts/Geist/webfonts/Geist[wght].woff2
+- License: SIL Open Font License 1.1; see OFL-Geist.txt.
