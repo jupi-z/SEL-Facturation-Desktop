@@ -165,6 +165,14 @@ def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
     assert "<NavIcon" in app
 
 
+def test_solar_sales_show_customer_names_instead_of_internal_ids() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert "function customerLabel(customerId: unknown, customers: Row[])" in app
+    assert "customerLabel(row.customer_id, customers)" in app
+    assert "<SolarContractManager sales={sales} customers={customers}" in app
+
+
 def test_solar_catalog_route_uses_local_api_error_contract() -> None:
     local_api = (ROOT / "v2" / "crates" / "sel-local" / "src" / "lib.rs").read_text(encoding="utf-8")
     handler = local_api.split("async fn list_solar_products(", 1)[1].split("\n}\n", 1)[0]

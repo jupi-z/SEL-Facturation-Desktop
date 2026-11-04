@@ -76,6 +76,12 @@ function rows<T extends Row>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
 
+function customerLabel(customerId: unknown, customers: Row[]): string {
+  const id = text(customerId, "");
+  const customer = customers.find((item) => text(item.customer_id ?? item.id, "") === id);
+  return text(customer?.legal_name, text(customer?.customer_code, id));
+}
+
 function humanError(error: unknown): string {
   return error instanceof Error ? error.message : "L’opération n’a pas abouti.";
 }
@@ -430,8 +436,8 @@ export default function App() {
           <div className="form-actions span-two"><Button primary type="submit">Vérifier le devis</Button></div>
         </form></Panel>
         {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
-        <Panel title="Ventes locales"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, text(row.customer_id), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />])} /></Panel>
-        <SolarContractManager sales={sales} onCreated={refresh} />
+        <Panel title="Ventes locales"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />])} /></Panel>
+        <SolarContractManager sales={sales} customers={customers} onCreated={refresh} />
       </>}
 
       {view === "receivables" && <>
@@ -672,7 +678,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   </>;
 }
 
-function SolarContractManager({ sales, onCreated }: { sales: Row[]; onCreated: () => Promise<void> }) {
+function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; customers: Row[]; onCreated: () => Promise<void> }) {
   const [saleId, setSaleId] = useState("");
   const [schedule, setSchedule] = useState([{ due_date: "", amount: "" }]);
   const [plan, setPlan] = useState<Row | null>(null);
