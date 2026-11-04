@@ -207,7 +207,7 @@ async def capture_views() -> None:
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")
             await page.get_by_role("button", name="Encaissements", exact=True).click()
-            await page.get_by_label("Abonné").select_option("demo-customer-0001")
+            await page.locator('.payment-layout form select[name="customer_id"]').select_option("demo-customer-0001")
             await page.locator('select[name="receivable_id"] option[value="demo-receivable-solar-0001"]').wait_for()
             await page.locator('select[name="receivable_id"]').select_option("demo-receivable-solar-0001")
             await page.locator('select[name="schedule_id"] option[value="demo-solar-schedule-0001"]').wait_for()

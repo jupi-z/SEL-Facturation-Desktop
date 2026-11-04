@@ -187,6 +187,7 @@ def test_visual_review_captures_solar_payment_allocation() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
     assert '"payments-solar-1440x900.png"' in visual_review
+    assert '.payment-layout form select[name="customer_id"]' in visual_review
     assert 'select_option("demo-receivable-solar-0001")' in visual_review
     assert 'select_option("demo-solar-schedule-0001")' in visual_review
     assert '"id": "demo-solar-schedule-0001"' in visual_review
