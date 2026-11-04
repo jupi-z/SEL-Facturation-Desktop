@@ -203,6 +203,19 @@ async def capture_views() -> None:
                 await page.evaluate("window.scrollTo(0, 0)")
                 await page.wait_for_timeout(120)
                 await page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"))
+                if slug == "customers":
+                    await page.get_by_role("button", name="Ouvrir le dossier →").click()
+                    customer_heading = page.get_by_role("heading", name="Fiche abonné · SEL-DÉMO-0001")
+                    await customer_heading.wait_for()
+                    await customer_heading.evaluate("element => element.closest('.panel').scrollIntoView({block: 'start'})")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "customer-record-1440x900.png"))
+                if slug == "receivables":
+                    await page.get_by_label("Abonné").select_option("demo-customer-0001")
+                    await page.get_by_text("demo-receivable-0001").wait_for()
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "receivables-statement-1440x900.png"))
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")

@@ -221,6 +221,15 @@ def test_visual_review_captures_solar_payment_allocation() -> None:
     assert "element.closest('.panel').getBoundingClientRect().top" in visual_review
 
 
+def test_visual_review_captures_customer_record_and_receivable_statement() -> None:
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert '"customer-record-1440x900.png"' in visual_review
+    assert '"receivables-statement-1440x900.png"' in visual_review
+    assert 'get_by_role("button", name="Ouvrir le dossier →")' in visual_review
+    assert 'get_by_label("Abonné").select_option("demo-customer-0001")' in visual_review
+
+
 def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     history_view = app.split("{selectedInvoice &&", 1)[1].split("</>}", 1)[0]
