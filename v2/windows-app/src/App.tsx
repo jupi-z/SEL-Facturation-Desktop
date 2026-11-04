@@ -374,7 +374,7 @@ export default function App() {
             <div className="form-actions span-two"><Button primary type="submit">Enregistrer les modifications</Button></div>
           </form> : <div className="empty-state">Chargement du dossier abonné…</div>}
         </Panel>
-        <CustomerStatement customerId={selectedCustomer} statement={statement} />
+        <CustomerStatement customerId={selectedCustomer} customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} statement={statement} />
       </> : <>
         <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier, le consulter et enregistrer un nouvel abonné." />
         <div className="columns customer-layout">
@@ -653,7 +653,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
     <Panel title="Nouveau relevé">
       <div className="form-grid reading-filters">
         <label>Abonné<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Sélectionner…</option>{customers.map((customer) => <option key={text(customer.customer_id ?? customer.id)} value={text(customer.customer_id ?? customer.id)}>{text(customer.customer_code)} — {text(customer.legal_name)}</option>)}</select></label>
-        <label>Service<select value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{text(account.service_code)} · {text(account.connection_status)}</option>)}</select></label>
+        <label>Service<select value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{domainLabel(account.service_code)} · {domainLabel(account.connection_status)}</option>)}</select></label>
         <label className="span-two">Compteur<select value={meterId} onChange={(event) => setMeterId(event.target.value)} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {text(meter.unit)}</option>)}</select></label>
       </div>
       {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void saveReading(event)}>
@@ -736,8 +736,8 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
   </>;
 }
 
-function CustomerStatement({ customerId, statement }: { customerId: string; statement: Row | null }) {
-  return <Panel title={`Situation du compte · ${customerId}`}>
+function CustomerStatement({ customerId, customerName, statement }: { customerId: string; customerName: string; statement: Row | null }) {
+  return <Panel title={`Situation du compte · ${customerName}`}>
     {statement ? <div className="columns"><div><p><strong>Factures</strong></p><Table headers={["Référence", "Période", "État"]} empty="Aucune facture dans le relevé." data={rows<Row>(statement.invoices).map((item) => [text(item.invoice_number ?? item.invoice_id), text(item.period ?? item.billing_period), <Status value={item.status} />])} /></div><div><p><strong>Créances</strong></p><Table headers={["Référence", "Solde", "Situation"]} empty="Aucune créance dans le relevé." data={rows<Row>(statement.receivables).map((item) => [text(item.id ?? item.receivable_id), formatMoney(item.balance, item.currency), <Status value={item.status} />])} /></div></div> : <div className="empty-state">Chargement du relevé abonné…</div>}
   </Panel>;
 }

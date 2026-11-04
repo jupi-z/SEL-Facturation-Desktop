@@ -225,6 +225,16 @@ def test_customer_statement_uses_localized_status_badges() -> None:
 
     assert statement.count("<Status value={item.status} />") == 2
     assert "text(item.status)" not in statement
+    assert "customerName: string" in statement
+    assert "Situation du compte · ${customerName}" in statement
+    assert '<CustomerStatement customerId={selectedCustomer} customerName={text(selectedCustomerData?.legal_name, selectedCustomer)}' in app
+
+
+def test_meter_service_codes_are_localized_for_operators() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert "domainLabel(account.service_code)" in app
+    assert "domainLabel(account.connection_status)" in app
 
 
 def test_business_codes_are_localized_before_they_reach_tables() -> None:
