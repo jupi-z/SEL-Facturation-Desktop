@@ -475,6 +475,7 @@ paths:
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Customer code returned by X-Next-Cursor }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
         - { name: status, in: query, required: false, schema: { type: string, enum: [ACTIVE, ARCHIVED] } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 128 }, description: Case-insensitive substring search in customer code and legal name }
       responses:
         '200':
           description: Customers page; the legacy array response is preserved

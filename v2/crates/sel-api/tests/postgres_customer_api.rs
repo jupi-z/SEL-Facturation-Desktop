@@ -53,4 +53,23 @@ async fn customer_api_reads_from_postgres_after_new_app_state() {
         .unwrap();
     let loaded = app.oneshot(request).await.unwrap();
     assert_eq!(loaded.status(), axum::http::StatusCode::OK);
+
+    let search = Request::builder()
+        .uri("/v1/customers?q=FIXTURE")
+        .header("authorization", "Bearer test")
+        .body(Body::empty())
+        .unwrap();
+    let searched = router(AppState::with_central_store(
+        CentralStore::connect(&database_url, organization_id)
+            .await
+            .expect("connect central store for search"),
+    ))
+    .oneshot(search)
+    .await
+    .unwrap();
+    assert_eq!(searched.status(), axum::http::StatusCode::OK);
+    let searched: serde_json::Value =
+        serde_json::from_slice(&searched.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(searched.as_array().unwrap().len(), 1);
+    assert_eq!(searched[0]["customer_code"], "PG-API-1");
 }

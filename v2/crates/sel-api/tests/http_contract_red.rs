@@ -190,3 +190,50 @@ async fn customer_listing_supports_bounded_cursor_pagination_and_status_filter()
         serde_json::from_slice(&second.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(second_body[0]["customer_code"], "C-003");
 }
+
+#[tokio::test]
+async fn customer_listing_searches_code_and_name_without_case_sensitivity() {
+    let app = router(AppState::new(Uuid::new_v4()));
+    for (code, name) in [
+        ("SEL-C-001", "Clarisse Bomatsa"),
+        ("SEL-C-002", "Amani Kizel"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/customers")
+                    .header("authorization", "Bearer test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({"customer_code":code,"legal_name":name}))
+                            .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    for query in ["clarisse", "c-001"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/customers?q={query}"))
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body[0]["customer_code"], "SEL-C-001");
+    }
+}

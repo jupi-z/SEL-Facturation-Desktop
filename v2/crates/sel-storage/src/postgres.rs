@@ -1075,13 +1075,17 @@ impl CentralStore {
     }
 
     pub async fn list_customers(&self) -> Result<Vec<Customer>, sqlx::Error> {
-        Ok(self.list_customers_page(None, None, i64::MAX).await?.0)
+        Ok(self
+            .list_customers_page(None, None, None, i64::MAX)
+            .await?
+            .0)
     }
 
     pub async fn list_customers_page(
         &self,
         after_customer_code: Option<&str>,
         status: Option<&str>,
+        search: Option<&str>,
         limit: i64,
     ) -> Result<(Vec<Customer>, Option<String>), sqlx::Error> {
         let fetch_limit = limit.max(1).saturating_add(1);
@@ -1091,12 +1095,15 @@ impl CentralStore {
              WHERE organization_id = $1
                AND ($2::text IS NULL OR customer_code > $2)
                AND ($3::text IS NULL OR status = $3)
+               AND ($4::text IS NULL OR strpos(lower(customer_code), lower($4)) > 0
+                    OR strpos(lower(legal_name), lower($4)) > 0)
              ORDER BY customer_code
-             LIMIT $4",
+             LIMIT $5",
         )
         .bind(self.organization_id)
         .bind(after_customer_code)
         .bind(status)
+        .bind(search)
         .bind(fetch_limit)
         .fetch_all(&self.pool)
         .await?;

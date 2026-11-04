@@ -111,6 +111,66 @@ async fn local_production_router_requires_the_configured_bearer_token() {
 }
 
 #[tokio::test]
+async fn local_customer_search_filters_sqlite_by_name_and_code() {
+    let path = std::env::temp_dir().join(format!(
+        "sel-v2-local-customer-search-{}.sqlite",
+        Uuid::new_v4()
+    ));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
+    let app = router_with_store(store.clone());
+    for (code, name) in [
+        ("SEL-C-101", "Clarisse Bomatsa"),
+        ("SEL-C-102", "Amani Kizel"),
+        ("SEL-C-103", "Élodie Mbuyi"),
+    ] {
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/local/v1/customers")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({"customer_code":code,"legal_name":name}))
+                            .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), axum::http::StatusCode::CREATED);
+    }
+
+    for (term, expected_code) in [
+        ("clarisse", "SEL-C-101"),
+        ("c-101", "SEL-C-101"),
+        ("élodie", "SEL-C-103"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/local/v1/customers?q={term}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body[0]["customer_code"], expected_code);
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn catalog_refresh_fetches_and_persists_verified_snapshot_once() {
     let path =
         std::env::temp_dir().join(format!("sel-v2-catalog-refresh-{}.sqlite", Uuid::new_v4()));

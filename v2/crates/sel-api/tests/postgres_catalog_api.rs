@@ -85,6 +85,31 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
     .await
     .expect("insert FX fixtures");
 
+    sqlx::query(
+        "INSERT INTO catalog_reference_versions
+         (id, reference_type, natural_key, payload, effective_from, status, approval_ref)
+         VALUES
+         ($1, 'TAX_PROFILE', 'WATER|SEL|ENERGY',
+          jsonb_build_object('service_code','WATER','jurisdiction','SEL','base','ENERGY','rate','0.16','source','fixture'),
+          '2026-01-01', 'APPROVED', 'SEL-TAX-FIXTURE'),
+         ($2, 'TAX_PROFILE', 'WATER|SEL|ENERGY',
+          jsonb_build_object('service_code','WATER','jurisdiction','SEL','base','ENERGY','rate','0.99','source','fixture'),
+          '2026-01-01', 'REVOKED', NULL),
+         ($3, 'FX_RATE', 'USD|CDF',
+          jsonb_build_object('from_currency','USD','to_currency','CDF','value','2360','source','fixture'),
+          '2026-01-01', 'APPROVED', 'SEL-FX-FIXTURE'),
+         ($4, 'FX_RATE', 'USD|CDF',
+          jsonb_build_object('from_currency','USD','to_currency','CDF','value','9999','source','fixture'),
+          '2026-01-01', 'DRAFT', NULL)",
+    )
+    .bind(approved_tax)
+    .bind(revoked_tax)
+    .bind(approved_fx)
+    .bind(unapproved_fx)
+    .execute(&store.pool)
+    .await
+    .expect("insert versioned reference fixtures");
+
     let app = router(AppState::with_central_store(store));
     let products = get_json(&app, "/v1/catalog/products").await;
     assert_eq!(products.as_array().unwrap().len(), 1);
@@ -452,7 +477,7 @@ async fn tariff_versions_can_be_superseded_and_revoked_without_deleting_history(
         .unwrap()
         .to_owned();
 
-    let category = format!("LIFECYCLE-{}", Uuid::new_v4());
+    let category = format!("LIFECYCLE-{}", Uuid::new_v4()).to_ascii_uppercase();
     let previous_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO tariff_versions

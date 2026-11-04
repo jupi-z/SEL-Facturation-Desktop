@@ -1536,6 +1536,7 @@ struct CustomerListQuery {
     cursor: Option<String>,
     limit: Option<usize>,
     status: Option<String>,
+    q: Option<String>,
 }
 
 async fn list_customers(
@@ -1553,11 +1554,23 @@ async fn list_customers(
             ));
         }
     }
+    let search = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if search.is_some_and(|value| value.chars().count() > 128) {
+        return Err(ApiError::unprocessable(
+            "CUSTOMER_SEARCH_TOO_LONG",
+            "customer search is limited to 128 characters",
+        ));
+    }
     let (customers, next_cursor) = if let Some(store) = &state.central {
         store
             .list_customers_page(
                 query.cursor.as_deref(),
                 query.status.as_deref(),
+                search,
                 limit as i64,
             )
             .await
@@ -1579,6 +1592,13 @@ async fn list_customers(
                     .cursor
                     .as_deref()
                     .is_none_or(|cursor| item.customer_code.as_str() > cursor)
+            })
+            .filter(|item| {
+                search.is_none_or(|term| {
+                    let term = term.to_lowercase();
+                    item.customer_code.to_lowercase().contains(&term)
+                        || item.legal_name.to_lowercase().contains(&term)
+                })
             })
             .cloned()
             .collect();

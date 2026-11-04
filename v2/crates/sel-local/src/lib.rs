@@ -363,12 +363,59 @@ async fn create_customer(
     Ok((StatusCode::CREATED, Json(customer)))
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct CustomerListQuery {
+    cursor: Option<String>,
+    limit: Option<usize>,
+    status: Option<String>,
+    q: Option<String>,
+}
+
 async fn list_customers(
     State(state): State<LocalAppState>,
-) -> Result<Json<Vec<Customer>>, (StatusCode, String)> {
-    Ok(Json(
-        state.store.list_customers().await.map_err(internal_error)?,
-    ))
+    Query(query): Query<CustomerListQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    if query
+        .status
+        .as_deref()
+        .is_some_and(|status| !matches!(status, "ACTIVE" | "ARCHIVED"))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "status must be ACTIVE or ARCHIVED".into(),
+        ));
+    }
+    let search = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if search.is_some_and(|value| value.chars().count() > 128) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "customer search is limited to 128 characters".into(),
+        ));
+    }
+    let limit = query.limit.unwrap_or(100).clamp(1, 100) as i64;
+    let (customers, next_cursor) = state
+        .store
+        .list_customers_page(
+            query.cursor.as_deref(),
+            query.status.as_deref(),
+            search,
+            limit,
+        )
+        .await
+        .map_err(internal_error)?;
+    let mut response = Json(customers).into_response();
+    if let Some(cursor) = next_cursor {
+        response.headers_mut().insert(
+            "x-next-cursor",
+            axum::http::HeaderValue::from_str(&cursor)
+                .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+        );
+    }
+    Ok(response)
 }
 
 async fn get_customer(

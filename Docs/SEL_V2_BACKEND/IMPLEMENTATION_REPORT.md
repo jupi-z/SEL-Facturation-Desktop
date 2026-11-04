@@ -388,7 +388,7 @@ Résultat CI pour le commit de code `138dd02f16408eed7fef4ed342f97d1a77ed7ab9` :
 
 ### Phase 2 — versions des référentiels et cache offline (travail en cours, 4 novembre 2026)
 
-Cette mise à jour supersède l'état « NOT_STARTED » des taxes, devises, catalogue solaire et cache offline indiqué dans la transition initiale. Le travail ci-dessous est présent dans l'arbre de travail basé sur `26fd1d31c5b3e8060edb9c076a774fbd20de1057`; il n'est pas encore commité, poussé ni validé par GitHub Actions.
+Cette mise à jour supersède l'état « NOT_STARTED » des taxes, devises, catalogue solaire et cache offline indiqué dans la transition initiale. Le travail ci-dessous est basé sur `26fd1d31c5b3e8060edb9c076a774fbd20de1057` et a été commité/poussé dans `2f4d58830ea4af89acb2d4dfd1deb408bba4020c`. Au moment de la rédaction, les workflows GitHub Actions correspondants sont **IN_PROGRESS**, sans conclusion vérifiée.
 
 | Domaine / critère | Statut actuel | Code et preuve locale | Validation manquante |
 |---|---|---|---|
@@ -403,7 +403,15 @@ Cette mise à jour supersède l'état « NOT_STARTED » des taxes, devises, cata
 
 Validations de l'arbre de travail : `cargo test --workspace` (**PASS**, aucun échec ; les tests PostgreSQL sont ignorés selon leur précondition explicite), `cargo test -p sel-storage --test catalog_snapshot` (**PASS**), `cargo test -p sel-local --test local_http catalog_refresh_fetches_and_persists_verified_snapshot_once` (**PASS**), `cargo test -p sel-api tax_and_exchange_rate_administration_is_admin_only` (**PASS**), `cargo test -p sel-contracts --test openapi_contract` (**PASS**), `cargo test -p sel-api --test postgres_catalog_api --no-run` (**PASS compilation uniquement**), `cargo clippy --workspace --all-targets -- -D warnings` (**PASS**), `cargo fmt --all` (**PASS**). Le test `catalog_snapshot_is_authenticated_atomic_and_idempotent` couvre le hash invalide, les répétitions, les révocations et le blocage d'un choix fiscal ambigu. `tax_and_fx_versions_require_approval_and_preserve_effective_history` compile mais reste **NOT_TESTED** sur PostgreSQL.
 
-Blocage PostgreSQL : aucune variable `TEST_DATABASE_URL`/`DATABASE_URL` n'est configurée. Docker est installé, mais `docker version` échoue car le pipe `dockerDesktopLinuxEngine` n'existe pas. L'exécution SQL centrale est **BLOCKED_EXTERNAL** jusqu'à disponibilité d'un serveur PostgreSQL de test. Aucun workflow CI n'a été lancé sur les changements non poussés.
+Blocage PostgreSQL local : aucune variable `TEST_DATABASE_URL`/`DATABASE_URL` n'est configurée. Docker est installé, mais `docker version` échoue car le pipe `dockerDesktopLinuxEngine` n'existe pas. La CI du commit `c560524d69c3fbc0a28178cdd23977b22a3e2447` a échoué sur deux fixtures PostgreSQL (`catalog_reference_versions` manquantes dans le snapshot, catégorie de tarif non normalisée). Les corrections de fixtures sont présentes dans l'arbre de travail mais **pas encore poussées ni validées à distance**. Jusqu'à la prochaine CI verte, la Phase 2 reste à **74 %** ; les parcours PostgreSQL sont **NOT_TESTED localement**.
+
+### Phase 3 — clients et services (en cours, 4 novembre 2026)
+
+Premier incrément : la recherche des abonnés est disponible dans les API centrale et locale, avec pagination et recherche insensible à la casse sur le code/nom. SQLite applique le filtrage Unicode en Rust pour que les noms accentués soient recherchés correctement (la fonction `lower()` native SQLite est limitée aux caractères ASCII). Le paramètre `q` est borné à 128 caractères et décrit dans OpenAPI.
+
+Validations locales : `cargo test --workspace` (**PASS**, tests PostgreSQL ignorés faute de base), `cargo clippy --workspace --all-targets -- -D warnings` (**PASS**), `cargo fmt --all -- --check` (**PASS**), `git diff --check` (**PASS**), tests HTTP de recherche API et SQLite locale (**PASS**, y compris `Élodie` recherchée avec `élodie`), contrat OpenAPI (**PASS**). Les corrections de fixtures PostgreSQL de la Phase 2 sont incluses dans ce même arbre, mais attendent une nouvelle exécution CI.
+
+**Progression Phase 3 : 15 % (estimation par critères de sortie)**. La recherche client est implémentée et testée localement ; le CRUD client, les relevés de compteurs, le parcours facture combinée de bout en bout et l'historique des factures restent à terminer. Le prochain lot porte sur les relevés : le modèle normatif prévoit compteurs rattachés à des comptes de service, index courant/précédent, période, quantité mesurée et corrections liées par `corrected_from_id`. PostgreSQL possède déjà les tables initiales, mais aucune route n'existe et SQLite ne possède pas encore leur projection. La conception devra préserver l'historique et rendre toute correction explicite ; aucune règle tarifaire ne sera ajoutée dans ce lot.
 
 ### Clôture des critères techniques de phase 1 — 4 novembre 2026
 

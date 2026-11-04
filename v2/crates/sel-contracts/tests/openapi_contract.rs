@@ -8,6 +8,17 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .and_then(serde_yaml::Value::as_mapping)
         .unwrap();
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices/{id}/document-data")));
+    let customer_list = paths
+        .get(serde_yaml::Value::from("/v1/customers"))
+        .and_then(|path| path.get("get"))
+        .expect("customer list route is documented");
+    assert!(customer_list
+        .get("parameters")
+        .and_then(serde_yaml::Value::as_sequence)
+        .is_some_and(|parameters| parameters.iter().any(|parameter| {
+            parameter.get("name").and_then(serde_yaml::Value::as_str) == Some("q")
+                && parameter.get("in").and_then(serde_yaml::Value::as_str) == Some("query")
+        })));
     for (path, method) in [
         ("/v1/admin/catalog/tax-profiles", "get"),
         ("/v1/admin/catalog/tax-profiles", "post"),
