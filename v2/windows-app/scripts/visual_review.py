@@ -328,7 +328,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Vue d’ensemble", exact=True).click()
                     await page.get_by_role("button", name="Administration", exact=True).click()
                     await page.get_by_role("heading", name="Utilisateurs et rôles").wait_for()
-                    await page.get_by_text("admin-demo", exact=True).wait_for()
+                    await page.get_by_role("cell", name="admin-demo").first.wait_for()
                     await page.screenshot(path=str(OUTPUT / "admin-full-1440x900.png"), full_page=True)
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
