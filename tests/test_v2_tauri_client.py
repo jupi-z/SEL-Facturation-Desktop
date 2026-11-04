@@ -210,6 +210,7 @@ def test_visual_review_captures_solar_payment_allocation() -> None:
     assert 'select_option("demo-receivable-solar-0001")' in visual_review
     assert 'select_option("demo-solar-schedule-0001")' in visual_review
     assert '"id": "demo-solar-schedule-0001"' in visual_review
+    assert "element.closest('.panel').getBoundingClientRect().top" in visual_review
 
 
 def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> None:

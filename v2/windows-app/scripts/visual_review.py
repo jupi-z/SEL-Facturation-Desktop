@@ -196,7 +196,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Créer le contrat").click()
                     await page.get_by_role("heading", name="Échéancier consulté").wait_for()
                     await page.get_by_role("heading", name="Contrats et échéanciers solaires").evaluate(
-                        "element => window.scrollTo(0, element.getBoundingClientRect().top + window.scrollY - 90)"
+                        "element => window.scrollTo(0, element.closest('.panel').getBoundingClientRect().top + window.scrollY)"
                     )
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "solar-contracts-1440x900.png"))
