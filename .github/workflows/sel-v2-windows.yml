@@ -7,6 +7,7 @@ on:
     paths:
       - 'desktop_v2.py'
       - 'tests/test_desktop_v2.py'
+      - 'tests/test_v2_tauri_client.py'
       - 'v2/**'
       - 'requirements*.txt'
       - 'packaging/sel-facturation.ico'
@@ -29,7 +30,7 @@ jobs:
       - name: Install Python build dependencies
         run: python -m pip install -r requirements-build.txt pytest
       - name: Test launcher contract
-        run: python -m pytest -q tests/test_desktop_v2.py
+        run: python -m pytest -q tests/test_desktop_v2.py tests/test_v2_tauri_client.py
       - name: Install WiX Toolset 4
         run: |
           dotnet tool install --global wix --version 4.0.5
