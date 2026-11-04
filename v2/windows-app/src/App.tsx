@@ -403,6 +403,7 @@ export default function App() {
         </form></Panel>
         {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
         <Panel title="Ventes locales"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, text(row.customer_id), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />])} /></Panel>
+        <SolarContractManager sales={sales} onCreated={refresh} />
       </>}
 
       {view === "receivables" && <>
@@ -557,6 +558,64 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
       {accountId && !meters.length && <div className="empty-state">Aucun compteur actif n’est associé à ce service.</div>}
     </Panel>
     {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), `${text(reading.previous)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.current)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.measured_quantity)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—"])} /></Panel>}
+  </>;
+}
+
+function SolarContractManager({ sales, onCreated }: { sales: Row[]; onCreated: () => Promise<void> }) {
+  const [saleId, setSaleId] = useState("");
+  const [schedule, setSchedule] = useState([{ due_date: "", amount: "" }]);
+  const [plan, setPlan] = useState<Row | null>(null);
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const availableSales = sales.filter((sale) => sale.receivable_id && !sale.installment_plan_id);
+
+  async function viewPlan(planId: string) {
+    try { setPlan(await localRequest<Row>(`/local/v1/installment-plans/${encodeURIComponent(planId)}`)); }
+    catch (error) { setMessage(humanError(error)); }
+  }
+
+  async function saveContract(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const sale = availableSales.find((item) => text(item.sale_id) === saleId);
+    const form = new FormData(event.currentTarget);
+    if (!sale || !sale.receivable_id) return;
+    setSaving(true); setMessage("");
+    try {
+      const result = await localRequest<Row>("/local/v1/solar/contracts", "POST", {
+        sale_id: sale.sale_id,
+        receivable_id: sale.receivable_id,
+        schedule: schedule.map((entry, index) => ({ sequence: index + 1, due_date: entry.due_date, amount: entry.amount })),
+        currency: sale.currency,
+        approved_terms_revision: form.get("approved_terms_revision"),
+      });
+      const planId = text(result.installment_plan_id, "");
+      if (planId) setPlan(await localRequest<Row>(`/local/v1/installment-plans/${encodeURIComponent(planId)}`));
+      setMessage("Contrat et échéancier enregistrés sur ce poste.");
+      setSaleId(""); setSchedule([{ due_date: "", amount: "" }]);
+      await onCreated();
+    } catch (error) { setMessage(humanError(error)); }
+    finally { setSaving(false); }
+  }
+
+  const planRows = rows<Row>(plan?.schedule);
+  return <>
+    <Panel title="Contrats et échéanciers solaires">
+      {availableSales.length ? <form className="form-grid" onSubmit={(event) => void saveContract(event)}>
+        <label className="span-two">Vente à financer<select value={saleId} onChange={(event) => setSaleId(event.target.value)} required><option value="">Sélectionner une vente…</option>{availableSales.map((sale) => <option key={text(sale.sale_id)} value={text(sale.sale_id)}>{text(sale.sale_id)} · {formatMoney(sale.principal, sale.currency)}</option>)}</select></label>
+        {schedule.map((entry, index) => <div className="schedule-entry span-two" key={index}>
+          <label>Échéance {index + 1} · Date<input type="date" required value={entry.due_date} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, due_date: event.target.value } : item))} /></label>
+          <label>Montant dû<input type="number" min="0.01" step="0.01" required value={entry.amount} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item))} /></label>
+          {schedule.length > 1 && <button className="text-button remove-installment" type="button" onClick={() => setSchedule((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Retirer</button>}
+        </div>)}
+        <div className="schedule-actions span-two"><button className="text-button" type="button" onClick={() => setSchedule((current) => [...current, { due_date: "", amount: "" }])}>+ Ajouter une échéance</button></div>
+        <label className="span-two">Référence des conditions approuvées<input name="approved_terms_revision" required /></label>
+        <p className="help span-two">Le moteur vérifie les échéances et leur total par rapport à la créance. Aucun intérêt ni frais n’est ajouté.</p>
+        <div className="form-actions span-two"><Button primary type="submit" disabled={saving || !saleId}>{saving ? "Enregistrement…" : "Créer le contrat"}</Button></div>
+      </form> : <div className="empty-state">Aucune vente sans échéancier n’est disponible pour créer un contrat.</div>}
+      {message && <p role="status" className="reading-message">{message}</p>}
+      {sales.some((sale) => sale.installment_plan_id) && <div className="table-scroll"><table><thead><tr><th>Vente</th><th>Montant</th><th>Situation</th><th>Échéancier</th></tr></thead><tbody>{sales.filter((sale) => sale.installment_plan_id).map((sale) => <tr key={text(sale.sale_id)}><td><strong>{text(sale.sale_id)}</strong></td><td>{formatMoney(sale.principal, sale.currency)}</td><td><Status value={sale.status} /></td><td><button className="text-button" onClick={() => void viewPlan(text(sale.installment_plan_id))}>Consulter</button></td></tr>)}</tbody></table></div>}
+    </Panel>
+    {plan && <Panel title="Échéancier consulté"><div className="metrics compact-metrics"><Metric label="Principal" value={formatMoney(plan.principal, plan.currency)} note="Créance du contrat" /><Metric label="Payé" value={formatMoney(plan.paid, plan.currency)} note="Règlements affectés" /><Metric label="Restant" value={formatMoney(plan.remaining, plan.currency)} note="Solde de la créance" /><Metric label="En retard" value={formatMoney(plan.overdue_amount, plan.currency)} note="Échéances échues" /></div><Table headers={["N°", "Échéance", "Montant dû", "Payé", "Restant", "État"]} empty="Aucune échéance." data={planRows.map((item) => [text(item.sequence), text(item.due_date), formatMoney(item.amount_due, plan.currency), formatMoney(item.paid, plan.currency), formatMoney(item.remaining, plan.currency), <Status value={item.status} />])} /></Panel>}
   </>;
 }
 

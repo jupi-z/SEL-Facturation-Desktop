@@ -46,12 +46,26 @@ PAYMENTS = [{
 }]
 SALES = [{
     "sale_id": "demo-sale-0001",
+    "receivable_id": "demo-receivable-solar-0001",
     "customer_id": "demo-customer-0001",
     "product_code": "KIT-DÉMO",
     "principal": "120.00",
     "currency": "USD",
+    "installment_plan_id": None,
     "status": "LOCAL_ACCEPTED",
 }]
+SOLAR_PLAN = {
+    "id": "demo-plan-0001",
+    "principal": "120.00",
+    "paid": "0.00",
+    "remaining": "120.00",
+    "overdue_amount": "0.00",
+    "currency": "USD",
+    "schedule": [
+        {"sequence": 1, "due_date": "2026-12-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
+        {"sequence": 2, "due_date": "2027-01-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
+    ],
+}
 PRODUCTS = [{
     "id": "demo-product-0001",
     "sku": "KIT-DÉMO",
@@ -114,6 +128,8 @@ def mock_invoke_script() -> str:
         else if (path.startsWith('/local/v1/payments')) body = fixtures.payments;
         else if (path.startsWith('/local/v1/solar/sales')) body = fixtures.sales;
         else if (path.startsWith('/local/v1/solar/products')) body = fixtures.products;
+        else if (path.startsWith('/local/v1/solar/contracts')) {{ fixtures.sales[0].installment_plan_id = 'demo-plan-0001'; body = {{installment_plan_id:'demo-plan-0001',contract_id:'demo-contract-0001'}}; }}
+        else if (path.startsWith('/local/v1/installment-plans/')) body = SOLAR_PLAN;
         else if (path.startsWith('/local/v1/sync/trigger')) body = {{status:'PENDING_NETWORK',pending:5}};
         else if (path.startsWith('/local/v1/sync/status')) body = {{status:'LOCAL_READY',pending:5,conflicts:0,rejected:0,last_successful_sync:'Aucune confirmée'}};
         return {{status:200,body}};
@@ -168,6 +184,16 @@ async def capture_views() -> None:
                     await selects.nth(0).select_option("demo-customer-0001")
                     await selects.nth(1).select_option("demo-service-account-0001")
                     await selects.nth(2).select_option("demo-meter-0001")
+                if slug == "solar":
+                    await page.get_by_label("Vente à financer").select_option("demo-sale-0001")
+                    await page.get_by_label("Échéance 1 · Date").fill("2026-12-01")
+                    await page.get_by_label("Montant dû").fill("60.00")
+                    await page.get_by_role("button", name="+ Ajouter une échéance").click()
+                    await page.get_by_label("Échéance 2 · Date").fill("2027-01-01")
+                    await page.locator("label", has_text="Montant dû").nth(1).locator("input").fill("60.00")
+                    await page.get_by_label("Référence des conditions approuvées").fill("DEMO-SOLAR-TERMS")
+                    await page.get_by_role("button", name="Créer le contrat").click()
+                    await page.get_by_role("heading", name="Échéancier consulté").wait_for()
                 await page.wait_for_timeout(120)
                 await page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"), full_page=True)
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")

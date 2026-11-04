@@ -141,7 +141,12 @@ def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
     assert "list_active_solar_products" in storage
     assert '"/local/v1/solar/products"' in app
     assert '"/local/v1/solar/quotes"' in app
+    assert '"/local/v1/solar/contracts"' in app
+    assert 'local/v1/installment-plans/${encodeURIComponent(planId)}' in app
     assert "Vérifier le devis" in app
+    assert "Créer le contrat" in app
+    assert "Échéancier consulté" in app
+    assert "overdue_amount" in app
     assert "principal: result.principal" in app
     assert 'name="principal"' not in app
     assert "innerHTML" not in app
@@ -196,3 +201,4 @@ def test_figma_visual_review_uses_only_marked_synthetic_fixtures() -> None:
     assert "viewport={\"width\": 1440, \"height\": 900}" in visual_review
     assert "document.documentElement.scrollWidth" in visual_review
     assert "SEL-V2-Figma-Desktop-Review-${{ github.run_number }}" in workflow
+    assert 'DEMO-SOLAR-TERMS' in visual_review
