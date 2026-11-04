@@ -17,26 +17,30 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
 }
 
-async fn seed_local_catalog(store: &LocalStore) {
+async fn seed_local_catalog(store: &LocalStore, effective_from: chrono::NaiveDate) {
     sqlx::query(
         "INSERT INTO tariff_versions
          (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
-         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', '2000-01-01', 'convergence-v1', 'APPROVED'),
-                ($2, 'WATER', 'RESIDENTIAL', 'M3', '0.50', 'USD', '2000-01-01', 'convergence-v1', 'APPROVED')",
+         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', $3, 'convergence-v1', 'APPROVED'),
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', '0.50', 'USD', $4, 'convergence-v1', 'APPROVED')",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
+    .bind(effective_from.to_string())
+    .bind(effective_from.to_string())
     .execute(&store.pool)
     .await
     .unwrap();
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', '2000-01-01', 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', '2000-01-01', 'APPROVED')",
+         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', $3, 'APPROVED'),
+                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', $4, 'APPROVED')",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
+    .bind(effective_from.to_string())
+    .bind(effective_from.to_string())
     .execute(&store.pool)
     .await
     .unwrap();
@@ -52,26 +56,30 @@ async fn seed_local_catalog(store: &LocalStore) {
     .unwrap();
 }
 
-async fn seed_central_catalog(store: &CentralStore) {
+async fn seed_central_catalog(store: &CentralStore, effective_from: chrono::NaiveDate) {
     sqlx::query(
         "INSERT INTO tariff_versions
          (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
-         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', 0.095, 'USD', '2000-01-01', 'convergence-v1', 'APPROVED'),
-                ($2, 'WATER', 'RESIDENTIAL', 'M3', 0.50, 'USD', '2000-01-01', 'convergence-v1', 'APPROVED')",
+         VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', 0.095, 'USD', $3, 'convergence-v1', 'APPROVED'),
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', 0.50, 'USD', $4, 'convergence-v1', 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())
+    .bind(effective_from)
+    .bind(effective_from)
     .execute(&store.pool)
     .await
     .unwrap();
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', '2000-01-01', 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', '2000-01-01', 'APPROVED')",
+         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', $3, 'APPROVED'),
+                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', $4, 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())
+    .bind(effective_from)
+    .bind(effective_from)
     .execute(&store.pool)
     .await
     .unwrap();
@@ -104,6 +112,10 @@ async fn seed_local_customer(store: &LocalStore) -> sel_contracts::Customer {
 #[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
 async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+    let billing_year = 3_000 + (Uuid::new_v4().as_u128() % 6_000) as u32;
+    let effective_from = chrono::NaiveDate::from_ymd_opt(billing_year as i32, 1, 1).unwrap();
+    let billing_period = format!("{billing_year}-11");
+    let due_date = format!("{billing_year}-11-30");
     let organization_id = Uuid::new_v4();
     let actor_id = Uuid::new_v4();
     let device_one = Uuid::new_v4();
@@ -150,7 +162,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .await
         .unwrap();
     }
-    seed_central_catalog(&central).await;
+    seed_central_catalog(&central, effective_from).await;
 
     let base = std::env::temp_dir().join(format!("sel-v2-convergence-{}", Uuid::new_v4()));
     let path_one = base.with_extension("one.sqlite");
@@ -177,19 +189,19 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .configure_offline_identity(actor_id, grant_two)
         .await
         .unwrap();
-    seed_local_catalog(&first).await;
-    seed_local_catalog(&second).await;
+    seed_local_catalog(&first, effective_from).await;
+    seed_local_catalog(&second, effective_from).await;
 
     let customer = seed_local_customer(&first).await;
     let invoice_request = json!({
         "customer_id": customer.id,
-        "billing_period": "2000-11",
+        "billing_period": billing_period,
         "electricity": {"quantity":"100","unit":"KWH"},
         "water": {"quantity":"0","unit":"M3"},
         "water_zero_confirmed": true,
         "currency":"USD",
         "tariff_revision":"convergence-v1",
-        "due_date":"2026-11-30"
+        "due_date":due_date
     });
     let local_invoice = router_with_store(first.clone())
         .oneshot(
