@@ -61,6 +61,28 @@ PRODUCTS = [{
     "effective_from": "2026-01-01",
     "approval_ref": "DÉMO — DONNÉE FICTIVE",
 }]
+SERVICE_ACCOUNTS = [{
+    "id": "demo-service-account-0001",
+    "customer_id": "demo-customer-0001",
+    "service_code": "ELECTRICITY",
+    "connection_status": "CONNECTED",
+}]
+METERS = [{
+    "id": "demo-meter-0001",
+    "service_account_id": "demo-service-account-0001",
+    "serial": "DEMO-KWH-001",
+    "unit": "KWH",
+    "active": True,
+}]
+READINGS = [{
+    "id": "demo-reading-0001",
+    "meter_id": "demo-meter-0001",
+    "period": "2026-10",
+    "previous": "1000",
+    "current": "1100",
+    "measured_quantity": "100",
+    "source": "MANUAL",
+}]
 
 
 def mock_invoke_script() -> str:
@@ -70,6 +92,9 @@ def mock_invoke_script() -> str:
         "payments": PAYMENTS,
         "sales": SALES,
         "products": PRODUCTS,
+        "serviceAccounts": SERVICE_ACCOUNTS,
+        "meters": METERS,
+        "readings": READINGS,
     }, ensure_ascii=False)
     return f"""
       const fixtures = {fixtures};
@@ -80,6 +105,9 @@ def mock_invoke_script() -> str:
         let body = [];
         if (path === '/local/v1/customers') body = fixtures.customers;
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}}]}};
+        else if (path.startsWith('/local/v1/customers/') && path.endsWith('/service-accounts')) body = fixtures.serviceAccounts;
+        else if (path.startsWith('/local/v1/service-accounts/') && path.endsWith('/meters')) body = fixtures.meters;
+        else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings')) body = fixtures.readings;
         else if (path.startsWith('/local/v1/customers/')) body = fixtures.customers[0];
         else if (path.startsWith('/local/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
         else if (path.startsWith('/local/v1/invoices')) body = fixtures.invoices;
@@ -125,6 +153,7 @@ async def capture_views() -> None:
             views = [
                 ("dashboard", "Vue d’ensemble"),
                 ("customers", "Abonnés"),
+                ("readings", "Relevés"),
                 ("invoices", "Factures"),
                 ("payments", "Encaissements"),
                 ("solar", "Kits solaires"),
@@ -134,6 +163,11 @@ async def capture_views() -> None:
             ]
             for slug, label in views:
                 await page.get_by_role("button", name=label, exact=True).click()
+                if slug == "readings":
+                    selects = page.locator(".reading-filters select")
+                    await selects.nth(0).select_option("demo-customer-0001")
+                    await selects.nth(1).select_option("demo-service-account-0001")
+                    await selects.nth(2).select_option("demo-meter-0001")
                 await page.wait_for_timeout(120)
                 await page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"), full_page=True)
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")

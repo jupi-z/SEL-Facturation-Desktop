@@ -39,6 +39,7 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
     for label in (
         "Vue d’ensemble",
         "Abonnés",
+        "Relevés",
         "Factures",
         "Encaissements",
         "Kits solaires",
@@ -51,6 +52,19 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
 
     assert 'name="tax_id"' not in app
     assert "Le dossier local enregistre le code abonné, le nom, l’adresse et le téléphone." in app
+
+
+def test_meter_reading_screen_uses_local_routes_and_displays_rust_measurements() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert '/service-accounts/${encodeURIComponent(accountId)}/meters' in app
+    assert '/readings`, "POST"' in app
+    assert 'measured_quantity' in app
+    assert 'source: "MANUAL"' in app
+    assert 'Number(form.get("previous"))' not in app
+    assert '"readings", "Relevés"' in visual_review
+    assert '"DEMO-KWH-001"' in visual_review
 
 
 def test_v2_windows_client_has_local_brand_assets_and_no_remote_runtime_assets() -> None:

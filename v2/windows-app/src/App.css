@@ -92,6 +92,10 @@ table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .payment-table th:nth-child(5) { width: 18%; }
 .payment-table td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .payment-table td:nth-child(2), .payment-table td:nth-child(3), .payment-table td:nth-child(4) { white-space: nowrap; }
+.reading-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 16px; }
+.reading-entry { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-top: 16px; border-top: 1px solid var(--line); }
+.reading-entry .help { align-self: end; padding-bottom: 10px; }
+.reading-message { margin: 12px 0; color: var(--green); font-size: 12px; }
 th { color: var(--muted); background: #fff; text-align: left; font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
 th, td { min-height: 40px; padding: 11px 9px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 td { color: #263f5d; }

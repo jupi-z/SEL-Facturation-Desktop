@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState, type ButtonHTMLAttributes, t
 import { localRequest, localStatus, openMonarqueSite } from "./api";
 import "./App.css";
 
-type View = "dashboard" | "customers" | "invoices" | "payments" | "solar" | "receivables" | "sync" | "admin";
+type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "sync" | "admin";
 type Row = Record<string, unknown>;
 type Notice = { message: string; error?: boolean } | null;
 
 const navigation: { id: View; label: string; icon: string }[] = [
   { id: "dashboard", label: "Vue d’ensemble", icon: "grid" },
   { id: "customers", label: "Abonnés", icon: "people" },
+  { id: "readings", label: "Relevés", icon: "meter" },
   { id: "invoices", label: "Factures", icon: "document" },
   { id: "payments", label: "Encaissements", icon: "cash" },
   { id: "solar", label: "Kits solaires", icon: "sun" },
@@ -20,6 +21,7 @@ const navigation: { id: View; label: string; icon: string }[] = [
 const pageTitle: Record<View, { title: string; context: string }> = {
   dashboard: { title: "Vue d’ensemble", context: "SEL / OPÉRATIONS" },
   customers: { title: "Répertoire des abonnés", context: "SEL / CLIENTS" },
+  readings: { title: "Relevés de compteurs", context: "SEL / RELEVÉS" },
   invoices: { title: "Factures", context: "SEL / FACTURATION" },
   payments: { title: "Journal de caisse", context: "SEL / COMMERCE & FINANCE" },
   solar: { title: "Catalogue des kits solaires", context: "SEL / COMMERCE & FINANCE" },
@@ -352,6 +354,8 @@ export default function App() {
         </>}
       </>}
 
+      {view === "readings" && <MeterReadingsView customers={customers} />}
+
       {view === "invoices" && <>
         <div className="page-heading"><div><p className="eyebrow">CORE / FACTURATION</p><h1>Factures eau + électricité</h1><p className="muted">Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust.</p></div><span className="tag">USD</span></div>
         <Panel title="Nouvelle facture">
@@ -475,6 +479,85 @@ function PaymentForm({ customers, onSubmit }: { customers: Row[]; onSubmit: (eve
     <label>Créance à affecter<select name="receivable_id" required disabled={!customerId || !receivables.length}><option value="">{customerId ? "Sélectionner une créance" : "Sélectionnez d’abord un abonné"}</option>{receivables.map((item) => <option key={text(item.receivable_id ?? item.id)} value={text(item.receivable_id ?? item.id)}>{text(item.status)} · {formatMoney(item.balance, item.currency)}</option>)}</select></label>
     <div className="form-actions span-two"><Button primary type="submit">Enregistrer le règlement</Button></div>
   </form>;
+}
+
+function MeterReadingsView({ customers }: { customers: Row[] }) {
+  const [customerId, setCustomerId] = useState("");
+  const [accounts, setAccounts] = useState<Row[]>([]);
+  const [accountId, setAccountId] = useState("");
+  const [meters, setMeters] = useState<Row[]>([]);
+  const [meterId, setMeterId] = useState("");
+  const [readings, setReadings] = useState<Row[]>([]);
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); return; }
+    let active = true;
+    localRequest<unknown>(`/local/v1/customers/${encodeURIComponent(customerId)}/service-accounts`).then((result) => {
+      if (active) { setAccounts(rows(result)); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); }
+    }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
+    return () => { active = false; };
+  }, [customerId]);
+
+  useEffect(() => {
+    if (!accountId) { setMeters([]); setMeterId(""); setReadings([]); return; }
+    let active = true;
+    localRequest<unknown>(`/local/v1/service-accounts/${encodeURIComponent(accountId)}/meters`).then((result) => {
+      if (active) { setMeters(rows(result).filter((meter) => meter.active !== false)); setMeterId(""); setReadings([]); }
+    }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
+    return () => { active = false; };
+  }, [accountId]);
+
+  useEffect(() => {
+    if (!meterId) { setReadings([]); return; }
+    let active = true;
+    localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`).then((result) => {
+      if (active) setReadings(rows(result));
+    }).catch((error: unknown) => { if (active) setMessage(humanError(error)); });
+    return () => { active = false; };
+  }, [meterId]);
+
+  async function saveReading(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!meterId) return;
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setSaving(true); setMessage("");
+    try {
+      await localRequest(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`, "POST", {
+        period: form.get("period"), previous: form.get("previous"), current: form.get("current"), source: "MANUAL",
+      });
+      const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
+      setReadings(rows(result));
+      formElement.reset();
+      setMessage("Relevé enregistré sur ce poste.");
+    } catch (error) { setMessage(humanError(error)); }
+    finally { setSaving(false); }
+  }
+
+  return <>
+    <PageHeading eyebrow="CORE / RELEVÉS" title="Relevés de compteurs" description="Consultez l’historique et enregistrez les index. La consommation mesurée est calculée et validée par Rust." />
+    <Panel title="Nouveau relevé">
+      <div className="form-grid reading-filters">
+        <label>Abonné<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Sélectionner…</option>{customers.map((customer) => <option key={text(customer.customer_id ?? customer.id)} value={text(customer.customer_id ?? customer.id)}>{text(customer.customer_code)} — {text(customer.legal_name)}</option>)}</select></label>
+        <label>Service<select value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{text(account.service_code)} · {text(account.connection_status)}</option>)}</select></label>
+        <label className="span-two">Compteur<select value={meterId} onChange={(event) => setMeterId(event.target.value)} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {text(meter.unit)}</option>)}</select></label>
+      </div>
+      {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void saveReading(event)}>
+        <label>Période<input name="period" type="month" required /></label>
+        <label>Index précédent<input name="previous" type="number" min="0" step="0.001" required /></label>
+        <label>Nouvel index<input name="current" type="number" min="0" step="0.001" required /></label>
+        <p className="help">L’index doit respecter l’historique du compteur. La quantité consommée sera retournée par le moteur métier.</p>
+        <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer le relevé"}</Button></div>
+      </form>}
+      {message && <p role="status" className="reading-message">{message}</p>}
+      {!customerId && <div className="empty-state">Choisissez un abonné pour afficher ses services et ses compteurs.</div>}
+      {customerId && !accounts.length && <div className="empty-state">Aucun compte de service n’est enregistré pour cet abonné sur ce poste.</div>}
+      {accountId && !meters.length && <div className="empty-state">Aucun compteur actif n’est associé à ce service.</div>}
+    </Panel>
+    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), `${text(reading.previous)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.current)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, `${text(reading.measured_quantity)} ${text(meters.find((meter) => text(meter.id) === meterId)?.unit)}`, text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—"])} /></Panel>}
+  </>;
 }
 
 function CustomerStatement({ customerId, statement }: { customerId: string; statement: Row | null }) {
