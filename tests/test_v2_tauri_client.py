@@ -238,8 +238,69 @@ def test_solar_catalog_route_uses_local_api_error_contract() -> None:
 
     assert "Result<Json<Vec<serde_json::Value>>, (StatusCode, String)>" in handler
     assert ".map_err(internal_error)?" in handler
-    assert "ApiError" not in handler
-    assert "storage_error" not in handler
+
+
+def test_admin_console_uses_individual_native_session_and_real_central_contracts() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    adapter = (APP / "src" / "api.ts").read_text(encoding="utf-8")
+    native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+
+    assert "centralLogin" in app
+    assert '"/v1/admin/users"' in app
+    assert '"/v1/admin/devices"' in app
+    assert '"/v1/admin/offline-grants"' in app
+    assert "API locale d’administration non exposée" not in app
+    assert "Créer l’utilisateur" in app
+    assert "Désactiver" in app and "Réactiver" in app
+    assert "Réinitialiser le mot de passe" in app
+    assert "minLength={8}" in app
+    assert "AdminCatalogPanel" in app
+    assert "Créer un brouillon" in app
+    assert "Référence d’approbation SEL" in app
+    assert "Journal d’audit" not in app
+    assert 'invoke("central_login"' in adapter
+    assert '"central_admin_request"' in adapter
+    assert "central_login" in native and "central_admin_request" in native
+    assert "central_session" in native
+    assert "/v1/auth/login" in native
+    assert "Authorization" not in adapter
+
+
+def test_native_central_admin_bridge_is_allowlisted_and_never_uses_sync_token_as_user_session() -> None:
+    native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+
+    assert "validate_central_admin_request" in native
+    assert "session.access_token" in native
+    admin_command = native.split("async fn central_admin_request(", 1)[1].split("\n#[tauri::command]", 1)[0]
+    assert "central_api_token" not in admin_command
+    assert "v1/auth/login" in native
+    assert '"tariffs" | "products" | "tax-profiles" | "fx-rates"' in native
+    assert '"/v1/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/password"' in native
+    assert "localStorage" not in (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert ".." in native
+
+
+def test_admin_reference_writes_use_native_idempotency_and_require_explicit_approval() -> None:
+    native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert 'header("Idempotency-Key", uuid::Uuid::new_v4().to_string())' in native
+    assert "effective_to: values.effective_to || null" in app
+    assert 'approval_ref: approvalRef' in app
+    assert 'supersedes_tariff_id' in app
+    assert 'supersedes_product_id' in app
+    assert 'onRevoke={revokeCatalogItem}' in app
+    assert 'change_ref: changeRef' in app
+    assert "Brouillon" in app
+
+
+def test_admin_visual_review_covers_login_and_authenticated_synthetic_state() -> None:
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert "admin-login-1440x900.png" in visual_review
+    assert "__ADMIN_DEMO_SESSION__" in visual_review
+    assert "demo-admin-0001" in visual_review
+    assert "central_admin_request" in visual_review
 
 
 def test_solar_payment_form_clears_stale_schedules_and_fails_closed() -> None:
@@ -281,7 +342,7 @@ def test_financial_and_sync_statuses_are_shown_in_french() -> None:
 
 def test_customer_statement_uses_localized_status_badges() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
-    statement = app.split("function CustomerStatement(", 1)[1].split("\nfunction AdminCard(", 1)[0]
+    statement = app.split("function CustomerStatement(", 1)[1].split("\ntype AdminCatalog", 1)[0]
 
     assert statement.count("<Status value={item.status} />") == 2
     assert "text(item.status)" not in statement

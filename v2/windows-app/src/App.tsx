@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
-import { localRequest, localStatus, openMonarqueSite } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
+import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, localRequest, localStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
 import "./App.css";
 
 type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "sync" | "admin";
@@ -534,12 +534,7 @@ export default function App() {
 
       {view === "admin" && <>
         <PageHeading eyebrow="ADMIN / RÉFÉRENTIELS" title="Administration" description="Les écrans administratifs suivent les permissions et les paramètres effectivement exposés par le service Rust." />
-        <div className="admin-grid">
-          <AdminCard title="Utilisateurs et rôles" description="Gestion des accès et sessions" state="API locale d’administration non exposée" />
-          <AdminCard title="Appareils et autorisations offline" description="Enrôlement, grants et limites" state="À configurer par le serveur central" />
-          <AdminCard title="Tarifs et taxes approuvés" description="Révisions datées et historisées" state="Le catalogue local est en lecture seule" />
-          <AdminCard title="Journal d’audit" description="Écritures métier et corrections" state="Vue d’audit à raccorder au contrat central" />
-        </div>
+        <AdminConsole />
       </>}
 
       <footer>Application développée et sécurisée par LTEX · <button className="footer-link" onClick={() => void openMonarqueSite().catch((error: unknown) => setNotice({ message: humanError(error), error: true }))}>MonarQue Group</button></footer>
@@ -573,10 +568,17 @@ function Status({ value }: { value: unknown }) {
     CREDITED: "Avoir enregistré",
     CONFLICT: "Conflit à examiner",
     REJECTED: "Refusé",
+    ACTIVE: "Actif",
+    DISABLED: "Désactivé",
+    APPROVED: "Approuvé",
+    DRAFT: "Brouillon",
+    REVOKED: "Révoqué",
+    ISSUED: "Émise",
   };
   const state = normalized.toLocaleLowerCase("en").includes("pending") || normalized.toLocaleLowerCase("fr").includes("attente") ? "pending"
     : normalized.toLocaleLowerCase("en").includes("conflict") || normalized.toLocaleLowerCase("fr").includes("conflit") || normalized.toLocaleLowerCase("en").includes("reject") ? "danger"
-      : normalized.toLocaleLowerCase("en").includes("accept") || normalized.toLocaleLowerCase("en").includes("ready") ? "success" : "neutral";
+      : ["ACTIVE", "APPROVED", "ISSUED"].includes(normalized.toUpperCase()) || normalized.toLocaleLowerCase("en").includes("accept") || normalized.toLocaleLowerCase("en").includes("ready") ? "success"
+        : ["DISABLED", "REVOKED"].includes(normalized.toUpperCase()) ? "danger" : "neutral";
   return <span className={`status-badge ${state}`}>{labels[normalized] ?? normalized}</span>;
 }
 
@@ -862,6 +864,276 @@ function CustomerStatement({ customerName, customerCode, statement }: { customer
   </Panel>;
 }
 
-function AdminCard({ title, description, state }: { title: string; description: string; state: string }) {
-  return <section className="panel admin-card"><p className="eyebrow">ADMINISTRATION</p><h2>{title}</h2><p className="muted">{description}</p><span className="status-badge pending">{state}</span></section>;
+type AdminCatalog = "tariffs" | "products" | "tax-profiles" | "fx-rates";
+type AdminCatalogField = { name: string; label: string; type?: string; required?: boolean; step?: string };
+
+const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: AdminCatalogField[]; columns: string[] }> = {
+  tariffs: { title: "Tarifs", fields: [
+    { name: "service_code", label: "Service" }, { name: "customer_category", label: "Catégorie" },
+    { name: "unit", label: "Unité" }, { name: "unit_price", label: "Prix unitaire", type: "number", step: "any" },
+    { name: "currency", label: "Devise" }, { name: "effective_from", label: "Début d’effet", type: "date" },
+    { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
+  ], columns: ["service_code", "customer_category", "unit_price", "currency", "effective_from", "status"] },
+  products: { title: "Catalogue solaire", fields: [
+    { name: "sku", label: "Référence produit" }, { name: "label", label: "Désignation" },
+    { name: "price_reference", label: "Prix de référence", type: "number", step: "any" },
+    { name: "currency", label: "Devise" }, { name: "effective_from", label: "Début d’effet", type: "date" },
+    { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
+  ], columns: ["sku", "label", "price_reference", "currency", "effective_from", "status"] },
+  "tax-profiles": { title: "Profils fiscaux", fields: [
+    { name: "service_code", label: "Service" }, { name: "jurisdiction", label: "Juridiction" },
+    { name: "base", label: "Assiette" }, { name: "rate", label: "Taux", type: "number", step: "any" },
+    { name: "source", label: "Référence approuvée par SEL" }, { name: "effective_from", label: "Début d’effet", type: "date" },
+    { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
+  ], columns: ["service_code", "jurisdiction", "base", "rate", "effective_from", "status"] },
+  "fx-rates": { title: "Taux de change", fields: [
+    { name: "from_currency", label: "Devise source" }, { name: "to_currency", label: "Devise cible" },
+    { name: "value", label: "Taux", type: "number", step: "any" }, { name: "source", label: "Référence approuvée par SEL" },
+    { name: "effective_from", label: "Début d’effet", type: "date" }, { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
+  ], columns: ["from_currency", "to_currency", "value", "effective_from", "status"] },
+};
+
+function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }: {
+  kind: AdminCatalog; items: Row[]; busy: boolean;
+  onCreate: (kind: AdminCatalog, values: Record<string, string>) => void;
+  onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => void;
+  onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => void;
+}) {
+  const definition = adminCatalogDefinitions[kind];
+  const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
+  function create(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries([...new FormData(form).entries()].map(([key, value]) => [key, String(value).trim()]));
+    onCreate(kind, values);
+    form.reset();
+  }
+  return <Panel title={definition.title}>
+    <form className="form-grid admin-catalog-form" onSubmit={create}>
+      {definition.fields.map((field) => <label key={field.name}>{field.label}<input name={field.name} type={field.type ?? "text"} step={field.step} required={field.required !== false} /></label>)}
+      <div className="form-actions span-two"><Button primary type="submit" disabled={busy}>Créer un brouillon</Button></div>
+      <p className="help span-two">Le brouillon n’est pas applicable aux factures. Il faut une référence d’approbation saisie par SEL pour l’activer.</p>
+    </form>
+    <Table headers={[...definition.columns.map((field) => field.replaceAll("_", " ")), "Approbation"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
+      const id = text(item.id ?? item[idField], "");
+      const status = text(item.status).toUpperCase();
+      const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={(event) => {
+        event.preventDefault();
+        const values = new FormData(event.currentTarget);
+        onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
+      }}><input aria-label="Référence d’approbation SEL" name="approval_ref" placeholder="Référence SEL" required /><input aria-label="Version remplacée (facultatif)" name="supersedes_id" placeholder="UUID remplacé (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? <form className="admin-approve-form" onSubmit={(event) => {
+        event.preventDefault();
+        const changeRef = String(new FormData(event.currentTarget).get("change_ref") ?? "").trim();
+        onRevoke(kind, item, changeRef);
+      }}><input aria-label="Référence de révocation SEL" name="change_ref" placeholder="Référence SEL" required /><Button type="submit" disabled={busy || !id}>Révoquer</Button></form> : <Status value={status || "État inconnu"} />;
+      return [...definition.columns.map((field) => field === "status" ? <Status value={item[field]} /> : text(item[field])), approval];
+    })} />
+  </Panel>;
+}
+
+function AdminConsole() {
+  const [session, setSession] = useState<CentralSessionInfo | null>(null);
+  const [users, setUsers] = useState<Row[]>([]);
+  const [devices, setDevices] = useState<Row[]>([]);
+  const [grants, setGrants] = useState<Row[]>([]);
+  const [tariffs, setTariffs] = useState<Row[]>([]);
+  const [products, setProducts] = useState<Row[]>([]);
+  const [taxProfiles, setTaxProfiles] = useState<Row[]>([]);
+  const [fxRates, setFxRates] = useState<Row[]>([]);
+  const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
+  const [passwordTarget, setPasswordTarget] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const authenticated = useRef(false);
+
+  function clearAdminSession() {
+    authenticated.current = false;
+    setSession({ authenticated: false });
+    setUsers([]); setDevices([]); setGrants([]); setTariffs([]); setProducts([]); setTaxProfiles([]); setFxRates([]);
+  }
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    const paths = [
+      "/v1/admin/users", "/v1/admin/devices", "/v1/admin/offline-grants",
+      "/v1/admin/catalog/tariffs", "/v1/admin/catalog/products",
+      "/v1/admin/catalog/tax-profiles", "/v1/admin/catalog/fx-rates",
+    ];
+    const results = await Promise.allSettled(paths.map((path) => centralAdminRequest<unknown>(path)));
+    if (!authenticated.current) return;
+    const setters = [setUsers, setDevices, setGrants, setTariffs, setProducts, setTaxProfiles, setFxRates] as const;
+    results.forEach((result, index) => { if (result.status === "fulfilled") setters[index](rows<Row>(result.value)); });
+    const failed = results.filter((result) => result.status === "rejected");
+    if (failed.length) {
+      const current = await centralSessionStatus().catch(() => ({ authenticated: false }));
+      if (!current.authenticated) {
+        clearAdminSession();
+        setMessage("La session centrale a expiré. Reconnectez-vous pour continuer."); setError(true); setLoading(false);
+        return;
+      }
+    }
+    setMessage(failed.length ? `${7 - failed.length} référentiel(s) chargé(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "Données d’administration actualisées depuis le serveur central.");
+    setError(failed.length > 0);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    centralSessionStatus().then((value) => { if (active) { authenticated.current = value.authenticated; setSession(value); } }).catch(() => { if (active) setSession({ authenticated: false }); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => { if (session?.authenticated && session.role === "ADMIN") void loadData(); }, [session, loadData]);
+
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const identityRef = String(values.get("identity_ref") ?? "");
+    const password = String(values.get("password") ?? "");
+    form.reset();
+    setLoading(true); setMessage(""); setError(false);
+    try {
+      const result = await centralLogin(identityRef, password);
+      authenticated.current = true;
+      setSession({ authenticated: true, ...result });
+      setMessage("Session administrateur ouverte. Les jetons restent conservés en mémoire native.");
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setLoading(false); }
+  }
+
+  async function logout() {
+    try { await centralLogout(); clearAdminSession(); setMessage("Session centrale fermée."); setError(false); }
+    catch (reason) { setMessage(humanError(reason)); setError(true); }
+  }
+
+  async function createUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    try {
+      await centralAdminRequest("/v1/admin/users", "POST", {
+        identity_ref: String(values.get("identity_ref") ?? "").trim(),
+        role: String(values.get("role") ?? "BILLING_AGENT"),
+        password: String(values.get("password") ?? ""),
+      });
+      form.reset(); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+  }
+
+  async function toggleUser(user: Row) {
+    const id = text(user.id ?? user.user_id, "");
+    const status = text(user.status).toUpperCase() === "ACTIVE" ? "DISABLED" : "ACTIVE";
+    if (!id) return;
+    try {
+      await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { status });
+      setMessage(status === "ACTIVE" ? "Compte réactivé." : "Compte désactivé. Les sessions associées sont révoquées côté serveur.");
+      setError(false); await loadData();
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+  }
+
+  async function updateUserRole(user: Row) {
+    const id = text(user.id ?? user.user_id, "");
+    const role = roleDrafts[id];
+    if (!id || !role || role === text(user.role)) return;
+    try {
+      await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { role });
+      setMessage("Rôle modifié par le serveur central."); setError(false); await loadData();
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+  }
+
+  async function resetUserPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!passwordTarget) return;
+    const form = event.currentTarget;
+    const password = String(new FormData(form).get("password") ?? "");
+    try {
+      await centralAdminRequest(`/v1/users/${encodeURIComponent(passwordTarget)}/password`, "POST", { password });
+      form.reset(); setPasswordTarget(""); setMessage("Mot de passe mis à jour. Les sessions existantes sont révoquées côté serveur."); setError(false); await loadData();
+    } catch (reason) { form.reset(); setMessage(humanError(reason)); setError(true); }
+  }
+
+  async function createCatalogDraft(kind: AdminCatalog, values: Record<string, string>) {
+    setCatalogBusy(true);
+    try {
+      const body = { ...values, effective_to: values.effective_to || null };
+      await centralAdminRequest(`/v1/admin/catalog/${kind}`, "POST", body);
+      setMessage(`Brouillon ${adminCatalogDefinitions[kind].title.toLocaleLowerCase("fr")} transmis au serveur. Il n’est pas encore applicable.`); setError(false); await loadData();
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setCatalogBusy(false); }
+  }
+
+  async function approveCatalogDraft(kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) {
+    const id = text(item.id ?? item[kind === "tariffs" ? "tariff_id" : "product_id"], "");
+    if (!id || !approvalRef) return;
+    setCatalogBusy(true);
+    try {
+      const supersedesKey = kind === "tariffs" ? "supersedes_tariff_id" : kind === "products" ? "supersedes_product_id" : "supersedes_id";
+      const body = { approval_ref: approvalRef, [supersedesKey]: supersedesId || null };
+      await centralAdminRequest(`/v1/admin/catalog/${kind}/${encodeURIComponent(id)}/approve`, "POST", body);
+      setMessage("Référentiel approuvé par le serveur central avec la référence fournie."); setError(false); await loadData();
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setCatalogBusy(false); }
+  }
+
+  async function revokeCatalogItem(kind: AdminCatalog, item: Row, changeRef: string) {
+    const id = text(item.id ?? item[kind === "tariffs" ? "tariff_id" : "product_id"], "");
+    if (!id || !changeRef) return;
+    setCatalogBusy(true);
+    try {
+      await centralAdminRequest(`/v1/admin/catalog/${kind}/${encodeURIComponent(id)}/revoke`, "POST", { change_ref: changeRef });
+      setMessage("Révocation enregistrée par le serveur central avec la référence fournie."); setError(false); await loadData();
+    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setCatalogBusy(false); }
+  }
+
+  if (!session?.authenticated) return <>
+    {message && <div className={`notice${error ? " error" : ""}`} role={error ? "alert" : "status"}>{message}</div>}
+    <Panel title="Connexion administrateur centrale">
+      <p className="muted">La gestion des comptes, appareils et référentiels nécessite une connexion au serveur. Les opérations métier locales restent indépendantes de cette session.</p>
+      <form className="form-grid admin-login" onSubmit={(event) => void login(event)}>
+        <label>Identifiant SEL<input name="identity_ref" autoComplete="username" required /></label>
+        <label>Mot de passe<input name="password" type="password" autoComplete="current-password" required /></label>
+        <div className="form-actions span-two"><Button primary type="submit" disabled={loading}>{loading ? "Connexion…" : "Se connecter"}</Button></div>
+      </form>
+    </Panel>
+  </>;
+
+  if (session.role !== "ADMIN") return <Panel title="Accès administrateur requis">
+    <p className="muted">La session {text(session.role)} est authentifiée, mais ne possède pas le rôle ADMIN nécessaire à ces fonctions.</p>
+    <div className="form-actions"><Button onClick={() => void logout()}>Fermer la session</Button></div>
+  </Panel>;
+
+  return <>
+    {message && <div className={`notice${error ? " error" : ""}`} role={error ? "alert" : "status"}>{message}</div>}
+    <Panel title="Session administrateur" action={<div className="page-actions"><Button onClick={() => void loadData()} disabled={loading}>{loading ? "Actualisation…" : "Actualiser"}</Button><Button onClick={() => void logout()}>Se déconnecter</Button></div>}>
+      <dl className="customer-details admin-session"><div><dt>Utilisateur</dt><dd>{text(session.user_id)}</dd></div><div><dt>Rôle</dt><dd>{text(session.role)}</dd></div><div><dt>Organisation</dt><dd>{text(session.organization_id)}</dd></div></dl>
+    </Panel>
+    <Panel title="Utilisateurs et rôles">
+      <form className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
+        <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required /></label>
+        <label>Rôle<select name="role" defaultValue="BILLING_AGENT"><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
+        <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required /></label>
+        <div className="form-actions"><Button primary type="submit">Créer l’utilisateur</Button></div>
+      </form>
+      <Table headers={["Identifiant", "Rôle", "État", "Actions"]} empty="Aucun utilisateur retourné par le serveur." data={users.map((user) => {
+        const id = text(user.id ?? user.user_id, "");
+        return [text(user.identity_ref), <div className="admin-role-control"><select aria-label={`Rôle de ${text(user.identity_ref)}`} value={roleDrafts[id] ?? text(user.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [id]: event.target.value }))}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select><Button disabled={!roleDrafts[id] || roleDrafts[id] === text(user.role)} onClick={() => void updateUserRole(user)}>Enregistrer</Button></div>, <Status value={user.status} />, <div className="admin-user-actions"><Button onClick={() => setPasswordTarget(id)}>Réinitialiser le mot de passe</Button><Button onClick={() => void toggleUser(user)}>{text(user.status).toUpperCase() === "ACTIVE" ? "Désactiver" : "Réactiver"}</Button></div>];
+      })} />
+      {passwordTarget && <form className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Les sessions existantes de ce compte seront révoquées après validation côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required /></label><div className="page-actions"><Button type="button" onClick={() => setPasswordTarget("")}>Annuler</Button><Button primary type="submit">Confirmer le changement</Button></div></form>}
+    </Panel>
+    <div className="admin-grid admin-catalog-grid">
+      <AdminCatalogPanel kind="tariffs" items={tariffs} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
+      <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
+      <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
+      <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
+    </div>
+    <div className="admin-grid">
+      <Panel title="Appareils enrôlés"><Table headers={["Appareil", "État", "Dernière activité"]} empty="Aucun appareil communiqué." data={devices.map((device) => [text(device.id ?? device.device_id), <Status value={device.state ?? device.status} />, text(device.last_seen ?? device.last_seen_at)])} /></Panel>
+      <Panel title="Autorisations hors ligne"><Table headers={["Autorisation", "Utilisateur", "Expiration", "État"]} empty="Aucune autorisation retournée." data={grants.map((grant) => [text(grant.id ?? grant.grant_id), text(grant.user_id), text(grant.expires_at), <Status value={grant.revoked_at ? "Révoquée" : "Émise"} />])} /></Panel>
+    </div>
+    <p className="help">Les changements sont créés comme brouillons puis approuvés avec une référence fournie par SEL. La consultation du journal d’audit n’est pas intégrée car l’API ne fournit pas encore cette route.</p>
+  </>;
 }

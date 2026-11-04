@@ -134,6 +134,21 @@ def mock_invoke_script() -> str:
       const fixtures = {fixtures};
       window.__TAURI_INTERNALS__ = {{ invoke: async (command, args = {{}}) => {{
         if (command === 'local_status') return {{status:'LOCAL_READY',pending:5,conflicts:0,rejected:0,last_successful_sync:'Aucune confirmée'}};
+        if (command === 'central_session_status') return window.__ADMIN_DEMO_SESSION__ ? {{authenticated:true,user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}} : {{authenticated:false}};
+        if (command === 'central_login') {{ window.__ADMIN_DEMO_SESSION__ = true; return {{user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}}; }}
+        if (command === 'central_logout') {{ window.__ADMIN_DEMO_SESSION__ = false; return null; }}
+        if (command === 'central_admin_request') {{
+          const adminPath = args.path || '';
+          let adminBody = [];
+          if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
+          else if (adminPath === '/v1/admin/devices') adminBody = [{{device_id:'demo-device-0001',status:'ACTIVE',last_seen_at:'2026-11-04T08:00:00Z'}}];
+          else if (adminPath === '/v1/admin/offline-grants') adminBody = [{{grant_id:'demo-grant-0001',user_id:'demo-agent-0001',expires_at:'2026-12-01',status:'ACTIVE'}}];
+          else if (adminPath.endsWith('/tariffs')) adminBody = [{{service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',status:'APPROVED'}}];
+          else if (adminPath.endsWith('/products')) adminBody = fixtures.products.map(product => ({{...product,status:'APPROVED'}}));
+          else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{service_code:'DEMO',jurisdiction:'DEMO',base:'NET',rate:'0.16',status:'APPROVED'}}];
+          else if (adminPath.endsWith('/fx-rates')) adminBody = [{{from_currency:'USD',to_currency:'CDF',value:'DEMO',effective_from:'2026-01-01',status:'APPROVED'}}];
+          return {{status:200,body:adminBody}};
+        }}
         if (command !== 'local_request') throw new Error('Unexpected visual smoke command: ' + command);
         const path = args.path || '';
         let body = [];
@@ -304,6 +319,15 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "solar-new-sale-1440x900.png"))
                     await page.get_by_role("button", name="Fermer").click()
+                if slug == "admin":
+                    await page.get_by_role("heading", name="Connexion administrateur centrale").wait_for()
+                    await page.screenshot(path=str(OUTPUT / "admin-login-1440x900.png"))
+                    await page.evaluate("window.__ADMIN_DEMO_SESSION__ = true")
+                    await page.get_by_role("button", name="Vue d’ensemble", exact=True).click()
+                    await page.get_by_role("button", name="Administration", exact=True).click()
+                    await page.get_by_role("heading", name="Utilisateurs et rôles").wait_for()
+                    await page.get_by_text("admin-demo", exact=True).wait_for()
+                    await page.screenshot(path=str(OUTPUT / "admin-full-1440x900.png"), full_page=True)
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")

@@ -74,6 +74,9 @@ jobs:
         working-directory: v2/windows-app
         run: npm run build
 
+      - name: Test native session and central admin route allowlist
+        run: cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib --target x86_64-pc-windows-msvc
+
       - name: Build MSI and NSIS setup
         working-directory: v2/windows-app
         run: npm run tauri -- build --bundles msi,nsis

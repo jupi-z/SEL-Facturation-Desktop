@@ -42,6 +42,27 @@ impl Drop for LocalAgent {
 
 struct DesktopState {
     agent: Option<Arc<LocalAgent>>,
+    central_url: Option<String>,
+    central_client: reqwest::Client,
+    central_session: tokio::sync::Mutex<Option<CentralSession>>,
+}
+
+#[derive(Clone)]
+struct CentralSession {
+    access_token: String,
+    refresh_token: String,
+    user_id: String,
+    organization_id: String,
+    role: String,
+}
+
+#[derive(Deserialize)]
+struct CentralSessionTokens {
+    access_token: String,
+    refresh_token: String,
+    user_id: String,
+    organization_id: String,
+    role: String,
 }
 
 #[derive(Serialize)]
@@ -56,10 +77,10 @@ fn config_path(data_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| data_dir.join("device.json"))
 }
 
-fn start_agent(app: &tauri::AppHandle, data_dir: &Path) -> Result<Option<Arc<LocalAgent>>, String> {
+fn start_agent(app: &tauri::AppHandle, data_dir: &Path) -> Result<(Option<Arc<LocalAgent>>, Option<String>), String> {
     let path = config_path(data_dir);
     if !path.is_file() {
-        return Ok(None);
+        return Ok((None, None));
     }
     let config: DeviceConfig = serde_json::from_slice(
         &std::fs::read(&path).map_err(|error| format!("lecture de la configuration du poste: {error}"))?,
@@ -88,6 +109,7 @@ fn start_agent(app: &tauri::AppHandle, data_dir: &Path) -> Result<Option<Arc<Loc
             return Err("Le service central doit utiliser une URL HTTPS valide.".into());
         }
     }
+    let central_url = config.central_api_url.clone().map(|url| url.trim_end_matches('/').to_owned());
 
     let binary = std::env::var_os("SEL_LOCAL_BINARY")
         .map(PathBuf::from)
@@ -145,7 +167,7 @@ fn start_agent(app: &tauri::AppHandle, data_dir: &Path) -> Result<Option<Arc<Loc
         let _ = child.wait();
         return Err("l’agent local n’a pas ouvert son service dans le délai prévu.".into());
     }
-    Ok(Some(Arc::new(LocalAgent { child: Mutex::new(child), address, token: config.auth_token })))
+    Ok((Some(Arc::new(LocalAgent { child: Mutex::new(child), address, token: config.auth_token })), central_url))
 }
 
 fn validate_request(path: &str, method: &str) -> Result<(), String> {
@@ -161,6 +183,59 @@ fn validate_request(path: &str, method: &str) -> Result<(), String> {
         return Err("Méthode HTTP non autorisée.".into());
     }
     Ok(())
+}
+
+fn validate_central_admin_request(path: &str, method: &str) -> Result<(), String> {
+    if path.chars().any(|character| matches!(character, '?' | '#' | '%' | '\\' | '\r' | '\n'))
+        || path.split('/').any(|part| part == ".." || part == ".")
+    {
+        return Err("Cette route centrale n’est pas autorisée depuis le client.".into());
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    if let ["", "v1", "users", id, "password"] = parts.as_slice() {
+        if is_uuid_segment(id) && method == "POST" { return Ok(()); }
+        return Err("Méthode ou identifiant non autorisé pour cette route.".into());
+    }
+    if !path.starts_with("/v1/admin/") {
+        return Err("Cette route centrale n’est pas autorisée depuis le client.".into());
+    }
+    let collection = match parts.as_slice() {
+        ["", "v1", "admin", collection] => Some(*collection),
+        ["", "v1", "admin", "catalog", collection] => Some(*collection),
+        ["", "v1", "admin", "users", id] if is_uuid_segment(id) => {
+            return if method == "PATCH" { Ok(()) } else { Err("Méthode interdite pour cette route.".into()) };
+        }
+        ["", "v1", "admin", "offline-grants", id, "revoke"] if is_uuid_segment(id) => {
+            return if method == "POST" { Ok(()) } else { Err("Méthode interdite pour cette route.".into()) };
+        }
+        ["", "v1", "admin", "catalog", collection, id, action]
+            if is_uuid_segment(id) && matches!(*action, "approve" | "revoke") =>
+        {
+            if !matches!(*collection, "tariffs" | "products" | "tax-profiles" | "fx-rates") {
+                return Err("Référentiel central non autorisé.".into());
+            }
+            return if method == "POST" { Ok(()) } else { Err("Méthode interdite pour cette route.".into()) };
+        }
+        _ => None,
+    };
+    let Some(collection) = collection else {
+        return Err("Cette route centrale n’est pas autorisée depuis le client.".into());
+    };
+    if !matches!(collection, "users" | "devices" | "offline-grants" | "tariffs" | "products" | "tax-profiles" | "fx-rates") {
+        return Err("Référentiel central non autorisé.".into());
+    }
+    let create_allowed = matches!(collection, "users" | "tariffs" | "products" | "tax-profiles" | "fx-rates");
+    match method {
+        "GET" => Ok(()),
+        "POST" if create_allowed => Ok(()),
+        _ => Err("Méthode interdite pour cette route.".into()),
+    }
+}
+
+fn is_uuid_segment(value: &str) -> bool {
+    value.len() == 36 && value.bytes().enumerate().all(|(index, byte)| {
+        if matches!(index, 8 | 13 | 18 | 23) { byte == b'-' } else { byte.is_ascii_hexdigit() }
+    })
 }
 
 fn request_local(agent: &LocalAgent, path: &str, method: &str, body: Option<Value>, if_match: Option<i64>) -> Result<LocalResponse, String> {
@@ -236,6 +311,131 @@ async fn local_status(state: State<'_, DesktopState>) -> Result<Value, String> {
     }
 }
 
+fn central_error(status: u16, body: &Value) -> String {
+    body.get("error").and_then(|error| error.get("message")).and_then(Value::as_str)
+        .or_else(|| body.get("message").and_then(Value::as_str))
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Le serveur central a répondu HTTP {status}."))
+}
+
+async fn central_json_response(response: reqwest::Response) -> Result<LocalResponse, String> {
+    let status = response.status().as_u16();
+    let body = if status == 204 { Value::Null } else { response.json::<Value>().await.unwrap_or(Value::Null) };
+    Ok(LocalResponse { status, body })
+}
+
+#[tauri::command]
+async fn central_login(state: State<'_, DesktopState>, identity_ref: String, password: String) -> Result<Value, String> {
+    let base = state.central_url.as_deref().ok_or("La connexion centrale n’est pas configurée pour ce poste.")?;
+    if identity_ref.trim().is_empty() || password.is_empty() {
+        return Err("Saisissez votre identifiant et votre mot de passe.".into());
+    }
+    let response = state.central_client.post(format!("{base}/v1/auth/login"))
+        .json(&json!({"identity_ref": identity_ref, "password": password}))
+        .send().await.map_err(|error| format!("Service central inaccessible : {error}"))?;
+    let status = response.status().as_u16();
+    let value = response.json::<Value>().await.unwrap_or(Value::Null);
+    if !(200..300).contains(&status) { return Err(central_error(status, &value)); }
+    let tokens: CentralSessionTokens = serde_json::from_value(value)
+        .map_err(|_| "Réponse de session centrale invalide.".to_owned())?;
+    let public = json!({"user_id":tokens.user_id,"organization_id":tokens.organization_id,"role":tokens.role});
+    *state.central_session.lock().await = Some(CentralSession {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        user_id: tokens.user_id,
+        organization_id: tokens.organization_id,
+        role: tokens.role,
+    });
+    Ok(public)
+}
+
+#[tauri::command]
+async fn central_session_status(state: State<'_, DesktopState>) -> Result<Value, String> {
+    let session = state.central_session.lock().await;
+    Ok(match session.as_ref() {
+        Some(value) => json!({"authenticated":true,"user_id":value.user_id,"organization_id":value.organization_id,"role":value.role}),
+        None => json!({"authenticated":false}),
+    })
+}
+
+async fn send_central_admin(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    method: &str,
+    token: &str,
+    body: Option<Value>,
+) -> Result<reqwest::Response, String> {
+    let idempotent_write = matches!(method, "POST" | "PATCH");
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| "Méthode HTTP invalide.".to_owned())?;
+    let mut request = client.request(method, format!("{base}{path}")).bearer_auth(token);
+    if idempotent_write {
+        request = request.header("Idempotency-Key", uuid::Uuid::new_v4().to_string());
+    }
+    if let Some(value) = body { request = request.json(&value); }
+    request.send().await.map_err(|error| format!("Service central inaccessible : {error}"))
+}
+
+#[tauri::command]
+async fn central_admin_request(
+    state: State<'_, DesktopState>, path: String, method: String, body: Option<Value>,
+) -> Result<LocalResponse, String> {
+    let method = method.to_ascii_uppercase();
+    validate_central_admin_request(&path, &method)?;
+    let base = state.central_url.as_deref().ok_or("La connexion centrale n’est pas configurée pour ce poste.")?;
+    let session = state.central_session.lock().await.as_ref().cloned()
+        .ok_or("Connectez-vous avec votre compte SEL pour accéder à l’administration.")?;
+    if session.role != "ADMIN" { return Err("Cette fonction est réservée au rôle administrateur SEL.".into()); }
+    let response = send_central_admin(&state.central_client, base, &path, &method, &session.access_token, body.clone()).await?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let mut session_guard = state.central_session.lock().await;
+        let current = session_guard.as_mut().ok_or("La session a été fermée. Reconnectez-vous.")?;
+        let next_token = if current.access_token != session.access_token {
+            current.access_token.clone()
+        } else {
+            let refreshed = state.central_client.post(format!("{base}/v1/auth/refresh"))
+                .json(&json!({"refresh_token":current.refresh_token})).send().await
+                .map_err(|error| format!("Renouvellement de session impossible : {error}"))?;
+            let refresh_status = refreshed.status().as_u16();
+            let value = refreshed.json::<Value>().await.unwrap_or(Value::Null);
+            if !(200..300).contains(&refresh_status) {
+                *session_guard = None;
+                return Err("La session a expiré. Reconnectez-vous.".into());
+            }
+            let tokens: CentralSessionTokens = serde_json::from_value(value)
+                .map_err(|_| "Réponse de renouvellement invalide.".to_owned())?;
+            let refreshed_session = CentralSession {
+                access_token: tokens.access_token,
+                refresh_token: tokens.refresh_token,
+                user_id: tokens.user_id,
+                organization_id: tokens.organization_id,
+                role: tokens.role,
+            };
+            let access_token = refreshed_session.access_token.clone();
+            *current = refreshed_session;
+            access_token
+        };
+        drop(session_guard);
+        let retry = send_central_admin(&state.central_client, base, &path, &method, &next_token, body).await?;
+        return central_json_response(retry).await;
+    }
+    central_json_response(response).await
+}
+
+#[tauri::command]
+async fn central_logout(state: State<'_, DesktopState>) -> Result<(), String> {
+    let base = state.central_url.as_deref().ok_or("La connexion centrale n’est pas configurée pour ce poste.")?;
+    let mut session = state.central_session.lock().await;
+    if let Some(current) = session.as_ref() {
+        let response = state.central_client.post(format!("{base}/v1/auth/logout"))
+            .bearer_auth(&current.access_token).send().await
+            .map_err(|error| format!("Déconnexion centrale non confirmée : {error}"))?;
+        if !response.status().is_success() { return Err("Le serveur central n’a pas confirmé la déconnexion.".into()); }
+    }
+    *session = None;
+    Ok(())
+}
+
 #[tauri::command]
 fn open_monarque_site() -> Result<(), String> {
     #[cfg(windows)]
@@ -257,12 +457,56 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
-            let agent = start_agent(app.handle(), &data_dir)
+            let (agent, central_url) = start_agent(app.handle(), &data_dir)
                 .map_err(|error| std::io::Error::other(error))?;
-            app.manage(DesktopState { agent });
+            let central_client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .map_err(std::io::Error::other)?;
+            app.manage(DesktopState { agent, central_url, central_client, central_session: tokio::sync::Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![local_request, local_status, open_monarque_site])
+        .invoke_handler(tauri::generate_handler![local_request, local_status, central_login, central_session_status, central_admin_request, central_logout, open_monarque_site])
         .run(tauri::generate_context!())
         .expect("impossible de démarrer SEL Facturation");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_central_admin_request;
+
+    #[test]
+    fn central_admin_bridge_accepts_allowlisted_routes() {
+        for (path, method) in [
+            ("/v1/admin/users", "GET"),
+            ("/v1/admin/users", "POST"),
+            ("/v1/admin/devices", "GET"),
+            ("/v1/admin/offline-grants", "GET"),
+            ("/v1/admin/catalog/tariffs", "GET"),
+            ("/v1/admin/catalog/products", "POST"),
+            ("/v1/admin/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0", "PATCH"),
+            ("/v1/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/password", "POST"),
+            ("/v1/admin/offline-grants/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke", "POST"),
+            ("/v1/admin/catalog/tariffs/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/approve", "POST"),
+            ("/v1/admin/catalog/products/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke", "POST"),
+        ] {
+            assert!(validate_central_admin_request(path, method).is_ok(), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn central_admin_bridge_rejects_unlisted_routes_methods_and_traversal() {
+        for (path, method) in [
+            ("/v1/customers", "GET"),
+            ("/v1/admin/users/../../users", "GET"),
+            ("/v1/admin/users?organization=other", "GET"),
+            ("/v1/admin/catalog/products/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke", "DELETE"),
+            ("/v1/admin/devices", "POST"),
+            ("/v1/admin/audit", "GET"),
+            ("/v1/admin/users/not-a-uuid", "PATCH"),
+            ("/v1/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/password", "GET"),
+        ] {
+            assert!(validate_central_admin_request(path, method).is_err(), "{method} {path}");
+        }
+    }
 }

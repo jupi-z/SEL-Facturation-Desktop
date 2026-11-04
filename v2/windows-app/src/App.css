@@ -180,6 +180,22 @@ input:disabled, select:disabled { color: #77869a; background: #f2f5f9; }
 .admin-card h2 { margin: 10px 0 5px; color: var(--navy); font-size: 15px; }
 .admin-card .muted { margin: 0 0 14px; }
 .admin-card .status-badge { white-space: normal; }
+.admin-login { max-width: 760px; margin-top: 18px; }
+.admin-create-user { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; margin: 4px 0 18px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.admin-create-user .form-actions { grid-column: auto; }
+.admin-session { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.admin-grid > .panel { min-width: 0; }
+.admin-grid table { min-width: 560px; }
+.admin-catalog-grid { align-items: start; }
+.admin-catalog-form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.admin-approve-form { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(120px, 1fr) auto; gap: 7px; min-width: 360px; }
+.admin-approve-form input { min-height: 34px; padding: 6px 8px; }
+.admin-approve-form .button { min-height: 34px; padding: 6px 9px; white-space: nowrap; }
+.admin-role-control { display: flex; align-items: center; gap: 8px; min-width: 280px; }
+.admin-role-control select { min-width: 0; min-height: 36px; padding: 7px 9px; }
+.admin-role-control .button { min-height: 36px; padding: 7px 10px; white-space: nowrap; }
+.admin-user-actions { display: flex; gap: 8px; min-width: 300px; }
+.admin-password-reset { margin-top: 18px; padding-top: 17px; border-top: 1px solid var(--line); }
 .product-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .product-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-top: 3px solid var(--blue); border-radius: 3px; background: #fff; }
 .product-card h3 { margin: 9px 0 10px; color: var(--navy); font-size: 14px; font-weight: 700; }
@@ -217,7 +233,8 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric:nth-child(2) { border-right: 0; }
   .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-  .form-grid, .admin-grid, .product-grid, .quote-summary, .schedule-entry { grid-template-columns: 1fr; }
+  .form-grid, .admin-grid, .product-grid, .quote-summary, .schedule-entry, .admin-create-user, .admin-session, .admin-approve-form { grid-template-columns: 1fr; }
+  .admin-create-user .form-actions { grid-column: 1 / -1; }
   .customer-details { grid-template-columns: 1fr; }
   .page-heading { align-items: center; }
   footer { text-align: left; }
