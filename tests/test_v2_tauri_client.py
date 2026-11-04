@@ -192,6 +192,15 @@ def test_windows_typescript_target_does_not_use_es2022_array_at() -> None:
     assert "readings[readings.length - 1]" in app
 
 
+def test_financial_and_sync_statuses_are_shown_in_french() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert 'LOCAL_PENDING: "En attente de synchronisation"' in app
+    assert 'CENTRAL_ACCEPTED: "Confirmé par le serveur"' in app
+    assert 'LOCAL_ACCEPTED: "Enregistré sur ce poste"' in app
+    assert 'OVERDUE: "En retard"' in app
+
+
 def test_visual_review_captures_solar_payment_allocation() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 

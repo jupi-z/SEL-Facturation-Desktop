@@ -444,10 +444,27 @@ function Metric({ label, value, note }: { label: string; value: ReactNode; note:
 
 function Status({ value }: { value: unknown }) {
   const normalized = text(value, "État inconnu");
+  const labels: Record<string, string> = {
+    LOCAL_PENDING: "En attente de synchronisation",
+    CENTRAL_ACCEPTED: "Confirmé par le serveur",
+    LOCAL_ACCEPTED: "Enregistré sur ce poste",
+    LOCAL_READY: "Poste prêt",
+    PENDING_NETWORK: "En attente du réseau",
+    LOCAL_ONLY: "Fonctionnement local",
+    UPCOMING: "À venir",
+    OVERDUE: "En retard",
+    PAID: "Payé",
+    PARTIAL: "Partiellement payé",
+    OPEN: "À régler",
+    SETTLED: "Réglé",
+    CREDITED: "Avoir enregistré",
+    CONFLICT: "Conflit à examiner",
+    REJECTED: "Refusé",
+  };
   const state = normalized.toLocaleLowerCase("en").includes("pending") || normalized.toLocaleLowerCase("fr").includes("attente") ? "pending"
     : normalized.toLocaleLowerCase("en").includes("conflict") || normalized.toLocaleLowerCase("fr").includes("conflit") || normalized.toLocaleLowerCase("en").includes("reject") ? "danger"
       : normalized.toLocaleLowerCase("en").includes("accept") || normalized.toLocaleLowerCase("en").includes("ready") ? "success" : "neutral";
-  return <span className={`status-badge ${state}`}>{normalized}</span>;
+  return <span className={`status-badge ${state}`}>{labels[normalized] ?? normalized}</span>;
 }
 
 function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rust", action }: { data: Row; onConfirm?: () => void; title?: string; action?: ReactNode }) {
