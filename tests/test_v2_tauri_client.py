@@ -202,3 +202,5 @@ def test_figma_visual_review_uses_only_marked_synthetic_fixtures() -> None:
     assert "document.documentElement.scrollWidth" in visual_review
     assert "SEL-V2-Figma-Desktop-Review-${{ github.run_number }}" in workflow
     assert 'DEMO-SOLAR-TERMS' in visual_review
+    assert '"solarPlan": SOLAR_PLAN' in visual_review
+    assert "body = fixtures.solarPlan" in visual_review

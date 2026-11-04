@@ -106,6 +106,7 @@ def mock_invoke_script() -> str:
         "payments": PAYMENTS,
         "sales": SALES,
         "products": PRODUCTS,
+        "solarPlan": SOLAR_PLAN,
         "serviceAccounts": SERVICE_ACCOUNTS,
         "meters": METERS,
         "readings": READINGS,
@@ -129,7 +130,7 @@ def mock_invoke_script() -> str:
         else if (path.startsWith('/local/v1/solar/sales')) body = fixtures.sales;
         else if (path.startsWith('/local/v1/solar/products')) body = fixtures.products;
         else if (path.startsWith('/local/v1/solar/contracts')) {{ fixtures.sales[0].installment_plan_id = 'demo-plan-0001'; body = {{installment_plan_id:'demo-plan-0001',contract_id:'demo-contract-0001'}}; }}
-        else if (path.startsWith('/local/v1/installment-plans/')) body = SOLAR_PLAN;
+        else if (path.startsWith('/local/v1/installment-plans/')) body = fixtures.solarPlan;
         else if (path.startsWith('/local/v1/sync/trigger')) body = {{status:'PENDING_NETWORK',pending:5}};
         else if (path.startsWith('/local/v1/sync/status')) body = {{status:'LOCAL_READY',pending:5,conflicts:0,rejected:0,last_successful_sync:'Aucune confirmée'}};
         return {{status:200,body}};
