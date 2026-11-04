@@ -10,11 +10,12 @@ use axum::{
 };
 use rust_decimal::Decimal;
 use sel_contracts::{
-    utility_snapshot_sha256, CreateCustomer, CreateSolarQuoteRequest, CreateSolarSaleRequest,
-    CreditNoteRequest, Customer, DocumentData, InvoiceLineResponse, PaymentAllocationRequest,
-    ProblemDetails, RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse,
-    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
-    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    catalog_snapshot_sha256, utility_snapshot_sha256, CatalogSnapshot, CatalogSnapshotPayload,
+    CreateCustomer, CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer,
+    DocumentData, InvoiceLineResponse, PaymentAllocationRequest, ProblemDetails,
+    RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse,
+    SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
+    UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -82,6 +83,58 @@ pub struct CreateTariffDraftRequest {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct ApproveTariffDraftRequest {
     pub approval_ref: String,
+    #[serde(default)]
+    pub supersedes_tariff_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct RevokeTariffRequest {
+    pub change_ref: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct CreateSolarProductDraftRequest {
+    pub sku: String,
+    pub label: String,
+    pub price_reference: Decimal,
+    pub currency: String,
+    pub effective_from: chrono::NaiveDate,
+    pub effective_to: Option<chrono::NaiveDate>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct ApproveSolarProductRequest {
+    pub approval_ref: String,
+    #[serde(default)]
+    pub supersedes_product_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct CreateTaxProfileDraftRequest {
+    pub service_code: String,
+    pub jurisdiction: String,
+    pub base: String,
+    pub rate: Decimal,
+    pub source: String,
+    pub effective_from: chrono::NaiveDate,
+    pub effective_to: Option<chrono::NaiveDate>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct CreateFxRateDraftRequest {
+    pub from_currency: String,
+    pub to_currency: String,
+    pub value: Decimal,
+    pub source: String,
+    pub effective_from: chrono::NaiveDate,
+    pub effective_to: Option<chrono::NaiveDate>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct ApproveReferenceDraftRequest {
+    pub approval_ref: String,
+    #[serde(default)]
+    pub supersedes_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -206,16 +259,57 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/devices/enroll", post(enroll_device))
         .route("/v1/devices/:id/revoke", post(revoke_device))
         .route("/v1/offline-grants", post(create_offline_grant))
-        .route("/v1/admin/catalog/tariffs", post(create_tariff_draft))
+        .route(
+            "/v1/admin/catalog/tariffs",
+            get(admin_catalog_tariffs).post(create_tariff_draft),
+        )
         .route(
             "/v1/admin/catalog/tariffs/:id/approve",
             post(approve_tariff_draft),
+        )
+        .route("/v1/admin/catalog/tariffs/:id/revoke", post(revoke_tariff))
+        .route(
+            "/v1/admin/catalog/products",
+            get(admin_catalog_products).post(create_solar_product_draft),
+        )
+        .route(
+            "/v1/admin/catalog/products/:id/approve",
+            post(approve_solar_product),
+        )
+        .route(
+            "/v1/admin/catalog/products/:id/revoke",
+            post(revoke_solar_product),
+        )
+        .route(
+            "/v1/admin/catalog/tax-profiles",
+            get(admin_tax_profiles).post(create_tax_profile_draft),
+        )
+        .route(
+            "/v1/admin/catalog/tax-profiles/:id/approve",
+            post(approve_tax_profile),
+        )
+        .route(
+            "/v1/admin/catalog/tax-profiles/:id/revoke",
+            post(revoke_tax_profile),
+        )
+        .route(
+            "/v1/admin/catalog/fx-rates",
+            get(admin_fx_rates).post(create_fx_rate_draft),
+        )
+        .route(
+            "/v1/admin/catalog/fx-rates/:id/approve",
+            post(approve_fx_rate),
+        )
+        .route(
+            "/v1/admin/catalog/fx-rates/:id/revoke",
+            post(revoke_fx_rate),
         )
         .route("/v1/meta/capabilities", get(capabilities))
         .route("/v1/catalog/products", get(catalog_products))
         .route("/v1/catalog/tariffs", get(catalog_tariffs))
         .route("/v1/catalog/tax-profiles", get(catalog_tax_profiles))
         .route("/v1/catalog/fx-rates", get(catalog_fx_rates))
+        .route("/v1/catalog/snapshot", get(catalog_snapshot))
         .route("/v1/customers", get(list_customers).post(create_customer))
         .route(
             "/v1/customers/:id",
@@ -325,6 +419,12 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
         if matches!(
             path,
             "/v1/admin/users" | "/v1/admin/devices" | "/v1/admin/offline-grants"
+        ) || matches!(
+            path,
+            "/v1/admin/catalog/tariffs"
+                | "/v1/admin/catalog/products"
+                | "/v1/admin/catalog/tax-profiles"
+                | "/v1/admin/catalog/fx-rates"
         ) {
             return is_admin;
         }
@@ -336,6 +436,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/catalog/tariffs"
                     | "/v1/catalog/tax-profiles"
                     | "/v1/catalog/fx-rates"
+                    | "/v1/catalog/snapshot"
                     | "/v1/customers"
                     | "/v1/sync/pull"
                     | "/v1/sync/status"
@@ -373,6 +474,16 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
         }
         if path == "/v1/admin/catalog/tariffs"
             || path_matches(path, "/v1/admin/catalog/tariffs/:id/approve")
+            || path_matches(path, "/v1/admin/catalog/tariffs/:id/revoke")
+            || path == "/v1/admin/catalog/products"
+            || path_matches(path, "/v1/admin/catalog/products/:id/approve")
+            || path_matches(path, "/v1/admin/catalog/products/:id/revoke")
+            || path == "/v1/admin/catalog/tax-profiles"
+            || path_matches(path, "/v1/admin/catalog/tax-profiles/:id/approve")
+            || path_matches(path, "/v1/admin/catalog/tax-profiles/:id/revoke")
+            || path == "/v1/admin/catalog/fx-rates"
+            || path_matches(path, "/v1/admin/catalog/fx-rates/:id/approve")
+            || path_matches(path, "/v1/admin/catalog/fx-rates/:id/revoke")
         {
             return is_admin;
         }
@@ -474,6 +585,249 @@ async fn catalog_products(
     Ok(Json(serde_json::Value::Array(products)))
 }
 
+async fn admin_catalog_tariffs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let tariffs = match &state.central {
+        Some(store) => store.admin_catalog_tariffs().await.map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(tariffs)))
+}
+
+async fn admin_catalog_products(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let products = match &state.central {
+        Some(store) => store
+            .admin_catalog_products()
+            .await
+            .map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(products)))
+}
+
+async fn admin_tax_profiles(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let versions = match &state.central {
+        Some(store) => store
+            .admin_reference_versions("TAX_PROFILE")
+            .await
+            .map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(versions)))
+}
+
+async fn admin_fx_rates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let versions = match &state.central {
+        Some(store) => store
+            .admin_reference_versions("FX_RATE")
+            .await
+            .map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(versions)))
+}
+
+async fn create_tax_profile_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateTaxProfileDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "reference administration requires PostgreSQL",
+        )
+    })?;
+    let digest = digest_json(&input)?;
+    reference_write_response(
+        store
+            .create_tax_profile_draft(
+                &input.service_code,
+                &input.jurisdiction,
+                &input.base,
+                input.rate,
+                &input.source,
+                input.effective_from,
+                input.effective_to,
+                principal.user_id,
+                idempotency_key,
+                &digest,
+            )
+            .await
+            .map_err(reference_write_error)?,
+    )
+}
+
+async fn create_fx_rate_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateFxRateDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "reference administration requires PostgreSQL",
+        )
+    })?;
+    let digest = digest_json(&input)?;
+    reference_write_response(
+        store
+            .create_fx_rate_draft(
+                &input.from_currency,
+                &input.to_currency,
+                input.value,
+                &input.source,
+                input.effective_from,
+                input.effective_to,
+                principal.user_id,
+                idempotency_key,
+                &digest,
+            )
+            .await
+            .map_err(reference_write_error)?,
+    )
+}
+
+async fn approve_tax_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ApproveReferenceDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    approve_reference(state, headers, id, principal, input, "TAX_PROFILE").await
+}
+
+async fn approve_fx_rate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ApproveReferenceDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    approve_reference(state, headers, id, principal, input, "FX_RATE").await
+}
+
+async fn approve_reference(
+    state: AppState,
+    headers: HeaderMap,
+    id: Uuid,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    input: ApproveReferenceDraftRequest,
+    expected_type: &str,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let key = require_idempotency(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "reference administration requires PostgreSQL",
+        )
+    })?;
+    let digest = digest_json(&(id, &input, expected_type))?;
+    let outcome = store
+        .approve_reference_draft(
+            id,
+            expected_type,
+            &input.approval_ref,
+            input.supersedes_id,
+            principal.user_id,
+            key,
+            &digest,
+        )
+        .await
+        .map_err(reference_write_error)?;
+    reference_write_response(outcome)
+}
+
+async fn revoke_tax_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<RevokeTariffRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    revoke_reference(state, headers, id, principal, input, "TAX_PROFILE").await
+}
+
+async fn revoke_fx_rate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<RevokeTariffRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    revoke_reference(state, headers, id, principal, input, "FX_RATE").await
+}
+
+async fn revoke_reference(
+    state: AppState,
+    headers: HeaderMap,
+    id: Uuid,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    input: RevokeTariffRequest,
+    expected_type: &str,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let key = require_idempotency(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "reference administration requires PostgreSQL",
+        )
+    })?;
+    let digest = digest_json(&(id, &input, expected_type))?;
+    let outcome = store
+        .revoke_reference_version(
+            id,
+            expected_type,
+            &input.change_ref,
+            principal.user_id,
+            key,
+            &digest,
+        )
+        .await
+        .map_err(reference_write_error)?;
+    reference_write_response(outcome)
+}
+
+fn reference_write_response(
+    outcome: sel_storage::postgres::CatalogWriteOutcome,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    Ok(match outcome {
+        sel_storage::postgres::CatalogWriteOutcome::Created(body) if body["status"] == "DRAFT" => {
+            (StatusCode::CREATED, Json(body))
+        }
+        sel_storage::postgres::CatalogWriteOutcome::Created(body) => (StatusCode::OK, Json(body)),
+        sel_storage::postgres::CatalogWriteOutcome::Replay(body) => (StatusCode::OK, Json(body)),
+    })
+}
+
 async fn catalog_tariffs(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -508,6 +862,49 @@ async fn catalog_fx_rates(
         None => Vec::new(),
     };
     Ok(Json(serde_json::Value::Array(rates)))
+}
+
+async fn catalog_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<CatalogSnapshot>, ApiError> {
+    require_auth(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "offline catalog snapshot requires the central PostgreSQL store",
+        ));
+    };
+    let mut products = store
+        .admin_catalog_products()
+        .await
+        .map_err(storage_error)?;
+    let mut tariffs = store.admin_catalog_tariffs().await.map_err(storage_error)?;
+    let mut tax_profiles = store
+        .admin_reference_versions("TAX_PROFILE")
+        .await
+        .map_err(storage_error)?;
+    let mut fx_rates = store
+        .admin_reference_versions("FX_RATE")
+        .await
+        .map_err(storage_error)?;
+    for rows in [
+        &mut products,
+        &mut tariffs,
+        &mut tax_profiles,
+        &mut fx_rates,
+    ] {
+        rows.retain(|row| matches!(row["status"].as_str(), Some("APPROVED" | "REVOKED")));
+    }
+    let payload = CatalogSnapshotPayload {
+        schema_version: 1,
+        products,
+        tariffs,
+        tax_profiles,
+        fx_rates,
+    };
+    let sha256 = catalog_snapshot_sha256(&payload);
+    Ok(Json(CatalogSnapshot { payload, sha256 }))
 }
 
 async fn create_tariff_draft(
@@ -572,12 +969,165 @@ async fn approve_tariff_draft(
         .approve_tariff_draft(
             tariff_id,
             &input.approval_ref,
+            input.supersedes_tariff_id,
             principal.user_id,
             idempotency_key,
             &digest,
         )
         .await
         .map_err(tariff_write_error)?
+    {
+        sel_storage::postgres::CatalogWriteOutcome::Created(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+        sel_storage::postgres::CatalogWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
+async fn revoke_tariff(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tariff_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<RevokeTariffRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "tariff administration requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&(tariff_id, &input))?;
+    match store
+        .revoke_tariff(
+            tariff_id,
+            &input.change_ref,
+            principal.user_id,
+            idempotency_key,
+            &digest,
+        )
+        .await
+        .map_err(tariff_write_error)?
+    {
+        sel_storage::postgres::CatalogWriteOutcome::Created(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+        sel_storage::postgres::CatalogWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
+async fn create_solar_product_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateSolarProductDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "product administration requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&input)?;
+    match store
+        .create_solar_product_draft(
+            &input.sku,
+            &input.label,
+            input.price_reference,
+            &input.currency,
+            input.effective_from,
+            input.effective_to,
+            principal.user_id,
+            idempotency_key,
+            &digest,
+        )
+        .await
+        .map_err(product_write_error)?
+    {
+        sel_storage::postgres::CatalogWriteOutcome::Created(body) => {
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        sel_storage::postgres::CatalogWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
+async fn approve_solar_product(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(product_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ApproveSolarProductRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "product administration requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&(product_id, &input))?;
+    match store
+        .approve_solar_product(
+            product_id,
+            &input.approval_ref,
+            input.supersedes_product_id,
+            principal.user_id,
+            idempotency_key,
+            &digest,
+        )
+        .await
+        .map_err(product_write_error)?
+    {
+        sel_storage::postgres::CatalogWriteOutcome::Created(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+        sel_storage::postgres::CatalogWriteOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
+}
+
+async fn revoke_solar_product(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(product_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<RevokeTariffRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "product administration requires the central PostgreSQL store",
+        ));
+    };
+    let digest = digest_json(&(product_id, &input))?;
+    match store
+        .revoke_solar_product(
+            product_id,
+            &input.change_ref,
+            principal.user_id,
+            idempotency_key,
+            &digest,
+        )
+        .await
+        .map_err(product_write_error)?
     {
         sel_storage::postgres::CatalogWriteOutcome::Created(body) => {
             Ok((StatusCode::OK, Json(body)))
@@ -2353,11 +2903,84 @@ fn tariff_write_error(error: sel_storage::postgres::TariffWriteError) -> ApiErro
             "TARIFF_PERIOD_OVERLAP",
             "an approved tariff already covers part of this service category period",
         ),
+        TariffWriteError::InvalidSupersededTariff => ApiError::unprocessable(
+            "TARIFF_SUPERSESSION_INVALID",
+            "the replaced tariff must be approved, compatible, and cover the new tariff start date",
+        ),
         TariffWriteError::IdempotencyPayloadMismatch => ApiError::conflict(
             "IDEMPOTENCY_PAYLOAD_MISMATCH",
             "idempotency key was reused with another payload",
         ),
         TariffWriteError::Database(error) => storage_error(error),
+    }
+}
+
+fn product_write_error(error: sel_storage::postgres::ProductWriteError) -> ApiError {
+    use sel_storage::postgres::ProductWriteError;
+    match error {
+        ProductWriteError::InvalidFields => ApiError::unprocessable(
+            "SOLAR_PRODUCT_FIELDS_INVALID",
+            "SKU, label, price, currency, or effective period is invalid",
+        ),
+        ProductWriteError::ApprovalRefRequired => ApiError::unprocessable(
+            "SOLAR_PRODUCT_APPROVAL_REF_REQUIRED",
+            "an explicit SEL approval reference is required",
+        ),
+        ProductWriteError::NotFound => {
+            ApiError::not_found("SOLAR_PRODUCT_NOT_FOUND", "solar product version was not found")
+        }
+        ProductWriteError::NotDraft => ApiError::conflict(
+            "SOLAR_PRODUCT_NOT_DRAFT",
+            "only a draft solar product can be approved",
+        ),
+        ProductWriteError::PeriodOverlap => ApiError::conflict(
+            "SOLAR_PRODUCT_PERIOD_OVERLAP",
+            "an approved product version already covers part of this SKU period",
+        ),
+        ProductWriteError::InvalidSupersededProduct => ApiError::unprocessable(
+            "SOLAR_PRODUCT_SUPERSESSION_INVALID",
+            "the replaced version must be approved, match the SKU/currency, and cover the new start date",
+        ),
+        ProductWriteError::IdempotencyPayloadMismatch => ApiError::conflict(
+            "IDEMPOTENCY_PAYLOAD_MISMATCH",
+            "idempotency key was reused with another payload",
+        ),
+        ProductWriteError::Database(error) => storage_error(error),
+    }
+}
+
+fn reference_write_error(error: sel_storage::postgres::ReferenceCatalogWriteError) -> ApiError {
+    use sel_storage::postgres::ReferenceCatalogWriteError as Error;
+    match error {
+        Error::InvalidFields => ApiError::unprocessable(
+            "REFERENCE_FIELDS_INVALID",
+            "reference values, dates, idempotency key, or route type are invalid",
+        ),
+        Error::ApprovalRefRequired => ApiError::unprocessable(
+            "REFERENCE_APPROVAL_REF_REQUIRED",
+            "an explicit SEL approval reference is required",
+        ),
+        Error::NotFound => ApiError::not_found(
+            "REFERENCE_VERSION_NOT_FOUND",
+            "reference version was not found",
+        ),
+        Error::NotDraft => ApiError::conflict(
+            "REFERENCE_NOT_DRAFT",
+            "only a draft reference can be approved",
+        ),
+        Error::PeriodOverlap => ApiError::conflict(
+            "REFERENCE_PERIOD_OVERLAP",
+            "an approved reference already covers part of this period",
+        ),
+        Error::InvalidSupersededReference => ApiError::unprocessable(
+            "REFERENCE_SUPERSESSION_INVALID",
+            "the replaced version must be approved, compatible, and cover the new start date",
+        ),
+        Error::IdempotencyPayloadMismatch => ApiError::conflict(
+            "IDEMPOTENCY_PAYLOAD_MISMATCH",
+            "idempotency key was reused with another payload",
+        ),
+        Error::Database(error) => storage_error(error),
     }
 }
 
@@ -2932,5 +3555,105 @@ mod tests {
             grant_path,
             "SUPERVISOR"
         ));
+    }
+
+    #[test]
+    fn catalog_administration_is_admin_only_and_reads_drafts() {
+        let tariff_id = "3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0";
+        assert!(role_allows_request(
+            &Method::GET,
+            "/v1/admin/catalog/tariffs",
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::GET,
+            "/v1/admin/catalog/tariffs",
+            "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/admin/catalog/tariffs/{tariff_id}/revoke"),
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            &format!("/v1/admin/catalog/tariffs/{tariff_id}/revoke"),
+            "SUPERVISOR"
+        ));
+    }
+
+    #[test]
+    fn product_catalog_mutations_require_admin_and_public_reads_remain_available() {
+        let product_id = "3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0";
+        assert!(role_allows_request(
+            &Method::GET,
+            "/v1/admin/catalog/products",
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::GET,
+            "/v1/admin/catalog/products",
+            "SUPERVISOR"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            "/v1/admin/catalog/products",
+            "ADMIN"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/admin/catalog/products/{product_id}/approve"),
+            "ADMIN"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/admin/catalog/products/{product_id}/revoke"),
+            "ADMIN"
+        ));
+        for role in ["BILLING_AGENT", "CASHIER", "SUPERVISOR", "AUDITOR_READONLY"] {
+            assert!(!role_allows_request(
+                &Method::POST,
+                "/v1/admin/catalog/products",
+                role
+            ));
+        }
+        assert!(role_allows_request(
+            &Method::GET,
+            "/v1/catalog/products",
+            "BILLING_AGENT"
+        ));
+    }
+
+    #[test]
+    fn tax_and_exchange_rate_administration_is_admin_only() {
+        for catalog in ["tax-profiles", "fx-rates"] {
+            let collection = format!("/v1/admin/catalog/{catalog}");
+            let version = format!("{collection}/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0");
+            assert!(role_allows_request(&Method::GET, &collection, "ADMIN"));
+            assert!(role_allows_request(&Method::POST, &collection, "ADMIN"));
+            assert!(role_allows_request(
+                &Method::POST,
+                &format!("{version}/approve"),
+                "ADMIN"
+            ));
+            assert!(role_allows_request(
+                &Method::POST,
+                &format!("{version}/revoke"),
+                "ADMIN"
+            ));
+            for role in ["BILLING_AGENT", "CASHIER", "SUPERVISOR", "AUDITOR_READONLY"] {
+                assert!(!role_allows_request(&Method::POST, &collection, role));
+                assert!(!role_allows_request(
+                    &Method::POST,
+                    &format!("{version}/approve"),
+                    role
+                ));
+                assert!(!role_allows_request(
+                    &Method::POST,
+                    &format!("{version}/revoke"),
+                    role
+                ));
+            }
+        }
     }
 }

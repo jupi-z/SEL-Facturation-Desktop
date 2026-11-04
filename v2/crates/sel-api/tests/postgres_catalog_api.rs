@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::Request;
 use http_body_util::BodyExt;
 use sel_api::{router, AppState};
+use sel_contracts::{catalog_snapshot_sha256, CatalogSnapshotPayload};
 use sel_storage::{migrate_postgres, CentralStore};
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -104,6 +105,23 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
     assert_eq!(rates.as_array().unwrap().len(), 1);
     assert_eq!(rates[0]["id"], approved_fx.to_string());
     assert_eq!(rates[0]["value"], "2360");
+
+    let snapshot = get_json_authenticated(&app, "/v1/catalog/snapshot", "catalog-fixture").await;
+    let payload: CatalogSnapshotPayload = serde_json::from_value(snapshot["payload"].clone())
+        .expect("snapshot payload matches its versioned contract");
+    assert_eq!(snapshot["sha256"], catalog_snapshot_sha256(&payload));
+    assert_eq!(
+        payload.products.len(),
+        2,
+        "snapshot includes revocation tombstones"
+    );
+    assert_eq!(payload.tariffs.len(), 1);
+    assert_eq!(
+        payload.tax_profiles.len(),
+        2,
+        "snapshot includes historical revoked profiles"
+    );
+    assert_eq!(payload.fx_rates.len(), 1);
 }
 
 #[tokio::test]
@@ -396,6 +414,485 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
     .await
     .expect("count concurrently approved tariffs");
     assert_eq!(approved_count, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn tariff_versions_can_be_superseded_and_revoked_without_deleting_history() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    let organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .expect("connect central store");
+    migrate_postgres(&store.pool).await.expect("run migrations");
+    store
+        .ensure_organization("SEL tariff lifecycle fixture")
+        .await
+        .expect("create fixture organization");
+    store
+        .bootstrap_initial_admin("admin@tariff-lifecycle.test", "FixturePass!8")
+        .await
+        .expect("bootstrap fixture administrator");
+    let app = router(AppState::with_production_central_store(store.clone()));
+    let login = post_json(
+        &app,
+        "/v1/auth/login",
+        None,
+        None,
+        json!({
+            "identity_ref": "admin@tariff-lifecycle.test",
+            "password": "FixturePass!8"
+        }),
+    )
+    .await;
+    assert_eq!(login.status(), axum::http::StatusCode::OK);
+    let token = json_body(login).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let category = format!("LIFECYCLE-{}", Uuid::new_v4());
+    let previous_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO tariff_versions
+         (id, service_code, customer_category, unit, unit_price, currency,
+          effective_from, effective_to, approval_ref, status)
+         VALUES ($1, 'WATER', $2, 'M3', 1.10, 'USD', '2025-01-01', NULL,
+                 'SEL-OLD-RATE', 'APPROVED')",
+    )
+    .bind(previous_id)
+    .bind(&category)
+    .execute(&store.pool)
+    .await
+    .expect("insert preceding approved tariff");
+
+    let draft = post_json(
+        &app,
+        "/v1/admin/catalog/tariffs",
+        Some(&token),
+        Some("lifecycle-create-1"),
+        json!({
+            "service_code": "WATER",
+            "customer_category": category,
+            "unit": "M3",
+            "unit_price": "1.30",
+            "currency": "USD",
+            "effective_from": "2026-11-04",
+            "effective_to": null
+        }),
+    )
+    .await;
+    assert_eq!(draft.status(), axum::http::StatusCode::CREATED);
+    let draft_id = json_body(draft).await["id"].as_str().unwrap().to_owned();
+    let approve_path = format!("/v1/admin/catalog/tariffs/{draft_id}/approve");
+    let approve = post_json(
+        &app,
+        &approve_path,
+        Some(&token),
+        Some("lifecycle-approve-1"),
+        json!({
+            "approval_ref": "SEL-NEW-RATE-APPROVAL",
+            "supersedes_tariff_id": previous_id
+        }),
+    )
+    .await;
+    assert_eq!(approve.status(), axum::http::StatusCode::OK);
+    assert_eq!(json_body(approve).await["status"], "APPROVED");
+
+    let prior_end = sqlx::query_scalar::<_, Option<chrono::NaiveDate>>(
+        "SELECT effective_to FROM tariff_versions WHERE id = $1",
+    )
+    .bind(previous_id)
+    .fetch_one(&store.pool)
+    .await
+    .expect("read superseded tariff end date");
+    assert_eq!(prior_end.unwrap().to_string(), "2026-11-03");
+
+    let revoke_path = format!("/v1/admin/catalog/tariffs/{draft_id}/revoke");
+    let revoke_payload = json!({"change_ref": "SEL-RATE-WITHDRAWAL-1"});
+    let revoke = post_json(
+        &app,
+        &revoke_path,
+        Some(&token),
+        Some("lifecycle-revoke-1"),
+        revoke_payload.clone(),
+    )
+    .await;
+    assert_eq!(revoke.status(), axum::http::StatusCode::OK);
+    assert_eq!(json_body(revoke).await["status"], "REVOKED");
+    let replay = post_json(
+        &app,
+        &revoke_path,
+        Some(&token),
+        Some("lifecycle-revoke-1"),
+        revoke_payload,
+    )
+    .await;
+    assert_eq!(replay.status(), axum::http::StatusCode::OK);
+
+    let revoked_catalog = get_json_authenticated(&app, "/v1/catalog/tariffs", &token).await;
+    assert!(!revoked_catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["id"] == draft_id));
+    let admin_catalog = get_json_authenticated(&app, "/v1/admin/catalog/tariffs", &token).await;
+    assert!(admin_catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["id"] == draft_id && row["status"] == "REVOKED"));
+    let audit_count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events
+         WHERE subject_id = $1 AND event_type = 'TARIFF_VERSION_REVOKED'",
+    )
+    .bind(Uuid::parse_str(&draft_id).unwrap())
+    .fetch_one(&store.pool)
+    .await
+    .expect("count revocation audit events");
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn solar_product_drafts_require_approval_and_keep_prior_price_until_effective_date() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    let organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .expect("connect central store");
+    migrate_postgres(&store.pool).await.expect("run migrations");
+    store
+        .ensure_organization("SEL solar product catalog fixture")
+        .await
+        .expect("create fixture organization");
+    store
+        .bootstrap_initial_admin("admin@solar-catalog.test", "FixturePass!8")
+        .await
+        .expect("bootstrap fixture administrator");
+    let app = router(AppState::with_production_central_store(store.clone()));
+    let login = post_json(
+        &app,
+        "/v1/auth/login",
+        None,
+        None,
+        json!({
+            "identity_ref": "admin@solar-catalog.test",
+            "password": "FixturePass!8"
+        }),
+    )
+    .await;
+    assert_eq!(login.status(), axum::http::StatusCode::OK);
+    let token = json_body(login).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sku = format!("KIT-{}", Uuid::new_v4()).to_ascii_uppercase();
+    let today = chrono::Utc::now().date_naive();
+    let draft = post_json(
+        &app,
+        "/v1/admin/catalog/products",
+        Some(&token),
+        Some("solar-product-create-01"),
+        json!({
+            "sku": sku,
+            "label": "Solar kit fixture",
+            "price_reference": "125.00",
+            "currency": "USD",
+            "effective_from": today.to_string(),
+            "effective_to": null
+        }),
+    )
+    .await;
+    assert_eq!(draft.status(), axum::http::StatusCode::CREATED);
+    let first = json_body(draft).await;
+    assert_eq!(first["status"], "DRAFT");
+    assert_eq!(first["active"], false);
+    let first_id = first["id"].as_str().unwrap().to_owned();
+
+    let before = get_json_authenticated(&app, "/v1/catalog/products", &token).await;
+    assert!(!before
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|product| product["id"] == first_id));
+
+    let approve = post_json(
+        &app,
+        &format!("/v1/admin/catalog/products/{first_id}/approve"),
+        Some(&token),
+        Some("solar-product-approve-01"),
+        json!({"approval_ref": "SEL-SOLAR-CATALOG-APPROVAL-1"}),
+    )
+    .await;
+    assert_eq!(approve.status(), axum::http::StatusCode::OK);
+    assert_eq!(json_body(approve).await["status"], "APPROVED");
+
+    let future_start = today + chrono::Duration::days(30);
+    let second_draft = post_json(
+        &app,
+        "/v1/admin/catalog/products",
+        Some(&token),
+        Some("solar-product-create-02"),
+        json!({
+            "sku": first["sku"],
+            "label": "Solar kit fixture revised",
+            "price_reference": "140.00",
+            "currency": "USD",
+            "effective_from": future_start.to_string(),
+            "effective_to": null
+        }),
+    )
+    .await;
+    assert_eq!(second_draft.status(), axum::http::StatusCode::CREATED);
+    let second_id = json_body(second_draft).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second_approval = post_json(
+        &app,
+        &format!("/v1/admin/catalog/products/{second_id}/approve"),
+        Some(&token),
+        Some("solar-product-approve-02"),
+        json!({
+            "approval_ref": "SEL-SOLAR-CATALOG-APPROVAL-2",
+            "supersedes_product_id": first_id
+        }),
+    )
+    .await;
+    assert_eq!(second_approval.status(), axum::http::StatusCode::OK);
+
+    let prior = sqlx::query("SELECT active, effective_to, status FROM products WHERE id = $1")
+        .bind(Uuid::parse_str(&first_id).unwrap())
+        .fetch_one(&store.pool)
+        .await
+        .expect("read previous solar version");
+    assert!(prior.try_get::<bool, _>("active").unwrap());
+    assert_eq!(
+        prior
+            .try_get::<Option<chrono::NaiveDate>, _>("effective_to")
+            .unwrap()
+            .unwrap()
+            .to_string(),
+        (future_start - chrono::Duration::days(1)).to_string()
+    );
+    assert_eq!(prior.try_get::<String, _>("status").unwrap(), "APPROVED");
+    let public_catalog = get_json_authenticated(&app, "/v1/catalog/products", &token).await;
+    assert!(public_catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|product| product["id"] == first_id));
+    assert!(!public_catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|product| product["id"] == second_id));
+
+    let admin_catalog = get_json_authenticated(&app, "/v1/admin/catalog/products", &token).await;
+    assert!(admin_catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|product| product["id"] == second_id && product["status"] == "APPROVED"));
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    let organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .expect("connect central store");
+    migrate_postgres(&store.pool).await.expect("run migrations");
+    store
+        .ensure_organization("SEL reference administration fixture")
+        .await
+        .expect("create fixture organization");
+    store
+        .bootstrap_initial_admin("admin@reference.test", "FixturePass!8")
+        .await
+        .expect("bootstrap fixture administrator");
+    let app = router(AppState::with_production_central_store(store.clone()));
+    let login = post_json(
+        &app,
+        "/v1/auth/login",
+        None,
+        None,
+        json!({
+            "identity_ref": "admin@reference.test", "password": "FixturePass!8"
+        }),
+    )
+    .await;
+    assert_eq!(login.status(), axum::http::StatusCode::OK);
+    let token = json_body(login).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let today = chrono::Utc::now().date_naive();
+    let key_suffix = Uuid::new_v4().simple().to_string();
+    let tax_key = format!("TAX-SEL-{key_suffix}");
+    let tax_create_path = "/v1/admin/catalog/tax-profiles";
+    let tax_request = json!({
+        "service_code": "WATER", "jurisdiction": format!("SEL-{key_suffix}"),
+        "base": "SERVICE", "rate": "0.16", "source": "SEL-approved schedule",
+        "effective_from": today.to_string(), "effective_to": null
+    });
+    let tax_draft_response = post_json(
+        &app,
+        tax_create_path,
+        Some(&token),
+        Some(&tax_key),
+        tax_request.clone(),
+    )
+    .await;
+    assert_eq!(tax_draft_response.status(), axum::http::StatusCode::CREATED);
+    let tax_draft = json_body(tax_draft_response).await;
+    assert_eq!(tax_draft["status"], "DRAFT");
+    let tax_id = tax_draft["id"].as_str().unwrap().to_owned();
+    let replay = post_json(
+        &app,
+        tax_create_path,
+        Some(&token),
+        Some(&tax_key),
+        tax_request,
+    )
+    .await;
+    assert_eq!(replay.status(), axum::http::StatusCode::OK);
+    assert_eq!(json_body(replay).await["id"], tax_id);
+    let public_before = get_json_authenticated(&app, "/v1/catalog/tax-profiles", &token).await;
+    assert!(!public_before
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["id"] == tax_id));
+
+    let tax_approve_path = format!("/v1/admin/catalog/tax-profiles/{tax_id}/approve");
+    let tax_approved = post_json(
+        &app,
+        &tax_approve_path,
+        Some(&token),
+        Some(&format!("approve-tax-{key_suffix}")),
+        json!({
+            "approval_ref": format!("SEL-TAX-APPROVAL-{key_suffix}"), "supersedes_id": null
+        }),
+    )
+    .await;
+    assert_eq!(tax_approved.status(), axum::http::StatusCode::OK);
+    assert_eq!(json_body(tax_approved).await["status"], "APPROVED");
+    assert!(
+        get_json_authenticated(&app, "/v1/catalog/tax-profiles", &token)
+            .await
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == tax_id)
+    );
+
+    let future = today + chrono::Duration::days(20);
+    let fx_pair = Uuid::new_v4().simple().to_string().to_ascii_uppercase();
+    let from_currency = format!("X{}", &fx_pair[0..2]);
+    let to_currency = format!("Y{}", &fx_pair[2..4]);
+    let fx_request = json!({
+        "from_currency": from_currency, "to_currency": to_currency, "value": "2375.50",
+        "source": "SEL approved exchange bulletin", "effective_from": today.to_string(),
+        "effective_to": null
+    });
+    let fx_draft_response = post_json(
+        &app,
+        "/v1/admin/catalog/fx-rates",
+        Some(&token),
+        Some(&format!("fx-create-{key_suffix}")),
+        fx_request,
+    )
+    .await;
+    assert_eq!(fx_draft_response.status(), axum::http::StatusCode::CREATED);
+    let fx_draft = json_body(fx_draft_response).await;
+    let fx_id = fx_draft["id"].as_str().unwrap().to_owned();
+
+    // The tax endpoint must reject an FX draft without changing it.
+    let wrong_route = post_json(
+        &app,
+        &format!("/v1/admin/catalog/tax-profiles/{fx_id}/approve"),
+        Some(&token),
+        Some(&format!("wrong-type-{key_suffix}")),
+        json!({
+            "approval_ref": "SEL-TEST-ONLY", "supersedes_id": null
+        }),
+    )
+    .await;
+    assert_eq!(
+        wrong_route.status(),
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let still_draft: String =
+        sqlx::query_scalar("SELECT status FROM catalog_reference_versions WHERE id = $1")
+            .bind(Uuid::parse_str(&fx_id).unwrap())
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(still_draft, "DRAFT");
+
+    let fx_approved = post_json(
+        &app,
+        &format!("/v1/admin/catalog/fx-rates/{fx_id}/approve"),
+        Some(&token),
+        Some(&format!("approve-fx-{key_suffix}")),
+        json!({
+            "approval_ref": format!("SEL-FX-APPROVAL-{key_suffix}"), "supersedes_id": null
+        }),
+    )
+    .await;
+    assert_eq!(fx_approved.status(), axum::http::StatusCode::OK);
+    assert_eq!(json_body(fx_approved).await["status"], "APPROVED");
+
+    let next_fx = post_json(
+        &app,
+        "/v1/admin/catalog/fx-rates",
+        Some(&token),
+        Some(&format!("fx-next-{key_suffix}")),
+        json!({
+            "from_currency": from_currency, "to_currency": to_currency, "value": "2400",
+            "source": "SEL next approved bulletin", "effective_from": future.to_string(),
+            "effective_to": null
+        }),
+    )
+    .await;
+    assert_eq!(next_fx.status(), axum::http::StatusCode::CREATED);
+    let next_id = json_body(next_fx).await["id"].as_str().unwrap().to_owned();
+    let next_approved = post_json(
+        &app,
+        &format!("/v1/admin/catalog/fx-rates/{next_id}/approve"),
+        Some(&token),
+        Some(&format!("approve-fx-next-{key_suffix}")),
+        json!({
+            "approval_ref": format!("SEL-FX-APPROVAL-NEXT-{key_suffix}"), "supersedes_id": fx_id
+        }),
+    )
+    .await;
+    assert_eq!(next_approved.status(), axum::http::StatusCode::OK);
+    let previous_end: Option<chrono::NaiveDate> =
+        sqlx::query_scalar("SELECT effective_to FROM fx_rate_versions WHERE id = $1")
+            .bind(Uuid::parse_str(&fx_id).unwrap())
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(previous_end, Some(future - chrono::Duration::days(1)));
+    let admin_fx = get_json_authenticated(&app, "/v1/admin/catalog/fx-rates", &token).await;
+    assert!(admin_fx
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["id"] == fx_id));
+    assert!(admin_fx
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["id"] == next_id));
 }
 
 async fn get_json(app: &axum::Router, path: &str) -> Value {

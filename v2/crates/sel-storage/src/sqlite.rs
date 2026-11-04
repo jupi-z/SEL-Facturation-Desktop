@@ -1,9 +1,10 @@
 use chrono::{NaiveDate, Utc};
 use rust_decimal::Decimal;
 use sel_contracts::{
-    solar_schedule_id, utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer,
-    CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, CreditNoteSyncPayload,
-    Customer, InvoiceLineResponse, InvoiceVoidSyncPayload, PaymentAllocationRequest,
+    catalog_snapshot_sha256, solar_schedule_id, utility_snapshot_sha256,
+    ActivateSolarContractRequest, CatalogSnapshot, CreateCustomer, CreateSolarQuoteRequest,
+    CreateSolarSaleRequest, CreditNoteRequest, CreditNoteSyncPayload, Customer,
+    InvoiceLineResponse, InvoiceVoidSyncPayload, PaymentAllocationRequest,
     PaymentAllocationSyncPayload, PaymentReversalSyncPayload, PaymentSyncPayload,
     RecordPaymentRequest, ReversePaymentRequest, SolarContractSyncPayload, SolarQuoteResponse,
     SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, SyncPullResponse,
@@ -366,6 +367,162 @@ impl LocalStore {
         Ok((customers, next_cursor))
     }
 
+    pub async fn apply_catalog_snapshot(
+        &self,
+        snapshot: &CatalogSnapshot,
+    ) -> Result<(), sqlx::Error> {
+        if snapshot.payload.schema_version != 1
+            || catalog_snapshot_sha256(&snapshot.payload) != snapshot.sha256
+        {
+            return Err(sqlx::Error::Protocol(
+                "catalog snapshot schema or SHA-256 is invalid".into(),
+            ));
+        }
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        for product in &snapshot.payload.products {
+            let status = required_catalog_text(product, "status")?;
+            if !matches!(status.as_str(), "APPROVED" | "REVOKED") {
+                return Err(sqlx::Error::Protocol(
+                    "catalog snapshot contains a draft product".into(),
+                ));
+            }
+            sqlx::query(
+                "INSERT INTO products
+                 (id, sku, product_type, label, price_reference, currency, active,
+                  effective_from, effective_to, status, approval_ref)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                 ON CONFLICT(id) DO UPDATE SET sku=excluded.sku,
+                   product_type=excluded.product_type, label=excluded.label,
+                   price_reference=excluded.price_reference, currency=excluded.currency,
+                   active=excluded.active, effective_from=excluded.effective_from,
+                   effective_to=excluded.effective_to, status=excluded.status,
+                   approval_ref=excluded.approval_ref",
+            )
+            .bind(required_catalog_text(product, "id")?)
+            .bind(required_catalog_text(product, "sku")?)
+            .bind(required_catalog_text(product, "product_type")?)
+            .bind(required_catalog_text(product, "label")?)
+            .bind(required_catalog_text(product, "price_reference")?)
+            .bind(required_catalog_text(product, "currency")?)
+            .bind(status == "APPROVED")
+            .bind(required_catalog_text(product, "effective_from")?)
+            .bind(optional_catalog_text(product, "effective_to"))
+            .bind(&status)
+            .bind(optional_catalog_text(product, "approval_ref"))
+            .execute(&mut *tx)
+            .await?;
+        }
+        for tariff in &snapshot.payload.tariffs {
+            let status = required_catalog_text(tariff, "status")?;
+            if !matches!(status.as_str(), "APPROVED" | "REVOKED") {
+                return Err(sqlx::Error::Protocol(
+                    "catalog snapshot contains a draft tariff".into(),
+                ));
+            }
+            sqlx::query(
+                "INSERT INTO tariff_versions
+                 (id, service_code, customer_category, unit, unit_price, currency,
+                  effective_from, effective_to, approval_ref, approved_by, status)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                 ON CONFLICT(id) DO UPDATE SET service_code=excluded.service_code,
+                   customer_category=excluded.customer_category, unit=excluded.unit,
+                   unit_price=excluded.unit_price, currency=excluded.currency,
+                   effective_from=excluded.effective_from, effective_to=excluded.effective_to,
+                   approval_ref=excluded.approval_ref, approved_by=excluded.approved_by,
+                   status=excluded.status",
+            )
+            .bind(required_catalog_text(tariff, "id")?)
+            .bind(required_catalog_text(tariff, "service_code")?)
+            .bind(required_catalog_text(tariff, "customer_category")?)
+            .bind(required_catalog_text(tariff, "unit")?)
+            .bind(required_catalog_text(tariff, "unit_price")?)
+            .bind(required_catalog_text(tariff, "currency")?)
+            .bind(required_catalog_text(tariff, "effective_from")?)
+            .bind(optional_catalog_text(tariff, "effective_to"))
+            .bind(optional_catalog_text(tariff, "approval_ref").unwrap_or_default())
+            .bind(optional_catalog_text(tariff, "approved_by"))
+            .bind(&status)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for profile in &snapshot.payload.tax_profiles {
+            let status = required_catalog_text(profile, "status")?;
+            if !matches!(status.as_str(), "APPROVED" | "REVOKED") {
+                return Err(sqlx::Error::Protocol(
+                    "catalog snapshot contains a draft tax profile".into(),
+                ));
+            }
+            sqlx::query(
+                "INSERT INTO tax_profile_versions
+                 (id, service_code, jurisdiction, base, rate, source, effective_from,
+                  effective_to, status, approval_ref, approved_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                 ON CONFLICT(id) DO UPDATE SET service_code=excluded.service_code,
+                   jurisdiction=excluded.jurisdiction, base=excluded.base, rate=excluded.rate,
+                   source=excluded.source, effective_from=excluded.effective_from,
+                   effective_to=excluded.effective_to, status=excluded.status,
+                   approval_ref=excluded.approval_ref, approved_by=excluded.approved_by",
+            )
+            .bind(required_catalog_text(profile, "id")?)
+            .bind(required_catalog_text(profile, "service_code")?)
+            .bind(required_catalog_text(profile, "jurisdiction")?)
+            .bind(required_catalog_text(profile, "base")?)
+            .bind(required_catalog_text(profile, "rate")?)
+            .bind(required_catalog_text(profile, "source")?)
+            .bind(required_catalog_text(profile, "effective_from")?)
+            .bind(optional_catalog_text(profile, "effective_to"))
+            .bind(&status)
+            .bind(optional_catalog_text(profile, "approval_ref"))
+            .bind(optional_catalog_text(profile, "approved_by"))
+            .execute(&mut *tx)
+            .await?;
+        }
+        for rate in &snapshot.payload.fx_rates {
+            let status = required_catalog_text(rate, "status")?;
+            if !matches!(status.as_str(), "APPROVED" | "REVOKED") {
+                return Err(sqlx::Error::Protocol(
+                    "catalog snapshot contains a draft FX rate".into(),
+                ));
+            }
+            sqlx::query(
+                "INSERT INTO fx_rate_versions
+                 (id, from_currency, to_currency, value, effective_from, source, approved,
+                  effective_to, approval_ref, approved_by, status)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                 ON CONFLICT(id) DO UPDATE SET from_currency=excluded.from_currency,
+                   to_currency=excluded.to_currency, value=excluded.value,
+                   effective_from=excluded.effective_from, source=excluded.source,
+                   approved=excluded.approved, effective_to=excluded.effective_to,
+                   approval_ref=excluded.approval_ref, approved_by=excluded.approved_by,
+                   status=excluded.status",
+            )
+            .bind(required_catalog_text(rate, "id")?)
+            .bind(required_catalog_text(rate, "from_currency")?)
+            .bind(required_catalog_text(rate, "to_currency")?)
+            .bind(required_catalog_text(rate, "value")?)
+            .bind(required_catalog_text(rate, "effective_from")?)
+            .bind(required_catalog_text(rate, "source")?)
+            .bind(status == "APPROVED")
+            .bind(optional_catalog_text(rate, "effective_to"))
+            .bind(optional_catalog_text(rate, "approval_ref"))
+            .bind(optional_catalog_text(rate, "approved_by"))
+            .bind(&status)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query("INSERT INTO catalog_sync_state (key,value,updated_at) VALUES ('sha256',$1,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at")
+            .bind(&snapshot.sha256).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn catalog_snapshot_hash(&self) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query_scalar("SELECT value FROM catalog_sync_state WHERE key = 'sha256'")
+            .fetch_optional(&self.pool)
+            .await
+    }
+
     pub async fn load_tariffs(
         &self,
         revision: &str,
@@ -387,15 +544,21 @@ impl LocalStore {
         .bind(&date)
         .fetch_optional(&self.pool)
         .await?;
-        let electricity_tax = sqlx::query(
+        let electricity_taxes = sqlx::query(
             "SELECT rate FROM tax_profile_versions
              WHERE service_code = 'ELECTRICITY' AND status = 'APPROVED'
                AND effective_from <= $1 AND (effective_to IS NULL OR effective_to >= $1)
-             ORDER BY effective_from DESC LIMIT 1",
+             ORDER BY effective_from DESC, jurisdiction, base LIMIT 2",
         )
         .bind(&date)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
+        if electricity_taxes.len() > 1 {
+            return Err(sqlx::Error::Protocol(
+                "multiple applicable electricity tax profiles require an explicit SEL tax mapping"
+                    .into(),
+            ));
+        }
         let water = sqlx::query(
             "SELECT unit_price FROM tariff_versions
              WHERE service_code = 'WATER' AND unit = 'M3' AND currency = $1
@@ -408,20 +571,25 @@ impl LocalStore {
         .bind(&date)
         .fetch_optional(&self.pool)
         .await?;
-        let water_tax = sqlx::query(
+        let water_taxes = sqlx::query(
             "SELECT rate FROM tax_profile_versions
              WHERE service_code = 'WATER' AND status = 'APPROVED'
                AND effective_from <= $1 AND (effective_to IS NULL OR effective_to >= $1)
-             ORDER BY effective_from DESC LIMIT 1",
+             ORDER BY effective_from DESC, jurisdiction, base LIMIT 2",
         )
         .bind(&date)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
+        if water_taxes.len() > 1 {
+            return Err(sqlx::Error::Protocol(
+                "multiple applicable water tax profiles require an explicit SEL tax mapping".into(),
+            ));
+        }
         Ok(LocalTariffSnapshot {
             electricity_unit_price: sqlite_decimal_column(electricity.as_ref(), "unit_price")?,
-            electricity_tax_rate: sqlite_decimal_column(electricity_tax.as_ref(), "rate")?,
+            electricity_tax_rate: sqlite_decimal_column(electricity_taxes.first(), "rate")?,
             water_unit_price: sqlite_decimal_column(water.as_ref(), "unit_price")?,
-            water_tax_rate: sqlite_decimal_column(water_tax.as_ref(), "rate")?,
+            water_tax_rate: sqlite_decimal_column(water_taxes.first(), "rate")?,
         })
     }
 
@@ -594,7 +762,10 @@ impl LocalStore {
         }
         let product_price_text: Option<String> = sqlx::query_scalar(
             "SELECT price_reference FROM products
-             WHERE sku = $1 AND product_type = 'SOLAR_KIT' AND currency = $2 AND active = 1",
+             WHERE sku = $1 AND product_type = 'SOLAR_KIT' AND currency = $2
+               AND active = 1 AND status = 'APPROVED'
+               AND effective_from <= date('now')
+               AND (effective_to IS NULL OR effective_to >= date('now'))",
         )
         .bind(input.product_code.trim())
         .bind(&input.currency)
@@ -681,7 +852,9 @@ impl LocalStore {
         let price_text: Option<String> = sqlx::query_scalar(
             "SELECT price_reference FROM products
              WHERE sku = $1 AND product_type = 'SOLAR_KIT'
-               AND currency = $2 AND active = 1",
+               AND currency = $2 AND active = 1 AND status = 'APPROVED'
+               AND effective_from <= date('now')
+               AND (effective_to IS NULL OR effective_to >= date('now'))",
         )
         .bind(input.product_code.trim())
         .bind(&input.currency)
@@ -3404,6 +3577,20 @@ fn parse_uuid_column(row: &SqliteRow, column: &str, label: &str) -> Result<Uuid,
     value
         .parse::<Uuid>()
         .map_err(|error| sqlx::Error::Protocol(format!("invalid {label} id: {error}")))
+}
+
+fn required_catalog_text(value: &serde_json::Value, field: &str) -> Result<String, sqlx::Error> {
+    optional_catalog_text(value, field)
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| sqlx::Error::Protocol(format!("catalog snapshot field {field} is missing")))
+}
+
+fn optional_catalog_text<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    value
+        .get(field)
+        .or_else(|| value.get("payload").and_then(|payload| payload.get(field)))
+        .and_then(serde_json::Value::as_str)
 }
 
 fn sqlite_decimal_column(

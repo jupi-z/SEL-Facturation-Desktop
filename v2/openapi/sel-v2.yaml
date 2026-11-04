@@ -155,6 +155,67 @@ paths:
         '200':
           description: Active commercial products
           content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogProduct' } } } }
+  /v1/admin/catalog/products:
+    get:
+      operationId: listAdminSolarProductVersions
+      description: ADMIN only. Lists approved, draft, and revoked solar product versions.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Full solar product version history
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/SolarProductVersion' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createSolarProductDraft
+      description: ADMIN only. Draft is unavailable to quotes and sales until explicitly approved.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSolarProductDraftRequest' }
+      responses:
+        '201': { description: Draft created, not commercially available }
+        '200': { description: Idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/products/{id}/approve:
+    post:
+      operationId: approveSolarProductVersion
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveSolarProductRequest' }
+      responses:
+        '200': { description: Approved version; optional predecessor is closed on the prior day }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/products/{id}/revoke:
+    post:
+      operationId: revokeSolarProductVersion
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeTariffRequest' }
+      responses:
+        '200': { description: Version revoked and audit recorded }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/catalog/tariffs:
     get:
       operationId: listCatalogTariffs
@@ -164,6 +225,15 @@ paths:
           description: Approved dated utility tariffs only
           content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogTariff' } } } }
   /v1/admin/catalog/tariffs:
+    get:
+      operationId: listAdminTariffVersions
+      description: ADMIN only. Lists all tariff versions and states, including drafts and revoked versions.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Full administrative tariff history
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/TariffDraft' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
     post:
       operationId: createTariffDraft
       description: ADMIN only. Creates an inactive draft; this does not make a tariff applicable to billing.
@@ -202,6 +272,145 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tariffs/{id}/revoke:
+    post:
+      operationId: revokeTariffVersion
+      description: ADMIN only. Append-audited revocation; issued invoice snapshots are not modified.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeTariffRequest' }
+      responses:
+        '200':
+          description: Tariff version revoked or idempotently replayed
+          content: { application/json: { schema: { $ref: '#/components/schemas/TariffDraft' } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tax-profiles:
+    get:
+      operationId: listAdminTaxProfileVersions
+      description: ADMIN only. Lists drafts and historical versions.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Tax profile version history, including drafts }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createTaxProfileDraft
+      description: ADMIN only. Creates an auditable draft; it is not used for billing until approved.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTaxProfileDraftRequest' }
+      responses:
+        '201': { description: Draft created }
+        '200': { description: Idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tax-profiles/{id}/approve:
+    post:
+      operationId: approveTaxProfileVersion
+      description: ADMIN only. Requires an explicit SEL approval reference and non-overlapping effective dates.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveReferenceDraftRequest' }
+      responses:
+        '200': { description: Approved version or idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tax-profiles/{id}/revoke:
+    post:
+      operationId: revokeTaxProfileVersion
+      description: ADMIN only. Revokes and audits a version without changing issued document snapshots.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeTariffRequest' }
+      responses:
+        '200': { description: Revoked version or idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/fx-rates:
+    get:
+      operationId: listAdminExchangeRateVersions
+      description: ADMIN only. Lists drafts and historical versions.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Exchange rate version history, including drafts }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createExchangeRateDraft
+      description: ADMIN only. Creates an auditable draft; it cannot be used for conversion until approved.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateFxRateDraftRequest' }
+      responses:
+        '201': { description: Draft created }
+        '200': { description: Idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/fx-rates/{id}/approve:
+    post:
+      operationId: approveExchangeRateVersion
+      description: ADMIN only. Requires an explicit SEL approval reference and non-overlapping effective dates.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveReferenceDraftRequest' }
+      responses:
+        '200': { description: Approved version or idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/fx-rates/{id}/revoke:
+    post:
+      operationId: revokeExchangeRateVersion
+      description: ADMIN only. Revokes and audits a version without changing issued document snapshots.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeTariffRequest' }
+      responses:
+        '200': { description: Revoked version or idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
   /v1/catalog/tax-profiles:
     get:
       operationId: listCatalogTaxProfiles
@@ -218,6 +427,16 @@ paths:
         '200':
           description: Approved exchange rates only
           content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogFxRate' } } } }
+  /v1/catalog/snapshot:
+    get:
+      operationId: getOfflineCatalogSnapshot
+      description: Authenticated immutable versioned projection for local offline caches. Includes approved and revoked historical versions, excludes drafts, and carries a deterministic SHA-256 over payload.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Catalog snapshot with version and integrity hash
+          content: { application/json: { schema: { $ref: '#/components/schemas/CatalogSnapshot' } } }
+        '401': { $ref: '#/components/responses/Problem' }
   /v1/devices/enroll:
     post:
       operationId: enrollDevice
@@ -525,7 +744,7 @@ components:
         status: { type: string, enum: [ACTIVE, REVOKED] }
     CatalogProduct:
       type: object
-      required: [id, sku, product_type, label, price_reference, currency]
+      required: [id, sku, product_type, label, price_reference, currency, effective_from]
       properties:
         id: { type: string, format: uuid }
         sku: { type: string }
@@ -533,6 +752,43 @@ components:
         label: { type: string }
         price_reference: { type: string }
         currency: { type: string }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: [string, 'null'] }
+    SolarProductVersion:
+      type: object
+      required: [id, sku, product_type, label, price_reference, currency, active, effective_from, effective_to, approval_ref, status]
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string, maxLength: 64 }
+        product_type: { type: string, enum: [SOLAR_KIT, OTHER] }
+        label: { type: string, maxLength: 160 }
+        price_reference: { type: string }
+        currency: { type: string, enum: [USD, CDF] }
+        active: { type: boolean }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: [string, 'null'] }
+        approved_by: { type: [string, 'null'], format: uuid }
+        status: { type: string, enum: [DRAFT, APPROVED, REVOKED] }
+    CreateSolarProductDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [sku, label, price_reference, currency, effective_from]
+      properties:
+        sku: { type: string, minLength: 1, maxLength: 64 }
+        label: { type: string, minLength: 1, maxLength: 160 }
+        price_reference: { type: string, pattern: '^[0-9]+(\.[0-9]{1,6})?$' }
+        currency: { type: string, enum: [USD, CDF] }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+    ApproveSolarProductRequest:
+      type: object
+      additionalProperties: false
+      required: [approval_ref]
+      properties:
+        approval_ref: { type: string, minLength: 1, maxLength: 160 }
+        supersedes_product_id: { type: [string, 'null'], format: uuid }
     CatalogTariff:
       type: object
       required: [id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref]
@@ -564,6 +820,13 @@ components:
       required: [approval_ref]
       properties:
         approval_ref: { type: string, minLength: 1, maxLength: 160 }
+        supersedes_tariff_id: { type: [string, 'null'], format: uuid }
+    RevokeTariffRequest:
+      type: object
+      additionalProperties: false
+      required: [change_ref]
+      properties:
+        change_ref: { type: string, minLength: 1, maxLength: 160 }
     TariffDraft:
       type: object
       required: [id, service_code, customer_category, unit, unit_price, currency, effective_from, effective_to, status]
@@ -577,7 +840,7 @@ components:
         effective_from: { type: string, format: date }
         effective_to: { type: [string, 'null'], format: date }
         approval_ref: { type: [string, 'null'] }
-        status: { type: string, enum: [DRAFT, APPROVED] }
+        status: { type: string, enum: [DRAFT, APPROVED, REVOKED] }
     CatalogTaxProfile:
       type: object
       required: [id, service_code, jurisdiction, base, rate, source, effective_from]
@@ -590,6 +853,7 @@ components:
         source: { type: string }
         effective_from: { type: string, format: date }
         effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: [string, 'null'] }
     CatalogFxRate:
       type: object
       required: [id, from_currency, to_currency, value, effective_from, source]
@@ -599,7 +863,54 @@ components:
         to_currency: { type: string }
         value: { type: string }
         effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
         source: { type: string }
+        approval_ref: { type: [string, 'null'] }
+    CatalogSnapshot:
+      type: object
+      required: [payload, sha256]
+      properties:
+        payload: { $ref: '#/components/schemas/CatalogSnapshotPayload' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    CatalogSnapshotPayload:
+      type: object
+      required: [schema_version, products, tariffs, tax_profiles, fx_rates]
+      properties:
+        schema_version: { type: integer, enum: [1] }
+        products: { type: array, items: { type: object } }
+        tariffs: { type: array, items: { type: object } }
+        tax_profiles: { type: array, items: { type: object } }
+        fx_rates: { type: array, items: { type: object } }
+    CreateTaxProfileDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [service_code, jurisdiction, base, rate, source, effective_from]
+      properties:
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        jurisdiction: { type: string, minLength: 1, maxLength: 64 }
+        base: { type: string, minLength: 1, maxLength: 64 }
+        rate: { type: string, pattern: '^[0-9]+(\\.[0-9]{1,6})?$' }
+        source: { type: string, minLength: 1, maxLength: 160 }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+    CreateFxRateDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [from_currency, to_currency, value, source, effective_from]
+      properties:
+        from_currency: { type: string, pattern: '^[A-Z]{3}$' }
+        to_currency: { type: string, pattern: '^[A-Z]{3}$' }
+        value: { type: string, pattern: '^[0-9]+(\\.[0-9]{1,12})?$' }
+        source: { type: string, minLength: 1, maxLength: 160 }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+    ApproveReferenceDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [approval_ref]
+      properties:
+        approval_ref: { type: string, minLength: 1, maxLength: 160 }
+        supersedes_id: { type: [string, 'null'], format: uuid }
     Customer:
       type: object
       required: [id, organization_id, customer_code, legal_name, status, revision]

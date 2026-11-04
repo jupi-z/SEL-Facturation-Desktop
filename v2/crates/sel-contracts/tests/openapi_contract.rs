@@ -8,9 +8,34 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .and_then(serde_yaml::Value::as_mapping)
         .unwrap();
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices/{id}/document-data")));
+    for (path, method) in [
+        ("/v1/admin/catalog/tax-profiles", "get"),
+        ("/v1/admin/catalog/tax-profiles", "post"),
+        ("/v1/admin/catalog/tax-profiles/{id}/approve", "post"),
+        ("/v1/admin/catalog/tax-profiles/{id}/revoke", "post"),
+        ("/v1/admin/catalog/fx-rates", "get"),
+        ("/v1/admin/catalog/fx-rates", "post"),
+        ("/v1/admin/catalog/fx-rates/{id}/approve", "post"),
+        ("/v1/admin/catalog/fx-rates/{id}/revoke", "post"),
+        ("/v1/catalog/snapshot", "get"),
+        ("/v1/admin/catalog/products", "get"),
+        ("/v1/admin/catalog/products", "post"),
+        ("/v1/admin/catalog/products/{id}/approve", "post"),
+        ("/v1/admin/catalog/products/{id}/revoke", "post"),
+    ] {
+        let operation = paths
+            .get(serde_yaml::Value::from(path))
+            .and_then(|item| item.get(method))
+            .unwrap_or_else(|| panic!("missing documented {method} {path}"));
+        assert!(operation.get("security").is_some());
+    }
     let tariff_draft = paths
         .get(serde_yaml::Value::from("/v1/admin/catalog/tariffs"))
         .expect("tariff administration route is documented");
+    assert!(
+        tariff_draft.get("get").is_some(),
+        "draft list must be documented"
+    );
     let create_operation = tariff_draft
         .get("post")
         .expect("tariff draft POST operation");
@@ -35,6 +60,19 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .get("parameters")
         .and_then(serde_yaml::Value::as_sequence)
         .is_some_and(|parameters| parameters.len() == 2));
+    let tariff_revoke = paths
+        .get(serde_yaml::Value::from(
+            "/v1/admin/catalog/tariffs/{id}/revoke",
+        ))
+        .expect("tariff revocation route is documented");
+    let revoke_operation = tariff_revoke
+        .get("post")
+        .expect("tariff revocation POST operation");
+    assert!(revoke_operation.get("security").is_some());
+    assert!(revoke_operation
+        .get("parameters")
+        .and_then(serde_yaml::Value::as_sequence)
+        .is_some_and(|parameters| parameters.len() == 2));
     let schemas = document
         .get("components")
         .and_then(|value| value.get("schemas"))
@@ -43,6 +81,14 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
     for schema in [
         "CreateTariffDraftRequest",
         "ApproveTariffDraftRequest",
+        "RevokeTariffRequest",
+        "CreateSolarProductDraftRequest",
+        "ApproveSolarProductRequest",
+        "CreateTaxProfileDraftRequest",
+        "CreateFxRateDraftRequest",
+        "ApproveReferenceDraftRequest",
+        "CatalogSnapshot",
+        "CatalogSnapshotPayload",
         "TariffDraft",
     ] {
         assert!(schemas.contains_key(serde_yaml::Value::from(schema)));

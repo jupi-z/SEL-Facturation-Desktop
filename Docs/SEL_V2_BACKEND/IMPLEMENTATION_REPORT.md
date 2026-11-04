@@ -386,6 +386,25 @@ Progression déclarée : Phase 1 **90 % — incomplète** (le pourcentage histor
 
 Résultat CI pour le commit de code `138dd02f16408eed7fef4ed342f97d1a77ed7ab9` : **PASS**, backend Rust/PostgreSQL run `41734754734`, paquet serveur `41734754664`, build Windows Desktop `41734754663`, installateur candidat Windows `41734754655`. Les deux premières exécutions de la tranche avaient révélé des défauts de fixture uniquement : token de catalogue non authentifié (`7288ad6`) puis casse non normalisée dans l'assertion du test (`50f40da`). Elles ont été corrigées et la suite PostgreSQL complète est verte sur `138dd02`; aucun échec n'a été masqué ou désactivé. Le commit documentaire ultérieur peut encore déclencher de nouveaux workflows.
 
+### Phase 2 — versions des référentiels et cache offline (travail en cours, 4 novembre 2026)
+
+Cette mise à jour supersède l'état « NOT_STARTED » des taxes, devises, catalogue solaire et cache offline indiqué dans la transition initiale. Le travail ci-dessous est présent dans l'arbre de travail basé sur `26fd1d31c5b3e8060edb9c076a774fbd20de1057`; il n'est pas encore commité, poussé ni validé par GitHub Actions.
+
+| Domaine / critère | Statut actuel | Code et preuve locale | Validation manquante |
+|---|---|---|---|
+| Cycle de vie des tarifs | IN_PROGRESS | Liste ADMIN des versions, approbation/révocation auditées, dates d'effet et remplacement sans suppression d'historique ; contrôle de chevauchement transactionnel. | Exécuter le test HTTP PostgreSQL réel et la CI du nouveau commit. |
+| Catalogue solaire versionné | IN_PROGRESS | Brouillons, approbation, révocation, dates d'effet ; prix courant conservé jusqu'à la veille d'une nouvelle version ; migration SQLite testée et données historiques préservées. | Migration et test HTTP PostgreSQL réel/CI. |
+| Profils fiscaux | IN_PROGRESS | Brouillon, approbation avec référence SEL, remplacement daté, révocation auditée, liste ADMIN, RBAC et OpenAPI. Aucune valeur SEL inventée. | Test PostgreSQL réel/CI et confirmation SEL des profils, juridictions et assiettes. Si des profils applicables sont ambigus, le moteur bloque la facturation plutôt que choisir arbitrairement. |
+| Taux de change | IN_PROGRESS | Référentiels datés, source et approbation explicites ; brouillons exclus du catalogue commercial ; migrations PostgreSQL/SQLite additives. | Test PostgreSQL réel/CI ; aucun taux n'est créé ou approuvé automatiquement. |
+| Snapshot offline | IN_PROGRESS | Contrat versionné, SHA-256 déterministe, projection SQLite transactionnelle des versions approuvées/révoquées, rejeu idempotent et révocations propagées ; worker de rafraîchissement après sync réussie. Tests SQLite et HTTP local passés. | Test du endpoint central, migration PostgreSQL et parcours bout en bout CI avec PostgreSQL. |
+| Fichiers de facture côté serveur | PASS local | Le snapshot ne contient que des données structurées ; les tests existants vérifient l'absence de stockage de fichiers de factures serveur. | Nouvelle CI du commit courant. |
+
+**Progression Phase 2 : 74 %** pour le travail actuel d'implémentation et de validation locale. Ce pourcentage ne compte pas comme terminés les tests PostgreSQL/CI, les valeurs métier approuvées par SEL ou les écrans d'administration du nouveau frontend.
+
+Validations de l'arbre de travail : `cargo test --workspace` (**PASS**, aucun échec ; les tests PostgreSQL sont ignorés selon leur précondition explicite), `cargo test -p sel-storage --test catalog_snapshot` (**PASS**), `cargo test -p sel-local --test local_http catalog_refresh_fetches_and_persists_verified_snapshot_once` (**PASS**), `cargo test -p sel-api tax_and_exchange_rate_administration_is_admin_only` (**PASS**), `cargo test -p sel-contracts --test openapi_contract` (**PASS**), `cargo test -p sel-api --test postgres_catalog_api --no-run` (**PASS compilation uniquement**), `cargo clippy --workspace --all-targets -- -D warnings` (**PASS**), `cargo fmt --all` (**PASS**). Le test `catalog_snapshot_is_authenticated_atomic_and_idempotent` couvre le hash invalide, les répétitions, les révocations et le blocage d'un choix fiscal ambigu. `tax_and_fx_versions_require_approval_and_preserve_effective_history` compile mais reste **NOT_TESTED** sur PostgreSQL.
+
+Blocage PostgreSQL : aucune variable `TEST_DATABASE_URL`/`DATABASE_URL` n'est configurée. Docker est installé, mais `docker version` échoue car le pipe `dockerDesktopLinuxEngine` n'existe pas. L'exécution SQL centrale est **BLOCKED_EXTERNAL** jusqu'à disponibilité d'un serveur PostgreSQL de test. Aucun workflow CI n'a été lancé sur les changements non poussés.
+
 ### Clôture des critères techniques de phase 1 — 4 novembre 2026
 
 Cette section supersède les pourcentages historiques de phase 1 ci-dessus. **Phase 1 (contrats backend, autorisation et cycle de vie des identités) : critères de code 100 % réalisés** sur le jalon courant ; ce statut n'affirme ni un enrôlement sur un serveur réel, ni une recette Windows, ni une mise en production.

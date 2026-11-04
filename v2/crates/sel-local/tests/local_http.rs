@@ -1,8 +1,10 @@
 use axum::body::Body;
 use axum::http::Request;
 use http_body_util::BodyExt;
-use sel_contracts::SyncEnvelope;
-use sel_local::{router_with_store, router_with_store_and_auth};
+use sel_contracts::{
+    catalog_snapshot_sha256, CatalogSnapshot, CatalogSnapshotPayload, SyncEnvelope,
+};
+use sel_local::{refresh_catalog_once, router_with_store, router_with_store_and_auth};
 use sel_storage::LocalStore;
 use sel_sync::payload_digest;
 use serde_json::json;
@@ -105,6 +107,56 @@ async fn local_production_router_requires_the_configured_bearer_token() {
         .await
         .unwrap();
     assert_eq!(accepted.status(), axum::http::StatusCode::OK);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn catalog_refresh_fetches_and_persists_verified_snapshot_once() {
+    let path =
+        std::env::temp_dir().join(format!("sel-v2-catalog-refresh-{}.sqlite", Uuid::new_v4()));
+    let store = LocalStore::connect(
+        &format!("sqlite://{}", path.display()),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    )
+    .await
+    .expect("open local store");
+    let payload = CatalogSnapshotPayload {
+        schema_version: 1,
+        products: vec![],
+        tariffs: vec![],
+        tax_profiles: vec![],
+        fx_rates: vec![],
+    };
+    let snapshot = CatalogSnapshot {
+        sha256: catalog_snapshot_sha256(&payload),
+        payload,
+    };
+    let app = axum::Router::new().route(
+        "/v1/catalog/snapshot",
+        axum::routing::get({
+            let snapshot = snapshot.clone();
+            move || {
+                let snapshot = snapshot.clone();
+                async move { axum::Json(snapshot) }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let endpoint = format!("http://{address}");
+    assert!(refresh_catalog_once(&store, &endpoint, "test-token")
+        .await
+        .unwrap());
+    assert!(!refresh_catalog_once(&store, &endpoint, "test-token")
+        .await
+        .unwrap());
+    assert_eq!(
+        store.catalog_snapshot_hash().await.unwrap(),
+        Some(snapshot.sha256)
+    );
+    server.abort();
     let _ = std::fs::remove_file(path);
 }
 

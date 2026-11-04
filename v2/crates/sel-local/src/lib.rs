@@ -7,11 +7,11 @@ use axum::{
     Json, Router,
 };
 use sel_contracts::{
-    utility_snapshot_sha256, ActivateSolarContractRequest, CreateCustomer, CreateSolarQuoteRequest,
-    CreateSolarSaleRequest, CreditNoteRequest, Customer, InvoiceLineResponse,
-    PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
-    SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UtilityBillingRequest,
-    UtilityBillingResponse, VoidInvoiceRequest,
+    utility_snapshot_sha256, ActivateSolarContractRequest, CatalogSnapshot, CreateCustomer,
+    CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer,
+    InvoiceLineResponse, PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest,
+    SolarSaleResponse, SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer,
+    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_storage::{LocalSolarSaleError, LocalStore};
@@ -168,6 +168,33 @@ pub async fn pull_once(
     Ok(count)
 }
 
+pub async fn refresh_catalog_once(
+    store: &LocalStore,
+    endpoint: &str,
+    bearer_token: &str,
+) -> Result<bool, SyncWorkerError> {
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/catalog/snapshot",
+            endpoint.trim_end_matches('/')
+        ))
+        .bearer_auth(bearer_token)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(SyncWorkerError::Server {
+            status: response.status().as_u16(),
+            body: response.text().await.unwrap_or_default(),
+        });
+    }
+    let snapshot: CatalogSnapshot = response.json().await?;
+    if store.catalog_snapshot_hash().await?.as_deref() == Some(snapshot.sha256.as_str()) {
+        return Ok(false);
+    }
+    store.apply_catalog_snapshot(&snapshot).await?;
+    Ok(true)
+}
+
 /// Runs one push/pull cycle immediately and retries on a fixed interval. A
 /// failed cycle leaves the outbox untouched, so reconnecting automatically
 /// resumes transmission without losing or duplicating business effects.
@@ -185,6 +212,9 @@ pub fn spawn_sync_worker(
             ticker.tick().await;
             if let Err(error) = sync_once(&store, &endpoint, &bearer_token).await {
                 eprintln!("SEL local synchronization deferred: {error}");
+            } else if let Err(error) = refresh_catalog_once(&store, &endpoint, &bearer_token).await
+            {
+                eprintln!("SEL local catalog refresh deferred: {error}");
             }
         }
     })

@@ -496,6 +496,26 @@ pub struct SyncPullResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CatalogSnapshotPayload {
+    pub schema_version: u32,
+    pub products: Vec<serde_json::Value>,
+    pub tariffs: Vec<serde_json::Value>,
+    pub tax_profiles: Vec<serde_json::Value>,
+    pub fx_rates: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CatalogSnapshot {
+    pub payload: CatalogSnapshotPayload,
+    pub sha256: String,
+}
+
+pub fn catalog_snapshot_sha256(payload: &CatalogSnapshotPayload) -> String {
+    let canonical = serde_json::to_vec(payload).expect("catalog snapshot payload is serializable");
+    hex::encode(Sha256::digest(canonical))
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CreateSolarSaleRequest {
     pub customer_id: Uuid,
     pub product_code: String,
