@@ -357,7 +357,19 @@ export default function App() {
         </Panel>
       </>}
 
-      {view === "customers" && <>
+      {view === "customers" && (selectedCustomer ? <>
+        <PageHeading eyebrow="CORE / CLIENTS" title="Dossier abonné" description={`${text(selectedCustomerData?.customer_code)} · ${text(selectedCustomerData?.legal_name)}`} action={<Button aria-label="Retour au répertoire" onClick={() => { setSelectedCustomer(""); setSelectedCustomerData(null); setStatement(null); }}>Retour au répertoire</Button>} />
+        <Panel title={`Fiche abonné · ${text(selectedCustomerData?.customer_code)}`}>
+          {selectedCustomerData ? <form className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
+            <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required /></label>
+            <label>Révision locale<input value={text(selectedCustomerData.revision)} readOnly /></label>
+            <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} /></label>
+            <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} /></label>
+            <div className="form-actions span-two"><Button primary type="submit">Enregistrer les modifications</Button></div>
+          </form> : <div className="empty-state">Chargement du dossier abonné…</div>}
+        </Panel>
+        <CustomerStatement customerId={selectedCustomer} statement={statement} />
+      </> : <>
         <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier, le consulter et enregistrer un nouvel abonné." />
         <div className="columns customer-layout">
           <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné disponible sur ce poste." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); }}>Ouvrir le dossier →</button>])} /></Panel>
@@ -368,19 +380,7 @@ export default function App() {
             <div className="form-actions span-two"><Button primary type="submit">Enregistrer l’abonné</Button></div>
           </form></Panel>
         </div>
-        {selectedCustomer && <>
-          <Panel title={`Fiche abonné · ${text(selectedCustomerData?.customer_code)}`}>
-            {selectedCustomerData ? <form className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
-              <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required /></label>
-              <label>Révision locale<input value={text(selectedCustomerData.revision)} readOnly /></label>
-              <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} /></label>
-              <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} /></label>
-              <div className="form-actions span-two"><Button primary type="submit">Enregistrer les modifications</Button></div>
-            </form> : <div className="empty-state">Chargement du dossier abonné…</div>}
-          </Panel>
-          <CustomerStatement customerId={selectedCustomer} statement={statement} />
-        </>}
-      </>}
+      </>)}
 
       {view === "readings" && <MeterReadingsView customers={customers} />}
 
@@ -462,8 +462,8 @@ export default function App() {
   </div>;
 }
 
-function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
-  return <div className="page-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="muted">{description}</p></div></div>;
+function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
+  return <div className="page-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="muted">{description}</p></div>{action}</div>;
 }
 
 function Metric({ label, value, note }: { label: string; value: ReactNode; note: string }) {

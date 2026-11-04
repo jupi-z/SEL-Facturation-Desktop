@@ -205,9 +205,8 @@ async def capture_views() -> None:
                 await page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"))
                 if slug == "customers":
                     await page.get_by_role("button", name="Ouvrir le dossier →").click()
-                    customer_heading = page.get_by_role("heading", name="Fiche abonné · SEL-DÉMO-0001")
-                    await customer_heading.wait_for()
-                    await customer_heading.evaluate("element => element.closest('.panel').scrollIntoView({block: 'start'})")
+                    await page.get_by_role("heading", name="Dossier abonné").wait_for()
+                    await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "customer-record-1440x900.png"))
                 if slug == "receivables":
