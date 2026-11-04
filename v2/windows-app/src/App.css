@@ -69,6 +69,7 @@ button { cursor: pointer; }
 .metric-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .columns { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr); gap: 18px; }
 .customer-layout { grid-template-columns: minmax(0, 1.35fr) minmax(330px, .85fr); align-items: start; }
+.payment-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
 .panel { min-width: 0; margin-bottom: 18px; padding: 20px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 11px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .panel-heading h2 { margin: 0; color: var(--navy); font-size: 14px; font-weight: 720; }
@@ -83,6 +84,14 @@ button { cursor: pointer; }
 .status-badge.danger { color: var(--red); background: #ffeded; }
 .table-scroll { width: 100%; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.payment-table { table-layout: fixed; }
+.payment-table th:nth-child(1) { width: 25%; }
+.payment-table th:nth-child(2) { width: 23%; }
+.payment-table th:nth-child(3) { width: 17%; }
+.payment-table th:nth-child(4) { width: 17%; }
+.payment-table th:nth-child(5) { width: 18%; }
+.payment-table td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.payment-table td:nth-child(2), .payment-table td:nth-child(3), .payment-table td:nth-child(4) { white-space: nowrap; }
 th { color: var(--muted); background: #fff; text-align: left; font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
 th, td { min-height: 40px; padding: 11px 9px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 td { color: #263f5d; }

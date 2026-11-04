@@ -41,6 +41,17 @@ function formatMoney(value: unknown, currency: unknown): string {
   return `${sign}${grouped},${fraction.padEnd(2, "0")} ${text(currency, "")}`.trim();
 }
 
+function formatDateTime(value: unknown): string {
+  const raw = text(value, "");
+  const date = new Date(raw);
+  if (!raw || Number.isNaN(date.getTime())) return raw || "—";
+  return new Intl.DateTimeFormat("fr-CD", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "Africa/Lubumbashi",
+  }).format(date);
+}
+
 function rows<T extends Row>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
@@ -57,9 +68,9 @@ function Panel({ title, action, children }: { title: string; action?: ReactNode;
   return <section className="panel"><div className="panel-heading"><h2>{title}</h2>{action}</div>{children}</section>;
 }
 
-function Table({ headers, data, empty }: { headers: string[]; data: ReactNode[][]; empty: string }) {
+function Table({ headers, data, empty, className = "" }: { headers: string[]; data: ReactNode[][]; empty: string; className?: string }) {
   if (!data.length) return <div className="empty-state">{empty}</div>;
-  return <div className="table-scroll"><table><thead><tr>{headers.map((header) => <th key={header} scope="col">{header}</th>)}</tr></thead><tbody>{data.map((row, index) => <tr key={index}>{row.map((value, column) => <td key={column}>{value}</td>)}</tr>)}</tbody></table></div>;
+  return <div className="table-scroll"><table className={className}><thead><tr>{headers.map((header) => <th key={header} scope="col">{header}</th>)}</tr></thead><tbody>{data.map((row, index) => <tr key={index}>{row.map((value, column) => <td key={column}>{value}</td>)}</tr>)}</tbody></table></div>;
 }
 
 function NavIcon({ name }: { name: string }) {
@@ -366,9 +377,9 @@ export default function App() {
 
       {view === "payments" && <>
         <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
-        <div className="columns customer-layout">
+        <div className="payment-layout">
           <Panel title="Nouvel encaissement"><PaymentForm customers={customers} onSubmit={submit} /></Panel>
-          <Panel title="Encaissements enregistrés"><Table headers={["Référence", "Date", "Montant", "Mode", "État"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong>{text(row.payment_id)}</strong>, text(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), text(row.method), <Status value={row.status} />])} /></Panel>
+          <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), text(row.method), <Status value={row.status} />])} /></Panel>
         </div>
       </>}
 

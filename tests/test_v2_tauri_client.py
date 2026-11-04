@@ -104,6 +104,20 @@ def test_financial_amounts_are_formatted_without_client_side_calculation() -> No
     assert "formatMoney(row.balance, row.currency)" in app
 
 
+def test_cash_journal_uses_a_wide_table_and_lubumbashi_datetime_format() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert '<div className="payment-layout">' in app
+    assert 'className="payment-table"' in app
+    assert 'timeZone: "Africa/Lubumbashi"' in app
+    assert 'formatDateTime(row.paid_at ?? row.occurred_at)' in app
+    assert ".payment-table { table-layout: fixed; }" in css
+    assert "viewport={\"width\": 1440, \"height\": 900}" in visual_review
+    assert 'locale="fr-CD"' in visual_review
+
+
 def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     local_api = (ROOT / "v2" / "crates" / "sel-local" / "src" / "lib.rs").read_text(encoding="utf-8")

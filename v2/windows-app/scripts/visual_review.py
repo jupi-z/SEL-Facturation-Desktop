@@ -118,7 +118,7 @@ async def capture_views() -> None:
         await wait_for_server(process)
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
-            page = await browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=1)
+            page = await browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=1, locale="fr-CD")
             await page.add_init_script(mock_invoke_script())
             await page.goto(URL, wait_until="domcontentloaded")
             await page.get_by_role("heading", name="Vue d’ensemble").wait_for()
