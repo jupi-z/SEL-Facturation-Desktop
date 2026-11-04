@@ -176,6 +176,13 @@ def test_solar_payment_form_clears_stale_schedules_and_fails_closed() -> None:
     assert "schedule_id: form.get(\"schedule_id\") || null" in payment_form
 
 
+def test_windows_typescript_target_does_not_use_es2022_array_at() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert ".at(-1)" not in app
+    assert "readings[readings.length - 1]" in app
+
+
 def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     history_view = app.split("{selectedInvoice &&", 1)[1].split("</>}", 1)[0]

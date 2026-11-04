@@ -586,7 +586,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
     finally { setSaving(false); }
   }
 
-  const latestReading = readings.at(-1) ?? null;
+  const latestReading = readings.length ? readings[readings.length - 1] : null;
 
   return <>
     <PageHeading eyebrow="CORE / RELEVÉS" title="Relevés de compteurs" description="Consultez l’historique et enregistrez les index. La consommation mesurée est calculée et validée par Rust." />
