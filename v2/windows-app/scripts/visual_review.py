@@ -16,7 +16,7 @@ from pypdf import PdfReader
 
 ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / "v2" / "windows-app"
-OUTPUT = ROOT / "artifacts" / "phase8-documents-figma"
+OUTPUT = Path(os.environ.get("SEL_VISUAL_OUTPUT", ROOT / "artifacts" / "phase8-documents-figma"))
 URL = "http://127.0.0.1:1420"
 
 CUSTOMERS = [{
@@ -25,6 +25,14 @@ CUSTOMERS = [{
     "legal_name": "Client Alpha",
     "address": "Quartier Manika, Kolwezi",
     "phone": "+243 000 000 000",
+    "status": "ACTIVE",
+    "revision": 1,
+}, {
+    "id": "demo-customer-0002",
+    "customer_code": "SEL-DÉMO-0002",
+    "legal_name": "Client Beta",
+    "address": "Quartier Joli Site, Kolwezi",
+    "phone": "+243 000 000 001",
     "status": "ACTIVE",
     "revision": 1,
 }]
@@ -161,11 +169,11 @@ def mock_invoke_script() -> str:
             ? {{currency:'USD',subtotal:'11.00',tax:'1.76',total:'12.76',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}}]}}
             : {{currency:'USD',subtotal:'9.50',tax:'1.52',total:'11.02',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}}]}};
         }}
-        else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}};
-        else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts')) body = fixtures.serviceAccounts;
-        else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[4]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
-        else if (path.startsWith('/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[4]; body = meterId === 'demo-meter-water-0001' ? {{meter_id:meterId,period:'2026-11',previous:'5',current:'10',measured_quantity:'5',source:'MANUAL'}} : {{meter_id:meterId,period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}}; }}
-        else if (path.startsWith('/v1/meters/') && path.endsWith('/readings')) {{ const meterId = path.split('/')[4]; body = fixtures.readings.filter((reading) => reading.meter_id === meterId); }}
+        else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) {{ const customerId = path.split('/')[3]; body = customerId === 'demo-customer-0001' ? {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}} : {{invoices:[],receivables:[]}}; }}
+        else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts')) {{ const customerId = path.split('/')[3]; body = fixtures.serviceAccounts.filter((account) => account.customer_id === customerId); }}
+        else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[3]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
+        else if (path.startsWith('/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[3]; body = meterId === 'demo-meter-water-0001' ? {{meter_id:meterId,period:'2026-11',previous:'5',current:'10',measured_quantity:'5',source:'MANUAL'}} : {{meter_id:meterId,period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}}; }}
+        else if (path.startsWith('/v1/meters/') && path.endsWith('/readings')) {{ const meterId = path.split('/')[3]; body = fixtures.readings.filter((reading) => reading.meter_id === meterId); }}
         else if (path.startsWith('/v1/customers/')) body = fixtures.customers[0];
         else if (path.startsWith('/v1/invoices/') && path.endsWith('/document-data')) {{
           const positiveWater = window.__invoicePdfWaterPositive === true;
@@ -289,7 +297,11 @@ async def capture_views() -> None:
     try:
         await wait_for_server(process)
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
+            browser_channel = os.environ.get("SEL_VISUAL_BROWSER")
+            browser_options = {"headless": True}
+            if browser_channel:
+                browser_options["channel"] = browser_channel
+            browser = await playwright.chromium.launch(**browser_options)
             page = await browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=1, locale="fr-CD")
             await page.add_init_script(mock_invoke_script())
             await page.add_init_script("""(() => {
@@ -324,6 +336,7 @@ async def capture_views() -> None:
                     selects = page.locator(".reading-filters select")
                     await selects.nth(0).select_option("demo-customer-0001")
                     await selects.nth(1).select_option("demo-service-account-0001")
+                    await page.locator('.reading-filters select option[value="demo-meter-0001"]').wait_for(state="attached")
                     await selects.nth(2).select_option("demo-meter-0001")
                     await page.locator('.reading-entry input[name="period"]').fill("2026-11")
                     await page.locator('.reading-entry input[name="current"]').fill("1200")
@@ -372,7 +385,7 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "customer-new-1440x900.png"))
                     await page.get_by_role("button", name="Fermer le formulaire").click()
-                    await page.get_by_role("button", name="Ouvrir le dossier →").click()
+                    await page.get_by_role("button", name="Ouvrir le dossier →").first.click()
                     await page.get_by_role("heading", name="Dossier abonné").wait_for()
                     await page.get_by_role("heading", name="Situation du compte · Client Alpha").wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
@@ -383,6 +396,16 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "customer-edit-1440x900.png"))
                     await page.get_by_role("button", name="Annuler la modification").click()
+                    await page.get_by_role("button", name="Retour au répertoire").click()
+                    await page.locator("tbody tr").nth(1).get_by_role("button", name="Ouvrir le dossier →").click()
+                    await page.get_by_role("heading", name="Services et compteurs").wait_for()
+                    await page.get_by_role("button", name="Rattacher un service").click()
+                    await page.get_by_label("Service").wait_for()
+                    await page.get_by_role("heading", name="Services et compteurs").evaluate(
+                        "element => element.scrollIntoView({ block: 'center' })"
+                    )
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / "service-account-without-meter-1440x900.png"))
                 if slug == "receivables":
                     await page.get_by_label("Abonné").select_option("demo-customer-0001")
                     await page.get_by_text("demo-receivable-0001").wait_for()

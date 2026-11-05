@@ -1104,7 +1104,7 @@ Le dossier abonné expose désormais la gestion des services Eau et Électricit�
 | Autorisations API | PASS — création/modification des raccordements accessible aux rôles ADMIN, SUPERVISOR et BILLING_AGENT |
 | Facturation sans compteur | PASS — la saisie manuelle de kWh et m³ utilise l'API de prévisualisation/émission; aucun identifiant compteur n'est requis |
 | Régression HTTP PostgreSQL | CODE — test de liste de compteurs vide ajouté après création d'un raccordement; compilé avec `cargo test -p sel-api --test postgres_meter_readings --no-run -j 1`. Exécution réelle non faite faute de base de test dédiée dans cette session |
-| Vérifications locales | PASS — `npm run build`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -j 1`; `python -m pytest -q` (324 réussis) |
+| Vérifications locales | PASS — `npm run build`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -j 1`; `python -m pytest -q` (324 réussis); recette Playwright Chromium (29 captures, dont le parcours de rattachement sans compteur, relevés et PDF A4) |
 | État des données SEL | PASS — aucune écriture en production; le rattachement des services se fait depuis le dossier de chaque abonné après distribution du client validé |
 
 **Limite de livraison :** les scénarios PostgreSQL annotés `ignore` exigent un `TEST_DATABASE_URL`; ils ne sont pas comptés comme exécutés. La mise à jour du dépôt ou une CI réussie ne remplace pas la publication d'un nouvel installateur ni sa vérification sur le poste de Clarisse.
