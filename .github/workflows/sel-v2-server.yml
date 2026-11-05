@@ -25,6 +25,7 @@ jobs:
           POSTGRES_APP_USER: sel_api_validation
           POSTGRES_APP_PASSWORD: validation-only-app-password
           SEL_OFFLINE_GRANT_PUBLIC_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          SEL_OFFLINE_GRANT_SIGNING_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           SEL_ORGANIZATION_ID: 00000000-0000-4000-8000-000000000001
           SEL_ORGANIZATION_NAME: SEL%20Validation
         run: docker compose -f v2/deploy/compose.production.example.yml config --quiet
@@ -50,6 +51,7 @@ jobs:
           set -euo pipefail
           openssl genpkey -algorithm ED25519 -out "$RUNNER_TEMP/offline-grant-test.pem"
           export SEL_OFFLINE_GRANT_PUBLIC_KEY="$(openssl pkey -in "$RUNNER_TEMP/offline-grant-test.pem" -pubout -outform DER | tail -c 32 | base64 -w0)"
+          export SEL_OFFLINE_GRANT_SIGNING_KEY="$(openssl pkey -in "$RUNNER_TEMP/offline-grant-test.pem" -outform DER | tail -c 32 | base64 -w0)"
           compose=(docker compose -p sel-v2-ci -f v2/deploy/compose.production.example.yml)
           cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
           trap cleanup EXIT
