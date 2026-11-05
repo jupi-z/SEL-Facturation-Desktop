@@ -35,4 +35,36 @@ jobs:
           caddy:2.8-alpine
           caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Build central API image without secrets
-        run: docker build --file v2/deploy/Dockerfile --tag sel-v2-api:validation .
+        run: docker build --file v2/deploy/Dockerfile --tag sel-v2-ci-sel-api:latest .
+      - name: Smoke test production PostgreSQL role bootstrap and API readiness
+        env:
+          POSTGRES_DB: sel_v2_validation
+          POSTGRES_ADMIN_USER: sel_admin_validation
+          POSTGRES_ADMIN_PASSWORD: validation-only-admin-password
+          POSTGRES_APP_USER: sel_api_validation
+          POSTGRES_APP_PASSWORD: validation-only-app-password
+          SEL_ORGANIZATION_ID: 00000000-0000-4000-8000-000000000001
+          SEL_ORGANIZATION_NAME: SEL Validation
+          RUST_LOG: warn
+        run: |
+          set -euo pipefail
+          openssl genpkey -algorithm ED25519 -out "$RUNNER_TEMP/offline-grant-test.pem"
+          export SEL_OFFLINE_GRANT_PUBLIC_KEY="$(openssl pkey -in "$RUNNER_TEMP/offline-grant-test.pem" -pubout -outform DER | tail -c 32 | base64 -w0)"
+          compose=(docker compose -p sel-v2-ci -f v2/deploy/compose.production.example.yml)
+          cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          "${compose[@]}" config --quiet
+          "${compose[@]}" up -d --no-build postgres sel-api
+          ready=false
+          for _ in $(seq 1 60); do
+            if "${compose[@]}" exec -T sel-api wget -qO- http://127.0.0.1:8080/health/ready >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            "${compose[@]}" logs --tail=80 postgres sel-api | sed -E 's#postgres(ql)?://[^[:space:]]+#postgres://[REDACTED]#g'
+            exit 1
+          fi
+          echo "Production Compose PostgreSQL role initialization and API readiness passed."
