@@ -401,7 +401,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/sync/status", get(sync_status))
         .route("/v1/config/versions", get(config_versions))
         .route("/v1/client-resources/manifest", get(resource_manifest))
-        .route("/v1/solar/sales", post(create_solar_sale))
+        .route(
+            "/v1/solar/sales",
+            get(list_solar_sales).post(create_solar_sale),
+        )
+        .route(
+            "/v1/solar/sales/:id/document-data",
+            get(get_solar_sale_document_data),
+        )
         .route("/v1/solar/quotes", post(create_solar_quote))
         .route("/v1/solar/contracts", post(create_solar_contract))
         .route(
@@ -540,6 +547,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/meters/:id/readings"
                     | "/v1/invoices"
                     | "/v1/payments"
+                    | "/v1/solar/sales"
                     | "/v1/sync/pull"
                     | "/v1/sync/status"
                     | "/v1/config/versions"
@@ -553,6 +561,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 || path_matches(path, "/v1/invoices/:id")
                 || path_matches(path, "/v1/invoices/:id/document-data")
                 || path_matches(path, "/v1/payments/:id/document-data")
+                || path_matches(path, "/v1/solar/sales/:id/document-data")
                 || path_matches(path, "/v1/receivables/:id")
                 || path_matches(path, "/v1/installment-plans/:id"));
     }
@@ -3477,6 +3486,38 @@ async fn create_solar_sale(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+#[derive(serde::Deserialize)]
+struct SolarSalesQuery {
+    limit: Option<u32>,
+}
+
+async fn list_solar_sales(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SolarSalesQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_auth(&headers)?;
+    central_store(&state)?
+        .list_solar_sales(query.limit.unwrap_or(50).clamp(1, 100))
+        .await
+        .map(Json)
+        .map_err(storage_error)
+}
+
+async fn get_solar_sale_document_data(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(sale_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    central_store(&state)?
+        .solar_sale_document_data(sale_id)
+        .await
+        .map_err(storage_error)?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("SOLAR_SALE_NOT_FOUND", "solar sale not found"))
+}
+
 async fn create_solar_quote(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4336,6 +4377,44 @@ mod tests {
             &Method::POST,
             "/v1/admin/devices/00000000-0000-0000-0000-000000000001/provision",
             "SUPERVISOR"
+        ));
+    }
+
+    #[test]
+    fn solar_sales_reads_are_available_to_all_reader_roles_only() {
+        let sale_document = "/v1/solar/sales/00000000-0000-0000-0000-000000000001/document-data";
+        for role in [
+            "ADMIN",
+            "BILLING_AGENT",
+            "CASHIER",
+            "SUPERVISOR",
+            "AUDITOR_READONLY",
+        ] {
+            assert!(
+                role_allows_request(&Method::GET, "/v1/solar/sales", role),
+                "{role}"
+            );
+            assert!(
+                role_allows_request(&Method::GET, sale_document, role),
+                "{role}"
+            );
+        }
+        for role in ["ADMIN", "SUPERVISOR", "BILLING_AGENT"] {
+            assert!(
+                role_allows_request(&Method::POST, "/v1/solar/sales", role),
+                "{role}"
+            );
+        }
+        for role in ["CASHIER", "AUDITOR_READONLY"] {
+            assert!(
+                !role_allows_request(&Method::POST, "/v1/solar/sales", role),
+                "{role}"
+            );
+        }
+        assert!(!role_allows_request(
+            &Method::GET,
+            "/v1/solar/sales/not-a-uuid/document-data",
+            "ADMIN"
         ));
     }
 
