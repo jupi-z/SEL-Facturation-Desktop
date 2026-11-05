@@ -973,6 +973,10 @@ impl CentralStore {
         idempotency_key: &str,
         request_digest: &str,
     ) -> Result<DeviceWriteOutcome, DeviceWriteError> {
+        // PostgreSQL TIMESTAMPTZ stores microseconds. Normalize before signing,
+        // persisting, and returning the grant so all representations match.
+        let issued_at = postgres_timestamp_precision(issued_at);
+        let expires_at = postgres_timestamp_precision(expires_at);
         if public_key_id.trim().is_empty()
             || sync_token_hash.len() != 64
             || !sync_token_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1199,8 +1203,8 @@ impl CentralStore {
             }));
         }
 
-        let issued_at = now;
-        let expires_at = now + Duration::days(7);
+        let issued_at = postgres_timestamp_precision(now);
+        let expires_at = postgres_timestamp_precision(issued_at + Duration::days(7));
         let canonical = offline_grant_canonical_bytes(
             grant_id, user_id, device_id, &scopes, &limits, issued_at, expires_at,
         )
@@ -7314,6 +7318,11 @@ fn token_digest(token: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(token.as_bytes());
     hex::encode(digest.finalize())
+}
+
+fn postgres_timestamp_precision(value: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp_micros(value.timestamp_micros())
+        .expect("a valid UTC timestamp remains valid at PostgreSQL precision")
 }
 
 fn scope_allows_command(scopes: &serde_json::Value, command_type: &str) -> bool {
