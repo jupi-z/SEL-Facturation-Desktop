@@ -492,6 +492,7 @@ async fn tariff_versions_can_be_superseded_and_revoked_without_deleting_history(
     .await
     .expect("insert preceding approved tariff");
 
+    let effective_from = chrono::Utc::now().date_naive();
     let draft = post_json(
         &app,
         "/v1/admin/catalog/tariffs",
@@ -503,7 +504,7 @@ async fn tariff_versions_can_be_superseded_and_revoked_without_deleting_history(
             "unit": "M3",
             "unit_price": "1.30",
             "currency": "USD",
-            "effective_from": chrono::Utc::now().date_naive().to_string(),
+            "effective_from": effective_from.to_string(),
             "effective_to": null
         }),
     )
@@ -534,7 +535,10 @@ async fn tariff_versions_can_be_superseded_and_revoked_without_deleting_history(
     .fetch_one(&store.pool)
     .await
     .expect("read superseded tariff end date");
-    assert_eq!(prior_end.unwrap().to_string(), "2026-11-03");
+    assert_eq!(
+        prior_end.unwrap(),
+        effective_from - chrono::Duration::days(1)
+    );
 
     let revoke_path = format!("/v1/admin/catalog/tariffs/{draft_id}/revoke");
     let revoke_payload = json!({"change_ref": "SEL-RATE-WITHDRAWAL-1"});
