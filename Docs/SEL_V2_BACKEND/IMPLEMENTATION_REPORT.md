@@ -1014,3 +1014,16 @@ Le propriétaire confirme qu’il n’y a qu’un seul poste et qu’aucun plafo
 | Installation sur poste SEL et recette commerciale | BLOCKED_EXTERNAL | La CI Windows utilise un poste virtuel et un profil synthétique. L'installation, l'activation de l'appareil, l'impression réelle, les factures avec eau positive et la synchronisation après coupure n'ont pas été validées sur le poste d'exploitation SEL. |
 
 **Verdict : `NO_GO` pour la facturation de production; `GO_CANDIDATE` pour le candidat Windows et le backend déployé.** Le service central répond, l'accès est contrôlé et le compte métier existe. La configuration tarifaire/fiscale absente empêche les opérations commerciales; l'absence de manifeste signifie que les mises à jour V2 distantes ne sont pas actives. Ne pas présenter le système comme pleinement exploitable tant que ces blocages ne sont pas levés et la recette sur le poste cible effectuée.
+
+### Blocage P0 détecté avant approbation des tarifs (5 novembre 2026)
+
+L'examen préalable à toute écriture de tarifs en production a révélé une lacune fonctionnelle : `tariff_versions` enregistre `customer_category`, mais le modèle client V2 et le formulaire de création Windows ne portent pas cette catégorie. Les fonctions centrales et SQLite `load_tariffs` filtrent service, unité, devise, révision et date, mais pas catégorie; elles terminent par `LIMIT 1`. Avec plusieurs catégories, le prix choisi n'est donc pas déterministe ni garanti applicable à l'abonné. Aucune tarification n'a été chargée en production pour éviter un risque de montant incorrect.
+
+| Critère | Statut | Suite indispensable |
+|---|---|---|
+| Catégorie portée par le dossier abonné | FAIL — lacune de modèle et d'interface | Ajouter une catégorie additive, préservant les dossiers existants; rendre les dossiers historiques explicitement non classés jusqu'à correction. Ajouter la saisie/édition et validation Windows. |
+| Sélection du tarif par catégorie | FAIL — moteur central et local | Résoudre la catégorie depuis le dossier autoritatif (pas une valeur libre dans la facture), filtrer explicitement les tarifs dans PostgreSQL/SQLite et refuser toute catégorie sans tarif approuvé. Appliquer aussi cette règle à la synchronisation. |
+| Régression financière | NOT_TESTED — correction non commencée | Ajouter des tests API et SQLite avec tarifs résidentiel et commercial simultanés, vérifier les prix corrects, les erreurs si catégorie ou tarif manquent, et la même résolution hors ligne/centrale. |
+| Paramètres tarifaires en production | BLOCKED | Ne créer ni approuver aucun barème avant correction et tests. Le prix d'eau confirmé est 0,30 USD/m³; les valeurs historiques V1 sont documentées plus haut. La période d'effet et l'assiette TVA eau devront être consignées dans des références d'approbation vérifiables. |
+
+Cette lacune renforce le verdict `NO_GO` pour la facturation commerciale. La version 0.4.1 reste un candidat d'installation technique; elle ne doit pas servir à émettre des factures avant cette correction, l'approbation du catalogue et une recette métier.
