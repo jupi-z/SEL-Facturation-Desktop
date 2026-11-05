@@ -278,7 +278,10 @@ async fn device_provisioning_is_atomic_signed_scoped_and_sync_token_is_revocable
     assert_eq!(no_op_renewal.status(), StatusCode::OK);
     let no_op_renewal = json_body(no_op_renewal).await;
     assert_eq!(no_op_renewal["renewed"], false);
-    assert_eq!(no_op_renewal["expires_at"], renewed["expires_at"]);
+    let no_op_expires_at =
+        chrono::DateTime::parse_from_rfc3339(no_op_renewal["expires_at"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(no_op_expires_at, renewed_expires_at);
 
     let pending_payload = json!({
         "customer_code": format!("RENEWED-{}", Uuid::new_v4()),
