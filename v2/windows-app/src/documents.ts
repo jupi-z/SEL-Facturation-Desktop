@@ -67,9 +67,7 @@ function periodLabel(valueToFormat: unknown): string {
 function statusLabel(status: unknown): string {
   const value = String(status ?? "—");
   const labels: Record<string, string> = {
-    LOCAL_PENDING: "En attente de synchronisation",
     CENTRAL_ACCEPTED: "Confirmé par le serveur",
-    LOCAL_ACCEPTED: "Enregistré sur ce poste",
     ISSUED: "Émis",
     UPCOMING: "À venir",
     OVERDUE: "En retard",
@@ -95,7 +93,7 @@ function baseStyles(): TDocumentDefinitions["styles"] {
 function footer(currentPage: number, pageCount: number): Content {
   return {
     columns: [
-      { text: "Document interne SEL · Généré localement", style: "muted" },
+      { text: "Document généré par SEL à partir des données du serveur", style: "muted" },
       { text: `Page ${currentPage} / ${pageCount}`, alignment: "right", style: "muted" },
     ],
     margin: [45, 0, 45, 13],
@@ -103,11 +101,11 @@ function footer(currentPage: number, pageCount: number): Content {
 }
 
 function statusColor(status: unknown): string {
-  return String(status) === "LOCAL_PENDING" ? "#a65a00" : String(status) === "VOID" ? "#a33131" : "#137a51";
+  return String(status) === "VOID" ? "#a33131" : "#137a51";
 }
 
 function statusFill(status: unknown): string {
-  return String(status) === "LOCAL_PENDING" ? "#fff2d4" : String(status) === "VOID" ? "#fce9e9" : "#e1f5ec";
+  return String(status) === "VOID" ? "#fce9e9" : "#e1f5ec";
 }
 
 function documentHeader(organizationName: string, reference: string, title: string, subtitle: string, status: string): Content[] {
@@ -241,14 +239,12 @@ function invoiceDefinition(data: Data): TDocumentDefinitions {
   }
   const reference = value(invoice, "invoice_number", value(invoice, "invoice_id"));
   const internalQr = value(data, "qr_internal_reference", value(data, "document_reference"));
-  const pending = String(data.origin ?? invoice.status) === "LOCAL_PENDING";
-  const issueTitle = String(invoice.status) === "VOID" ? "FACTURE ANNULÉE" : pending ? "DOCUMENT PROVISOIRE" : "FACTURE DE CONSOMMATION";
-  const subtitle = pending ? "Facture combinée · En attente de synchronisation" : "Électricité et eau · Facture combinée";
+  const issueTitle = String(invoice.status) === "VOID" ? "FACTURE ANNULÉE" : "FACTURE DE CONSOMMATION";
+  const subtitle = "Électricité et eau · Facture combinée";
   const documentRows = [
     ...(data.issued_at ? [`Émission : ${dateLabel(data.issued_at)}`] : []),
     `Période : ${periodLabel(invoice.billing_period)}`,
     ...(invoice.due_date ? [`Échéance : ${dateLabel(invoice.due_date)}`] : []),
-    ...(pending ? ["Statut : à confirmer par le central"] : []),
   ].filter((row) => !row.endsWith(": "));
   return {
     pageSize: "A4", pageMargins: [45, 26, 45, 36], defaultStyle: { font: "Roboto", fontSize: 9, color: "#152c4b" }, styles: baseStyles(), footer,
@@ -333,12 +329,12 @@ function solarDefinition(data: Data): TDocumentDefinitions {
         ] }, layout: "lightHorizontalLines" } as Content,
       ] : []),
       ...financialSummary("Total de la vente", "Montant de la vente", total, "", "", total),
-      ...qrFooter(value(data, "qr_internal_reference"), "Document de vente rendu localement sur ce poste."),
+      ...qrFooter(value(data, "qr_internal_reference"), "Document généré par SEL à partir des données du serveur."),
     ],
   };
 }
 
-export async function buildLocalPdf(documentType: "invoice" | "payment" | "solar", data: Data): Promise<PdfDocument> {
+export async function buildClientPdf(documentType: "invoice" | "payment" | "solar", data: Data): Promise<PdfDocument> {
   const definitions = documentType === "invoice" ? invoiceDefinition(data) : documentType === "payment" ? paymentDefinition(data) : solarDefinition(data);
   const reference = documentType === "invoice" ? value(object(data.invoice), "invoice_number", value(object(data.invoice), "invoice_id")) : value(data, "document_reference");
   const title = documentType === "invoice" ? "Facture eau + électricité" : documentType === "payment" ? "Reçu de paiement" : "Facture de vente solaire";
@@ -348,7 +344,7 @@ export async function buildLocalPdf(documentType: "invoice" | "payment" | "solar
   return { blob: await pdf.getBlob(), pdf, filename, title };
 }
 
-export async function renderLocalPdfPreview(blob: Blob, container: HTMLElement, onPageCount: (count: number) => void, signal: AbortSignal): Promise<() => void> {
+export async function renderClientPdfPreview(blob: Blob, container: HTMLElement, onPageCount: (count: number) => void, signal: AbortSignal): Promise<() => void> {
   const pdfjs = await import("pdfjs-dist");
   if (signal.aborted) return () => {};
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -383,7 +379,7 @@ export async function renderLocalPdfPreview(blob: Blob, container: HTMLElement, 
       canvas.style.height = `${viewport.height}px`;
       container.append(canvas);
       const context = canvas.getContext("2d");
-      if (!context) throw new Error("Le rendu local du document n’est pas disponible.");
+      if (!context) throw new Error("L’aperçu du document n’est pas disponible.");
       const transform = pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0];
       const task = page.render({ canvas, canvasContext: context, viewport, ...(transform ? { transform } : {}) });
       tasks.push(task);

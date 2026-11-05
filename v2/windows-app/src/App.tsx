@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import { activateDevice, centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, localRequest, localStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
-import { buildLocalPdf, renderLocalPdfPreview } from "./documents";
+import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, centralRequest, centralStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
+import { buildClientPdf, renderClientPdfPreview } from "./documents";
 import "./App.css";
 
-type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "sync" | "admin";
+type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "server" | "admin";
 type Row = Record<string, unknown>;
 type Notice = { message: string; error?: boolean } | null;
 type PreviewDocument = { title: string; filename: string; blob: Blob };
@@ -18,7 +18,7 @@ const navigation: { id: View; label: string; icon: string }[] = [
   { id: "payments", label: "Encaissements", icon: "cash" },
   { id: "solar", label: "Kits solaires", icon: "sun" },
   { id: "receivables", label: "Créances", icon: "balance" },
-  { id: "sync", label: "Synchronisation", icon: "sync" },
+  { id: "server", label: "Serveur", icon: "server" },
   { id: "admin", label: "Administration", icon: "settings" },
 ];
 
@@ -30,7 +30,7 @@ const pageTitle: Record<View, { title: string; context: string }> = {
   payments: { title: "Journal de caisse", context: "SEL / COMMERCE & FINANCE" },
   solar: { title: "Catalogue des kits solaires", context: "SEL / COMMERCE & FINANCE" },
   receivables: { title: "Suivi des créances", context: "SEL / COMMERCE & FINANCE" },
-  sync: { title: "Centre de synchronisation", context: "SEL / ADMINISTRATION" },
+  server: { title: "État du serveur", context: "SEL / SERVICE CENTRAL" },
   admin: { title: "Administration", context: "SEL / ADMINISTRATION" },
 };
 
@@ -74,9 +74,9 @@ function formatDateTime(value: unknown): string {
   }).format(date);
 }
 
-function localDateTimeValue(date = new Date()): string {
-  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return localDate.toISOString().slice(0, 16);
+function dateTimeInputValue(date = new Date()): string {
+  const wallClockDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return wallClockDate.toISOString().slice(0, 16);
 }
 
 function domainLabel(value: unknown): string {
@@ -114,7 +114,7 @@ function humanError(error: unknown): string {
     const message = (error as { message?: unknown }).message;
     if (typeof message === "string" && message.trim()) return message;
   }
-  return "L’opération n’a pas abouti. Consultez le détail de l’état du poste.";
+  return "L’opération n’a pas abouti. Vérifiez la connexion au service SEL et réessayez.";
 }
 
 function Button({ children, primary = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
@@ -139,13 +139,19 @@ function NavIcon({ name }: { name: string }) {
     cash: <><rect x="2.8" y="5" width="14.4" height="10" rx="1.8" /><path d="M5 5V3.8h10V5M5 15v1.2h10V15" /><circle cx="10" cy="10" r="2.2" /><path d="M5.2 8v.1M14.8 12v.1" /></>,
     sun: <><circle cx="10" cy="10" r="3.2" /><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2m12.8-5.3-1.4 1.4M6.1 13.9l-1.4 1.4m10.6 0-1.4-1.4M6.1 6.1 4.7 4.7" /></>,
     balance: <><path d="M10 3v13M5 6h10M4 6l-2 4h4L4 6Zm12 0-2 4h4l-2-4Z" /><path d="M6 17h8M7.5 14h5" /></>,
-    sync: <><path d="M15.8 7.5A6.3 6.3 0 0 0 4.4 6L3 7.5" /><path d="M3 4.5v3h3M4.2 12.5A6.3 6.3 0 0 0 15.6 14L17 12.5" /><path d="M17 15.5v-3h-3" /></>,
+    server: <><rect x="3" y="3" width="14" height="5" rx="1" /><rect x="3" y="12" width="14" height="5" rx="1" /><path d="M6 5.5h.1M6 14.5h.1M9 5.5h5M9 14.5h5" /></>,
     settings: <><path d="m8.6 2.8.4-1h2l.4 1a7.6 7.6 0 0 1 1.6.7l1-.4 1.4 1.4-.4 1a7.6 7.6 0 0 1 .7 1.6l1 .4v2l-1 .4a7.6 7.6 0 0 1-.7 1.6l.4 1-1.4 1.4-1-.4a7.6 7.6 0 0 1-1.6.7l-.4 1h-2l-.4-1a7.6 7.6 0 0 1-1.6-.7l-1 .4-1.4-1.4.4-1a7.6 7.6 0 0 1-.7-1.6l-1-.4v-2l1-.4A7.6 7.6 0 0 1 5 5.5l-.4-1L6 3.1l1 .4a7.6 7.6 0 0 1 1.6-.7Z" transform="translate(1.5 1.5) scale(.85)" /><circle cx="10" cy="10" r="2.5" /></>,
   };
   return <svg className="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{icons[name] ?? icons.grid}</svg>;
 }
 
 export default function App() {
+  const [session, setSession] = useState<CentralSessionInfo | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authMessage, setAuthMessage] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [serverReady, setServerReady] = useState<boolean | null>(null);
+  const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [view, setView] = useState<View>("dashboard");
   const [customers, setCustomers] = useState<Row[]>([]);
   const [invoices, setInvoices] = useState<Row[]>([]);
@@ -155,8 +161,7 @@ export default function App() {
   const [solarQuote, setSolarQuote] = useState<Row | null>(null);
   const [solarSaleDraft, setSolarSaleDraft] = useState<Row | null>(null);
   const [solarSaleOpen, setSolarSaleOpen] = useState(false);
-  const [sync, setSync] = useState<Row | null>(null);
-  const [syncIssues, setSyncIssues] = useState<Row[]>([]);
+  const [serverStatus, setServerStatus] = useState<Row | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [loading, setLoading] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState("");
@@ -174,45 +179,120 @@ export default function App() {
   const [documentPreview, setDocumentPreview] = useState<PreviewDocument | null>(null);
   const [documentBusy, setDocumentBusy] = useState(false);
 
+  useEffect(() => {
+    let active = true;
+    Promise.allSettled([centralSessionStatus(), centralStatus<Row>()]).then(([sessionResult, healthResult]) => {
+      if (!active) return;
+      if (sessionResult.status === "fulfilled") {
+        setSession(sessionResult.value);
+        if (!sessionResult.value.authenticated && sessionResult.value.server_reachable === false) setAuthMessage("Le serveur SEL est inaccessible. Vérifiez votre connexion Internet puis réessayez.");
+      } else setAuthMessage(humanError(sessionResult.reason));
+      if (healthResult.status === "fulfilled") {
+        const ready = healthResult.value.status === "CENTRAL_CONNECTED" && healthResult.value.configured === true;
+        setServerReachable(true);
+        setServerReady(ready);
+        if (!ready) setAuthMessage("Le serveur SEL est joignable. Un administrateur doit terminer la configuration avant la facturation.");
+      } else {
+        setServerReachable(false);
+        setServerReady(false);
+        if (sessionResult.status !== "fulfilled" || !sessionResult.value.authenticated) setAuthMessage("Le serveur SEL est inaccessible. Une connexion Internet est nécessaire pour ouvrir l’application.");
+      }
+    }).finally(() => { if (active) setAuthChecking(false); });
+    const expired = () => { setSession({ authenticated: false }); setAuthMessage("Votre session a expiré. Connectez-vous à nouveau."); };
+    const unavailable = () => {
+      setServerReachable(false);
+      setServerReady(false);
+      setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]);
+      setStatement(null); setSelectedCustomerData(null); setSelectedInvoice(null); setPreview(null);
+      setNotice({ message: "Le serveur SEL est indisponible ou non configuré. Les données métier sont masquées jusqu’au rétablissement du service.", error: true });
+    };
+    window.addEventListener("sel-session-expired", expired);
+    window.addEventListener("sel-server-unavailable", unavailable);
+    return () => { active = false; window.removeEventListener("sel-session-expired", expired); window.removeEventListener("sel-server-unavailable", unavailable); };
+  }, []);
+
   const refresh = useCallback(async () => {
+    if (!session?.authenticated) return;
     setLoading(true);
     try {
-      const local = await localStatus<Row>();
-      setSync(local);
-      if (local.status === "ACTIVATION_REQUIRED") {
-        setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]); setSyncIssues([]);
-        setNotice({ message: text(local.message, "Ce poste doit être activé par un administrateur SEL."), error: true });
-        return;
-      }
-      const [customerResult, invoiceResult, paymentResult, saleResult, productsResult, syncResult, issueResult] = await Promise.allSettled([
-        localRequest<unknown>("/local/v1/customers"),
-        localRequest<unknown>("/local/v1/invoices?limit=100"),
-        localRequest<unknown>("/local/v1/payments?limit=100"),
-        localRequest<unknown>("/local/v1/solar/sales?limit=100"),
-        localRequest<unknown>("/local/v1/solar/products"),
-        Promise.resolve(local),
-        localRequest<Row>("/local/v1/sync/issues"),
+      const [customerResult, invoiceResult, paymentResult, salesResult, productsResult, statusResult] = await Promise.allSettled([
+        centralRequest<unknown>("/v1/customers"),
+        centralRequest<unknown>("/v1/invoices?limit=100"),
+        centralRequest<unknown>("/v1/payments?limit=100"),
+        centralRequest<unknown>("/v1/solar/sales?limit=100"),
+        centralRequest<unknown>("/v1/catalog/products"),
+        centralStatus<Row>(),
       ]);
-      if (customerResult.status === "fulfilled") setCustomers(rows(customerResult.value));
-      if (invoiceResult.status === "fulfilled") setInvoices(rows(invoiceResult.value));
-      if (paymentResult.status === "fulfilled") setPayments(rows(paymentResult.value));
-      if (saleResult.status === "fulfilled") setSales(rows(saleResult.value));
-      if (productsResult.status === "fulfilled") setSolarProducts(rows(productsResult.value));
-      if (syncResult.status === "fulfilled") setSync(syncResult.value);
-      if (issueResult.status === "fulfilled") setSyncIssues(rows<Row>(issueResult.value.items));
-      const failure = [customerResult, invoiceResult, paymentResult, saleResult, productsResult, syncResult, issueResult].find((result) => result.status === "rejected");
-      setNotice(failure?.status === "rejected" ? { message: humanError(failure.reason), error: true } : null);
+      setCustomers(customerResult.status === "fulfilled" ? rows(customerResult.value) : []);
+      setInvoices(invoiceResult.status === "fulfilled" ? rows(invoiceResult.value) : []);
+      setPayments(paymentResult.status === "fulfilled" ? rows(paymentResult.value) : []);
+      setSales(salesResult.status === "fulfilled" ? rows(salesResult.value) : []);
+      setSolarProducts(productsResult.status === "fulfilled" ? rows(productsResult.value) : []);
+      if (statusResult.status === "fulfilled") {
+        setServerReachable(true);
+        setServerStatus(statusResult.value);
+        setServerReady(statusResult.value.status === "CENTRAL_CONNECTED" && statusResult.value.configured === true);
+      } else {
+        setServerReachable(false);
+        setServerStatus(null);
+        setServerReady(false);
+        window.dispatchEvent(new Event("sel-server-unavailable"));
+      }
+      const failure = [customerResult, invoiceResult, paymentResult, salesResult, productsResult, statusResult].find((result) => result.status === "rejected");
+      setNotice(failure?.status === "rejected"
+        ? { message: humanError(failure.reason), error: true }
+        : statusResult.status === "fulfilled" && statusResult.value.configured !== true
+          ? { message: "Le serveur SEL répond, mais sa configuration de production n’est pas prête. Les opérations restent bloquées.", error: true }
+          : null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [session?.authenticated]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { if (session?.authenticated) void refresh(); }, [session?.authenticated, refresh]);
+
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    setAuthBusy(true); setAuthMessage("");
+    try {
+      const result = await centralLogin(String(values.get("identity_ref") ?? "").trim(), String(values.get("password") ?? ""));
+      setSession({ authenticated: true, ...result });
+      setAuthMessage("");
+      form.reset();
+    } catch (reason) { setAuthMessage(humanError(reason)); }
+    finally { setAuthBusy(false); }
+  }
+
+  async function signOut() {
+    try { await centralLogout(); }
+    catch (reason) { setAuthMessage(humanError(reason)); }
+    finally { setSession({ authenticated: false }); setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]); }
+  }
+
+  async function retryServer() {
+    try {
+      const status = await centralStatus<Row>();
+      const ready = status.configured === true && status.status === "CENTRAL_CONNECTED";
+      setServerReachable(true);
+      setServerReady(ready);
+      if (!ready) setNotice({ message: "Le serveur est joignable, mais ses référentiels doivent être initialisés par un administrateur.", error: true });
+      else {
+        setNotice(null);
+        await refresh();
+      }
+    } catch (error) {
+      setServerReachable(false);
+      setServerReady(false);
+      setNotice({ message: humanError(error), error: true });
+    }
+  }
 
   useEffect(() => {
     if (!selectedCustomer) { setStatement(null); return; }
     let active = true;
-    localRequest<Row>(`/local/v1/customers/${encodeURIComponent(selectedCustomer)}/statement`)
+    centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}/statement`)
       .then((data) => { if (active) setStatement(data); })
       .catch((error: unknown) => { if (active) setNotice({ message: humanError(error), error: true }); });
     return () => { active = false; };
@@ -257,7 +337,7 @@ export default function App() {
     event.preventDefault();
     const form = event.currentTarget;
     try {
-      await localRequest(path, "POST", payload);
+      await centralRequest(path, "POST", payload);
       setNotice({ message: success });
       form.reset();
       await refresh();
@@ -269,8 +349,8 @@ export default function App() {
     event.preventDefault();
     const form = event.currentTarget;
     try {
-      await localRequest("/local/v1/customers", "POST", Object.fromEntries(new FormData(form)) as Row);
-      setNotice({ message: "Abonné enregistré localement." });
+      await centralRequest("/v1/customers", "POST", Object.fromEntries(new FormData(form)) as Row);
+      setNotice({ message: "Abonné enregistré sur le serveur SEL." });
       form.reset();
       setCustomerCreateOpen(false);
       await refresh();
@@ -297,7 +377,7 @@ export default function App() {
       due_date: form.get("due_date") || null,
     };
     try {
-      const result = await localRequest<Row>("/local/v1/billing/utility/preview", "POST", payload);
+      const result = await centralRequest<Row>("/v1/billing/utility/preview", "POST", payload);
       setInvoiceDraft(payload);
       setPreview(result);
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
@@ -306,10 +386,10 @@ export default function App() {
   async function confirmInvoice() {
     if (!invoiceDraft) return;
     try {
-      await localRequest("/local/v1/billing/utility/issue", "POST", invoiceDraft);
+      await centralRequest("/v1/billing/utility/issue", "POST", invoiceDraft);
       setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
       setInvoiceFormKey((key) => key + 1);
-      setNotice({ message: "Facture émise et enregistrée sur ce poste." });
+      setNotice({ message: "Facture enregistrée par le serveur SEL." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
@@ -318,7 +398,7 @@ export default function App() {
     const id = text(invoice.invoice_id ?? invoice.id, "");
     if (!id) return;
     try {
-      const details = await localRequest<Row>(`/local/v1/invoices/${encodeURIComponent(id)}`);
+      const details = await centralRequest<Row>(`/v1/invoices/${encodeURIComponent(id)}`);
       setSelectedInvoice(details);
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
@@ -329,14 +409,14 @@ export default function App() {
     setDocumentBusy(true);
     try {
       const route = kind === "invoice"
-        ? `/local/v1/invoices/${encodeURIComponent(key)}/document-data`
+        ? `/v1/invoices/${encodeURIComponent(key)}/document-data`
         : kind === "payment"
-          ? `/local/v1/payments/${encodeURIComponent(key)}/document-data`
-          : `/local/v1/solar/sales/${encodeURIComponent(key)}/document-data`;
-      const data = await localRequest<Row>(route);
-      const generated = await buildLocalPdf(kind, data);
+          ? `/v1/payments/${encodeURIComponent(key)}/document-data`
+          : `/v1/solar/sales/${encodeURIComponent(key)}/document-data`;
+      const data = await centralRequest<Row>(route);
+      const generated = await buildClientPdf(kind, data);
       setDocumentPreview({ title: generated.title, filename: generated.filename, blob: generated.blob });
-      setNotice({ message: `${generated.title} préparé localement depuis les données du poste.` });
+      setNotice({ message: `${generated.title} préparé sur ce poste à partir des données centrales.` });
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
     finally { setDocumentBusy(false); }
   }
@@ -370,19 +450,18 @@ export default function App() {
       phone: String(form.get("phone") ?? "").trim() || null,
     };
     try {
-      const updated = await localRequest<Row>(`/local/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", payload, Number(selectedCustomerData.revision));
+      const updated = await centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", payload, Number(selectedCustomerData.revision));
       setSelectedCustomerData(updated);
       setCustomerEditOpen(false);
-      setNotice({ message: "Dossier abonné modifié. La révision locale a été vérifiée." });
+      setNotice({ message: "Dossier abonné modifié sur le serveur central." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
 
-  async function syncNow() {
+  async function refreshServerStatus() {
     try {
-      await localRequest("/local/v1/sync/trigger", "POST", {});
-      setNotice({ message: "Demande de synchronisation transmise à l’agent local. L’acceptation sera affichée après l’accusé central." });
       await refresh();
+      setNotice({ message: "Données actualisées depuis le serveur SEL." });
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
 
@@ -396,7 +475,7 @@ export default function App() {
       terms_revision: form.get("terms_revision"),
     };
     try {
-      const result = await localRequest<Row>("/local/v1/solar/quotes", "POST", {
+      const result = await centralRequest<Row>("/v1/solar/quotes", "POST", {
         product_code: draft.product_code,
         currency: draft.currency,
         terms_revision: draft.terms_revision,
@@ -410,11 +489,11 @@ export default function App() {
   async function confirmSolarSale() {
     if (!solarSaleDraft) return;
     try {
-      await localRequest("/local/v1/solar/sales", "POST", solarSaleDraft);
+      await centralRequest("/v1/solar/sales", "POST", solarSaleDraft);
       setSolarQuote(null);
       setSolarSaleDraft(null);
       setSolarSaleOpen(false);
-      setNotice({ message: "Vente enregistrée localement avec sa créance. Un paiement comptant se saisit dans le journal de caisse." });
+      setNotice({ message: "Vente enregistrée sur le serveur SEL avec sa créance. Un paiement comptant se saisit dans le journal de caisse." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
@@ -425,11 +504,20 @@ export default function App() {
   }
 
   const activePage = pageTitle[view];
-  const pending = Number(sync?.pending ?? 0);
   const link = (id: View, label: string) => <button className="text-button" onClick={() => navigateTo(id)}>{label}</button>;
   const previewLines = rows<Row>(preview?.lines);
   const previewElectricity = previewLines.find((line) => text(line.service_code).toUpperCase() === "ELECTRICITY");
   const previewWater = previewLines.find((line) => text(line.service_code).toUpperCase() === "WATER");
+
+  if (authChecking) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><div className="auth-card" role="status"><p className="eyebrow">VÉRIFICATION SÉCURISÉE</p><h2>Connexion au serveur SEL</h2><p className="muted">Vérification de la session et de la disponibilité du service central…</p></div></div></section>;
+
+  if (!session?.authenticated) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><form className="auth-card" onSubmit={(event) => void signIn(event)}><p className="eyebrow">ACCÈS SÉCURISÉ</p><h2>Connexion à SEL Facturation</h2><p className="muted">Connectez-vous avec votre compte SEL pour accéder à l’application.</p>{authMessage && <div className="notice error" role="alert">{authMessage}</div>}<label>Identifiant SEL<input name="identity_ref" autoComplete="username" required autoFocus /></label><label>Mot de passe<input name="password" type="password" autoComplete="current-password" required /></label><Button primary type="submit" disabled={authBusy || serverReachable === false}>{authBusy ? "Connexion…" : "Se connecter"}</Button>{serverReachable === false && <Button type="button" onClick={() => void retryServer()}>Réessayer la connexion</Button>}<p className="auth-help">Une connexion Internet est requise pour ouvrir et utiliser SEL Facturation.</p></form></div></section>;
+
+  if (serverReachable === false) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Les opérations sont traitées et conservées par le serveur central SEL.</p></div><small>Connexion au serveur requise</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">SERVICE CENTRAL</p><h2>Connexion au serveur interrompue</h2><p className="muted">Pour protéger l’exactitude des factures et des paiements, l’application est verrouillée jusqu’au rétablissement du service en ligne.</p>{notice?.message && <div className="notice error" role="alert">{notice.message}</div>}<div className="page-actions"><Button primary onClick={() => void retryServer()}>Réessayer</Button><Button onClick={() => void signOut()}>Se déconnecter</Button></div></div></div></section>;
+
+  if (session.require_password_change) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Votre compte SEL,<br />sécurisé dès le départ.</h1><p>Modifiez votre mot de passe temporaire pour continuer.</p></div><small>Application connectée au serveur central</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">PREMIÈRE CONNEXION</p><h2>Changer le mot de passe</h2><PasswordChangeForm onComplete={() => { setSession({ authenticated: false }); setAuthMessage("Mot de passe modifié. Connectez-vous avec votre nouveau mot de passe."); }} /></div></div></section>;
+
+  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -439,28 +527,26 @@ export default function App() {
           <NavIcon name={item.icon} /><span>{item.label}</span>
         </button>)}
       </nav>
-      <div className="sidebar-foot"><span className="eyebrow">POSTE LOCAL</span><p>Données conservées sur cet ordinateur</p></div>
+      <div className="sidebar-foot"><span className="eyebrow">SERVICE CENTRAL</span><p>Connexion requise pour toute opération</p></div>
     </aside>
 
     <main className="content">
       <header className="topbar"><p className="eyebrow">{activePage.context}</p>
-        <div className={`connection-status${pending ? " pending" : ""}`}><span className="status-dot" aria-hidden="true" />
-          {sync ? (pending ? `${pending} opération(s) en attente` : sync.status === "LOCAL_READY" ? "Service local prêt" : "Mode local") : "État local indisponible"}
-        </div>
+        <div className="connection-status"><span className="status-dot" aria-hidden="true" />{serverStatus?.status === "CENTRAL_CONNECTED" ? "Serveur SEL · connecté" : "Serveur SEL · état inconnu"}<Button onClick={() => void signOut()}>Se déconnecter</Button></div>
       </header>
       {notice && <div className={`notice${notice.error ? " error" : ""}`} role={notice.error ? "alert" : "status"}>{notice.message}<button aria-label="Fermer le message" onClick={() => setNotice(null)}>×</button></div>}
-      {loading && <div className="loading-line" role="status">Actualisation des données locales…</div>}
+      {loading && <div className="loading-line" role="status">Chargement des données centrales…</div>}
 
       {view === "dashboard" && <>
-        <div className="page-heading"><div><p className="eyebrow">ACTIVITÉ DU POSTE</p><h1>Vue d’ensemble</h1><p className="muted">Opérations enregistrées localement et état de leur synchronisation.</p></div><Button primary onClick={() => navigateTo("invoices")}>Nouvelle facture</Button></div>
+        <div className="page-heading"><div><p className="eyebrow">ACTIVITÉ SEL</p><h1>Vue d’ensemble</h1><p className="muted">Dossiers et opérations consultés directement sur le serveur central.</p></div><Button primary onClick={() => navigateTo("invoices")}>Nouvelle facture</Button></div>
         <div className="metrics">
-          <Metric label="Abonnés" value={customers.length} note="Dossiers disponibles sur ce poste" />
-          <Metric label="Factures" value={invoices.length} note="Documents présents localement" />
-          <Metric label="Encaissements" value={payments.length} note="Règlements enregistrés" />
-          <Metric label="À synchroniser" value={pending} note={pending ? "En attente de confirmation centrale" : "État renvoyé par l’agent local"} />
+          <Metric label="Abonnés" value={customers.length} note="Dossiers chargés du serveur SEL" />
+          <Metric label="Factures" value={invoices.length} note="Documents enregistrés au serveur" />
+          <Metric label="Encaissements" value={payments.length} note="Règlements renvoyés par le serveur" />
+          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Source unique : serveur SEL" />
         </div>
-        <Panel title="Dossiers / activité récente" action={link("sync", "État de synchronisation →")}>
-          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune opération enregistrée sur ce poste." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, formatMoney(amount, row.currency), <Status value={row.status} />])} />
+        <Panel title="Dossiers / activité récente" action={link("server", "État du serveur →")}>
+          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune activité récente retournée par le serveur." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, formatMoney(amount, row.currency), <Status value={row.status} />])} />
         </Panel>
       </>}
 
@@ -470,20 +556,21 @@ export default function App() {
           {selectedCustomerData ? customerEditOpen ? <form className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
             <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required /></label>
             <label>Catégorie tarifaire<select name="customer_category" defaultValue={text(selectedCustomerData.customer_category, "")} required><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
-            <label>Révision locale<input value={text(selectedCustomerData.revision)} readOnly /></label>
+            <label>Révision du dossier<input value={text(selectedCustomerData.revision)} readOnly /></label>
             <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} /></label>
             <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} /></label>
             <div className="form-actions span-two"><Button type="button" onClick={() => setCustomerEditOpen(false)}>Annuler</Button><Button primary type="submit">Enregistrer les modifications</Button></div>
-          </form> : <dl className="customer-details"><div><dt>Nom / raison sociale</dt><dd>{text(selectedCustomerData.legal_name)}</dd></div><div><dt>Code abonné</dt><dd>{text(selectedCustomerData.customer_code)}</dd></div><div><dt>Catégorie tarifaire</dt><dd>{text(selectedCustomerData.customer_category, "À compléter")}</dd></div><div><dt>Adresse</dt><dd>{text(selectedCustomerData.address)}</dd></div><div><dt>Téléphone</dt><dd>{text(selectedCustomerData.phone)}</dd></div><div><dt>Révision locale</dt><dd>{text(selectedCustomerData.revision)}</dd></div></dl> : <div className="empty-state">Chargement du dossier abonné…</div>}
+          </form> : <dl className="customer-details"><div><dt>Nom / raison sociale</dt><dd>{text(selectedCustomerData.legal_name)}</dd></div><div><dt>Code abonné</dt><dd>{text(selectedCustomerData.customer_code)}</dd></div><div><dt>Catégorie tarifaire</dt><dd>{text(selectedCustomerData.customer_category, "À compléter")}</dd></div><div><dt>Adresse</dt><dd>{text(selectedCustomerData.address)}</dd></div><div><dt>Téléphone</dt><dd>{text(selectedCustomerData.phone)}</dd></div><div><dt>Révision du dossier</dt><dd>{text(selectedCustomerData.revision)}</dd></div></dl> : <div className="empty-state">Chargement du dossier abonné…</div>}
         </Panel>
+        <ServiceAccountsManager customerId={selectedCustomer} />
         <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} customerCode={text(selectedCustomerData?.customer_code)} statement={statement} />
       </> : <>
         <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => setCustomerCreateOpen((open) => !open)}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
         <div className="metrics customer-metrics">
-          <Metric label="Abonnés enregistrés" value={customers.length} note="Dossiers disponibles sur ce poste" />
-          <Metric label="Factures locales" value={invoices.length} note="Documents présents sur ce poste" />
-          <Metric label="Versements locaux" value={payments.length} note="Règlements enregistrés localement" />
-          <Metric label="À synchroniser" value={pending} note={pending ? "En attente de confirmation centrale" : "État renvoyé par l’agent local"} />
+          <Metric label="Abonnés enregistrés" value={customers.length} note="Dossiers gérés par le serveur SEL" />
+          <Metric label="Factures" value={invoices.length} note="Documents enregistrés au serveur" />
+          <Metric label="Versements" value={payments.length} note="Règlements enregistrés au serveur" />
+          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Source unique : serveur SEL" />
         </div>
         {customerCreateOpen && <Panel title="Nouvel abonné"><form className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
             <label>Code abonné<input name="customer_code" required /></label><label>Nom / raison sociale<input name="legal_name" required /></label>
@@ -492,10 +579,17 @@ export default function App() {
             <p className="help span-two">Les informations pourront être complétées dans le dossier de l’abonné.</p>
             <div className="form-actions span-two"><Button primary type="submit">Enregistrer l’abonné</Button></div>
           </form></Panel>}
-        <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné disponible sur ce poste." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); setCustomerEditOpen(false); }}>Ouvrir le dossier →</button>])} /></Panel>
+        <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné retourné par le serveur." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); setCustomerEditOpen(false); }}>Ouvrir le dossier →</button>])} /></Panel>
       </>)}
 
-      {view === "readings" && <MeterReadingsView customers={customers} />}
+      {view === "readings" && <MeterReadingsView customers={customers} onOpenInvoices={() => navigateTo("invoices")} onOpenCustomer={(customerId) => {
+        const customer = customers.find((item) => text(item.customer_id ?? item.id) === customerId);
+        if (!customer) return;
+        setSelectedCustomer(customerId);
+        setSelectedCustomerData(customer);
+        setCustomerEditOpen(false);
+        navigateTo("customers");
+      }} />}
 
       {view === "invoices" && <>
         <div hidden={Boolean(preview)}>
@@ -523,7 +617,7 @@ export default function App() {
             </aside>
           </div>
           <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
-            <Table headers={["Référence", "Abonné", "Période", "État", "Actions"]} empty="Aucune facture locale." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", row.invoice_id ?? row.id)}>Document PDF</Button></div>])} />
+            <Table headers={["Référence", "Abonné", "Période", "État", "Actions"]} empty="Aucune facture retournée par le serveur." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", row.invoice_id ?? row.id)}>Document PDF</Button></div>])} />
           </Panel>
           {selectedInvoice && <>
             <p className="muted">Période {text(selectedInvoice.billing_period)} · Échéance {text(selectedInvoice.due_date)} · <Status value={selectedInvoice.status} /></p>
@@ -546,11 +640,11 @@ export default function App() {
       {view === "payments" && <>
         <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
         <PaymentForm customers={customers} sales={sales} onSubmit={submit} />
-        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État", "Document"]} empty="Aucun encaissement local." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), domainLabel(row.method), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("payment", row.payment_id ?? row.id)}>Reçu PDF</Button>])} /></Panel>
+        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État", "Document"]} empty="Aucun encaissement retourné par le serveur." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), domainLabel(row.method), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("payment", row.payment_id ?? row.id)}>Reçu PDF</Button>])} /></Panel>
       </>}
 
       {view === "solar" && <>
-        <PageHeading eyebrow="COMMERCE / FINANCE" title="Catalogue des kits solaires" description="Consultez les produits approuvés et les ventes enregistrées sur ce poste." action={<Button primary onClick={() => setSolarSaleOpen(true)}>Créer une vente</Button>} />
+        <PageHeading eyebrow="COMMERCE / FINANCE" title="Catalogue des kits solaires" description="Consultez les produits approuvés et les ventes enregistrées par le serveur." action={<Button primary onClick={() => setSolarSaleOpen(true)}>Créer une vente</Button>} />
         {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); }}>Fermer</Button>}><form className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
           <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
           <label>Produit approuvé<select name="product_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
@@ -561,41 +655,39 @@ export default function App() {
         </form></Panel>}
         {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
         <div className="metrics solar-metrics">
-          <Metric label="Produits disponibles" value={solarProducts.length} note="Catalogue local approuvé" />
-          <Metric label="Ventes enregistrées" value={sales.length} note="Historique de ce poste" />
+          <Metric label="Produits disponibles" value={solarProducts.length} note="Catalogue central approuvé" />
+          <Metric label="Ventes enregistrées" value={sales.length} note="Historique chargé du serveur" />
           <Metric label="Contrats à échéances" value={sales.filter((sale) => Boolean(sale.installment_plan_id)).length} note="Échéanciers associés" />
-          <Metric label="À synchroniser" value={pending} note="Opérations en attente" />
+          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Opérations centralisées" />
         </div>
         <Panel title="Catalogue approuvé">
-          <Table headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]} empty="Aucun produit solaire approuvé et applicable n’est disponible sur ce poste." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), product.category ? domainLabel(product.category) : "—", formatMoney(product.price_reference, product.currency), <span className="status-badge success">Disponible</span>])} />
+          <Table headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]} empty="Aucun produit solaire approuvé et applicable n’est disponible sur le serveur." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), product.category ? domainLabel(product.category) : "—", formatMoney(product.price_reference, product.currency), <span className="status-badge success">Disponible</span>])} />
         </Panel>
-        <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire locale." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
+        <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
         <SolarContractManager sales={sales} customers={customers} onCreated={refresh} />
       </>}
 
       {view === "receivables" && <>
-        <PageHeading eyebrow="FINANCE / SOLDES" title="Suivi des créances" description="Soldes et obligations renvoyés par l’agent local, sans recalcul dans l’interface." />
+        <PageHeading eyebrow="FINANCE / SOLDES" title="Suivi des créances" description="Soldes et obligations renvoyés par le serveur, sans recalcul dans l’interface." />
         <Panel title="Situation d’un abonné"><label className="customer-picker">Abonné<select value={selectedCustomer} onChange={(event) => setSelectedCustomer(event.target.value)}><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
           {statement ? <Table headers={["Référence", "Nature", "Solde", "Situation"]} empty="Aucune créance associée." data={rows<Row>(statement.receivables).map((row) => [<strong>{text(row.receivable_id ?? row.id)}</strong>, domainLabel(row.source_type), formatMoney(row.balance, row.currency), <Status value={row.status} />])} /> : <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
         </Panel>
       </>}
 
-      {view === "sync" && <>
-        <div className="page-heading"><div><p className="eyebrow">ADMIN / CONTINUITÉ</p><h1>Centre de synchronisation</h1><p className="muted">Une opération n’est confirmée qu’après l’accusé durable du serveur central.</p></div><Button primary onClick={() => void syncNow()}>Synchroniser maintenant</Button></div>
-        <div className="metrics compact-metrics"><Metric label="À envoyer" value={text(sync?.pending, "—")} note="Enregistrées en SQLite" /><Metric label="Conflits" value={text(sync?.conflicts, "—")} note="À examiner" /><Metric label="Refus" value={text(sync?.rejected, "—")} note="Motif conservé" /><Metric label="Dernière réussite" value={text(sync?.last_successful_sync, "Aucune confirmée")} note="Accusé central" /></div>
-        <Panel title="État du poste"><div className="summary-state"><Status value={text(sync?.state ?? sync?.status, "LOCAL_ONLY")} /><p>{pending ? `${pending} opération(s) attendent leur confirmation centrale.` : "Le statut reflète les informations confirmées par l’agent local."}</p><p>Autorisation hors ligne : {text(sync?.offline_grant, "état non communiqué")}</p></div></Panel>
-        <Panel title="Conflits et refus à examiner"><p className="help">Ces opérations restent conservées sur le poste. Aucun conflit financier n’est résolu automatiquement.</p><Table headers={["Événement", "Commande", "État", "Motif", "Révision centrale", "Date"]} empty="Aucun conflit ou refus enregistré localement." data={syncIssues.map((issue) => [<strong>{text(issue.event_id)}</strong>, text(issue.command_type), <Status value={issue.status} />, text(issue.reason), text(issue.central_revision), formatDateTime(issue.created_at)])} /></Panel>
+      {view === "server" && <>
+        <PageHeading eyebrow="SEL / SERVICE CENTRAL" title="Connexion au serveur" description="Les abonnés, factures et paiements sont consultés et enregistrés directement sur le serveur SEL." action={<Button primary onClick={() => void refreshServerStatus()}>Actualiser l’état</Button>} />
+        <Panel title="État de la connexion"><div className="summary-state"><Status value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Connecté au serveur SEL" : serverStatus?.status === "CENTRAL_UNCONFIGURED" ? "Configuration serveur incomplète" : "Serveur indisponible"} /><p>{serverStatus?.status === "CENTRAL_CONNECTED" ? "Les opérations sont envoyées directement au serveur central." : serverStatus?.status === "CENTRAL_UNCONFIGURED" ? "Le service répond, mais la configuration de production doit être terminée avant toute opération." : "Aucune opération métier n’est possible sans connexion au serveur SEL."}</p></div></Panel>
       </>}
 
       {view === "admin" && <>
         <PageHeading eyebrow="ADMIN / RÉFÉRENTIELS" title="Administration" description="Les écrans administratifs suivent les permissions et les paramètres effectivement exposés par le service Rust." />
-        <AdminConsole onDeviceActivated={() => void refresh()} />
+        <AdminConsole session={session} onSignedOut={() => void signOut()} />
       </>}
 
       {documentPreview && <div className="document-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDocumentPreview(); }}>
         <section className="document-preview-dialog" role="dialog" aria-modal="true" aria-label={documentPreview.title}>
-          <header className="document-preview-toolbar"><div><p className="eyebrow">DOCUMENT LOCAL · A4</p><h2>{documentPreview.title}</h2><p className="muted">Aperçu généré localement depuis les données enregistrées sur ce poste.</p></div><div className="page-actions"><Button onClick={() => window.print()}>Imprimer</Button><Button primary onClick={() => void saveDocument()}>Enregistrer le PDF</Button><Button aria-label="Fermer l’aperçu" onClick={closeDocumentPreview}>Fermer</Button></div></header>
-          <LocalPdfPreview blob={documentPreview.blob} />
+          <header className="document-preview-toolbar"><div><p className="eyebrow">DOCUMENT · A4</p><h2>{documentPreview.title}</h2><p className="muted">Aperçu préparé à partir des données renvoyées par le serveur SEL.</p></div><div className="page-actions"><Button onClick={() => window.print()}>Imprimer</Button><Button primary onClick={() => void saveDocument()}>Enregistrer le PDF</Button><Button aria-label="Fermer l’aperçu" onClick={closeDocumentPreview}>Fermer</Button></div></header>
+      <ClientPdfPreview blob={documentPreview.blob} />
         </section>
       </div>}
       <footer>Application développée et sécurisée par LTEX · <button className="footer-link" onClick={() => void openMonarqueSite().catch((error: unknown) => setNotice({ message: humanError(error), error: true }))}>MonarQue Group</button></footer>
@@ -603,7 +695,7 @@ export default function App() {
   </div>;
 }
 
-function LocalPdfPreview({ blob }: { blob: Blob }) {
+function ClientPdfPreview({ blob }: { blob: Blob }) {
   const container = useRef<HTMLDivElement>(null);
   const [pageCount, setPageCount] = useState(0);
   const [error, setError] = useState("");
@@ -616,20 +708,46 @@ function LocalPdfPreview({ blob }: { blob: Blob }) {
     setError("");
     const element = container.current;
     if (!element) return;
-    void renderLocalPdfPreview(blob, element, setPageCount, controller.signal)
+    void renderClientPdfPreview(blob, element, setPageCount, controller.signal)
       .then((cleanup) => { if (active) dispose = cleanup; else cleanup(); })
       .catch((reason: unknown) => { if (active) setError(humanError(reason)); });
     return () => { active = false; controller.abort(); dispose(); };
   }, [blob]);
 
   return <div className="document-pdf-stage">
-    <p className="document-pdf-status" role="status">{error || (pageCount ? `${pageCount} page${pageCount > 1 ? "s" : ""} · aperçu PDF hors ligne` : "Préparation de l’aperçu PDF…")}</p>
+    <p className="document-pdf-status" role="status">{error || (pageCount ? `${pageCount} page${pageCount > 1 ? "s" : ""} · aperçu préparé sur ce poste` : "Préparation de l’aperçu PDF…")}</p>
     <div ref={container} className="document-pdf-pages" aria-label="Pages du document PDF" />
   </div>;
 }
 
 function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   return <div className="page-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="muted">{description}</p></div>{action}</div>;
+}
+
+function PasswordChangeForm({ onComplete }: { onComplete: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const currentPassword = String(values.get("current_password") ?? "");
+    const password = String(values.get("new_password") ?? "");
+    if (password !== String(values.get("repeat_password") ?? "")) { setError("Les deux nouveaux mots de passe ne correspondent pas."); return; }
+    setBusy(true); setError("");
+    try {
+      await centralAdminRequest("/v1/auth/change-password", "POST", { current_password: currentPassword, new_password: password });
+      onComplete();
+    } catch (reason) { setError(humanError(reason)); }
+    finally { setBusy(false); }
+  }
+  return <form className="auth-change-form" onSubmit={(event) => void submit(event)}>
+    {error && <div className="notice error" role="alert">{error}</div>}
+    <label>Mot de passe temporaire<input type="password" name="current_password" autoComplete="current-password" minLength={8} required /></label>
+    <label>Nouveau mot de passe<input type="password" name="new_password" autoComplete="new-password" minLength={8} required /></label>
+    <label>Confirmer le nouveau mot de passe<input type="password" name="repeat_password" autoComplete="new-password" minLength={8} required /></label>
+    <Button primary type="submit" disabled={busy}>{busy ? "Enregistrement…" : "Changer le mot de passe"}</Button>
+  </form>;
 }
 
 function Metric({ label, value, note }: { label: string; value: ReactNode; note: string }) {
@@ -639,12 +757,7 @@ function Metric({ label, value, note }: { label: string; value: ReactNode; note:
 function Status({ value }: { value: unknown }) {
   const normalized = text(value, "État inconnu");
   const labels: Record<string, string> = {
-    LOCAL_PENDING: "En attente de synchronisation",
     CENTRAL_ACCEPTED: "Confirmé par le serveur",
-    LOCAL_ACCEPTED: "Enregistré sur ce poste",
-    LOCAL_READY: "Poste prêt",
-    PENDING_NETWORK: "En attente du réseau",
-    LOCAL_ONLY: "Fonctionnement local",
     UPCOMING: "À venir",
     OVERDUE: "En retard",
     PAID: "Payé",
@@ -685,13 +798,13 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
   const [receivablesError, setReceivablesError] = useState("");
   const [planSchedules, setPlanSchedules] = useState<Record<string, { schedule: Row[]; currency: string; loading: boolean; error: string }>>({});
   const [receivedAmount, setReceivedAmount] = useState("");
-  const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
+  const [occurredAt, setOccurredAt] = useState(dateTimeInputValue);
 
   useEffect(() => {
     if (!customerId) { setReceivables([]); setReceivablesLoading(false); setReceivablesError(""); return; }
     let active = true;
     setReceivables([]); setReceivablesLoading(true); setReceivablesError("");
-    localRequest<Row>(`/local/v1/customers/${encodeURIComponent(customerId)}/statement`).then((result) => {
+    centralRequest<Row>(`/v1/customers/${encodeURIComponent(customerId)}/statement`).then((result) => {
       if (active) setReceivables(rows<Row>(result.receivables).filter((item) => Number(item.balance) > 0));
     }).catch((error: unknown) => { if (active) { setReceivables([]); setReceivablesError(humanError(error)); } })
       .finally(() => { if (active) setReceivablesLoading(false); });
@@ -716,7 +829,7 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
     });
     void Promise.all(planIds.map(async (planId) => {
       try {
-        const result = await localRequest<Row>(`/local/v1/installment-plans/${encodeURIComponent(planId)}`);
+        const result = await centralRequest<Row>(`/v1/installment-plans/${encodeURIComponent(planId)}`);
         return [planId, { schedule: rows<Row>(result.schedule), currency: text(result.currency), loading: false, error: "" }] as const;
       } catch (error) {
         return [planId, { schedule: [], currency: "", loading: false, error: humanError(error) }] as const;
@@ -748,13 +861,13 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
       : allocation));
   }
 
-  return <div className="payment-workspace"><Panel title="Informations du règlement"><form id="local-payment-form" className="form-grid" onSubmit={async (event) => {
+  return <div className="payment-workspace"><Panel title="Informations du règlement"><form id="central-payment-form" className="form-grid" onSubmit={async (event) => {
     const form = new FormData(event.currentTarget);
-    const saved = await onSubmit(event, "/local/v1/payments", {
+    const saved = await onSubmit(event, "/v1/payments", {
       customer_id: form.get("customer_id"), received_amount: form.get("received_amount"), currency, method: form.get("method"), occurred_at: new Date(String(form.get("occurred_at"))).toISOString(),
       allocations: allocationRows.map((allocation) => ({ receivable_id: allocation.receivableId, amount: allocation.amount, schedule_id: allocation.scheduleId || null })),
-    }, "Règlement enregistré sur ce poste.");
-    if (saved) { setCustomerId(""); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); setReceivedAmount(""); setOccurredAt(localDateTimeValue()); }
+    }, "Règlement enregistré par le serveur SEL.");
+    if (saved) { setCustomerId(""); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); setReceivedAmount(""); setOccurredAt(dateTimeInputValue()); }
   }}>
     <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
     <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)} required /></label>
@@ -781,10 +894,111 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
       <p className="help">Les montants, échéances et soldes sont vérifiés atomiquement par le moteur Rust. Chaque ligne reste affectée à une créance distincte.</p>
     </div>
     <label>Référence interne<input value="Générée par Rust à l’enregistrement" readOnly /></label>
-  </form></Panel><Panel title="Récapitulatif"><div className="payment-summary"><p className="eyebrow">PRÉPARATION DU RÈGLEMENT</p><h2>Règlement</h2><p className="muted">{primaryReceivable ? `${domainLabel(primaryReceivable.source_type ?? primaryReceivable.status)} · soldes retournés par Rust` : "Choisissez un abonné puis les créances à affecter."}</p><div className="payment-summary-values"><div><span>Abonné</span><strong>{customerId ? customerLabel(customerId, customers) : "—"}</strong></div><div><span>Créances sélectionnées</span><strong>{allocationRows.filter((allocation) => allocation.receivableId).length}</strong></div><div><span>Devise</span><strong>{currency}</strong></div></div><p className="eyebrow">MONTANT À CONFIRMER</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong><span className={`status-badge${primaryReceivable ? " pending" : ""}`}>{primaryReceivable ? "En attente d’enregistrement" : "Aucune créance sélectionnée"}</span><p className="help">Rust contrôle le montant reçu, l’ensemble des affectations, les devises et chaque solde avant d’enregistrer le règlement.</p><Button primary type="submit" form="local-payment-form" disabled={paymentBlocked}>Enregistrer le règlement</Button></div></Panel></div>;
+  </form></Panel><Panel title="Récapitulatif"><div className="payment-summary"><p className="eyebrow">PRÉPARATION DU RÈGLEMENT</p><h2>Règlement</h2><p className="muted">{primaryReceivable ? `${domainLabel(primaryReceivable.source_type ?? primaryReceivable.status)} · soldes retournés par Rust` : "Choisissez un abonné puis les créances à affecter."}</p><div className="payment-summary-values"><div><span>Abonné</span><strong>{customerId ? customerLabel(customerId, customers) : "—"}</strong></div><div><span>Créances sélectionnées</span><strong>{allocationRows.filter((allocation) => allocation.receivableId).length}</strong></div><div><span>Devise</span><strong>{currency}</strong></div></div><p className="eyebrow">MONTANT À CONFIRMER</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong><span className={`status-badge${primaryReceivable ? " pending" : ""}`}>{primaryReceivable ? "En attente d’enregistrement" : "Aucune créance sélectionnée"}</span><p className="help">Rust contrôle le montant reçu, l’ensemble des affectations, les devises et chaque solde avant d’enregistrer le règlement.</p><Button primary type="submit" form="central-payment-form" disabled={paymentBlocked}>Enregistrer le règlement</Button></div></Panel></div>;
 }
 
-function MeterReadingsView({ customers }: { customers: Row[] }) {
+function ServiceAccountsManager({ customerId }: { customerId: string }) {
+  const [accounts, setAccounts] = useState<Row[]>([]);
+  const [metersByAccount, setMetersByAccount] = useState<Record<string, Row[]>>({});
+  const [accountFormOpen, setAccountFormOpen] = useState(false);
+  const [meterFormAccount, setMeterFormAccount] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [messageError, setMessageError] = useState(false);
+
+  const loadAccounts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = rows(await centralRequest<unknown>(`/v1/customers/${encodeURIComponent(customerId)}/service-accounts`));
+      const meterEntries = await Promise.all(result.map(async (account) => {
+        const accountId = text(account.id);
+        const meters = rows(await centralRequest<unknown>(`/v1/service-accounts/${encodeURIComponent(accountId)}/meters`));
+        return [accountId, meters] as const;
+      }));
+      setAccounts(result);
+      setMetersByAccount(Object.fromEntries(meterEntries));
+    } catch (error) {
+      setMessage(humanError(error));
+      setMessageError(true);
+    } finally { setLoading(false); }
+  }, [customerId]);
+
+  useEffect(() => { void loadAccounts(); }, [loadAccounts]);
+
+  async function createServiceAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const serviceCode = String(form.get("service_code") ?? "");
+    const payload = {
+      service_code: serviceCode,
+      connection_status: String(form.get("connection_status") ?? "UNKNOWN"),
+      contract_ref: String(form.get("contract_ref") ?? "").trim() || null,
+      activated_at: String(form.get("activated_at") ?? "") || null,
+    };
+    setSaving(true); setMessage(""); setMessageError(false);
+    try {
+      await centralRequest(`/v1/customers/${encodeURIComponent(customerId)}/service-accounts`, "POST", payload);
+      setAccountFormOpen(false);
+      setMessage(`${domainLabel(serviceCode)} rattaché à l’abonné. Aucun compteur n’a été créé.`);
+      await loadAccounts();
+    } catch (error) { setMessage(humanError(error)); setMessageError(true); }
+    finally { setSaving(false); }
+  }
+
+  async function createMeter(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const account = accounts.find((item) => text(item.id) === meterFormAccount);
+    if (!account) return;
+    const form = new FormData(event.currentTarget);
+    const unit = text(account.service_code).toUpperCase() === "WATER" ? "M3" : "KWH";
+    setSaving(true); setMessage(""); setMessageError(false);
+    try {
+      await centralRequest(`/v1/service-accounts/${encodeURIComponent(meterFormAccount)}/meters`, "POST", {
+        serial: String(form.get("serial") ?? "").trim(), unit,
+      });
+      setMeterFormAccount("");
+      setMessage("Compteur enregistré. Les relevés pourront être saisis pour ce service.");
+      await loadAccounts();
+    } catch (error) { setMessage(humanError(error)); setMessageError(true); }
+    finally { setSaving(false); }
+  }
+
+  const availableServices = ["ELECTRICITY", "WATER"].filter((code) => !accounts.some((account) => text(account.service_code).toUpperCase() === code));
+
+  return <Panel title="Services et compteurs" action={<Button primary onClick={() => setAccountFormOpen((open) => !open)} disabled={!availableServices.length || saving}>{accountFormOpen ? "Fermer" : "Rattacher un service"}</Button>}>
+    <p className="help service-account-intro">Rattacher Eau ou Électricité ne nécessite pas de compteur. Ajoutez un compteur uniquement lorsqu’il existe réellement; sans compteur, la consommation reste saisissable directement sur une facture.</p>
+    {loading ? <div className="empty-state">Chargement des services depuis le serveur…</div> : accounts.length ? <div className="service-account-list">{accounts.map((account) => {
+      const accountId = text(account.id);
+      const accountMeters = metersByAccount[accountId] ?? [];
+      const unit = text(account.service_code).toUpperCase() === "WATER" ? "M3" : "KWH";
+      const contractRef = text(account.contract_ref, "").trim();
+      return <article className="service-account-card" key={accountId}>
+        <div className="service-account-head"><div><strong>{domainLabel(account.service_code)}</strong><span className="muted">{domainLabel(account.connection_status)}</span></div><Button onClick={() => setMeterFormAccount((current) => current === accountId ? "" : accountId)} disabled={saving}>{meterFormAccount === accountId ? "Annuler" : "Ajouter un compteur"}</Button></div>
+        {contractRef && <p className="help">Contrat : {contractRef}</p>}
+        {accountMeters.length ? <ul className="service-meter-list">{accountMeters.map((meter) => <li key={text(meter.id)}><strong>{text(meter.serial)}</strong><span>{formatUnit(meter.unit)}{meter.active === false ? " · Inactif" : " · Actif"}</span></li>)}</ul> : <p className="help">Aucun compteur enregistré. Le service reste utilisable pour la facturation manuelle.</p>}
+        {meterFormAccount === accountId && <form className="form-grid service-meter-form" onSubmit={(event) => void createMeter(event)}>
+          <label>Numéro réel du compteur<input name="serial" maxLength={128} required placeholder="À saisir uniquement si le compteur existe" /></label>
+          <label>Unité<input value={unit === "M3" ? "m³" : "kWh"} readOnly /></label>
+          <p className="help span-two">Ce champ est obligatoire uniquement pour enregistrer un compteur réel. Aucun numéro fictif ne sera créé.</p>
+          <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer le compteur"}</Button></div>
+        </form>}
+      </article>;
+    })}</div> : <div className="empty-state">Aucun service n’est encore rattaché. Vous pouvez ajouter l’eau et l’électricité sans créer de compteur.</div>}
+    {accountFormOpen && availableServices.length > 0 && <form className="form-grid service-account-form" onSubmit={(event) => void createServiceAccount(event)}>
+      <label>Service<select name="service_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{availableServices.map((code) => <option key={code} value={code}>{domainLabel(code)}</option>)}</select></label>
+      <label>État du raccordement<select name="connection_status" defaultValue="UNKNOWN"><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
+      <label>Référence du contrat <span className="muted">(facultatif)</span><input name="contract_ref" maxLength={128} /></label>
+      <label>Date d’activation <span className="muted">(facultative)</span><input name="activated_at" type="date" /></label>
+      <p className="help span-two">Aucun numéro de compteur n’est demandé à cette étape. L’état « Inconnu » évite d’affirmer un raccordement non vérifié.</p>
+      <div className="form-actions span-two"><Button type="button" onClick={() => setAccountFormOpen(false)}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Rattacher le service"}</Button></div>
+    </form>}
+    {accountFormOpen && !availableServices.length && <p className="help">L’eau et l’électricité sont déjà rattachées à cet abonné.</p>}
+    {message && <p role={messageError ? "alert" : "status"} className={`reading-message${messageError ? " error" : ""}`}>{message}</p>}
+  </Panel>;
+}
+
+function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { customers: Row[]; onOpenInvoices: () => void; onOpenCustomer: (customerId: string) => void }) {
   const [customerId, setCustomerId] = useState("");
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [accountId, setAccountId] = useState("");
@@ -803,7 +1017,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   useEffect(() => {
     if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); return; }
     let active = true;
-    localRequest<unknown>(`/local/v1/customers/${encodeURIComponent(customerId)}/service-accounts`).then((result) => {
+    centralRequest<unknown>(`/v1/customers/${encodeURIComponent(customerId)}/service-accounts`).then((result) => {
       if (active) { setAccounts(rows(result)); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); }
     }).catch((error: unknown) => { if (active) { setMessage(humanError(error)); setMessageError(true); } });
     return () => { active = false; };
@@ -812,7 +1026,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   useEffect(() => {
     if (!accountId) { setMeters([]); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); return; }
     let active = true;
-    localRequest<unknown>(`/local/v1/service-accounts/${encodeURIComponent(accountId)}/meters`).then((result) => {
+    centralRequest<unknown>(`/v1/service-accounts/${encodeURIComponent(accountId)}/meters`).then((result) => {
       if (active) { setMeters(rows(result).filter((meter) => meter.active !== false)); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); }
     }).catch((error: unknown) => { if (active) { setMessage(humanError(error)); setMessageError(true); } });
     return () => { active = false; };
@@ -821,7 +1035,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
   useEffect(() => {
     if (!meterId) { setReadings([]); setReadingPeriod(""); setPreviousIndex(""); return; }
     let active = true;
-    localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`).then((result) => {
+    centralRequest<unknown>(`/v1/meters/${encodeURIComponent(meterId)}/readings`).then((result) => {
       if (active) { const nextReadings = rows(result); setReadings(nextReadings); setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : ""); }
     }).catch((error: unknown) => { if (active) { setMessage(humanError(error)); setMessageError(true); } });
     return () => { active = false; };
@@ -834,8 +1048,8 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
     try {
       const form = new FormData(event.currentTarget);
       const input = { period: form.get("period"), previous: form.get("previous"), current: form.get("current"), source: "MANUAL" };
-      const meterBase = `/local/v1/meters/${encodeURIComponent(meterId)}/readings`;
-      const result = await localRequest<Row>(`${meterBase}/preview`, "POST", input);
+      const meterBase = `/v1/meters/${encodeURIComponent(meterId)}/readings`;
+      const result = await centralRequest<Row>(`${meterBase}/preview`, "POST", input);
       setPreview(result);
       setPreviewInput(input);
     } catch (error) { setPreview(null); setPreviewInput(null); setMessage(humanError(error)); setMessageError(true); }
@@ -846,14 +1060,14 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
     if (!meterId || !previewInput) return;
     setSaving(true); setMessage(""); setMessageError(false);
     try {
-      await localRequest(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`, "POST", previewInput);
-      const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
+      await centralRequest(`/v1/meters/${encodeURIComponent(meterId)}/readings`, "POST", previewInput);
+      const result = await centralRequest<unknown>(`/v1/meters/${encodeURIComponent(meterId)}/readings`);
       const nextReadings = rows(result);
       setReadings(nextReadings);
       setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : "");
       setReadingPeriod("");
       setPreview(null); setPreviewInput(null);
-      setMessage("Relevé enregistré sur ce poste."); setMessageError(false);
+      setMessage("Relevé enregistré par le serveur SEL."); setMessageError(false);
     } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
   }
@@ -864,10 +1078,10 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
     const form = new FormData(event.currentTarget);
     setSaving(true); setMessage(""); setMessageError(false);
     try {
-      await localRequest(`/local/v1/meter-readings/${encodeURIComponent(text(correctingReading.id))}/corrections`, "POST", {
+      await centralRequest(`/v1/meter-readings/${encodeURIComponent(text(correctingReading.id))}/corrections`, "POST", {
         current: form.get("current"), source: "MANUAL", reason: form.get("reason"),
       });
-      const result = await localRequest<unknown>(`/local/v1/meters/${encodeURIComponent(meterId)}/readings`);
+      const result = await centralRequest<unknown>(`/v1/meters/${encodeURIComponent(meterId)}/readings`);
       const nextReadings = rows(result);
       setReadings(nextReadings); setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : ""); setCorrectingReading(null);
       setMessage("Correction ajoutée à l’historique. Le relevé initial est conservé."); setMessageError(false);
@@ -893,14 +1107,14 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
           <label>Période<input name="period" type="month" value={readingPeriod} onChange={(event) => { const selectedPeriod = event.target.value; setReadingPeriod(selectedPeriod); const preceding = readings.filter((reading) => text(reading.period) < selectedPeriod); setPreviousIndex(preceding.length ? text(preceding[preceding.length - 1].current) : ""); }} required /></label>
           <label>Index précédent<input name="previous" type="number" min="0" step="0.001" value={previousIndex} onChange={(event) => setPreviousIndex(event.target.value)} required /></label>
           <label>Nouvel index<input name="current" type="number" min="0" step="0.001" required /></label>
-          <label>Source du relevé<input value="Saisie sur ce poste" readOnly /></label>
+          <label>Source du relevé<input value="Saisie de l’agent" readOnly /></label>
           <p className="help span-two">La consommation est calculée et validée par le moteur Rust avant l’enregistrement.</p>
           <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Vérification…" : "Prévisualiser les index"}</Button></div>
         </form>}
         {message && <p role={messageError ? "alert" : "status"} className={`reading-message${messageError ? " error" : ""}`}>{message}</p>}
         {!customerId && <div className="empty-state">Choisissez un abonné pour afficher ses services et ses compteurs.</div>}
-        {customerId && !accounts.length && <div className="empty-state">Aucun compte de service n’est enregistré pour cet abonné sur ce poste.</div>}
-        {accountId && !meters.length && <div className="empty-state">Aucun compteur actif n’est associé à ce service.</div>}
+        {customerId && !accounts.length && <div className="empty-state service-empty-state"><p>Aucun service n’est encore rattaché à cet abonné. Vous pouvez le faire depuis son dossier, sans numéro de compteur.</p><Button onClick={() => onOpenCustomer(customerId)}>Ouvrir le dossier abonné</Button></div>}
+        {accountId && !meters.length && <div className="empty-state service-empty-state"><p>Aucun compteur actif n’est associé à ce service. La facture peut tout de même être créée avec une consommation saisie manuellement.</p><Button primary onClick={onOpenInvoices}>Saisir une facture manuellement</Button></div>}
       </Panel>
       <Panel title="Récapitulatif">
         <div className="reading-summary">
@@ -910,7 +1124,7 @@ function MeterReadingsView({ customers }: { customers: Row[] }) {
           <dl><div><dt>Compteur</dt><dd>{selectedMeter ? text(selectedMeter.serial) : "—"}</dd></div><div><dt>Index précédent</dt><dd>{preview ? formatQuantity(preview.previous, selectedMeter?.unit) : "—"}</dd></div><div><dt>Index actuel</dt><dd>{preview ? formatQuantity(preview.current, selectedMeter?.unit) : "—"}</dd></div></dl>
           <p className="eyebrow">CONSOMMATION MESURÉE</p>
           <strong className="reading-quantity">{preview ? formatQuantity(preview.measured_quantity, selectedMeter?.unit) : "—"}</strong>
-          <span className={`status-badge${preview ? " pending" : ""}`}>{preview ? "Brouillon local · non enregistré" : "En attente de vérification"}</span>
+          <span className={`status-badge${preview ? " pending" : ""}`}>{preview ? "Prévisualisation · non enregistrée" : "En attente de vérification"}</span>
           <p className="help">Les index sont revalidés par Rust au moment de l’enregistrement.</p>
           {preview && <Button primary onClick={() => void saveReading()} disabled={saving}>{saving ? "Enregistrement…" : "Valider les index"}</Button>}
         </div>
@@ -935,7 +1149,7 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
   const availableSales = sales.filter((sale) => sale.receivable_id && !sale.installment_plan_id);
 
   async function viewPlan(planId: string) {
-    try { setPlan(await localRequest<Row>(`/local/v1/installment-plans/${encodeURIComponent(planId)}`)); }
+    try { setPlan(await centralRequest<Row>(`/v1/installment-plans/${encodeURIComponent(planId)}`)); }
     catch (error) { setMessage(humanError(error)); }
   }
 
@@ -946,7 +1160,7 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
     if (!sale || !sale.receivable_id) return;
     setSaving(true); setMessage("");
     try {
-      const result = await localRequest<Row>("/local/v1/solar/contracts", "POST", {
+      const result = await centralRequest<Row>("/v1/solar/contracts", "POST", {
         sale_id: sale.sale_id,
         receivable_id: sale.receivable_id,
         schedule: schedule.map((entry, index) => ({ sequence: index + 1, due_date: entry.due_date, amount: entry.amount })),
@@ -954,8 +1168,8 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
         approved_terms_revision: form.get("approved_terms_revision"),
       });
       const planId = text(result.installment_plan_id, "");
-      if (planId) setPlan(await localRequest<Row>(`/local/v1/installment-plans/${encodeURIComponent(planId)}`));
-      setMessage("Contrat et échéancier enregistrés sur ce poste.");
+      if (planId) setPlan(await centralRequest<Row>(`/v1/installment-plans/${encodeURIComponent(planId)}`));
+      setMessage("Contrat et échéancier enregistrés par le serveur SEL.");
       setSaleId(""); setSchedule([{ due_date: "", amount: "" }]);
       await onCreated();
     } catch (error) { setMessage(humanError(error)); }
@@ -1057,11 +1271,8 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }:
   </Panel>;
 }
 
-function AdminConsole({ onDeviceActivated }: { onDeviceActivated: () => void }) {
-  const [session, setSession] = useState<CentralSessionInfo | null>(null);
+function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; onSignedOut: () => void }) {
   const [users, setUsers] = useState<Row[]>([]);
-  const [devices, setDevices] = useState<Row[]>([]);
-  const [grants, setGrants] = useState<Row[]>([]);
   const [tariffs, setTariffs] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
   const [taxProfiles, setTaxProfiles] = useState<Row[]>([]);
@@ -1073,27 +1284,23 @@ function AdminConsole({ onDeviceActivated }: { onDeviceActivated: () => void }) 
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
-  const [deviceConfigured, setDeviceConfigured] = useState(false);
-  const [deviceActivationBusy, setDeviceActivationBusy] = useState(false);
-  const [activationUserId, setActivationUserId] = useState("");
   const authenticated = useRef(false);
 
   function clearAdminSession() {
     authenticated.current = false;
-    setSession({ authenticated: false });
-    setUsers([]); setDevices([]); setGrants([]); setTariffs([]); setProducts([]); setTaxProfiles([]); setFxRates([]); setAuditEvents([]);
+    setUsers([]); setTariffs([]); setProducts([]); setTaxProfiles([]); setFxRates([]); setAuditEvents([]);
   }
 
   const loadData = useCallback(async () => {
     setLoading(true);
     const paths = [
-      "/v1/admin/users", "/v1/admin/devices", "/v1/admin/offline-grants",
+      "/v1/admin/users",
       "/v1/admin/catalog/tariffs", "/v1/admin/catalog/products",
       "/v1/admin/catalog/tax-profiles", "/v1/admin/catalog/fx-rates", "/v1/admin/audit-events",
     ];
     const results = await Promise.allSettled(paths.map((path) => centralAdminRequest<unknown>(path)));
     if (!authenticated.current) return;
-    const setters = [setUsers, setDevices, setGrants, setTariffs, setProducts, setTaxProfiles, setFxRates, setAuditEvents] as const;
+    const setters = [setUsers, setTariffs, setProducts, setTaxProfiles, setFxRates, setAuditEvents] as const;
     results.forEach((result, index) => { if (result.status === "fulfilled") setters[index](rows<Row>(result.value)); });
     const failed = results.filter((result) => result.status === "rejected");
     if (failed.length) {
@@ -1104,55 +1311,16 @@ function AdminConsole({ onDeviceActivated }: { onDeviceActivated: () => void }) 
         return;
       }
     }
-    setMessage(failed.length ? `${8 - failed.length} rubrique(s) chargée(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "Données d’administration actualisées depuis le serveur central.");
+    setMessage(failed.length ? `${6 - failed.length} rubrique(s) chargée(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "Données d’administration actualisées depuis le serveur central.");
     setError(failed.length > 0);
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    let active = true;
-    centralSessionStatus().then((value) => { if (active) { authenticated.current = value.authenticated; setSession(value); } }).catch(() => { if (active) setSession({ authenticated: false }); });
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
-    localStatus<Row>().then((value) => setDeviceConfigured(text(value.status) !== "ACTIVATION_REQUIRED"))
-      .catch(() => setDeviceConfigured(false));
-  }, []);
-
-  useEffect(() => { if (session?.authenticated && session.role === "ADMIN") void loadData(); }, [session, loadData]);
-
-  const activeOperators = users.filter((user) =>
-    text(user.status).toUpperCase() === "ACTIVE" &&
-    ["BILLING_AGENT", "CASHIER"].includes(text(user.role).toUpperCase()),
-  );
-  useEffect(() => {
-    if (!activeOperators.some((user) => text(user.id ?? user.user_id, "") === activationUserId)) {
-      setActivationUserId(text(activeOperators[0]?.id ?? activeOperators[0]?.user_id, ""));
-    }
-  }, [activeOperators, activationUserId]);
-
-  async function login(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const values = new FormData(form);
-    const identityRef = String(values.get("identity_ref") ?? "");
-    const password = String(values.get("password") ?? "");
-    form.reset();
-    setLoading(true); setMessage(""); setError(false);
-    try {
-      const result = await centralLogin(identityRef, password);
-      authenticated.current = true;
-      setSession({ authenticated: true, ...result });
-      setMessage("Session centrale ouverte. Les jetons restent conservés en mémoire native.");
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
-    finally { setLoading(false); }
-  }
-
-  async function logout() {
-    try { await centralLogout(); clearAdminSession(); setMessage("Session centrale fermée."); setError(false); }
-    catch (reason) { setMessage(humanError(reason)); setError(true); }
-  }
+    authenticated.current = session.authenticated;
+    if (session.authenticated && session.role === "ADMIN") void loadData();
+    else clearAdminSession();
+  }, [session, loadData]);
 
   async function createUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1180,49 +1348,6 @@ function AdminConsole({ onDeviceActivated }: { onDeviceActivated: () => void }) 
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
   }
 
-  async function revokeDevice(device: Row) {
-    const id = text(device.id ?? device.device_id, "");
-    if (!id || text(device.state ?? device.status).toUpperCase() === "REVOKED") return;
-    if (!window.confirm("Révoquer cet appareil ? Il ne pourra plus synchroniser jusqu’à un nouvel enrôlement.")) return;
-    try {
-      await centralAdminRequest(`/v1/devices/${encodeURIComponent(id)}/revoke`, "POST");
-      setMessage("Appareil révoqué par le serveur central."); setError(false); await loadData();
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
-  }
-
-  async function provisionCurrentDevice() {
-    if (!activationUserId) {
-      setMessage("Créez d’abord un compte Agent facturation ou Caissier actif pour ce poste.");
-      setError(true);
-      return;
-    }
-    if (!window.confirm("Activer ce poste Windows pour les opérations SEL locales et la synchronisation. L’autorisation hors ligne sera signée par le serveur et expirera après 7 jours. SEL a confirmé qu’aucun plafond de montant ne s’applique à cet unique poste. Continuer ?")) return;
-    setDeviceActivationBusy(true);
-    try {
-      const result = await activateDevice(activationUserId);
-      setDeviceConfigured(true);
-      setMessage(`Poste activé. Autorisation hors ligne valable jusqu’au ${formatDateTime(result.offline_authorization_expires_at)}.`);
-      setError(false);
-      onDeviceActivated();
-      await loadData();
-    } catch (reason) {
-      setMessage(humanError(reason));
-      setError(true);
-    } finally {
-      setDeviceActivationBusy(false);
-    }
-  }
-
-  async function revokeGrant(grant: Row) {
-    const id = text(grant.id ?? grant.grant_id, "");
-    if (!id || grant.revoked_at) return;
-    if (!window.confirm("Révoquer cette autorisation hors ligne ? Le poste concerné devra se reconnecter pour recevoir une nouvelle autorisation.")) return;
-    try {
-      await centralAdminRequest(`/v1/admin/offline-grants/${encodeURIComponent(id)}/revoke`, "POST");
-      setMessage("Autorisation hors ligne révoquée par le serveur central."); setError(false); await loadData();
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
-  }
-
   async function updateUserRole(user: Row) {
     const id = text(user.id ?? user.user_id, "");
     const role = roleDrafts[id];
@@ -1242,37 +1367,6 @@ function AdminConsole({ onDeviceActivated }: { onDeviceActivated: () => void }) 
       await centralAdminRequest(`/v1/users/${encodeURIComponent(passwordTarget)}/password`, "POST", { password });
       form.reset(); setPasswordTarget(""); setMessage("Mot de passe mis à jour. Les sessions existantes sont révoquées côté serveur."); setError(false); await loadData();
     } catch (reason) { form.reset(); setMessage(humanError(reason)); setError(true); }
-  }
-
-  async function changeTemporaryPassword(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const values = new FormData(form);
-    const currentPassword = String(values.get("current_password") ?? "");
-    const newPassword = String(values.get("new_password") ?? "");
-    const repeatedPassword = String(values.get("repeat_password") ?? "");
-    if (newPassword !== repeatedPassword) {
-      setMessage("Les deux nouveaux mots de passe ne correspondent pas.");
-      setError(true);
-      return;
-    }
-    setLoading(true);
-    try {
-      await centralAdminRequest("/v1/auth/change-password", "POST", {
-        current_password: currentPassword,
-        new_password: newPassword,
-      });
-      setSession({ authenticated: false });
-      authenticated.current = false;
-      form.reset();
-      setMessage("Mot de passe changé. Connectez-vous à nouveau avec votre nouveau mot de passe.");
-      setError(false);
-    } catch (reason) {
-      setMessage(humanError(reason));
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
   }
 
   async function createCatalogDraft(kind: AdminCatalog, values: Record<string, string>) {
@@ -1309,39 +1403,14 @@ function AdminConsole({ onDeviceActivated }: { onDeviceActivated: () => void }) 
     finally { setCatalogBusy(false); }
   }
 
-  if (!session?.authenticated) return <>
-    {message && <div className={`notice${error ? " error" : ""}`} role={error ? "alert" : "status"}>{message}</div>}
-    <Panel title="Connexion administrateur centrale">
-      <p className="muted">La gestion des comptes, appareils et référentiels nécessite une connexion au serveur. Les opérations métier locales restent indépendantes de cette session.</p>
-      <form className="form-grid admin-login" onSubmit={(event) => void login(event)}>
-        <label>Identifiant SEL<input name="identity_ref" autoComplete="username" required /></label>
-        <label>Mot de passe<input name="password" type="password" autoComplete="current-password" required /></label>
-        <div className="form-actions span-two"><Button primary type="submit" disabled={loading}>{loading ? "Connexion…" : "Se connecter"}</Button></div>
-      </form>
-    </Panel>
-  </>;
-
-  if (session.require_password_change) return <>
-    {message && <div className={error ? "notice error" : "notice"} role={error ? "alert" : "status"}>{message}</div>}
-    <Panel title="Changez votre mot de passe temporaire">
-      <p className="muted">Avant toute opération, remplacez le mot de passe temporaire par un mot de passe personnel d’au moins 8 caractères.</p>
-      <form className="form-grid admin-login" onSubmit={(event) => void changeTemporaryPassword(event)}>
-        <label>Mot de passe temporaire<input name="current_password" type="password" autoComplete="current-password" minLength={8} required /></label>
-        <label>Nouveau mot de passe<input name="new_password" type="password" autoComplete="new-password" minLength={8} required /></label>
-        <label>Confirmer le nouveau mot de passe<input name="repeat_password" type="password" autoComplete="new-password" minLength={8} required /></label>
-        <div className="form-actions span-two"><Button primary type="submit" disabled={loading}>{loading ? "Enregistrement…" : "Changer le mot de passe"}</Button></div>
-      </form>
-    </Panel>
-  </>;
-
   if (session.role !== "ADMIN") return <Panel title="Accès administrateur requis">
     <p className="muted">La session {text(session.role)} est authentifiée, mais ne possède pas le rôle ADMIN nécessaire à ces fonctions.</p>
-    <div className="form-actions"><Button onClick={() => void logout()}>Fermer la session</Button></div>
+    <div className="form-actions"><Button onClick={onSignedOut}>Fermer la session</Button></div>
   </Panel>;
 
   return <>
     {message && <div className={`notice${error ? " error" : ""}`} role={error ? "alert" : "status"}>{message}</div>}
-    <Panel title="Session administrateur" action={<div className="page-actions"><Button onClick={() => void loadData()} disabled={loading}>{loading ? "Actualisation…" : "Actualiser"}</Button><Button onClick={() => void logout()}>Se déconnecter</Button></div>}>
+    <Panel title="Session administrateur" action={<div className="page-actions"><Button onClick={() => void loadData()} disabled={loading}>{loading ? "Actualisation…" : "Actualiser"}</Button><Button onClick={onSignedOut}>Se déconnecter</Button></div>}>
       <dl className="customer-details admin-session"><div><dt>Utilisateur</dt><dd>{text(session.user_id)}</dd></div><div><dt>Rôle</dt><dd>{text(session.role)}</dd></div><div><dt>Organisation</dt><dd>{text(session.organization_id)}</dd></div></dl>
     </Panel>
     <Panel title="Utilisateurs et rôles">
@@ -1363,15 +1432,6 @@ function AdminConsole({ onDeviceActivated }: { onDeviceActivated: () => void }) 
       <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
       <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
       <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-    </div>
-    <div className="admin-grid">
-      {!deviceConfigured && <Panel title="Activer ce poste Windows">
-        <p className="muted">L’activation enregistre le poste auprès de SEL, prépare sa base SQLite locale et lui remet une autorisation hors ligne signée. Les opérations seront conservées localement puis synchronisées avec PostgreSQL lorsque la connexion est disponible.</p>
-        {activeOperators.length > 0 ? <label>Compte responsable des opérations locales<select value={activationUserId} onChange={(event) => setActivationUserId(event.target.value)}>{activeOperators.map((user) => <option key={text(user.id ?? user.user_id)} value={text(user.id ?? user.user_id)}>{text(user.identity_ref)} · {text(user.role)}</option>)}</select></label> : <p className="notice error">Aucun compte Agent facturation ou Caissier actif. Créez ce compte avant d’activer le poste.</p>}
-        <div className="form-actions"><Button primary onClick={() => void provisionCurrentDevice()} disabled={deviceActivationBusy || !activationUserId}>{deviceActivationBusy ? "Activation sécurisée…" : "Activer ce poste"}</Button></div>
-      </Panel>}
-      <Panel title="Appareils enrôlés"><Table headers={["Appareil", "État", "Dernière activité", "Action"]} empty="Aucun appareil communiqué." data={devices.map((device) => [text(device.id ?? device.device_id), <Status value={device.state ?? device.status} />, text(device.last_seen ?? device.last_seen_at), <Button disabled={text(device.state ?? device.status).toUpperCase() === "REVOKED"} onClick={() => void revokeDevice(device)}>Révoquer</Button>])} /></Panel>
-      <Panel title="Autorisations hors ligne"><Table headers={["Autorisation", "Utilisateur", "Expiration", "État", "Action"]} empty="Aucune autorisation retournée." data={grants.map((grant) => [text(grant.id ?? grant.grant_id), text(grant.user_id), text(grant.expires_at), <Status value={grant.revoked_at ? "Révoquée" : "Émise"} />, <Button disabled={Boolean(grant.revoked_at)} onClick={() => void revokeGrant(grant)}>Révoquer</Button>])} /></Panel>
     </div>
     <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>
   </>;

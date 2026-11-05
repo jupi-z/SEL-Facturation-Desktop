@@ -4,7 +4,7 @@ use argon2::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rust_decimal::Decimal;
 use sel_contracts::{
     offline_grant_canonical_bytes, solar_schedule_id, utility_snapshot_sha256,
@@ -738,7 +738,8 @@ impl CentralStore {
         let access_token = Uuid::new_v4().to_string();
         let refresh_token = Uuid::new_v4().to_string();
         let access_expires_at = Utc::now() + Duration::minutes(15);
-        let refresh_expires_at = Utc::now() + Duration::days(30);
+        // A central session survives application restarts but expires absolutely after three days.
+        let refresh_expires_at = Utc::now() + Duration::days(3);
         sqlx::query(
             "INSERT INTO auth_sessions
              (id, organization_id, user_id, access_token_hash, refresh_token_hash,
@@ -1132,6 +1133,131 @@ impl CentralStore {
         .fetch_optional(&self.pool)
         .await?;
         Ok(device_id)
+    }
+
+    pub async fn renew_device_offline_grant(
+        &self,
+        device_id: Uuid,
+        grant_id: Uuid,
+        signing_key: &SigningKey,
+        now: DateTime<Utc>,
+    ) -> Result<serde_json::Value, DeviceWriteError> {
+        let mut tx = self.pool.begin().await?;
+        let device_active = sqlx::query(
+            "SELECT id FROM devices
+             WHERE id = $1 AND organization_id = $2 AND state = 'ACTIVE'
+             FOR UPDATE",
+        )
+        .bind(device_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if device_active.is_none() {
+            return Err(DeviceWriteError::NotFound);
+        }
+
+        let Some(grant) = sqlx::query(
+            "SELECT user_id, scopes, limits, issued_at, expires_at
+             FROM offline_grants
+             WHERE id = $1 AND device_id = $2 AND revoked_at IS NULL
+             FOR UPDATE",
+        )
+        .bind(grant_id)
+        .bind(device_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Err(DeviceWriteError::NotFound);
+        };
+        let user_id: Uuid = grant.try_get("user_id")?;
+        let scopes: serde_json::Value = grant.try_get("scopes")?;
+        let limits: serde_json::Value = grant.try_get("limits")?;
+        let previous_issued_at: DateTime<Utc> = grant.try_get("issued_at")?;
+        let previous_expires_at: DateTime<Utc> = grant.try_get("expires_at")?;
+
+        let user_active = sqlx::query(
+            "SELECT id FROM users
+             WHERE id = $1 AND organization_id = $2 AND status = 'ACTIVE'
+             FOR UPDATE",
+        )
+        .bind(user_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if user_active.is_none() {
+            return Err(DeviceWriteError::ProvisioningContextInvalid);
+        }
+
+        if previous_expires_at > now + Duration::days(1) {
+            tx.commit().await?;
+            return Ok(json!({
+                "grant_id": grant_id,
+                "device_id": device_id,
+                "user_id": user_id,
+                "expires_at": previous_expires_at,
+                "renewed": false
+            }));
+        }
+
+        let issued_at = now;
+        let expires_at = now + Duration::days(7);
+        let canonical = offline_grant_canonical_bytes(
+            grant_id, user_id, device_id, &scopes, &limits, issued_at, expires_at,
+        )
+        .map_err(|_| DeviceWriteError::InvalidProvisioningSignature)?;
+        let signature = BASE64.encode(signing_key.sign(&canonical).to_bytes());
+
+        sqlx::query(
+            "INSERT INTO offline_grant_renewals
+             (id, grant_id, device_id, previous_issued_at, previous_expires_at,
+              issued_at, expires_at, signature)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(grant_id)
+        .bind(device_id)
+        .bind(previous_issued_at)
+        .bind(previous_expires_at)
+        .bind(issued_at)
+        .bind(expires_at)
+        .bind(&signature)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE offline_grants
+             SET issued_at = $1, expires_at = $2, signature = $3
+             WHERE id = $4 AND device_id = $5 AND revoked_at IS NULL",
+        )
+        .bind(issued_at)
+        .bind(expires_at)
+        .bind(&signature)
+        .bind(grant_id)
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1,$2,$3,'OFFLINE_GRANT_RENEWED',$4,$5)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(grant_id)
+        .bind(now)
+        .bind(json!({"device_id":device_id}))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(json!({
+            "grant_id": grant_id,
+            "device_id": device_id,
+            "user_id": user_id,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+            "signature": signature,
+            "renewed": true
+        }))
     }
 
     pub async fn revoke_device(
@@ -5073,6 +5199,179 @@ impl CentralStore {
             .await?;
         tx.commit().await?;
         Ok(outcome)
+    }
+
+    /// Lists solar sales from the central ledger. The desktop client never
+    /// keeps a separate sales cache in online-only mode.
+    pub async fn list_solar_sales(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT s.id, s.customer_id, s.contract_id, s.currency, s.sold_at,
+                    s.sale_type, s.status, r.id AS receivable_id, r.principal_total,
+                    ip.id AS installment_plan_id,
+                    (SELECT p.sku FROM sale_lines sl JOIN products p ON p.id = sl.product_id
+                     WHERE sl.sale_id = s.id ORDER BY sl.id LIMIT 1) AS product_code
+             FROM sales s
+             JOIN customers c ON c.id = s.customer_id
+             LEFT JOIN receivables r ON r.source_type = 'SALE' AND r.source_id = s.id
+             LEFT JOIN installment_plans ip ON ip.receivable_id = r.id
+             WHERE c.organization_id = $1 AND s.sale_type = 'SOLAR_KIT'
+             ORDER BY s.sold_at DESC, s.id DESC
+             LIMIT $2",
+        )
+        .bind(self.organization_id)
+        .bind(i64::from(limit.clamp(1, 100)))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let sold_at: DateTime<Utc> = row.try_get("sold_at")?;
+                let principal: Option<Decimal> = row.try_get("principal_total")?;
+                Ok(json!({
+                    "sale_id": row.try_get::<Uuid, _>("id")?,
+                    "customer_id": row.try_get::<Uuid, _>("customer_id")?,
+                    "contract_id": row.try_get::<Option<Uuid>, _>("contract_id")?,
+                    "installment_plan_id": row.try_get::<Option<Uuid>, _>("installment_plan_id")?,
+                    "receivable_id": row.try_get::<Option<Uuid>, _>("receivable_id")?,
+                    "principal": principal.map(|value| format!("{:.2}", value.round_dp(2))),
+                    "currency": row.try_get::<String, _>("currency")?,
+                    "product_code": row.try_get::<Option<String>, _>("product_code")?,
+                    "sold_at": sold_at.to_rfc3339(),
+                    "sale_type": row.try_get::<String, _>("sale_type")?,
+                    "status": row.try_get::<String, _>("status")?
+                }))
+            })
+            .collect()
+    }
+
+    /// Returns structured data for a locally generated solar confirmation PDF.
+    /// No document bytes are written to the server.
+    pub async fn solar_sale_document_data(
+        &self,
+        sale_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, sqlx::Error> {
+        let sale = sqlx::query(
+            "SELECT s.id, s.customer_id, s.contract_id, s.currency, s.sold_at, s.status,
+                    r.id AS receivable_id, r.principal_total,
+                    c.customer_code, c.legal_name, c.contact_fields,
+                    o.legal_name AS organization_name
+             FROM sales s
+             JOIN customers c ON c.id = s.customer_id
+             JOIN organizations o ON o.id = c.organization_id
+             LEFT JOIN receivables r ON r.source_type = 'SALE' AND r.source_id = s.id
+             WHERE s.id = $1 AND c.organization_id = $2 AND s.sale_type = 'SOLAR_KIT'",
+        )
+        .bind(sale_id)
+        .bind(self.organization_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(sale) = sale else {
+            return Ok(None);
+        };
+
+        let lines = sqlx::query(
+            "SELECT p.sku AS product_reference, sl.quantity, sl.unit_price,
+                    sl.tax_snapshot, sl.total
+             FROM sale_lines sl
+             JOIN products p ON p.id = sl.product_id
+             WHERE sl.sale_id = $1 ORDER BY sl.id",
+        )
+        .bind(sale_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|line| {
+            let quantity: Decimal = line.try_get("quantity")?;
+            let unit_price: Decimal = line.try_get("unit_price")?;
+            let total: Decimal = line.try_get("total")?;
+            Ok(json!({
+                "product_reference": line.try_get::<String, _>("product_reference")?,
+                "quantity": quantity.normalize().to_string(),
+                "unit_price": format!("{:.2}", unit_price.round_dp(2)),
+                "tax_snapshot": line.try_get::<serde_json::Value, _>("tax_snapshot")?,
+                "total": format!("{:.2}", total.round_dp(2))
+            }))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+
+        let receivable_id: Option<Uuid> = sale.try_get("receivable_id")?;
+        let plan = if let Some(receivable_id) = receivable_id {
+            if let Some(plan) = sqlx::query(
+                "SELECT id, principal_amount, currency, start_date, status
+                 FROM installment_plans WHERE receivable_id = $1",
+            )
+            .bind(receivable_id)
+            .fetch_optional(&self.pool)
+            .await?
+            {
+                let plan_id: Uuid = plan.try_get("id")?;
+                let schedule = sqlx::query(
+                    "SELECT id, sequence, due_date, amount_due, schedule_status
+                     FROM installment_schedule WHERE plan_id = $1 ORDER BY sequence",
+                )
+                .bind(plan_id)
+                .fetch_all(&self.pool)
+                .await?
+                .into_iter()
+                .map(|item| {
+                    let amount: Decimal = item.try_get("amount_due")?;
+                    Ok(json!({
+                        "id": item.try_get::<Uuid, _>("id")?,
+                        "sequence": item.try_get::<i32, _>("sequence")?,
+                        "due_date": item.try_get::<NaiveDate, _>("due_date")?.to_string(),
+                        "amount_due": format!("{:.2}", amount.round_dp(2)),
+                        "status": item.try_get::<String, _>("schedule_status")?
+                    }))
+                })
+                .collect::<Result<Vec<_>, sqlx::Error>>()?;
+                json!({
+                    "id": plan_id,
+                    "principal": format!("{:.2}", plan.try_get::<Decimal, _>("principal_amount")?.round_dp(2)),
+                    "currency": plan.try_get::<String, _>("currency")?,
+                    "start_date": plan.try_get::<NaiveDate, _>("start_date")?.to_string(),
+                    "status": plan.try_get::<String, _>("status")?,
+                    "schedule": schedule
+                })
+            } else {
+                json!({"id": null, "schedule": []})
+            }
+        } else {
+            json!({"id": null, "schedule": []})
+        };
+
+        let sold_at: DateTime<Utc> = sale.try_get("sold_at")?;
+        let status: String = sale.try_get("status")?;
+        let contacts: serde_json::Value = sale.try_get("contact_fields")?;
+        let principal: Option<Decimal> = sale.try_get("principal_total")?;
+        Ok(Some(json!({
+            "document_schema_version": 1,
+            "document_type": "SOLAR_SALE_CONFIRMATION",
+            "document_reference": format!("SEL-SOLAR-{}", sale_id.simple().to_string().to_uppercase()),
+            "qr_internal_reference": format!("SEL:SOLAR-SALE:{sale_id}"),
+            "organization_name": sale.try_get::<String, _>("organization_name")?,
+            "sale": {
+                "sale_id": sale_id,
+                "receivable_id": receivable_id,
+                "customer_id": sale.try_get::<Uuid, _>("customer_id")?,
+                "contract_id": sale.try_get::<Option<Uuid>, _>("contract_id")?,
+                "principal": principal.map(|value| format!("{:.2}", value.round_dp(2))),
+                "currency": sale.try_get::<String, _>("currency")?,
+                "sold_at": sold_at.to_rfc3339(),
+                "status": status
+            },
+            "customer": {
+                "customer_code": sale.try_get::<String, _>("customer_code")?,
+                "legal_name": sale.try_get::<String, _>("legal_name")?,
+                "address": contacts.get("address").cloned().unwrap_or(serde_json::Value::Null),
+                "phone": contacts.get("phone").cloned().unwrap_or(serde_json::Value::Null)
+            },
+            "lines": lines,
+            "installment_plan": plan,
+            "origin": "CENTRAL_ACCEPTED"
+        })))
     }
 
     async fn create_solar_sale_with_ids_in_tx(

@@ -1046,3 +1046,65 @@ La lacune décrite ci-dessus est corrigée dans le code de la branche `monarque/
 | CI distante / paquet d'installation | NOT_YET_VERIFIED | Les modifications locales ne sont pas encore attachées à une exécution CI. Le candidat Windows 0.4.2 n'est ni publié ni validé sur un poste SEL. |
 
 **État du candidat :** correction de catégorie `PASS` localement et sur PostgreSQL de test; client web 0.4.2 compilé. **Verdict d'exploitation : `NO_GO` pour la facturation en production.** Les paramètres fiscaux approuvés et chargés, l'activation réelle de l'appareil, le manifeste de mise à jour et la recette Windows sur le poste SEL manquent toujours. Le déploiement du candidat et la publication d'un installateur ne sont pas effectués par cette vérification.
+
+### Bascule du client Windows V2 en mode connecté uniquement (5 novembre 2026)
+
+Le client Windows V2 est désormais modifié pour travailler exclusivement via l'API centrale configurée (`https://sel.shuleops.com` par défaut). Il ne lance plus l'agent SQLite, n'envoie plus de requêtes `/local/v1` ou `/v1/sync`, et le pont Tauri refuse aussi la provision d'appareils et la gestion de grants hors ligne. Une connexion utilisateur est requise au démarrage; le jeton de renouvellement est protégé par DPAPI, permet de conserver la session après redémarrage et ne repousse pas l'échéance absolue de trois jours pendant sa rotation. L'état « serveur joignable mais catalogue non configuré » est distingué d'une panne réseau : l'administrateur peut s'authentifier pour initialiser les référentiels, tandis que les parcours commerciaux restent bloqués. En cas de réelle indisponibilité centrale, l'interface masque les données métier et verrouille les opérations. Les clés d'idempotence de requête sont des marqueurs de reprise sans contenu métier; aucun payload métier n'est mis en file locale. La génération de PDF demeure locale à partir des données structurées renvoyées par l'API.
+
+| Critère | Statut | Preuve / limite |
+|---|---|---|
+| Client métier exclusivement connecté | PASS — code et tests de pont | Le client n'exécute pas `sel-local`; les listes et écritures utilisent les endpoints `/v1`; le pont refuse les routes locales, de synchronisation offline, de provision d'appareil et de grants offline. Build TypeScript/Vite réussi et 4 tests natifs Tauri réussis. |
+| Ventes solaires centrales | PASS — API et PostgreSQL de test | `GET /v1/solar/sales?limit=100` et `GET /v1/solar/sales/:id/document-data` ajoutés; intégrés au chargement Windows. Le scénario PostgreSQL de vente/contrat/échéancier et les nouvelles assertions HTTP de liste/document passent sur le conteneur de test. |
+| Session utilisateur, redémarrage et durée maximale | PASS — implémentation et test PostgreSQL | DPAPI conserve uniquement le jeton de renouvellement; expiration serveur à trois jours; test de rotation confirme que l'échéance absolue ne glisse pas. Migration additive `0020_three_day_session_expiry.sql` limite aussi les sessions déjà ouvertes lors de son application. |
+| Échec réseau et configuration métier incomplète | PASS — code | Les états réseau et catalogue sont séparés. L'authentification administrateur reste possible quand le serveur répond avec `configured:false`; l'interface ne donne accès qu'à l'initialisation, sans autoriser les opérations commerciales. En panne réseau, les écrans se verrouillent et les données métier en mémoire sont vidées. Les listes échouées sont vidées pour ne pas exposer des données périmées. |
+| Build client et tests locaux | PASS partiel | `npm run build` PASS; `cargo fmt --all` PASS; tests Tauri 4/4 PASS; test PostgreSQL solaire 1/1 PASS; test PostgreSQL de rotation de session 1/1 PASS; tests `cargo test -p sel-api -p sel-storage` PASS pour les suites non ignorées. Les tests Postgres explicitement marqués `ignore` n'ont pas tous été lancés dans cette tranche. Le build Vite signale encore des bundles PDF/polices supérieurs à 500 kB. |
+| API de production | BLOCKED — configuration métier | Vérification HTTP en lecture seule de `https://sel.shuleops.com/health/ready` : HTTP 200, `configured:false`. Les opérations métier restent correctement bloquées tant que le catalogue commercial actif n'est pas provisionné. Aucune écriture financière ni migration de production n'a été faite pendant cette tranche. |
+| Authentification Figma | BLOCKED_EXTERNAL — fichier de design inaccessible | Le lien Figma fourni n'est pas accessible par l'outil de lecture disponible et aucun connecteur Figma n'est exposé dans cette session. Le formulaire présent n'est donc pas certifié comme copie fidèle des frames Figma; aucune conformité visuelle exacte n'est revendiquée. |
+| Installation Windows / exploitation | NOT_TESTED | Aucun nouvel installateur n'a été produit ou installé pendant cette tranche; pas de recette de connexion avec un utilisateur réel sur le poste SEL, ni de validation imprimante. |
+
+**Verdict de cette tranche :** le chemin réseau côté client est corrigé et vérifié jusqu'à un PostgreSQL local de test, mais le produit reste `NO_GO` pour l'exploitation commerciale tant que le serveur de production reste `configured:false`. La disponibilité HTTP seule ne signifie pas que les tarifs et profils nécessaires à l'émission réelle sont actifs. Branche locale `monarque/sel-v2-backend`, HEAD de départ `8c1ae14`; les changements restent non commités et les modifications préexistantes du worktree ont été conservées.
+
+### Retrait du mode métier hors connexion du client Windows — 5 novembre 2026
+
+La distribution Windows V2 est désormais orientée exclusivement vers l'API centrale : écran de connexion obligatoire, opérations via `/v1`, verrouillage si le serveur est inaccessible, retrait de l'administration des appareils/autorisations hors ligne et suppression de l'agent `sel-local.exe` de la configuration et du workflow Tauri. Les fixtures de contrôle visuel représentent maintenant des réponses centrales. Le workflow qui produisait l'ancien installateur V2 Python est supprimé; le workflow Windows V1 est remplacé par une suite de régression sans étape de compilation/publication. Les anciens lanceurs `desktop.py`/`desktop_v2.py` et scripts de build Python/PyWebView sont maintenant bloqués à l'exécution; leurs sources et paquets WiX sont gardés uniquement pour référence historique. La définition du workflow V1 a été conservée sous `.github/legacy/` et n'est pas chargée par GitHub Actions.
+
+| Élément | État | Preuve / limite |
+|---|---|---|
+| Écrans et pont natif du client | IN_PROGRESS — code modifié | `v2/windows-app/src/App.tsx`, `api.ts`, `src-tauri/src/lib.rs`; l'agent, les routes locales et les états `LOCAL_PENDING` ne sont plus utilisés dans les parcours Windows. La génération de PDF reste côté poste depuis les données centrales, comme prévu. |
+| Installateur Tauri | IN_PROGRESS — configuration modifiée | `tauri.conf.json` n'embarque pas l'agent; le workflow ne compile plus `sel-local.exe`. Un binaire généré précédemment dans `src-tauri/resources/sel-local.exe` a été supprimé. Aucun nouvel installateur n'a été construit dans cette tranche. |
+| Chaînes de distribution historiques | IN_PROGRESS — neutralisées dans les sources | `.github/workflows/sel-v2-windows.yml` est retiré; `.github/workflows/windows.yml` ne construit plus l'application V1 locale. `build-windows.ps1` et `v2/packaging/build-v2.ps1` s'arrêtent avec un message de retrait; les anciens lanceurs ne démarrent plus leur runtime SQLite. La recette legacy vérifie maintenant la conservation de marqueurs de session/préférences sans créer SQLite, identité de poste ou outbox. |
+| Vérification CI et poste Windows | NOT_TESTED | Les tests, le build du client, le nouvel installateur et son démarrage sur le poste SEL n'ont pas été exécutés dans cette tranche. La version déjà installée ne change pas automatiquement : elle doit être remplacée par un nouveau build. |
+| Sources historiques SQLite/synchronisation | CONSERVÉES, non distribuées par le client Windows | Les crates Rust anciennes, schémas et tests restent présents pour préserver l'historique et la suite backend. Les routes de synchronisation centrales existent encore dans le code API; aucune suppression de données ou migration n'a été effectuée. Cette conservation technique ne donne pas au nouveau client un mode métier hors connexion. |
+
+**Statut :** le mode local est retiré des parcours distribuables et les lanceurs/builds historiques sont bloqués dans les sources. Les API/crates de synchronisation et leurs migrations restent présentes pour préserver l'historique backend; elles ne sont plus utilisées par le client Windows. Ces modifications n'ont pas encore été validées par CI ni par un nouvel installateur. La copie déjà installée chez SEL n'est pas modifiée par un changement de source : elle continuera à afficher son ancien comportement jusqu'à installation d'un paquet Tauri reconstruit et validé.
+
+### 403 au chargement du tableau de bord — 5 novembre 2026
+
+La revue de la capture et du contrôle d'accès identifie une route manquante dans la matrice RBAC : le client demande `GET /v1/solar/sales` au chargement du tableau de bord, mais cette lecture n'était pas déclarée dans `role_allows_request`. La politique refusait donc la route par défaut, y compris pour le rôle `ADMIN`; le problème concernait également les autres rôles de lecture. Le backend renvoie un `ProblemDetails` RFC avec `code/title/detail`, alors que le client ne lisait que `message`, ce qui réduisait l'erreur à un HTTP 403 générique.
+
+La matrice autorise maintenant la liste et le document des ventes solaires à tous les rôles de lecture déjà définis. Un test parcourt l'ensemble des routes métier GET du client Windows pour ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR et AUDITOR_READONLY. Le client interprète maintenant les champs du `ProblemDetails` et indique le code ainsi que la route en cas de 403.
+
+| Vérification | Résultat |
+|---|---|
+| Tests unitaires `sel-api --lib` | PASS — 12/12, dont matrice complète des routes de lecture |
+| Build client `npm run build` | PASS — bundles générés; avertissement existant de taille des bundles PDF |
+| Déploiement de l'API de production | NOT_DONE — le changement doit être déployé sur le serveur pour supprimer le 403 réel |
+| Nouvel installateur Windows | NOT_BUILT après cette correction — nécessaire uniquement pour embarquer le diagnostic détaillé côté interface; la correction d'autorisation est serveur |
+
+**Conclusion :** le défaut de code source qui bloque le tableau de bord est corrigé et couvert pour les cinq rôles. La capture ne permet pas à elle seule d'identifier le contenu exact du corps d'erreur reçu en production; toutefois la route non autorisée correspond exactement à l'appel effectué par le client. Le 403 ne disparaîtra chez les utilisateurs qu'après déploiement du backend corrigé. Aucun compte ni donnée de production n'a été modifié.
+
+### Raccordements sans compteur physique — 5 novembre 2026
+
+Le dossier abonné expose désormais la gestion des services Eau et Électricité. Un raccordement se crée sans numéro de compteur; son état peut rester « Inconnu » jusqu'à vérification. L'enregistrement d'un compteur est une action distincte, disponible seulement lorsqu'un appareil physique existe. La page Relevés explique qu'un relevé d'index nécessite un compteur et propose d'ouvrir le dossier abonné pour rattacher le service ou la Facturation pour saisir les quantités relevées manuellement. La facture combinée reste calculée par le moteur Rust et affiche toujours les deux services.
+
+| Vérification | Résultat |
+|---|---|
+| Gestion UI du service dans le dossier abonné | PASS — sélection Eau/Électricité, état de raccordement, contrat et date facultatifs; aucun numéro fictif |
+| Compteur | PASS — création séparée; numéro réel obligatoire uniquement pour cette action |
+| Autorisations API | PASS — création/modification des raccordements accessible aux rôles ADMIN, SUPERVISOR et BILLING_AGENT |
+| Facturation sans compteur | PASS — la saisie manuelle de kWh et m³ utilise l'API de prévisualisation/émission; aucun identifiant compteur n'est requis |
+| Régression HTTP PostgreSQL | CODE — test de liste de compteurs vide ajouté après création d'un raccordement; compilé avec `cargo test -p sel-api --test postgres_meter_readings --no-run -j 1`. Exécution réelle non faite faute de base de test dédiée dans cette session |
+| Vérifications locales | PASS — `npm run build`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -j 1`; `python -m pytest -q` (324 réussis) |
+| État des données SEL | PASS — aucune écriture en production; le rattachement des services se fait depuis le dossier de chaque abonné après distribution du client validé |
+
+**Limite de livraison :** les scénarios PostgreSQL annotés `ignore` exigent un `TEST_DATABASE_URL`; ils ne sont pas comptés comme exécutés. La mise à jour du dépôt ou une CI réussie ne remplace pas la publication d'un nouvel installateur ni sa vérification sur le poste de Clarisse.

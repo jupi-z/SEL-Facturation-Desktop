@@ -2942,7 +2942,7 @@ dependencies = [
 
 [[package]]
 name = "sel-v2-windows"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "chrono",
  "reqwest",

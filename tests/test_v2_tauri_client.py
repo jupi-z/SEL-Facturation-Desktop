@@ -30,21 +30,23 @@ def test_tauri_installer_is_per_user_and_windows_ci_exercises_profile_preservati
     assert '"version": "0.3.99"' in workflow
     assert "installer_lifecycle_smoke.py" in workflow
     assert 'Path(os.environ["LOCALAPPDATA"]) / APP_IDENTIFIER' in smoke
-    assert "sel-local-v2.sqlite" in smoke
-    assert "synthetic-pending-event" in smoke
-    assert "synthetic-historical-document.marker" in smoke
+    assert "central-session.dpapi" in smoke
+    assert "local business database" in smoke
+    assert "sel-local-v2.sqlite" not in smoke
     assert '"repair/reinstall"' in smoke
 
 
-def test_v2_windows_client_keeps_local_api_credentials_out_of_javascript() -> None:
+def test_v2_windows_client_uses_only_the_authenticated_central_api() -> None:
     adapter = (APP / "src" / "api.ts").read_text(encoding="utf-8")
     native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
 
-    assert 'invoke<LocalResponse<T>>("local_request"' in adapter
+    assert 'invoke<CentralResponse<T>>("central_request"' in adapter
     assert "Authorization" not in adapter
-    assert "/local/v1/" in native
-    assert "Bearer " in native
-    assert "local_request" in native
+    assert 'DEFAULT_CENTRAL_API_URL: &str = "https://sel.shuleops.com"' in native
+    assert ".bearer_auth(token)" in native
+    assert "session.access_token" in native
+    assert "local_request" not in native
+    assert '"/local/v1/customers"' in native
     assert '"https://' not in adapter
 
 
@@ -59,7 +61,7 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
         "Encaissements",
         "Kits solaires",
         "Créances",
-        "Synchronisation",
+        "Serveur",
         "Administration",
         "Prévisualiser la facture",
     ):
@@ -70,7 +72,7 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
     assert '"+ Ajouter un abonné"' in app
 
 
-def test_meter_reading_screen_uses_local_routes_and_displays_rust_measurements() -> None:
+def test_meter_reading_screen_uses_central_routes_and_displays_rust_measurements() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
@@ -111,17 +113,17 @@ def test_v2_windows_shell_preserves_figma_desktop_geometry_and_tokens() -> None:
     assert "width: 20px; height: 20px; color: #98b9e0" in css
 
 
-def test_sidebar_uses_distinct_local_icons_for_each_destination() -> None:
+def test_sidebar_uses_distinct_icons_for_each_destination() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     icon = app.split("function NavIcon(", 1)[1].split("\n}\n", 1)[0]
 
-    for name in ("grid", "people", "meter", "document", "cash", "sun", "balance", "sync", "settings"):
+    for name in ("grid", "people", "meter", "document", "cash", "sun", "balance", "server", "settings"):
         assert f"    {name}:" in icon
     assert "void name" not in icon
     assert "stroke=\"currentColor\"" in icon
 
 
-def test_dashboard_uses_recent_local_operations_without_demo_financial_data() -> None:
+def test_dashboard_uses_recent_central_operations_without_demo_financial_data() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
     assert 'title="Dossiers / activité récente"' in app
@@ -162,17 +164,18 @@ def test_cash_journal_uses_a_wide_table_and_lubumbashi_datetime_format() -> None
     assert 'locale="fr-CD"' in visual_review
 
 
-def test_solar_sales_use_the_approved_local_catalog_and_rust_quote() -> None:
+def test_solar_sales_use_the_approved_central_catalog_and_rust_quote() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     local_api = (ROOT / "v2" / "crates" / "sel-local" / "src" / "lib.rs").read_text(encoding="utf-8")
     storage = (ROOT / "v2" / "crates" / "sel-storage" / "src" / "sqlite.rs").read_text(encoding="utf-8")
 
     assert '"/local/v1/solar/products"' in local_api
     assert "list_active_solar_products" in storage
-    assert '"/local/v1/solar/products"' in app
-    assert '"/local/v1/solar/quotes"' in app
-    assert '"/local/v1/solar/contracts"' in app
-    assert 'local/v1/installment-plans/${encodeURIComponent(planId)}' in app
+    assert '"/v1/catalog/products"' in app
+    assert '"/v1/solar/quotes"' in app
+    assert '"/v1/solar/contracts"' in app
+    assert 'v1/installment-plans/${encodeURIComponent(planId)}' in app
+    assert 'centralRequest<unknown>("/v1/catalog/products")' in app
     assert "Vérifier le devis" in app
     assert "Créer le contrat" in app
     assert "Échéancier consulté" in app
@@ -194,7 +197,7 @@ def test_invoice_workspace_matches_figma_two_column_preview_flow() -> None:
     assert "formatMoney(preview.total, preview.currency)" in app
     assert ".invoice-workspace { display: grid; grid-template-columns:" in css
     assert "invoice-preview-1440x900.png" in visual_review
-    assert "path === '/local/v1/billing/utility/preview'" in visual_review
+    assert "path === '/v1/billing/utility/preview'" in visual_review
 
 
 def test_invoice_preview_is_a_distinct_figma_aligned_step_before_emission() -> None:
@@ -255,29 +258,29 @@ def test_solar_catalog_route_uses_local_api_error_contract() -> None:
     assert ".map_err(internal_error)?" in handler
 
 
-def test_admin_console_uses_individual_native_session_and_real_central_contracts() -> None:
+def test_admin_console_uses_individual_session_without_offline_device_controls() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     adapter = (APP / "src" / "api.ts").read_text(encoding="utf-8")
     native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
 
     assert "centralLogin" in app
     assert '"/v1/admin/users"' in app
-    assert '"/v1/admin/devices"' in app
-    assert '"/v1/admin/offline-grants"' in app
+    assert '"/v1/admin/devices"' not in app
+    assert '"/v1/admin/offline-grants"' not in app
     assert '"/v1/admin/audit-events"' in app
     assert "API locale d’administration non exposée" not in app
     assert "Créer l’utilisateur" in app
     assert "Désactiver" in app and "Réactiver" in app
     assert "Réinitialiser le mot de passe" in app
-    assert '`/v1/devices/${encodeURIComponent(id)}/revoke`' in app
-    assert '`/v1/admin/offline-grants/${encodeURIComponent(id)}/revoke`' in app
+    assert '`/v1/devices/${encodeURIComponent(id)}/revoke`' not in app
+    assert '`/v1/admin/offline-grants/${encodeURIComponent(id)}/revoke`' not in app
     assert "minLength={8}" in app
     assert "AdminCatalogPanel" in app
     assert "Créer un brouillon" in app
     assert "Référence d’approbation SEL" in app
     assert "Journal d’audit récent" in app
-    assert '"/local/v1/sync/issues"' in app
-    assert "Conflits et refus à examiner" in app
+    assert '"/local/v1/' not in app
+    assert "Synchronisation" not in app
     assert 'invoke("central_login"' in adapter
     assert '"central_admin_request"' in adapter
     assert "central_login" in native and "central_admin_request" in native
@@ -295,7 +298,7 @@ def test_native_central_admin_bridge_is_allowlisted_and_never_uses_sync_token_as
     assert "central_api_token" not in admin_command
     assert "v1/auth/login" in native
     assert '"tariffs" | "products" | "tax-profiles" | "fx-rates"' in native
-    assert '"", "v1", "devices", id, "revoke"' in native
+    assert '"", "v1", "devices", id, "revoke"' not in native
     assert '"/v1/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/password"' in native
     assert "localStorage" not in (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     assert ".." in native
@@ -307,7 +310,7 @@ def test_admin_reference_writes_use_native_idempotency_and_require_explicit_appr
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
     assert 'tokio = { version = "1", features = ["sync"] }' in manifest
-    assert 'header("Idempotency-Key", uuid::Uuid::new_v4().to_string())' in native
+    assert 'header("Idempotency-Key", idempotency_key)' in native
     assert "effective_to: values.effective_to || null" in app
     assert 'approval_ref: approvalRef' in app
     assert 'supersedes_tariff_id' in app
@@ -327,15 +330,19 @@ def test_phase_seven_audit_and_sync_issue_contracts_are_documented() -> None:
     assert "ne sont jamais résolues automatiquement" in local_contract
 
 
-def test_admin_visual_review_covers_login_and_authenticated_synthetic_state() -> None:
+def test_visual_review_covers_mandatory_central_login_and_authenticated_state() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
-    assert "admin-login-1440x900.png" in visual_review
+    assert "login-1440x900.png" in visual_review
+    assert 'get_by_role("heading", name="Connexion à SEL Facturation")' in visual_review
+    assert 'get_by_role("button", name="Se connecter")' in visual_review
     assert "__ADMIN_DEMO_SESSION__" in visual_review
     assert "demo-admin-0001" in visual_review
     assert "central_admin_request" in visual_review
     assert "demo-audit-0001" in visual_review
-    assert "demo-conflict-0001" in visual_review
+    assert "central_request" in visual_review
+    assert "/local/v1/" not in visual_review
+    assert "PENDING_NETWORK" not in visual_review
 
 
 def test_solar_payment_form_clears_stale_schedules_and_fails_closed() -> None:
@@ -381,12 +388,12 @@ def test_windows_typescript_target_does_not_use_es2022_array_at() -> None:
     assert "readings[readings.length - 1]" in app
 
 
-def test_financial_and_sync_statuses_are_shown_in_french() -> None:
+def test_central_financial_statuses_are_shown_in_french_without_offline_states() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
-    assert 'LOCAL_PENDING: "En attente de synchronisation"' in app
     assert 'CENTRAL_ACCEPTED: "Confirmé par le serveur"' in app
-    assert 'LOCAL_ACCEPTED: "Enregistré sur ce poste"' in app
+    assert 'LOCAL_PENDING:' not in app
+    assert 'LOCAL_ACCEPTED:' not in app
     assert 'OVERDUE: "En retard"' in app
 
 
@@ -549,7 +556,7 @@ def test_customer_dossier_has_read_only_overview_and_explicit_edit_mode() -> Non
     assert '"customer-edit-1440x900.png"' in visual_review
 
 
-def test_customer_directory_surfaces_truthful_local_metrics_before_the_table() -> None:
+def test_customer_directory_surfaces_truthful_central_metrics_before_the_table() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     directory = app.split('title="Répertoire des abonnés"', 1)[1].split(
         '{view === "readings"', 1
@@ -557,9 +564,9 @@ def test_customer_directory_surfaces_truthful_local_metrics_before_the_table() -
 
     assert 'className="metrics customer-metrics"' in directory
     assert 'label="Abonnés enregistrés" value={customers.length}' in directory
-    assert 'label="Factures locales" value={invoices.length}' in directory
-    assert 'label="Versements locaux" value={payments.length}' in directory
-    assert 'label="À synchroniser" value={pending}' in directory
+    assert 'label="Factures" value={invoices.length}' in directory
+    assert 'label="Versements" value={payments.length}' in directory
+    assert 'value={pending}' not in directory
     assert directory.index('className="metrics customer-metrics"') < directory.index(
         'title="Abonnés enregistrés"'
     )
@@ -599,14 +606,15 @@ def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> 
     assert "{onConfirm &&" in app
 
 
-def test_tauri_bridge_fails_closed_and_offloads_local_http() -> None:
+def test_tauri_bridge_fails_closed_and_uses_only_central_http() -> None:
     native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
 
     assert "start_agent(app.handle(), &data_dir).ok()" not in native
-    assert "spawn_blocking" in native
-    assert "MAX_LOCAL_RESPONSE_BYTES: usize = 16 * 1024 * 1024" in native
-    assert "take((MAX_LOCAL_RESPONSE_BYTES + 1) as u64)" in native
-    assert "env_clear()" in native
+    assert "local_request" not in native
+    assert "central_request" in native
+    assert 'Command::new("explorer.exe")' in native
+    assert 'Command::new("cmd.exe")' not in native
+    assert 'Command::new("powershell.exe")' not in native
     assert "https://monarquegrp.com" in native
     assert "open_monarque_site" in native
     assert "open_monarque_site" in (APP / "src" / "api.ts").read_text(encoding="utf-8")
@@ -617,7 +625,7 @@ def test_tauri_error_messages_are_preserved_in_ui() -> None:
 
     assert 'typeof error === "string"' in app
     assert 'const message = (error as { message?: unknown }).message' in app
-    assert '"L’opération n’a pas abouti. Consultez le détail de l’état du poste."' in app
+    assert '"L’opération n’a pas abouti. Vérifiez la connexion au service SEL et réessayez."' in app
 
 
 def test_central_admin_can_bootstrap_before_device_enrollment() -> None:
@@ -632,24 +640,25 @@ def test_central_admin_can_bootstrap_before_device_enrollment() -> None:
     assert 'centralAdminRequest("/v1/auth/change-password", "POST"' in app
 
 
-def test_central_admin_can_activate_device_for_an_active_business_user() -> None:
+def test_central_only_client_does_not_offer_offline_device_activation() -> None:
     bridge = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
     api = (APP / "src" / "api.ts").read_text(encoding="utf-8")
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
-    assert '["", "v1", "admin", "devices", id, "provision"]' in bridge
-    assert "target_user_id: String" in bridge
-    assert 'invoke("activate_device", { targetUserId })' in api
-    assert '"BILLING_AGENT", "CASHIER"' in app
-    assert 'setActivationUserId' in app
-    assert "aucun plafond de montant" in app
+    assert '["", "v1", "admin", "devices", id, "provision"]' not in bridge
+    assert "activate_device" not in api
+    assert 'function ServiceAccountsManager' in app
+    assert '"Rattacher un service"' in app
+    assert '"Ajouter un compteur"' in app
+    assert 'Aucun numéro de compteur n’est demandé à cette étape.' in app
+    assert 'setActivationUserId' not in app
 
 
-def test_tauri_windows_bundle_creates_sidecar_resource_directory() -> None:
+def test_tauri_windows_bundle_does_not_build_or_ship_the_local_agent() -> None:
     workflow = (ROOT / ".github" / "workflows" / "sel-v2-tauri-windows.yml").read_text(encoding="utf-8")
 
-    assert "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination)" in workflow
-    assert "Copy-Item -LiteralPath $source -Destination $destination -Force" in workflow
+    assert "sel-local.exe" not in workflow
+    assert "cargo build --manifest-path v2/Cargo.toml -p sel-local" not in workflow
 
 
 def test_figma_visual_review_uses_only_marked_synthetic_fixtures() -> None:

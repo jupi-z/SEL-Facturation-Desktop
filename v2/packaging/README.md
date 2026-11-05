@@ -1,23 +1,12 @@
-# Candidat Windows SEL V2
+# Ancien packaging V2 local — retiré
 
-Le paquet V2 est un candidat de test non signé Authenticode. Il contient :
+Ce packaging PyWebView + `sel-local` est obsolète et son script de build est
+volontairement bloqué. Il ne doit plus servir à produire ou distribuer SEL.
 
-- `SEL-Facturation-V2.exe`, shell natif pywebview et agent `sel-local.exe` embarqué ;
-- un MSI par utilisateur ;
-- un bootstrapper WebView2 qui installe le runtime Microsoft uniquement si le poste ne le possède pas ;
-- `SHA256SUMS.txt` pour vérifier les artefacts avant installation.
+Le client Windows actuel est `v2/windows-app` (Tauri). Il exige une session
+authentifiée et communique avec le serveur SEL pour chaque opération métier.
+Il n’embarque ni agent `sel-local`, ni base métier SQLite, ni outbox hors ligne.
 
-La base SQLite et les identités sont créées dans `%LOCALAPPDATA%\SEL Facturation V2`. Aucun PDF ni fichier de facture n’est envoyé ou stocké sur le serveur central par ce paquet.
-
-## Build Windows
-
-Depuis la racine du dépôt, avec Rust, Python 3.12, WiX 4 et les dépendances de `requirements-build.txt` :
-
-```powershell
-python -m pip install -r requirements-build.txt
-pwsh -File v2/packaging/build-v2.ps1 -Version 0.3.30
-```
-
-Le téléchargement WebView2 provient du lien officiel Microsoft utilisé uniquement au moment du build. Le bootstrapper conserve le runtime hors de l’application et ne contient aucun secret SEL.
-
-La validation réelle sur le poste SEL, l’impression, la configuration centralisée et la signature Authenticode restent des contrôles séparés.
+Les anciennes sources, migrations et contrats de synchronisation sont conservés
+pour la traçabilité et les migrations contrôlées. Ce maintien ne signifie pas que
+le client Windows offre un mode local.

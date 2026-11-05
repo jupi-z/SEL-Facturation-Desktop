@@ -36,7 +36,7 @@ INVOICES = [{
     "billing_period": "2026-10",
     "total": "11.02",
     "currency": "USD",
-    "status": "LOCAL_PENDING",
+    "status": "CENTRAL_ACCEPTED",
 }]
 PAYMENTS = [{
     "payment_id": "demo-payment-0001",
@@ -45,7 +45,7 @@ PAYMENTS = [{
     "currency": "USD",
     "method": "CASH",
     "occurred_at": "2026-11-04T08:00:00Z",
-    "status": "LOCAL_PENDING",
+    "status": "CENTRAL_ACCEPTED",
 }]
 SALES = [{
     "sale_id": "demo-sale-0001",
@@ -55,7 +55,7 @@ SALES = [{
     "principal": "120.00",
     "currency": "USD",
     "installment_plan_id": None,
-    "status": "LOCAL_ACCEPTED",
+    "status": "CENTRAL_ACCEPTED",
 }]
 SOLAR_PLAN = {
     "id": "demo-plan-0001",
@@ -136,7 +136,7 @@ def mock_invoke_script() -> str:
     return f"""
       const fixtures = {fixtures};
       window.__TAURI_INTERNALS__ = {{ invoke: async (command, args = {{}}) => {{
-        if (command === 'local_status') return {{status:'LOCAL_READY',pending:5,conflicts:1,rejected:1,last_successful_sync:'Aucune confirmée'}};
+        if (command === 'central_status') return {{status:'CENTRAL_CONNECTED',configured:true}};
         if (command === 'central_session_status') return window.__ADMIN_DEMO_SESSION__ ? {{authenticated:true,user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}} : {{authenticated:false}};
         if (command === 'central_login') {{ window.__ADMIN_DEMO_SESSION__ = true; return {{user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}}; }}
         if (command === 'central_logout') {{ window.__ADMIN_DEMO_SESSION__ = false; return null; }}
@@ -144,8 +144,6 @@ def mock_invoke_script() -> str:
           const adminPath = args.path || '';
           let adminBody = [];
           if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
-          else if (adminPath === '/v1/admin/devices') adminBody = [{{device_id:'demo-device-0001',status:'ACTIVE',last_seen_at:'2026-11-04T08:00:00Z'}}];
-          else if (adminPath === '/v1/admin/offline-grants') adminBody = [{{grant_id:'demo-grant-0001',user_id:'demo-agent-0001',expires_at:'2026-12-01',status:'ACTIVE'}}];
           else if (adminPath === '/v1/admin/audit-events') adminBody = [{{id:'demo-audit-0001',event_type:'USER_CREATED',actor_identity:'admin-demo',subject_id:'demo-agent-0001',occurred_at:'2026-11-04T08:10:00Z',redacted_metadata:{{role:'BILLING_AGENT'}}}}];
           else if (adminPath.endsWith('/tariffs')) adminBody = [{{service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',status:'APPROVED'}}];
           else if (adminPath.endsWith('/products')) adminBody = fixtures.products.map(product => ({{...product,status:'APPROVED'}}));
@@ -153,23 +151,23 @@ def mock_invoke_script() -> str:
           else if (adminPath.endsWith('/fx-rates')) adminBody = [{{from_currency:'USD',to_currency:'CDF',value:'DEMO',effective_from:'2026-01-01',status:'APPROVED'}}];
           return {{status:200,body:adminBody}};
         }}
-        if (command !== 'local_request') throw new Error('Unexpected visual smoke command: ' + command);
+        if (command !== 'central_request') throw new Error('Unexpected visual smoke command: ' + command);
         const path = args.path || '';
         let body = [];
-        if (path === '/local/v1/customers') body = fixtures.customers;
-        else if (path === '/local/v1/billing/utility/preview') {{
+        if (path === '/v1/customers') body = fixtures.customers;
+        else if (path === '/v1/billing/utility/preview') {{
           const waterQuantity = Number(args.body?.water?.quantity ?? 0);
           body = waterQuantity > 0
             ? {{currency:'USD',subtotal:'11.00',tax:'1.76',total:'12.76',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}}]}}
             : {{currency:'USD',subtotal:'9.50',tax:'1.52',total:'11.02',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}}]}};
         }}
-        else if (path.startsWith('/local/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}};
-        else if (path.startsWith('/local/v1/customers/') && path.endsWith('/service-accounts')) body = fixtures.serviceAccounts;
-        else if (path.startsWith('/local/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[4]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
-        else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[4]; body = meterId === 'demo-meter-water-0001' ? {{meter_id:meterId,period:'2026-11',previous:'5',current:'10',measured_quantity:'5',source:'MANUAL'}} : {{meter_id:meterId,period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}}; }}
-        else if (path.startsWith('/local/v1/meters/') && path.endsWith('/readings')) {{ const meterId = path.split('/')[4]; body = fixtures.readings.filter((reading) => reading.meter_id === meterId); }}
-        else if (path.startsWith('/local/v1/customers/')) body = fixtures.customers[0];
-        else if (path.startsWith('/local/v1/invoices/') && path.endsWith('/document-data')) {{
+        else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}};
+        else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts')) body = fixtures.serviceAccounts;
+        else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[4]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
+        else if (path.startsWith('/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[4]; body = meterId === 'demo-meter-water-0001' ? {{meter_id:meterId,period:'2026-11',previous:'5',current:'10',measured_quantity:'5',source:'MANUAL'}} : {{meter_id:meterId,period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}}; }}
+        else if (path.startsWith('/v1/meters/') && path.endsWith('/readings')) {{ const meterId = path.split('/')[4]; body = fixtures.readings.filter((reading) => reading.meter_id === meterId); }}
+        else if (path.startsWith('/v1/customers/')) body = fixtures.customers[0];
+        else if (path.startsWith('/v1/invoices/') && path.endsWith('/document-data')) {{
           const positiveWater = window.__invoicePdfWaterPositive === true;
           const invoiceLines = [
             {{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},
@@ -177,25 +175,22 @@ def mock_invoke_script() -> str:
               ? {{service_code:'WATER',quantity:'5',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}}
               : {{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}}
           ];
-          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',origin:'LOCAL_PENDING',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'SEL V2 local organization',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'11.00':'9.50',tax:positiveWater?'1.76':'1.52',total:positiveWater?'12.76':'11.02',lines:invoiceLines}}}};
+          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',origin:'CENTRAL',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'Société d’Énergie du Lualaba',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'11.00':'9.50',tax:positiveWater?'1.76':'1.52',total:positiveWater?'12.76':'11.02',lines:invoiceLines}}}};
         }}
-        else if (path.startsWith('/local/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
-        else if (path.startsWith('/local/v1/invoices')) body = fixtures.invoices;
-        else if (path.startsWith('/local/v1/payments/') && path.endsWith('/document-data')) body = {{document_schema_version:1,document_reference:'SEL-PAY-DEMO-0001',qr_internal_reference:'SEL:PAYMENT:demo-payment-0001',payment:{{payment_id:'demo-payment-0001',amount_received:'3.00',currency:'USD',method:'CASH',paid_at:'2026-11-04T08:00:00Z',status:'LOCAL_PENDING'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},allocations:[{{receivable_id:'demo-receivable-0001',amount:'3.00',currency:'USD'}}],reversals:[],origin:'LOCAL'}};
-        else if (path.startsWith('/local/v1/payments')) body = fixtures.payments;
-        else if (path.startsWith('/local/v1/solar/sales/') && path.endsWith('/document-data')) {{
+        else if (path.startsWith('/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
+        else if (path.startsWith('/v1/invoices')) body = fixtures.invoices;
+        else if (path.startsWith('/v1/payments/') && path.endsWith('/document-data')) body = {{document_schema_version:1,document_reference:'SEL-PAY-DEMO-0001',qr_internal_reference:'SEL:PAYMENT:demo-payment-0001',payment:{{payment_id:'demo-payment-0001',amount_received:'3.00',currency:'USD',method:'CASH',paid_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},allocations:[{{receivable_id:'demo-receivable-0001',amount:'3.00',currency:'USD'}}],reversals:[],origin:'CENTRAL'}};
+        else if (path.startsWith('/v1/payments')) body = fixtures.payments;
+        else if (path.startsWith('/v1/solar/sales/') && path.endsWith('/document-data')) {{
           const longSchedule = window.__solarDocumentLongSchedule === true
             ? Array.from({{length:36}},(_,index)=>({{sequence:index+1,due_date:`2027-${{String(Math.floor(index/12)+1).padStart(2,'0')}}-${{String((index%12)+1).padStart(2,'0')}}`,amount_due:'5.00',status:'UPCOMING'}}))
             : fixtures.solarPlan.schedule;
-          body = {{document_schema_version:1,document_type:'SOLAR_SALE_CONFIRMATION',document_reference:'SEL-SOLAR-DEMO-0001',qr_internal_reference:'SEL:SOLAR-SALE:demo-sale-0001',sale:{{sale_id:'demo-sale-0001',receivable_id:'demo-receivable-solar-0001',customer_id:'demo-customer-0001',principal:'120.00',currency:'USD',sold_at:'2026-11-04T08:00:00Z',status:'LOCAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},lines:[{{product_reference:'KIT-DÉMO',quantity:'1',unit_price:'120.00',total:'120.00'}}],installment_plan:{{currency:'USD',schedule:longSchedule}},origin:'LOCAL_ACCEPTED'}};
+          body = {{document_schema_version:1,document_type:'SOLAR_SALE_CONFIRMATION',document_reference:'SEL-SOLAR-DEMO-0001',qr_internal_reference:'SEL:SOLAR-SALE:demo-sale-0001',sale:{{sale_id:'demo-sale-0001',receivable_id:'demo-receivable-solar-0001',customer_id:'demo-customer-0001',principal:'120.00',currency:'USD',sold_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},lines:[{{product_reference:'KIT-DÉMO',quantity:'1',unit_price:'120.00',total:'120.00'}}],installment_plan:{{currency:'USD',schedule:longSchedule}},origin:'CENTRAL'}};
         }}
-        else if (path.startsWith('/local/v1/solar/sales')) body = fixtures.sales;
-        else if (path.startsWith('/local/v1/solar/products')) body = fixtures.products;
-        else if (path.startsWith('/local/v1/solar/contracts')) {{ fixtures.sales[0].installment_plan_id = 'demo-plan-0001'; body = {{installment_plan_id:'demo-plan-0001',contract_id:'demo-contract-0001'}}; }}
-        else if (path.startsWith('/local/v1/installment-plans/')) body = fixtures.solarPlan;
-        else if (path.startsWith('/local/v1/sync/trigger')) body = {{status:'PENDING_NETWORK',pending:5}};
-        else if (path.startsWith('/local/v1/sync/issues')) body = {{conflicts:1,rejected:1,items:[{{id:'demo-conflict-0001',event_id:'demo-event-0001',command_type:'UTILITY_INVOICE_ISSUED',status:'CONFLICT',reason:'Révision centrale différente',central_revision:4,created_at:'2026-11-04T08:12:00Z'}}]}};
-        else if (path.startsWith('/local/v1/sync/status')) body = {{status:'LOCAL_READY',pending:5,conflicts:0,rejected:0,last_successful_sync:'Aucune confirmée'}};
+        else if (path.startsWith('/v1/solar/sales')) body = fixtures.sales;
+        else if (path.startsWith('/v1/catalog/products')) body = fixtures.products;
+        else if (path.startsWith('/v1/solar/contracts')) {{ fixtures.sales[0].installment_plan_id = 'demo-plan-0001'; body = {{installment_plan_id:'demo-plan-0001',contract_id:'demo-contract-0001'}}; }}
+        else if (path.startsWith('/v1/installment-plans/')) body = fixtures.solarPlan;
         return {{status:200,body}};
       }}}};
     """
@@ -306,6 +301,11 @@ async def capture_views() -> None:
               };
             })();""")
             await page.goto(URL, wait_until="domcontentloaded")
+            await page.get_by_role("heading", name="Connexion à SEL Facturation").wait_for()
+            await page.screenshot(path=str(OUTPUT / "login-1440x900.png"))
+            await page.get_by_label("Identifiant SEL").fill("agent-demo")
+            await page.get_by_label("Mot de passe").fill("synthetic-password")
+            await page.get_by_role("button", name="Se connecter").click()
             await page.get_by_role("heading", name="Vue d’ensemble").wait_for()
             views = [
                 ("dashboard", "Vue d’ensemble"),
@@ -315,7 +315,7 @@ async def capture_views() -> None:
                 ("payments", "Encaissements"),
                 ("solar", "Kits solaires"),
                 ("receivables", "Créances"),
-                ("sync", "Synchronisation"),
+                ("server", "Serveur"),
                 ("admin", "Administration"),
             ]
             for slug, label in views:
@@ -476,11 +476,6 @@ async def capture_views() -> None:
                     await page.screenshot(path=str(OUTPUT / "solar-new-sale-1440x900.png"))
                     await page.get_by_role("button", name="Fermer", exact=True).click()
                 if slug == "admin":
-                    await page.get_by_role("heading", name="Connexion administrateur centrale").wait_for()
-                    await page.screenshot(path=str(OUTPUT / "admin-login-1440x900.png"))
-                    await page.evaluate("window.__ADMIN_DEMO_SESSION__ = true")
-                    await page.get_by_role("button", name="Vue d’ensemble", exact=True).click()
-                    await page.get_by_role("button", name="Administration", exact=True).click()
                     await page.get_by_role("heading", name="Utilisateurs et rôles").wait_for()
                     await page.get_by_role("cell", name="admin-demo").first.wait_for()
                     await page.screenshot(path=str(OUTPUT / "admin-full-1440x900.png"), full_page=True)

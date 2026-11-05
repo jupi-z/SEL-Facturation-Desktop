@@ -214,6 +214,60 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     assert_eq!(plan_body["schedule"].as_array().unwrap().len(), 2);
     assert_eq!(plan_body["schedule"][0]["status"], "OPEN");
 
+    let sales = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/solar/sales?limit=100")
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sales.status(), StatusCode::OK);
+    let sales_body = json_body(sales).await;
+    assert_eq!(sales_body.as_array().unwrap().len(), 1);
+    assert_eq!(sales_body[0]["sale_id"], sale_body["sale_id"]);
+    assert_eq!(sales_body[0]["receivable_id"], sale_body["receivable_id"]);
+    assert_eq!(
+        sales_body[0]["installment_plan_id"],
+        contract_body["installment_plan_id"]
+    );
+
+    let document = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/solar/sales/{}/document-data",
+                    sale_body["sale_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(document.status(), StatusCode::OK);
+    let document_body = json_body(document).await;
+    assert_eq!(document_body["origin"], "CENTRAL_ACCEPTED");
+    assert_eq!(document_body["sale"]["sale_id"], sale_body["sale_id"]);
+    assert_eq!(
+        document_body["customer"]["customer_code"],
+        customer["customer_code"]
+    );
+    assert_eq!(document_body["lines"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        document_body["installment_plan"]["schedule"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
     let counts = sqlx::query(
         "SELECT
            (SELECT count(*) FROM sales WHERE id = $1) AS sales,

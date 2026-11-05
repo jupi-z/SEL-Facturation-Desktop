@@ -3,6 +3,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$message = "Ce processus de build PyWebView/SQLite est retiré. Construisez le client Windows connecté avec v2/windows-app et le workflow SEL V2 Tauri Windows."
+throw $message
+
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..\.." )).Path
 if (-not $Version) { $Version = (Get-Content (Join-Path $PSScriptRoot "version.txt") -Raw).Trim() }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version WiX invalide: $Version" }

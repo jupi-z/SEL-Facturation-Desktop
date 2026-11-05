@@ -93,6 +93,12 @@ pub struct ProvisionDeviceRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenewOfflineGrantRequest {
+    pub grant_id: Uuid,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
 pub struct UpdateAdminUserRequest {
     pub role: Option<String>,
     pub status: Option<String>,
@@ -399,9 +405,20 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/sync/push", post(sync_push))
         .route("/v1/sync/pull", get(sync_pull))
         .route("/v1/sync/status", get(sync_status))
+        .route(
+            "/v1/devices/:id/offline-grant/renew",
+            post(renew_device_offline_grant),
+        )
         .route("/v1/config/versions", get(config_versions))
         .route("/v1/client-resources/manifest", get(resource_manifest))
-        .route("/v1/solar/sales", post(create_solar_sale))
+        .route(
+            "/v1/solar/sales",
+            get(list_solar_sales).post(create_solar_sale),
+        )
+        .route(
+            "/v1/solar/sales/:id/document-data",
+            get(get_solar_sale_document_data),
+        )
         .route("/v1/solar/quotes", post(create_solar_quote))
         .route("/v1/solar/contracts", post(create_solar_contract))
         .route(
@@ -473,7 +490,8 @@ async fn production_auth_guard(
         let sync_route = matches!(
             (method.as_str(), path),
             ("POST", "/v1/sync/push") | ("GET", "/v1/sync/pull") | ("GET", "/v1/sync/status")
-        );
+        ) || (method == axum::http::Method::POST
+            && path_matches(path, "/v1/devices/:id/offline-grant/renew"));
         if sync_route {
             if let Ok(Some(device_id)) = store.authenticate_sync_device_token(presented).await {
                 request
@@ -540,6 +558,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/meters/:id/readings"
                     | "/v1/invoices"
                     | "/v1/payments"
+                    | "/v1/solar/sales"
                     | "/v1/sync/pull"
                     | "/v1/sync/status"
                     | "/v1/config/versions"
@@ -553,6 +572,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 || path_matches(path, "/v1/invoices/:id")
                 || path_matches(path, "/v1/invoices/:id/document-data")
                 || path_matches(path, "/v1/payments/:id/document-data")
+                || path_matches(path, "/v1/solar/sales/:id/document-data")
                 || path_matches(path, "/v1/receivables/:id")
                 || path_matches(path, "/v1/installment-plans/:id"));
     }
@@ -1684,6 +1704,37 @@ async fn admin_provision_device(
                 (StatusCode::OK, Json(value))
             }
         })
+        .map_err(device_write_error)
+}
+
+async fn renew_device_offline_grant(
+    State(state): State<AppState>,
+    Path(device_id): Path<Uuid>,
+    device: Option<Extension<AuthenticatedDevice>>,
+    Json(input): Json<RenewOfflineGrantRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(Extension(AuthenticatedDevice(authenticated_device_id))) = device else {
+        return Err(ApiError::unauthorized(
+            "DEVICE_AUTH_REQUIRED",
+            "a valid enrolled-device synchronization token is required",
+        ));
+    };
+    if authenticated_device_id != device_id {
+        return Err(ApiError::forbidden(
+            "DEVICE_ID_MISMATCH",
+            "the authenticated device does not match the requested device",
+        ));
+    }
+    let signing_key = state.offline_grant_signing_key.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "OFFLINE_GRANT_ISSUER_UNAVAILABLE",
+            "the offline authorization issuer is not configured",
+        )
+    })?;
+    central_store(&state)?
+        .renew_device_offline_grant(device_id, input.grant_id, signing_key, Utc::now())
+        .await
+        .map(Json)
         .map_err(device_write_error)
 }
 
@@ -3477,6 +3528,38 @@ async fn create_solar_sale(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+#[derive(serde::Deserialize)]
+struct SolarSalesQuery {
+    limit: Option<u32>,
+}
+
+async fn list_solar_sales(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SolarSalesQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_auth(&headers)?;
+    central_store(&state)?
+        .list_solar_sales(query.limit.unwrap_or(50).clamp(1, 100))
+        .await
+        .map(Json)
+        .map_err(storage_error)
+}
+
+async fn get_solar_sale_document_data(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(sale_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    central_store(&state)?
+        .solar_sale_document_data(sale_id)
+        .await
+        .map_err(storage_error)?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("SOLAR_SALE_NOT_FOUND", "solar sale not found"))
+}
+
 async fn create_solar_quote(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4418,6 +4501,21 @@ mod tests {
         let service_account_id = Uuid::new_v4();
         let meter_id = Uuid::new_v4();
         let reading_id = Uuid::new_v4();
+        let solar_sale_id = Uuid::new_v4();
+        for role in [
+            "ADMIN",
+            "BILLING_AGENT",
+            "CASHIER",
+            "SUPERVISOR",
+            "AUDITOR_READONLY",
+        ] {
+            assert!(role_allows_request(&Method::GET, "/v1/solar/sales", role));
+            assert!(role_allows_request(
+                &Method::GET,
+                &format!("/v1/solar/sales/{solar_sale_id}/document-data"),
+                role
+            ));
+        }
         assert!(role_allows_request(
             &Method::POST,
             &format!("/v1/customers/{customer_id}/service-accounts"),
@@ -4488,6 +4586,44 @@ mod tests {
             "/v1/auth/login",
             "ADMIN"
         ));
+    }
+
+    #[test]
+    fn every_windows_business_read_route_is_available_to_all_reader_roles() {
+        let id = "3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0";
+        let paths = [
+            "/v1/customers".to_owned(),
+            format!("/v1/customers/{id}"),
+            format!("/v1/customers/{id}/statement"),
+            format!("/v1/customers/{id}/service-accounts"),
+            format!("/v1/service-accounts/{id}"),
+            format!("/v1/service-accounts/{id}/meters"),
+            format!("/v1/meters/{id}/readings"),
+            "/v1/invoices".to_owned(),
+            format!("/v1/invoices/{id}"),
+            format!("/v1/invoices/{id}/document-data"),
+            "/v1/payments".to_owned(),
+            format!("/v1/payments/{id}/document-data"),
+            format!("/v1/receivables/{id}"),
+            format!("/v1/installment-plans/{id}"),
+            "/v1/solar/sales".to_owned(),
+            format!("/v1/solar/sales/{id}/document-data"),
+            "/v1/catalog/products".to_owned(),
+        ];
+        for role in [
+            "ADMIN",
+            "BILLING_AGENT",
+            "CASHIER",
+            "SUPERVISOR",
+            "AUDITOR_READONLY",
+        ] {
+            for path in &paths {
+                assert!(
+                    role_allows_request(&Method::GET, path, role),
+                    "{role} cannot GET {path}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -894,7 +894,45 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         '200': { description: Honest local/central synchronization status }
+  /v1/devices/{id}/offline-grant/renew:
+    post:
+      operationId: renewDeviceOfflineGrant
+      summary: Renew the signed offline grant using the enrolled device sync token
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grant_id]
+              additionalProperties: false
+              properties:
+                grant_id: { type: string, format: uuid }
+      responses:
+        '200': { description: Existing authorization remains valid or is renewed and re-signed for seven days }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
   /v1/solar/sales:
+    get:
+      operationId: listSolarSales
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Solar sales and linked receivables read from central PostgreSQL
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+        '401': { $ref: '#/components/responses/Problem' }
     post:
       operationId: createSolarSale
       security: [{ bearerAuth: [] }]
@@ -903,6 +941,19 @@ paths:
       responses:
         '201': { description: One sale and one receivable }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/solar/sales/{id}/document-data:
+    get:
+      operationId: getSolarSaleDocumentData
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200':
+          description: Structured central data for local PDF rendering; no document file is stored server-side
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '404': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
   /v1/solar/quotes:
     post:
       operationId: createSolarQuote

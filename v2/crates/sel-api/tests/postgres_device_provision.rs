@@ -7,6 +7,7 @@ use http_body_util::BodyExt;
 use sel_api::{router, AppState};
 use sel_contracts::offline_grant_canonical_bytes;
 use sel_storage::{migrate_postgres, CentralStore};
+use sel_sync::payload_digest;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -201,6 +202,125 @@ async fn device_provisioning_is_atomic_signed_scoped_and_sync_token_is_revocable
         .await
         .unwrap();
     assert_eq!(sync.status(), StatusCode::OK);
+
+    sqlx::query("UPDATE offline_grants SET expires_at = now() - interval '1 second' WHERE id = $1")
+        .bind(grant_id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let renewed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/devices/{device_id}/offline-grant/renew"))
+                .header("authorization", format!("Bearer {sync_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"grant_id":grant_id}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(renewed.status(), StatusCode::OK);
+    let renewed = json_body(renewed).await;
+    assert_eq!(renewed["grant_id"], grant_id.to_string());
+    assert_eq!(renewed["device_id"], device_id.to_string());
+    assert_eq!(renewed["renewed"], true);
+    let renewed_issued_at =
+        chrono::DateTime::parse_from_rfc3339(renewed["issued_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+    let renewed_expires_at =
+        chrono::DateTime::parse_from_rfc3339(renewed["expires_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+    assert!(renewed_expires_at > chrono::Utc::now() + chrono::Duration::days(6));
+    let renewed_canonical = offline_grant_canonical_bytes(
+        grant_id,
+        operator_id,
+        device_id,
+        &request_body["scopes"],
+        &request_body["limits"],
+        renewed_issued_at,
+        renewed_expires_at,
+    )
+    .unwrap();
+    let renewed_signature = Signature::from_slice(
+        &BASE64
+            .decode(renewed["signature"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    verifying_key
+        .verify(&renewed_canonical, &renewed_signature)
+        .expect("renewed grant signature verifies");
+    let renewal_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM offline_grant_renewals WHERE grant_id = $1")
+            .bind(grant_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(renewal_count, 1);
+
+    let no_op_renewal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/devices/{device_id}/offline-grant/renew"))
+                .header("authorization", format!("Bearer {sync_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"grant_id":grant_id}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_op_renewal.status(), StatusCode::OK);
+    let no_op_renewal = json_body(no_op_renewal).await;
+    assert_eq!(no_op_renewal["renewed"], false);
+    assert_eq!(no_op_renewal["expires_at"], renewed["expires_at"]);
+
+    let pending_payload = json!({
+        "customer_code": format!("RENEWED-{}", Uuid::new_v4()),
+        "legal_name": "Offline customer retained across grant renewal",
+        "customer_category": "RESIDENTIAL"
+    });
+    let pending_event = json!({
+        "protocol_version": 1,
+        "event_id": Uuid::new_v4(),
+        "device_id": device_id,
+        "organization_id": organization_id,
+        "actor_id": operator_id,
+        "command_type": "CUSTOMER_CREATED",
+        "aggregate_id": Uuid::new_v4(),
+        "aggregate_expected_version": 0,
+        "occurred_at": issued_at + chrono::Duration::minutes(1),
+        "offline_grant_id": grant_id,
+        "payload": pending_payload,
+        "payload_sha256": payload_digest(&pending_payload),
+        "client_schema_version": 1
+    });
+    let accepted_after_renewal = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/sync/push")
+                .header("authorization", format!("Bearer {sync_token}"))
+                .header("idempotency-key", "offline-event-after-grant-renewal")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"device_id":device_id,"events":[pending_event]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted_after_renewal.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(accepted_after_renewal).await["results"][0]["status"],
+        "ACCEPTED"
+    );
 
     let mismatched = app
         .clone()

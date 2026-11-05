@@ -1,12 +1,13 @@
-# SEL V2 Backend
+# SEL V2 — application Windows connectée et backend
 
-Backend Rust autonome et sans interface graphique pour la prochaine architecture SEL.
+L’application Windows SEL V2 est un client du service central. Toute ouverture
+et toute opération métier nécessitent une connexion au serveur SEL et une
+session utilisateur valide. Elle ne fournit aucun mode métier hors connexion.
 
-## Exécution locale
+## Développement du service central
 
 ```text
 cargo run -p sel-api
-cargo run -p sel-local
 ```
 
 Le service central écoute sur `127.0.0.1:8080` par défaut. `SEL_API_BIND` et
@@ -17,8 +18,27 @@ stricte : `SEL_API_AUTH_TOKEN` doit être injecté hors Git et chaque appel `/v1
 doit présenter ce jeton. Les tests en mémoire utilisent uniquement le garde
 historique de développement et ne doivent pas être exposés.
 
-Le service local reste limité à `127.0.0.1:8090` et expose l'état offline,
-le déclenchement de synchronisation et l'état des ressources de confiance.
+Le client Windows V2 exige une
+session utilisateur auprès de l'API centrale, lit et écrit les données métier
+directement dans PostgreSQL via cette API et verrouille ses écrans métier quand
+le service est indisponible. Il ne démarre pas `sel-local` et ne propose pas
+d'opérations métier hors connexion. Si le serveur répond mais que ses
+référentiels ne sont pas encore configurés, l'administrateur peut se connecter
+pour les initialiser; les parcours commerciaux restent verrouillés. Les jetons de renouvellement sont protégés
+par DPAPI sur Windows; la session peut survivre aux redémarrages, avec une
+expiration absolue après trois jours. Les PDF sont composés sur le poste depuis
+les données structurées renvoyées par l'API; aucun fichier de facture n'est
+transmis au serveur.
+
+Les anciennes sources de l’agent local et de synchronisation sont conservées
+dans le dépôt pour préserver l’historique technique. Elles ne sont plus
+compilées, embarquées, exécutées ni utilisées par les workflows de distribution
+Windows. Les lanceurs Python V1/V2 et leurs scripts de build locaux sont
+neutralisés afin qu’ils ne puissent pas redémarrer ou redistribuer l’ancien
+mode par erreur. Les données métier sont exclusivement lues et écrites sur le serveur.
+Les jetons de session protégés par DPAPI et les clés d’idempotence conservées
+par le client sont des éléments techniques de session et de reprise de requête;
+ils ne constituent ni une base métier locale ni un mode hors connexion.
 
 ## Règles de sécurité
 

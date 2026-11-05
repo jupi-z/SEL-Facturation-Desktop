@@ -245,6 +245,13 @@ def main(argv: list[str] | None = None) -> int:
             logging.exception("Échec du smoke test SEL V2")
             return 1
 
+    print(
+        "Ce lanceur SEL V2 local est retiré. Utilisez le client Windows Tauri, "
+        "qui exige une connexion au serveur SEL.",
+        file=sys.stderr,
+    )
+    return 2
+
     runtime: LocalRuntime | None = None
     try:
         config = load_or_create_config()

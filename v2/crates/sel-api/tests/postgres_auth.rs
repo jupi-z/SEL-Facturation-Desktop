@@ -284,6 +284,17 @@ async fn individual_session_login_rotation_and_revocation_are_enforced() {
         .unwrap();
     assert_eq!(rotated.status(), StatusCode::OK);
     let rotated = json_body(rotated).await;
+    let initial_expiry =
+        chrono::DateTime::parse_from_rfc3339(login["refresh_expires_at"].as_str().unwrap())
+            .unwrap();
+    let rotated_expiry =
+        chrono::DateTime::parse_from_rfc3339(rotated["refresh_expires_at"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(
+        rotated_expiry.timestamp_micros(),
+        initial_expiry.timestamp_micros(),
+        "refresh token rotation must not extend the absolute three-day session lifetime"
+    );
     let second_access = rotated["access_token"].as_str().unwrap().to_owned();
     let old_access = app
         .clone()

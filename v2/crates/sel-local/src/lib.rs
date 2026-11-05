@@ -79,6 +79,8 @@ pub enum SyncWorkerError {
     Server { status: u16, body: String },
     #[error("sync response did not contain one result per event")]
     ResponseCardinality,
+    #[error("sync server returned an invalid offline grant renewal response")]
+    InvalidGrantRenewalResponse,
 }
 
 pub async fn sync_once(
@@ -86,6 +88,12 @@ pub async fn sync_once(
     endpoint: &str,
     bearer_token: &str,
 ) -> Result<SyncRunSummary, SyncWorkerError> {
+    if endpoint.starts_with("https://")
+        && store.actor_id != Uuid::nil()
+        && store.offline_grant_id != Uuid::nil()
+    {
+        renew_offline_grant_once(store, endpoint, bearer_token).await?;
+    }
     let events = store.claim_pending(100).await?;
     let mut summary = SyncRunSummary {
         attempted: events.len(),
@@ -151,6 +159,36 @@ pub async fn sync_once(
     }
     summary.pulled = pull_once(store, endpoint, bearer_token).await?;
     Ok(summary)
+}
+
+async fn renew_offline_grant_once(
+    store: &LocalStore,
+    endpoint: &str,
+    bearer_token: &str,
+) -> Result<(), SyncWorkerError> {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/v1/devices/{}/offline-grant/renew",
+            endpoint.trim_end_matches('/'),
+            store.device_id
+        ))
+        .bearer_auth(bearer_token)
+        .json(&json!({"grant_id":store.offline_grant_id}))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(SyncWorkerError::Server {
+            status: response.status().as_u16(),
+            body: response.text().await.unwrap_or_default(),
+        });
+    }
+    let body: serde_json::Value = response.json().await?;
+    if body["grant_id"].as_str() != Some(&store.offline_grant_id.to_string())
+        || body["expires_at"].as_str().is_none()
+    {
+        return Err(SyncWorkerError::InvalidGrantRenewalResponse);
+    }
+    Ok(())
 }
 
 pub async fn pull_once(

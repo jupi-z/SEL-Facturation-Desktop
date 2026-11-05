@@ -5,9 +5,9 @@ on:
     branches: [main]
     paths:
       - 'v2/windows-app/**'
-      - 'v2/crates/sel-local/**'
-      - 'v2/crates/sel-storage/**'
-      - 'v2/migrations/sqlite/**'
+      - 'v2/crates/sel-api/**'
+      - 'v2/crates/sel-domain/**'
+      - 'v2/openapi/**'
       - 'tests/test_v2_tauri_client.py'
       - '.github/workflows/sel-v2-tauri-windows.yml'
   workflow_dispatch:
@@ -57,18 +57,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: artifacts/phase8-documents-figma/*.png
-
-      - name: Compile the local Rust agent
-        run: cargo build --manifest-path v2/Cargo.toml -p sel-local --release --target x86_64-pc-windows-msvc
-
-      - name: Package the local agent into Tauri resources
-        shell: pwsh
-        run: |
-          $source = Join-Path $PWD 'v2/target/x86_64-pc-windows-msvc/release/sel-local.exe'
-          $destination = Join-Path $PWD 'v2/windows-app/src-tauri/resources/sel-local.exe'
-          if (-not (Test-Path -LiteralPath $source)) { throw 'The Windows sel-local binary was not produced.' }
-          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
-          Copy-Item -LiteralPath $source -Destination $destination -Force
 
       - name: Build the React client
         working-directory: v2/windows-app

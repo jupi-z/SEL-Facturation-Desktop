@@ -1,4 +1,5 @@
 $ErrorActionPreference='Stop'
+throw 'Le build V1 local est retiré. Utilisez le client Windows SEL V2 connecté et son workflow Tauri dédié.'
 Set-Location $PSScriptRoot
 py -3.12 -m venv .venv
 if ($LASTEXITCODE -ne 0) { throw 'Python 3.12 est requis pour compiler sur Windows.' }

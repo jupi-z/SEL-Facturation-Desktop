@@ -78,6 +78,28 @@ async fn meter_readings_are_persisted_scoped_and_corrected_append_only_over_http
     let account: ServiceAccount = serde_json::from_value(response_json(account_response).await)
         .expect("service account response");
 
+    let meters_before_installation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/service-accounts/{}/meters", account.id))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        meters_before_installation.status(),
+        axum::http::StatusCode::OK
+    );
+    assert_eq!(
+        response_json(meters_before_installation).await,
+        json!([]),
+        "service accounts must be usable before a physical meter is installed"
+    );
+
     let meter_response = app
         .clone()
         .oneshot(
