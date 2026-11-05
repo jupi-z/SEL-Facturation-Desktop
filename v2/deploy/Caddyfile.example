@@ -1,9 +1,26 @@
-{
-  auto_https off
+sel.shuleops.com {
+  encode zstd gzip
+  reverse_proxy sel-api:8080
 }
 
-sel.example.invalid {
-  tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
+update.sel.shuleops.com {
   encode gzip
-  reverse_proxy sel-api:8080
+
+  @published_assets path /updates/* /releases/* /resources/*
+  handle @published_assets {
+    @read_only method GET HEAD
+    handle @read_only {
+      @channel_metadata path /updates/latest.json /updates/latest.sig.json
+      header @channel_metadata Cache-Control "no-cache, no-store, must-revalidate"
+      @immutable_assets path /releases/* /resources/*
+      header @immutable_assets Cache-Control "public, max-age=31536000, immutable"
+      root * /srv/sel-updates
+      file_server {
+        hide .*
+      }
+    }
+    respond 405
+  }
+
+  respond 404
 }

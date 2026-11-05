@@ -28,5 +28,11 @@ jobs:
           SEL_ORGANIZATION_ID: 00000000-0000-4000-8000-000000000001
           SEL_ORGANIZATION_NAME: SEL%20Validation
         run: docker compose -f v2/deploy/compose.production.example.yml config --quiet
+      - name: Validate Caddy API and update-host routing
+        run: >-
+          docker run --rm
+          -v "$GITHUB_WORKSPACE/v2/deploy/Caddyfile.example:/etc/caddy/Caddyfile:ro"
+          caddy:2.8-alpine
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Build central API image without secrets
         run: docker build --file v2/deploy/Dockerfile --tag sel-v2-api:validation .

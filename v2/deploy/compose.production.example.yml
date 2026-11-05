@@ -50,14 +50,16 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./certs:/etc/caddy/certs:ro
+      - ./updates:/srv/sel-updates:ro
       - caddy-data:/data
       - caddy-config:/config
-    networks: [sel-v2-private]
+    networks: [sel-v2-private, sel-v2-edge]
 
 networks:
   sel-v2-private:
     internal: true
+  sel-v2-edge:
+    driver: bridge
 
 volumes:
   sel-v2-postgres:

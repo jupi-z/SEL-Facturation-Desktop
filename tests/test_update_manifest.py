@@ -4,9 +4,14 @@ from safeupdate_crypto import ManifestVerificationError, verify_signed_manifest
 from pathlib import Path
 
 from version import APP_VERSION
+from app import DEFAULT_UPDATE_MANIFEST_URL
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_safeupdate_default_channel_uses_sel_updates_subdomain():
+    assert DEFAULT_UPDATE_MANIFEST_URL == "https://update.sel.shuleops.com/updates/latest.json"
 
 
 def test_legacy_public_manifest_is_not_trusted_by_safeupdate_v1():
