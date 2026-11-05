@@ -935,3 +935,42 @@ Cet addendum remplace les lignes précédentes qui indiquaient qu’aucun déplo
 | Recette commerciale complète | BLOCKED_EXTERNAL | Tarifs/référentiels de production, autorisations hors ligne, synchronisation multi-postes réelle, impression sur périphérique SEL et installation V2 sur poste représentatif restent à vérifier. La Release est un candidat de recette, pas une livraison commerciale. |
 
 **Verdict actualisé : `GO_CANDIDATE`, pas `GO_PRODUCTION`.** L’API est déployée et joignable; le candidat Windows est disponible. Les opérations hors ligne et la recette commerciale complète ne sont pas démontrées, et aucun manifeste de mise à jour V2 n’est activé.
+
+### Recontrôle de fonctionnement des opérations essentielles (5 novembre 2026)
+
+Ce contrôle a séparé les vérifications de production en lecture seule des tests exécutés sur données synthétiques. Aucun client, facture, paiement, tarif ou appareil n’a été créé dans la base SEL pendant cette vérification.
+
+| Critère | Statut | Preuve / limite |
+|---|---|---|
+| Santé de l’API production | PASS — lecture seule | `GET https://sel.shuleops.com/health/ready` renvoie HTTP 200; `GET /v1/customers?limit=1` sans session renvoie HTTP 401. |
+| Connexion et schéma PostgreSQL production | PASS — lecture seule | Connexion au conteneur PostgreSQL sous `default_transaction_read_only=on`; base `sel_v2`, 15 migrations SQLx appliquées, tables métier attendues présentes. |
+| Données et référentiels production | BLOCKED — poste non prêt | Compteurs lus : 0 client, 0 facture, 0 paiement, 0 vente, 1 utilisateur, 0 appareil, 0 grant hors ligne, 0 tarif, 0 profil fiscal, 0 produit, 0 taux de change et 0 compte de service. Aucun calcul de facture commerciale réelle ne peut être validé sans référentiels approuvés. |
+| EXE Windows installé sur ce poste | BLOCKED — activation absente | `sel-v2-windows.exe` est en version 0.4.0 et `sel-local.exe` est présent; le fichier `%LOCALAPPDATA%\\cd.sel.facturation.desktop\\device.json` est absent. Tauri ne démarre donc pas l’agent local et les routes métier ne peuvent pas aboutir. |
+| Format Rust | PASS local | `cargo fmt --all -- --check`. |
+| Analyse statique Rust | PASS local | `cargo clippy --workspace --all-targets -- -D warnings`. |
+| Tests Rust disponibles localement | PASS local, PostgreSQL ignoré | `cargo test --workspace` termine avec succès; les tests annotés `ignored` requièrent `TEST_DATABASE_URL`, absent localement. |
+| Tests PostgreSQL d’intégration | PASS CI sur commit de référence | Le workflow backend du commit `d35eb8c809defad400f072025f0555de2d8573ad` exécute `cargo test --workspace -- --ignored` avec PostgreSQL 16.4 isolé : [run 41974474070](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41974474070), succès. Les données de ce service CI sont synthétiques. |
+| Tests du client Windows | PASS local | `py -3.12 -m pytest -q tests/test_v2_tauri_client.py` : 50 tests réussis. |
+| Compilation frontend | PASS local | `npm run build` dans `v2/windows-app`; Vite et TypeScript réussissent. |
+| Workflows Windows | PASS CI sur commit de référence | Build Tauri : [run 41974474099](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41974474099); candidat Windows et smoke d’installation : [run 41974474082](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/41974474082), succès. Ces tests utilisent un profil synthétique, pas une installation SEL activée. |
+
+**Verdict d’exploitation après ce recontrôle : `NO_GO` pour l’utilisation métier de l’EXE actuellement installé.** Le backend répond et les tests isolés du moteur passent, mais le poste réel n’est pas enrôlé et la base de production n’a aucun référentiel tarifaire. L’activation sécurisée, le provisionnement des référentiels approuvés puis une recette métier sur client de test restent obligatoires. Aucun EXE fonctionnel nouveau n’est déclaré ni publié par ce contrôle.
+
+### Correctif d’accès initial et vérification production (5 novembre 2026)
+
+Cette intervention corrige le premier parcours de connexion centrale sans configuration locale, et prépare la création d’un compte employé à mot de passe temporaire. Elle ne prétend pas rendre les opérations commerciales fonctionnelles tant que l’enrôlement du poste et les référentiels ne sont pas activés.
+
+| Critère | Statut | Preuve / limite |
+|---|---|---|
+| Connexion centrale avant enrôlement local | PASS — code et test natif | Le lanceur utilise `https://sel.shuleops.com` par défaut, accepte un override HTTPS et refuse HTTP. Le test Tauri `production_api_url_is_available_before_device_enrollment` passe. |
+| Mot de passe temporaire et première connexion | PARTIAL — code ajouté | Migration additive `0016_password_change_required.sql`, route `/v1/auth/change-password`, refus des routes métier tant que le mot de passe doit changer, invalidation des sessions et option activée par défaut dans l’administration. Un test PostgreSQL HTTP complet est ajouté, mais exige `TEST_DATABASE_URL` et n’a pas été exécuté localement. La migration n’a pas été appliquée en production et le compte Clarisse n’a pas été créé. |
+| Tests Rust | PASS local (tests non ignorés) | `cargo fmt --all -- --check` et `cargo test --workspace` dans `v2/` passent. Les tests PostgreSQL sont explicitement ignorés localement en l’absence de `TEST_DATABASE_URL`; ils ne sont pas déclarés PASS local. |
+| Tests natifs Windows | PASS local | `cargo test --manifest-path src-tauri/Cargo.toml --lib` : 3 tests réussis; `cargo test --manifest-path src-tauri/Cargo.toml --no-run` compile les exécutables de test. Aucun installateur n’a été construit ni installé sur le poste dans cette étape. |
+| Analyse statique Rust | PASS local | `cargo clippy --workspace --all-targets -- -D warnings` dans `v2/` termine sans avertissement. |
+| Client et interface | PASS local, avertissement de taille | `py -3.12 -m pytest -q tests/test_v2_tauri_client.py` : 51 tests réussis. `npm run build` réussit; Vite signale des chunks PDF/font dépassant 500 kB. |
+| Disponibilité actuelle production | PASS réseau / FAIL configuration métier | Lecture HTTP du 5 novembre : `/health/live` = 200, `/health/ready` = 200 avec `configured:false`, et `update.sel.shuleops.com/updates/latest.json` = 404. L’API et PostgreSQL tournent sur l’hôte SSH `kit-service`, mais aucun tarif actif n’est chargé. Ces réponses ne démontrent pas une facturation possible. |
+| Base de production modifiée | PASS — aucune écriture | Aucun compte, client, tarif, facture ou paiement n’a été créé; migration `0016` non déployée. |
+| Enrôlement et travail hors ligne | BLOCKED — P0 | Sans `device.json`, l’agent SQLite ne démarre pas. L’interface n’a pas encore de parcours d’enrôlement/provisionnement, et le serveur ne dispose pas d’émetteur de signature Ed25519 permettant de délivrer un grant au poste. Le worker local reçoit actuellement un jeton central d’accès limité dans le temps, sans cycle de rafraîchissement persistant pour assurer la reprise automatique à long terme. |
+| Mise en service commerciale | NO_GO | Les référentiels (tarifs, profils fiscaux, produits et taux approuvés) ne sont pas actifs; l’émission de factures ne peut donc pas être validée. Aucun compte Clarisse ni nouvel EXE de production n’est livré par cette étape. |
+
+**Décision : `NO_GO` pour une livraison production.** Les correctifs de démarrage et de première connexion sont prêts dans la branche, mais une simple compilation ne résout ni le poste non enrôlé, ni la signature des autorisations hors ligne, ni l’absence de tarifs. Ne pas déployer la migration ou présenter un nouvel EXE comme exploitable avant validation PostgreSQL intégrée, parcours d’enrôlement complet, référentiels SEL approuvés et recette Windows réelle.

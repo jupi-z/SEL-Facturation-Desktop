@@ -9,7 +9,8 @@ impl CentralStore {
     pub async fn admin_list_users(&self) -> Result<Vec<Value>, sqlx::Error> {
         let rows = sqlx::query(
             "SELECT id, identity_ref, role, status, created_at,
-                    (password_hash IS NOT NULL) AS credential_configured
+                    (password_hash IS NOT NULL) AS credential_configured,
+                    password_change_required
              FROM users WHERE organization_id = $1 ORDER BY identity_ref, id",
         )
         .bind(self.organization_id)
@@ -24,6 +25,7 @@ impl CentralStore {
                     "status": row.try_get::<String, _>("status")?,
                     "created_at": row.try_get::<DateTime<Utc>, _>("created_at")?,
                     "credential_configured": row.try_get::<bool, _>("credential_configured")?
+                    ,"require_password_change": row.try_get::<bool, _>("password_change_required")?
                 }))
             })
             .collect()
@@ -64,6 +66,7 @@ impl CentralStore {
         identity_ref: &str,
         role: &str,
         password: &str,
+        require_password_change: bool,
     ) -> Result<Value, E> {
         let identity_ref = identity_ref.trim();
         if identity_ref.is_empty()
@@ -95,14 +98,16 @@ impl CentralStore {
         }
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, organization_id, role, status, identity_ref, password_hash)
-             VALUES ($1, $2, $3, 'ACTIVE', $4, $5)",
+            "INSERT INTO users (id, organization_id, role, status, identity_ref, password_hash,
+                                password_change_required)
+             VALUES ($1, $2, $3, 'ACTIVE', $4, $5, $6)",
         )
         .bind(user_id)
         .bind(self.organization_id)
         .bind(role)
         .bind(identity_ref)
         .bind(password_hash)
+        .bind(require_password_change)
         .execute(&mut *tx)
         .await?;
         audit(
@@ -116,7 +121,8 @@ impl CentralStore {
         tx.commit().await?;
         Ok(
             json!({"id": user_id, "identity_ref": identity_ref, "role": role,
-                  "status": "ACTIVE", "credential_configured": true}),
+                  "status": "ACTIVE", "credential_configured": true,
+                  "require_password_change": require_password_change}),
         )
     }
 

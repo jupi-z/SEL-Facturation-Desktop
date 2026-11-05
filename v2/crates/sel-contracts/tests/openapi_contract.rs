@@ -162,6 +162,7 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .any(|path| path.to_ascii_lowercase().contains("pdf")));
 
     for (path, method) in [
+        ("/v1/auth/change-password", "post"),
         ("/v1/admin/users", "get"),
         ("/v1/admin/users", "post"),
         ("/v1/admin/users/{id}", "patch"),

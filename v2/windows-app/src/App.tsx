@@ -108,7 +108,13 @@ function customerLabel(customerId: unknown, customers: Row[]): string {
 }
 
 function humanError(error: unknown): string {
-  return error instanceof Error ? error.message : "L’opération n’a pas abouti.";
+  if (typeof error === "string" && error.trim()) return error;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return "L’opération n’a pas abouti. Consultez le détail de l’état du poste.";
 }
 
 function Button({ children, primary = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
@@ -1117,7 +1123,7 @@ function AdminConsole() {
       const result = await centralLogin(identityRef, password);
       authenticated.current = true;
       setSession({ authenticated: true, ...result });
-      setMessage("Session administrateur ouverte. Les jetons restent conservés en mémoire native.");
+      setMessage("Session centrale ouverte. Les jetons restent conservés en mémoire native.");
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
     finally { setLoading(false); }
   }
@@ -1136,6 +1142,7 @@ function AdminConsole() {
         identity_ref: String(values.get("identity_ref") ?? "").trim(),
         role: String(values.get("role") ?? "BILLING_AGENT"),
         password: String(values.get("password") ?? ""),
+        require_password_change: values.get("require_password_change") === "on",
       });
       form.reset(); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
@@ -1193,6 +1200,37 @@ function AdminConsole() {
     } catch (reason) { form.reset(); setMessage(humanError(reason)); setError(true); }
   }
 
+  async function changeTemporaryPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const currentPassword = String(values.get("current_password") ?? "");
+    const newPassword = String(values.get("new_password") ?? "");
+    const repeatedPassword = String(values.get("repeat_password") ?? "");
+    if (newPassword !== repeatedPassword) {
+      setMessage("Les deux nouveaux mots de passe ne correspondent pas.");
+      setError(true);
+      return;
+    }
+    setLoading(true);
+    try {
+      await centralAdminRequest("/v1/auth/change-password", "POST", {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      setSession({ authenticated: false });
+      authenticated.current = false;
+      form.reset();
+      setMessage("Mot de passe changé. Connectez-vous à nouveau avec votre nouveau mot de passe.");
+      setError(false);
+    } catch (reason) {
+      setMessage(humanError(reason));
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function createCatalogDraft(kind: AdminCatalog, values: Record<string, string>) {
     setCatalogBusy(true);
     try {
@@ -1239,6 +1277,19 @@ function AdminConsole() {
     </Panel>
   </>;
 
+  if (session.require_password_change) return <>
+    {message && <div className={error ? "notice error" : "notice"} role={error ? "alert" : "status"}>{message}</div>}
+    <Panel title="Changez votre mot de passe temporaire">
+      <p className="muted">Avant toute opération, remplacez le mot de passe temporaire par un mot de passe personnel d’au moins 8 caractères.</p>
+      <form className="form-grid admin-login" onSubmit={(event) => void changeTemporaryPassword(event)}>
+        <label>Mot de passe temporaire<input name="current_password" type="password" autoComplete="current-password" minLength={8} required /></label>
+        <label>Nouveau mot de passe<input name="new_password" type="password" autoComplete="new-password" minLength={8} required /></label>
+        <label>Confirmer le nouveau mot de passe<input name="repeat_password" type="password" autoComplete="new-password" minLength={8} required /></label>
+        <div className="form-actions span-two"><Button primary type="submit" disabled={loading}>{loading ? "Enregistrement…" : "Changer le mot de passe"}</Button></div>
+      </form>
+    </Panel>
+  </>;
+
   if (session.role !== "ADMIN") return <Panel title="Accès administrateur requis">
     <p className="muted">La session {text(session.role)} est authentifiée, mais ne possède pas le rôle ADMIN nécessaire à ces fonctions.</p>
     <div className="form-actions"><Button onClick={() => void logout()}>Fermer la session</Button></div>
@@ -1254,6 +1305,7 @@ function AdminConsole() {
         <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required /></label>
         <label>Rôle<select name="role" defaultValue="BILLING_AGENT"><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
         <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required /></label>
+        <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked /> Exiger le changement du mot de passe à la première connexion</span></label>
         <div className="form-actions"><Button primary type="submit">Créer l’utilisateur</Button></div>
       </form>
       <Table headers={["Identifiant", "Rôle", "État", "Actions"]} empty="Aucun utilisateur retourné par le serveur." data={users.map((user) => {

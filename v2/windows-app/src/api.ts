@@ -30,6 +30,7 @@ export type CentralSessionInfo = {
   user_id?: string;
   organization_id?: string;
   role?: string;
+  require_password_change?: boolean;
 };
 
 export function centralLogin(identityRef: string, password: string): Promise<Omit<CentralSessionInfo, "authenticated">> {

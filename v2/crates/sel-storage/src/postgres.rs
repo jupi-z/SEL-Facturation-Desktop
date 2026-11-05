@@ -41,6 +41,7 @@ pub struct AuthSessionPrincipal {
     pub user_id: Uuid,
     pub organization_id: Uuid,
     pub role: String,
+    pub password_change_required: bool,
 }
 
 #[derive(Debug, Error)]
@@ -65,6 +66,8 @@ pub enum AuthError {
     OrganizationNotFound,
     #[error("actor is not an active administrator in this organization")]
     ActorNotAuthorized,
+    #[error("the new password must differ from the current password")]
+    PasswordUnchanged,
 }
 
 #[derive(Debug, Error)]
@@ -599,7 +602,7 @@ impl CentralStore {
             return Err(AuthError::ActorNotAuthorized);
         }
         let updated = sqlx::query(
-            "UPDATE users SET password_hash = $1
+            "UPDATE users SET password_hash = $1, password_change_required = TRUE
              WHERE id = $2 AND organization_id = $3 AND status = 'ACTIVE'",
         )
         .bind(password_hash)
@@ -633,13 +636,76 @@ impl CentralStore {
         Ok(())
     }
 
+    pub async fn change_own_password(
+        &self,
+        user_id: Uuid,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<(), AuthError> {
+        if new_password.chars().count() < MIN_PASSWORD_LENGTH {
+            return Err(AuthError::PasswordHash(
+                "password must contain at least 8 characters".into(),
+            ));
+        }
+        if current_password == new_password {
+            return Err(AuthError::PasswordUnchanged);
+        }
+        let new_hash = Self::hash_user_password(new_password)?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT password_hash FROM users
+             WHERE id = $1 AND organization_id = $2 AND status = 'ACTIVE'
+             FOR UPDATE",
+        )
+        .bind(user_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AuthError::UserNotFound)?;
+        let stored_hash: Option<String> = row.try_get("password_hash")?;
+        let stored_hash = stored_hash.ok_or(AuthError::InvalidCredentials)?;
+        let parsed = PasswordHash::new(&stored_hash)
+            .map_err(|error| AuthError::PasswordHash(error.to_string()))?;
+        Argon2::default()
+            .verify_password(current_password.as_bytes(), &parsed)
+            .map_err(|_| AuthError::InvalidCredentials)?;
+        sqlx::query(
+            "UPDATE users SET password_hash = $1, password_change_required = FALSE
+             WHERE id = $2 AND organization_id = $3",
+        )
+        .bind(new_hash)
+        .bind(user_id)
+        .bind(self.organization_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE auth_sessions SET revoked_at = now()
+             WHERE organization_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(self.organization_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO audit_events
+             (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+             VALUES ($1, $2, $2, 'USER_PASSWORD_CHANGED', now(), '{}'::jsonb)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn login_user(
         &self,
         identity_ref: &str,
         password: &str,
     ) -> Result<serde_json::Value, AuthError> {
         let row = sqlx::query(
-            "SELECT id, role, password_hash
+            "SELECT id, role, password_hash, password_change_required
              FROM users
              WHERE organization_id = $1 AND lower(btrim(identity_ref)) = lower(btrim($2))
                AND status = 'ACTIVE'",
@@ -651,6 +717,7 @@ impl CentralStore {
         .ok_or(AuthError::InvalidCredentials)?;
         let user_id: Uuid = row.try_get("id")?;
         let role: String = row.try_get("role")?;
+        let password_change_required: bool = row.try_get("password_change_required")?;
         let stored_hash: Option<String> = row.try_get("password_hash")?;
         let Some(stored_hash) = stored_hash else {
             return Err(AuthError::InvalidCredentials);
@@ -688,6 +755,7 @@ impl CentralStore {
             "user_id": user_id,
             "organization_id": self.organization_id,
             "role": role,
+            "require_password_change": password_change_required,
             "access_expires_at": access_expires_at,
             "refresh_expires_at": refresh_expires_at
         }))
@@ -699,7 +767,7 @@ impl CentralStore {
     ) -> Result<serde_json::Value, AuthError> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
-            "SELECT s.id, s.user_id, u.role, s.refresh_expires_at
+            "SELECT s.id, s.user_id, u.role, u.password_change_required, s.refresh_expires_at
              FROM auth_sessions s
              JOIN users u ON u.id = s.user_id
              WHERE s.organization_id = $1 AND s.refresh_token_hash = $2
@@ -718,6 +786,7 @@ impl CentralStore {
         let session_id: Uuid = row.try_get("id")?;
         let user_id: Uuid = row.try_get("user_id")?;
         let role: String = row.try_get("role")?;
+        let password_change_required: bool = row.try_get("password_change_required")?;
         let access_token = Uuid::new_v4().to_string();
         let next_refresh_token = Uuid::new_v4().to_string();
         let access_expires_at = Utc::now() + Duration::minutes(15);
@@ -741,6 +810,7 @@ impl CentralStore {
             "user_id": user_id,
             "organization_id": self.organization_id,
             "role": role,
+            "require_password_change": password_change_required,
             "access_expires_at": access_expires_at,
             "refresh_expires_at": refresh_expires_at
         }))
@@ -763,7 +833,7 @@ impl CentralStore {
         access_token: &str,
     ) -> Result<AuthSessionPrincipal, AuthError> {
         let row = sqlx::query(
-            "SELECT s.user_id, s.organization_id, u.role
+            "SELECT s.user_id, s.organization_id, u.role, u.password_change_required
              FROM auth_sessions s
              JOIN users u ON u.id = s.user_id
              WHERE s.organization_id = $1 AND s.access_token_hash = $2
@@ -779,6 +849,7 @@ impl CentralStore {
             user_id: row.try_get("user_id")?,
             organization_id: row.try_get("organization_id")?,
             role: row.try_get("role")?,
+            password_change_required: row.try_get("password_change_required")?,
         })
     }
 

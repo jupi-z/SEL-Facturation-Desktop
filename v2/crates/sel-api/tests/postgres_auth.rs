@@ -326,6 +326,179 @@ async fn individual_session_login_rotation_and_revocation_are_enforced() {
 
 #[tokio::test]
 #[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn temporary_user_password_must_be_changed_before_business_access() {
+    let database_url = std::env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
+    std::env::remove_var("SEL_ALLOW_LEGACY_TOKEN");
+    let organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .expect("connect central store");
+    migrate_postgres(&store.pool).await.expect("run migrations");
+    store
+        .ensure_organization("SEL first-login fixture")
+        .await
+        .expect("create fixture organization");
+    let admin_id = store
+        .bootstrap_initial_admin("first-login-admin", "first login admin password")
+        .await
+        .expect("create fixture administrator");
+    let app = router(AppState::with_production_central_store(store.clone()));
+
+    let admin_login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "identity_ref": "first-login-admin",
+                        "password": "first login admin password"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin_login.status(), StatusCode::OK);
+    let admin_token = json_body(admin_login).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/admin/users")
+                .header("authorization", format!("Bearer {admin_token}"))
+                .header("content-type", "application/json")
+                .header("idempotency-key", "first-login-user")
+                .body(Body::from(
+                    json!({
+                        "identity_ref": "clarisse.bomatsa@selsasu.com",
+                        "role": "BILLING_AGENT",
+                        "password": "temporary fixture password",
+                        "require_password_change": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+
+    let temporary_login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "identity_ref": "clarisse.bomatsa@selsasu.com",
+                        "password": "temporary fixture password"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(temporary_login.status(), StatusCode::OK);
+    let temporary_session = json_body(temporary_login).await;
+    assert_eq!(temporary_session["require_password_change"], true);
+    let temporary_token = temporary_session["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let blocked = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/customers")
+                .header("authorization", format!("Bearer {temporary_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+
+    let changed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/change-password")
+                .header("authorization", format!("Bearer {temporary_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "current_password": "temporary fixture password",
+                        "new_password": "permanent fixture password"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), StatusCode::NO_CONTENT);
+
+    let new_login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "identity_ref": "clarisse.bomatsa@selsasu.com",
+                        "password": "permanent fixture password"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(new_login.status(), StatusCode::OK);
+    let new_session = json_body(new_login).await;
+    assert_eq!(new_session["require_password_change"], false);
+    let new_token = new_session["access_token"].as_str().unwrap();
+    let allowed = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/customers")
+                .header("authorization", format!("Bearer {new_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
+
+    let created_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE organization_id = $1 AND identity_ref = $2")
+            .bind(organization_id)
+            .bind("clarisse.bomatsa@selsasu.com")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_ne!(created_id, admin_id);
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
 async fn role_and_organization_boundaries_reject_write_escalation_and_idor() {
     let database_url = std::env::var("TEST_DATABASE_URL")
         .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");

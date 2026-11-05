@@ -58,10 +58,18 @@ pub struct SetUserPasswordRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
+pub struct ChangeOwnPasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
 pub struct CreateAdminUserRequest {
     pub identity_ref: String,
     pub role: String,
     pub password: String,
+    #[serde(default)]
+    pub require_password_change: bool,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -245,6 +253,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/login", post(auth_login))
         .route("/v1/auth/refresh", post(auth_refresh))
         .route("/v1/auth/logout", post(auth_logout))
+        .route("/v1/auth/change-password", post(auth_change_password))
         .route("/v1/users/:id/password", post(set_user_password))
         .route(
             "/v1/admin/users",
@@ -402,6 +411,18 @@ async fn production_auth_guard(
         .unwrap_or_default();
     if let Some(store) = &state.central {
         if let Ok(principal) = store.authenticate_access_token(presented).await {
+            if principal.password_change_required
+                && !((request.method() == axum::http::Method::POST
+                    && request.uri().path() == "/v1/auth/change-password")
+                    || (request.method() == axum::http::Method::POST
+                        && request.uri().path() == "/v1/auth/logout"))
+            {
+                return ApiError::forbidden(
+                    "PASSWORD_CHANGE_REQUIRED",
+                    "change the temporary password before using business functions",
+                )
+                .into_response();
+            }
             if !role_allows_request(request.method(), request.uri().path(), &principal.role) {
                 return ApiError::forbidden(
                     "PERMISSION_DENIED",
@@ -500,7 +521,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
     }
 
     if *method == Method::POST {
-        if path == "/v1/auth/logout" {
+        if matches!(path, "/v1/auth/logout" | "/v1/auth/change-password") {
             return is_reader;
         }
         if path_matches(path, "/v1/users/:id/password") {
@@ -1250,6 +1271,42 @@ async fn auth_logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn auth_change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ChangeOwnPasswordRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_auth(&headers)?;
+    let Some(Extension(AuthenticatedPrincipal(principal))) = principal else {
+        return Err(ApiError::unauthorized(
+            "SESSION_REQUIRED",
+            "individual session authentication is required",
+        ));
+    };
+    if input.new_password.chars().count() < sel_storage::postgres::MIN_PASSWORD_LENGTH {
+        return Err(ApiError::unprocessable(
+            "PASSWORD_TOO_SHORT",
+            "password must contain at least 8 characters",
+        ));
+    }
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "AUTH_UNAVAILABLE",
+            "password changes require the central PostgreSQL store",
+        ));
+    };
+    store
+        .change_own_password(
+            principal.user_id,
+            &input.current_password,
+            &input.new_password,
+        )
+        .await
+        .map_err(auth_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn set_user_password(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1353,6 +1410,7 @@ async fn admin_create_user(
             &input.identity_ref,
             &input.role,
             &input.password,
+            input.require_password_change,
         )
         .await
         .map(|body| (StatusCode::CREATED, Json(body)))
@@ -3319,6 +3377,10 @@ fn auth_error(error: sel_storage::postgres::AuthError) -> ApiError {
         sel_storage::postgres::AuthError::InvalidCredentials => {
             ApiError::unauthorized("INVALID_CREDENTIALS", "identity_ref or password is invalid")
         }
+        sel_storage::postgres::AuthError::PasswordUnchanged => ApiError::unprocessable(
+            "PASSWORD_UNCHANGED",
+            "the new password must differ from the current password",
+        ),
         sel_storage::postgres::AuthError::InvalidSession => {
             ApiError::unauthorized("INVALID_SESSION", "session is invalid, revoked or expired")
         }

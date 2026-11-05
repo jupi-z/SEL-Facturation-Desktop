@@ -9,6 +9,7 @@ use std::time::Duration;
 use tauri::{Manager, State};
 
 const MAX_LOCAL_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_CENTRAL_API_URL: &str = "https://sel.shuleops.com";
 
 #[derive(Debug, Deserialize)]
 struct DeviceConfig {
@@ -54,6 +55,7 @@ struct CentralSession {
     user_id: String,
     organization_id: String,
     role: String,
+    require_password_change: bool,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +65,8 @@ struct CentralSessionTokens {
     user_id: String,
     organization_id: String,
     role: String,
+    #[serde(default)]
+    require_password_change: bool,
 }
 
 #[derive(Serialize)]
@@ -75,6 +79,14 @@ fn config_path(data_dir: &Path) -> PathBuf {
     std::env::var_os("SEL_V2_DEVICE_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| data_dir.join("device.json"))
+}
+
+fn resolve_central_url(configured: Option<&str>, environment: Option<&str>) -> Result<String, String> {
+    let endpoint = environment.or(configured).unwrap_or(DEFAULT_CENTRAL_API_URL).trim();
+    if !endpoint.starts_with("https://") || endpoint.contains('\r') || endpoint.contains('\n') {
+        return Err("Le serveur SEL doit être configuré en HTTPS.".into());
+    }
+    Ok(endpoint.trim_end_matches('/').to_owned())
 }
 
 fn start_agent(app: &tauri::AppHandle, data_dir: &Path) -> Result<(Option<Arc<LocalAgent>>, Option<String>), String> {
@@ -192,6 +204,9 @@ fn validate_central_admin_request(path: &str, method: &str) -> Result<(), String
         return Err("Cette route centrale n’est pas autorisée depuis le client.".into());
     }
     let parts: Vec<&str> = path.split('/').collect();
+    if path == "/v1/auth/change-password" && method == "POST" {
+        return Ok(());
+    }
     if let ["", "v1", "users", id, "password"] = parts.as_slice() {
         if is_uuid_segment(id) && method == "POST" { return Ok(()); }
         return Err("Méthode ou identifiant non autorisé pour cette route.".into());
@@ -342,13 +357,14 @@ async fn central_login(state: State<'_, DesktopState>, identity_ref: String, pas
     if !(200..300).contains(&status) { return Err(central_error(status, &value)); }
     let tokens: CentralSessionTokens = serde_json::from_value(value)
         .map_err(|_| "Réponse de session centrale invalide.".to_owned())?;
-    let public = json!({"user_id":tokens.user_id,"organization_id":tokens.organization_id,"role":tokens.role});
+    let public = json!({"user_id":tokens.user_id,"organization_id":tokens.organization_id,"role":tokens.role,"require_password_change":tokens.require_password_change});
     *state.central_session.lock().await = Some(CentralSession {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         user_id: tokens.user_id,
         organization_id: tokens.organization_id,
         role: tokens.role,
+        require_password_change: tokens.require_password_change,
     });
     Ok(public)
 }
@@ -357,7 +373,7 @@ async fn central_login(state: State<'_, DesktopState>, identity_ref: String, pas
 async fn central_session_status(state: State<'_, DesktopState>) -> Result<Value, String> {
     let session = state.central_session.lock().await;
     Ok(match session.as_ref() {
-        Some(value) => json!({"authenticated":true,"user_id":value.user_id,"organization_id":value.organization_id,"role":value.role}),
+        Some(value) => json!({"authenticated":true,"user_id":value.user_id,"organization_id":value.organization_id,"role":value.role,"require_password_change":value.require_password_change}),
         None => json!({"authenticated":false}),
     })
 }
@@ -389,7 +405,9 @@ async fn central_admin_request(
     let base = state.central_url.as_deref().ok_or("La connexion centrale n’est pas configurée pour ce poste.")?;
     let session = state.central_session.lock().await.as_ref().cloned()
         .ok_or("Connectez-vous avec votre compte SEL pour accéder à l’administration.")?;
-    if session.role != "ADMIN" { return Err("Cette fonction est réservée au rôle administrateur SEL.".into()); }
+    if session.role != "ADMIN" && !path.starts_with("/v1/auth/") {
+        return Err("Cette fonction est réservée au rôle administrateur SEL.".into());
+    }
     let response = send_central_admin(&state.central_client, base, &path, &method, &session.access_token, body.clone()).await?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         let mut session_guard = state.central_session.lock().await;
@@ -414,6 +432,7 @@ async fn central_admin_request(
                 user_id: tokens.user_id,
                 organization_id: tokens.organization_id,
                 role: tokens.role,
+                require_password_change: tokens.require_password_change,
             };
             let access_token = refreshed_session.access_token.clone();
             *current = refreshed_session;
@@ -421,9 +440,17 @@ async fn central_admin_request(
         };
         drop(session_guard);
         let retry = send_central_admin(&state.central_client, base, &path, &method, &next_token, body).await?;
-        return central_json_response(retry).await;
+        let result = central_json_response(retry).await?;
+        if path == "/v1/auth/change-password" && (200..300).contains(&result.status) {
+            *state.central_session.lock().await = None;
+        }
+        return Ok(result);
     }
-    central_json_response(response).await
+    let result = central_json_response(response).await?;
+    if path == "/v1/auth/change-password" && (200..300).contains(&result.status) {
+        *state.central_session.lock().await = None;
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -465,11 +492,14 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             let (agent, central_url) = start_agent(app.handle(), &data_dir)
                 .map_err(|error| std::io::Error::other(error))?;
+            let environment_url = std::env::var("SEL_V2_API_URL").ok();
+            let central_url = resolve_central_url(central_url.as_deref(), environment_url.as_deref())
+                .map_err(std::io::Error::other)?;
             let central_client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(20))
                 .build()
                 .map_err(std::io::Error::other)?;
-            app.manage(DesktopState { agent, central_url, central_client, central_session: tokio::sync::Mutex::new(None) });
+            app.manage(DesktopState { agent, central_url: Some(central_url), central_client, central_session: tokio::sync::Mutex::new(None) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![local_request, local_status, central_login, central_session_status, central_admin_request, central_logout, open_monarque_site])
@@ -479,11 +509,12 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_central_admin_request;
+    use super::{resolve_central_url, validate_central_admin_request, DEFAULT_CENTRAL_API_URL};
 
     #[test]
     fn central_admin_bridge_accepts_allowlisted_routes() {
         for (path, method) in [
+            ("/v1/auth/change-password", "POST"),
             ("/v1/admin/users", "GET"),
             ("/v1/admin/users", "POST"),
             ("/v1/admin/devices", "GET"),
@@ -500,6 +531,19 @@ mod tests {
         ] {
             assert!(validate_central_admin_request(path, method).is_ok(), "{method} {path}");
         }
+    }
+
+    #[test]
+    fn production_api_url_is_available_before_device_enrollment() {
+        assert_eq!(
+            resolve_central_url(None, None).unwrap(),
+            DEFAULT_CENTRAL_API_URL
+        );
+        assert_eq!(
+            resolve_central_url(Some("https://sel.example/"), None).unwrap(),
+            "https://sel.example"
+        );
+        assert!(resolve_central_url(Some("http://sel.example"), None).is_err());
     }
 
     #[test]

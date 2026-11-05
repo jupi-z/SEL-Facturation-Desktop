@@ -612,6 +612,26 @@ def test_tauri_bridge_fails_closed_and_offloads_local_http() -> None:
     assert "open_monarque_site" in (APP / "src" / "api.ts").read_text(encoding="utf-8")
 
 
+def test_tauri_error_messages_are_preserved_in_ui() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert 'typeof error === "string"' in app
+    assert 'const message = (error as { message?: unknown }).message' in app
+    assert '"L’opération n’a pas abouti. Consultez le détail de l’état du poste."' in app
+
+
+def test_central_admin_can_bootstrap_before_device_enrollment() -> None:
+    bridge = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+    api = (APP / "src" / "api.ts").read_text(encoding="utf-8")
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert 'const DEFAULT_CENTRAL_API_URL: &str = "https://sel.shuleops.com"' in bridge
+    assert "resolve_central_url(None, None).unwrap()" in bridge
+    assert "require_password_change?: boolean" in api
+    assert 'values.get("require_password_change") === "on"' in app
+    assert 'centralAdminRequest("/v1/auth/change-password", "POST"' in app
+
+
 def test_tauri_windows_bundle_creates_sidecar_resource_directory() -> None:
     workflow = (ROOT / ".github" / "workflows" / "sel-v2-tauri-windows.yml").read_text(encoding="utf-8")
 
