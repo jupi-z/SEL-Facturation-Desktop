@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use chrono::{Duration, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use ed25519_dalek::{Signer, SigningKey};
 use rust_decimal::Decimal;
 use sel_contracts::{
@@ -678,8 +678,71 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
 }
 
 async fn health_ready(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let configured = state.tariffs.read().await.revision.is_some();
+    let configured = if let Some(store) = &state.central {
+        match (
+            store.admin_catalog_tariffs().await,
+            store.admin_reference_versions("TAX_PROFILE").await,
+        ) {
+            (Ok(tariffs), Ok(tax_profiles)) => {
+                utility_catalog_is_configured(&tariffs, &tax_profiles, Utc::now().date_naive())
+            }
+            _ => false,
+        }
+    } else {
+        state.tariffs.read().await.revision.is_some()
+    };
     Json(json!({"status":"ready","service":"sel-api","configured":configured}))
+}
+
+fn utility_catalog_is_configured(
+    tariffs: &[serde_json::Value],
+    tax_profiles: &[serde_json::Value],
+    effective_on: NaiveDate,
+) -> bool {
+    fn effective(row: &serde_json::Value, date: NaiveDate) -> bool {
+        let date = date.format("%Y-%m-%d").to_string();
+        let from = row["effective_from"].as_str().unwrap_or_default();
+        let to = row["effective_to"].as_str();
+        from <= date.as_str() && to.is_none_or(|to| to >= date.as_str())
+    }
+
+    fn approved(row: &serde_json::Value, date: NaiveDate) -> bool {
+        row["status"] == "APPROVED"
+            && row["approved_by"].as_str().is_some_and(|id| !id.is_empty())
+            && row["approval_ref"]
+                .as_str()
+                .is_some_and(|reference| !reference.trim().is_empty())
+            && effective(row, date)
+    }
+
+    let required_tariffs = [
+        ("ELECTRICITY", "RESIDENTIAL", "KWH"),
+        ("ELECTRICITY", "COMMERCIAL", "KWH"),
+        ("WATER", "RESIDENTIAL", "M3"),
+        ("WATER", "COMMERCIAL", "M3"),
+    ];
+    let tariffs_complete = required_tariffs.iter().all(|(service, category, unit)| {
+        tariffs
+            .iter()
+            .filter(|row| {
+                row["service_code"] == *service
+                    && row["customer_category"] == *category
+                    && row["unit"] == *unit
+                    && row["currency"] == "USD"
+                    && approved(row, effective_on)
+            })
+            .count()
+            == 1
+    });
+    let taxes_complete = ["ELECTRICITY", "WATER"].iter().all(|service| {
+        tax_profiles
+            .iter()
+            .filter(|row| row["payload"]["service_code"] == *service && approved(row, effective_on))
+            .count()
+            == 1
+    });
+
+    tariffs_complete && taxes_complete
 }
 
 async fn capabilities() -> Json<serde_json::Value> {
@@ -4225,8 +4288,10 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::role_allows_request;
+    use super::{role_allows_request, utility_catalog_is_configured};
     use axum::http::Method;
+    use chrono::NaiveDate;
+    use serde_json::json;
     use uuid::Uuid;
 
     #[test]
@@ -4565,5 +4630,46 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn production_readiness_requires_the_complete_approved_current_utility_catalog() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        let tariffs = vec![
+            json!({"service_code":"ELECTRICITY","customer_category":"RESIDENTIAL","unit":"KWH","currency":"USD","effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
+            json!({"service_code":"ELECTRICITY","customer_category":"COMMERCIAL","unit":"KWH","currency":"USD","effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
+            json!({"service_code":"WATER","customer_category":"RESIDENTIAL","unit":"M3","currency":"USD","effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
+            json!({"service_code":"WATER","customer_category":"COMMERCIAL","unit":"M3","currency":"USD","effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
+        ];
+        let taxes = vec![
+            json!({"payload":{"service_code":"ELECTRICITY"},"effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
+            json!({"payload":{"service_code":"WATER"},"effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
+        ];
+
+        assert!(utility_catalog_is_configured(&tariffs, &taxes, today));
+
+        let mut incomplete_tariffs = tariffs.clone();
+        incomplete_tariffs.pop();
+        assert!(!utility_catalog_is_configured(
+            &incomplete_tariffs,
+            &taxes,
+            today
+        ));
+
+        let mut incomplete_taxes = taxes.clone();
+        incomplete_taxes[1]["status"] = json!("DRAFT");
+        assert!(!utility_catalog_is_configured(
+            &tariffs,
+            &incomplete_taxes,
+            today
+        ));
+
+        let mut duplicate_tax = taxes;
+        duplicate_tax.push(json!({"payload":{"service_code":"WATER"},"effective_from":"2026-08-01","effective_to":null,"approval_ref":"DUPLICATE","approved_by":"admin","status":"APPROVED"}));
+        assert!(!utility_catalog_is_configured(
+            &tariffs,
+            &duplicate_tax,
+            today
+        ));
     }
 }
