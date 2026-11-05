@@ -38,6 +38,7 @@ Fichier : https://www.figma.com/design/EuIpbci6IR7m6ggApo5WWm/SEL-V2-%E2%80%94-P
 | [04_PLAN_IMPLEMENTATION.md](04_PLAN_IMPLEMENTATION.md) | Livraisons verticales, fichiers, exigences P0/P1/P2 |
 | [05_RECETTE_ET_PREUVES.md](05_RECETTE_ET_PREUVES.md) | Scénarios, tests automatiques, Windows, critères de sortie |
 | [06_MODELE_RAPPORT_FINAL.md](06_MODELE_RAPPORT_FINAL.md) | Rapport d'implémentation à renseigner par Codex |
+| [07_PROMPT_COURT_A_COLLER.md](07_PROMPT_COURT_A_COLLER.md) | Prompt de lancement à copier dans Codex |
 
 ## Protections essentielles
 
