@@ -5,6 +5,7 @@ services:
       POSTGRES_DB: sel_v2_test
       POSTGRES_USER: sel_test
       POSTGRES_PASSWORD: sel_test_only
+    ports: ["127.0.0.1:55432:5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sel_test -d sel_v2_test"]
       interval: 2s

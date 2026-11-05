@@ -632,6 +632,19 @@ def test_central_admin_can_bootstrap_before_device_enrollment() -> None:
     assert 'centralAdminRequest("/v1/auth/change-password", "POST"' in app
 
 
+def test_central_admin_can_activate_device_for_an_active_business_user() -> None:
+    bridge = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+    api = (APP / "src" / "api.ts").read_text(encoding="utf-8")
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert '["", "v1", "admin", "devices", id, "provision"]' in bridge
+    assert "target_user_id: String" in bridge
+    assert 'invoke("activate_device", { targetUserId })' in api
+    assert '"BILLING_AGENT", "CASHIER"' in app
+    assert 'setActivationUserId' in app
+    assert "aucun plafond de montant" in app
+
+
 def test_tauri_windows_bundle_creates_sidecar_resource_directory() -> None:
     workflow = (ROOT / ".github" / "workflows" / "sel-v2-tauri-windows.yml").read_text(encoding="utf-8")
 

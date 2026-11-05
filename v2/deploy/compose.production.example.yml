@@ -30,6 +30,7 @@ services:
       SEL_AUTH_MODE: session
       SEL_REQUIRE_SIGNED_OFFLINE_GRANTS: "1"
       SEL_OFFLINE_GRANT_PUBLIC_KEY: ${SEL_OFFLINE_GRANT_PUBLIC_KEY:?production Ed25519 public key is required}
+      SEL_OFFLINE_GRANT_SIGNING_KEY: ${SEL_OFFLINE_GRANT_SIGNING_KEY:?production Ed25519 signing key is required}
       SEL_ORGANIZATION_ID: ${SEL_ORGANIZATION_ID:?stable organization UUID is required}
       SEL_ORGANIZATION_NAME: ${SEL_ORGANIZATION_NAME:?organization name is required}
       RUST_LOG: ${RUST_LOG:-info}

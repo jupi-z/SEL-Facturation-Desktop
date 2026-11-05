@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, localRequest, localStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
+import { activateDevice, centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, localRequest, localStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
 import { buildLocalPdf, renderLocalPdfPreview } from "./documents";
 import "./App.css";
 
@@ -586,7 +586,7 @@ export default function App() {
 
       {view === "admin" && <>
         <PageHeading eyebrow="ADMIN / RÉFÉRENTIELS" title="Administration" description="Les écrans administratifs suivent les permissions et les paramètres effectivement exposés par le service Rust." />
-        <AdminConsole />
+        <AdminConsole onDeviceActivated={() => void refresh()} />
       </>}
 
       {documentPreview && <div className="document-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDocumentPreview(); }}>
@@ -1054,7 +1054,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }:
   </Panel>;
 }
 
-function AdminConsole() {
+function AdminConsole({ onDeviceActivated }: { onDeviceActivated: () => void }) {
   const [session, setSession] = useState<CentralSessionInfo | null>(null);
   const [users, setUsers] = useState<Row[]>([]);
   const [devices, setDevices] = useState<Row[]>([]);
@@ -1070,6 +1070,9 @@ function AdminConsole() {
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const [deviceConfigured, setDeviceConfigured] = useState(false);
+  const [deviceActivationBusy, setDeviceActivationBusy] = useState(false);
+  const [activationUserId, setActivationUserId] = useState("");
   const authenticated = useRef(false);
 
   function clearAdminSession() {
@@ -1109,7 +1112,22 @@ function AdminConsole() {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    localStatus<Row>().then((value) => setDeviceConfigured(text(value.status) !== "ACTIVATION_REQUIRED"))
+      .catch(() => setDeviceConfigured(false));
+  }, []);
+
   useEffect(() => { if (session?.authenticated && session.role === "ADMIN") void loadData(); }, [session, loadData]);
+
+  const activeOperators = users.filter((user) =>
+    text(user.status).toUpperCase() === "ACTIVE" &&
+    ["BILLING_AGENT", "CASHIER"].includes(text(user.role).toUpperCase()),
+  );
+  useEffect(() => {
+    if (!activeOperators.some((user) => text(user.id ?? user.user_id, "") === activationUserId)) {
+      setActivationUserId(text(activeOperators[0]?.id ?? activeOperators[0]?.user_id, ""));
+    }
+  }, [activeOperators, activationUserId]);
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1167,6 +1185,29 @@ function AdminConsole() {
       await centralAdminRequest(`/v1/devices/${encodeURIComponent(id)}/revoke`, "POST");
       setMessage("Appareil révoqué par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
+  }
+
+  async function provisionCurrentDevice() {
+    if (!activationUserId) {
+      setMessage("Créez d’abord un compte Agent facturation ou Caissier actif pour ce poste.");
+      setError(true);
+      return;
+    }
+    if (!window.confirm("Activer ce poste Windows pour les opérations SEL locales et la synchronisation. L’autorisation hors ligne sera signée par le serveur et expirera après 7 jours. SEL a confirmé qu’aucun plafond de montant ne s’applique à cet unique poste. Continuer ?")) return;
+    setDeviceActivationBusy(true);
+    try {
+      const result = await activateDevice(activationUserId);
+      setDeviceConfigured(true);
+      setMessage(`Poste activé. Autorisation hors ligne valable jusqu’au ${formatDateTime(result.offline_authorization_expires_at)}.`);
+      setError(false);
+      onDeviceActivated();
+      await loadData();
+    } catch (reason) {
+      setMessage(humanError(reason));
+      setError(true);
+    } finally {
+      setDeviceActivationBusy(false);
+    }
   }
 
   async function revokeGrant(grant: Row) {
@@ -1321,6 +1362,11 @@ function AdminConsole() {
       <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
     </div>
     <div className="admin-grid">
+      {!deviceConfigured && <Panel title="Activer ce poste Windows">
+        <p className="muted">L’activation enregistre le poste auprès de SEL, prépare sa base SQLite locale et lui remet une autorisation hors ligne signée. Les opérations seront conservées localement puis synchronisées avec PostgreSQL lorsque la connexion est disponible.</p>
+        {activeOperators.length > 0 ? <label>Compte responsable des opérations locales<select value={activationUserId} onChange={(event) => setActivationUserId(event.target.value)}>{activeOperators.map((user) => <option key={text(user.id ?? user.user_id)} value={text(user.id ?? user.user_id)}>{text(user.identity_ref)} · {text(user.role)}</option>)}</select></label> : <p className="notice error">Aucun compte Agent facturation ou Caissier actif. Créez ce compte avant d’activer le poste.</p>}
+        <div className="form-actions"><Button primary onClick={() => void provisionCurrentDevice()} disabled={deviceActivationBusy || !activationUserId}>{deviceActivationBusy ? "Activation sécurisée…" : "Activer ce poste"}</Button></div>
+      </Panel>}
       <Panel title="Appareils enrôlés"><Table headers={["Appareil", "État", "Dernière activité", "Action"]} empty="Aucun appareil communiqué." data={devices.map((device) => [text(device.id ?? device.device_id), <Status value={device.state ?? device.status} />, text(device.last_seen ?? device.last_seen_at), <Button disabled={text(device.state ?? device.status).toUpperCase() === "REVOKED"} onClick={() => void revokeDevice(device)}>Révoquer</Button>])} /></Panel>
       <Panel title="Autorisations hors ligne"><Table headers={["Autorisation", "Utilisateur", "Expiration", "État", "Action"]} empty="Aucune autorisation retournée." data={grants.map((grant) => [text(grant.id ?? grant.grant_id), text(grant.user_id), text(grant.expires_at), <Status value={grant.revoked_at ? "Révoquée" : "Émise"} />, <Button disabled={Boolean(grant.revoked_at)} onClick={() => void revokeGrant(grant)}>Révoquer</Button>])} /></Panel>
     </div>

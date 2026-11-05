@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $required = @(
   "POSTGRES_DB", "POSTGRES_ADMIN_USER", "POSTGRES_ADMIN_PASSWORD",
   "POSTGRES_APP_USER", "POSTGRES_APP_PASSWORD", "SEL_OFFLINE_GRANT_PUBLIC_KEY",
+  "SEL_OFFLINE_GRANT_SIGNING_KEY",
   "SEL_ORGANIZATION_ID", "SEL_ORGANIZATION_NAME"
 )
 $missing = $required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }

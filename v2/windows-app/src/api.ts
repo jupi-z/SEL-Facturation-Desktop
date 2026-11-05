@@ -21,6 +21,10 @@ export function localStatus<T>(): Promise<T> {
   return invoke<T>("local_status");
 }
 
+export function activateDevice(targetUserId: string): Promise<{ status: string; device_id: string; offline_authorization_expires_at: string }> {
+  return invoke("activate_device", { targetUserId });
+}
+
 export function openMonarqueSite(): Promise<void> {
   return invoke<void>("open_monarque_site");
 }

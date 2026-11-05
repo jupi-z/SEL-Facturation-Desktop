@@ -104,6 +104,12 @@ pub enum DeviceWriteError {
     NotFound,
     #[error("stored idempotency response is invalid: {0}")]
     StoredResponse(#[from] serde_json::Error),
+    #[error("device provisioning fields are invalid")]
+    InvalidProvisioning,
+    #[error("offline grant signature is invalid")]
+    InvalidProvisioningSignature,
+    #[error("actor or target user is not authorized for device provisioning")]
+    ProvisioningContextInvalid,
 }
 
 #[derive(Debug, Error)]
@@ -947,6 +953,185 @@ impl CentralStore {
         .await?;
         tx.commit().await?;
         Ok(DeviceWriteOutcome::Created(response))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn provision_device(
+        &self,
+        device_id: Uuid,
+        public_key_id: &str,
+        sync_token_hash: &str,
+        user_id: Uuid,
+        grant_id: Uuid,
+        scopes: &serde_json::Value,
+        limits: &serde_json::Value,
+        issued_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+        signature: &str,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceWriteError> {
+        if public_key_id.trim().is_empty()
+            || sync_token_hash.len() != 64
+            || !sync_token_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || device_id.is_nil()
+            || grant_id.is_nil()
+            || expires_at <= issued_at
+        {
+            return Err(DeviceWriteError::InvalidProvisioning);
+        }
+        let signature_bytes = BASE64
+            .decode(signature)
+            .map_err(|_| DeviceWriteError::InvalidProvisioningSignature)?;
+        let parsed_signature = Signature::from_slice(&signature_bytes)
+            .map_err(|_| DeviceWriteError::InvalidProvisioningSignature)?;
+        if self.require_signed_offline_grants {
+            let Some(verifying_key) = &self.offline_grant_public_key else {
+                return Err(DeviceWriteError::InvalidProvisioningSignature);
+            };
+            let canonical = offline_grant_canonical_bytes(
+                grant_id, user_id, device_id, scopes, limits, issued_at, expires_at,
+            )
+            .map_err(|_| DeviceWriteError::InvalidProvisioningSignature)?;
+            if verifying_key.verify(&canonical, &parsed_signature).is_err() {
+                return Err(DeviceWriteError::InvalidProvisioningSignature);
+            }
+        }
+
+        let mut tx = self.pool.begin().await?;
+        if let Some(row) = sqlx::query(
+            "SELECT request_digest, response_json FROM idempotency_keys
+             WHERE organization_id = $1 AND principal_id = $2
+               AND operation = 'device.provision' AND idempotency_key = $3",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let original_digest: String = row.try_get("request_digest")?;
+            if original_digest != request_digest {
+                return Err(DeviceWriteError::IdempotencyPayloadMismatch);
+            }
+            let response: serde_json::Value = row.try_get("response_json")?;
+            return Ok(DeviceWriteOutcome::Replay(response));
+        }
+
+        let context_valid = sqlx::query(
+            "SELECT 1 FROM users actor
+             JOIN users target ON target.organization_id = actor.organization_id
+             WHERE actor.id = $1 AND actor.organization_id = $2
+               AND actor.role = 'ADMIN' AND actor.status = 'ACTIVE'
+               AND target.id = $3 AND target.status = 'ACTIVE' FOR UPDATE OF actor, target",
+        )
+        .bind(actor_id)
+        .bind(self.organization_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+        if !context_valid {
+            return Err(DeviceWriteError::ProvisioningContextInvalid);
+        }
+
+        let response = json!({
+            "device_id": device_id,
+            "organization_id": self.organization_id,
+            "public_key_id": public_key_id,
+            "state": "ACTIVE",
+            "offline_grant": {
+                "grant_id": grant_id,
+                "user_id": user_id,
+                "device_id": device_id,
+                "scopes": scopes,
+                "limits": limits,
+                "issued_at": issued_at,
+                "expires_at": expires_at,
+                "signature": signature
+            }
+        });
+        sqlx::query(
+            "INSERT INTO devices (id, organization_id, public_key_id, state, sync_token_hash)
+             VALUES ($1, $2, $3, 'ACTIVE', $4)",
+        )
+        .bind(device_id)
+        .bind(self.organization_id)
+        .bind(public_key_id.trim())
+        .bind(sync_token_hash.to_ascii_lowercase())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO offline_grants
+             (id, user_id, device_id, scopes, limits, issued_at, expires_at, signature)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        )
+        .bind(grant_id)
+        .bind(user_id)
+        .bind(device_id)
+        .bind(scopes)
+        .bind(limits)
+        .bind(issued_at)
+        .bind(expires_at)
+        .bind(signature)
+        .execute(&mut *tx)
+        .await?;
+        for (event_type, subject_id, metadata) in [
+            (
+                "DEVICE_ENROLLED",
+                device_id,
+                json!({ "public_key_id": public_key_id }),
+            ),
+            (
+                "OFFLINE_GRANT_ISSUED",
+                grant_id,
+                json!({ "user_id": user_id, "device_id": device_id }),
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO audit_events
+                 (id, actor, subject_id, event_type, occurred_at, redacted_metadata)
+                 VALUES ($1,$2,$3,$4,now(),$5)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(actor_id)
+            .bind(subject_id)
+            .bind(event_type)
+            .bind(metadata)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(
+            "INSERT INTO idempotency_keys
+             (organization_id, principal_id, operation, idempotency_key,
+              request_digest, response_status, response_json)
+             VALUES ($1,$2,'device.provision',$3,$4,201,$5)",
+        )
+        .bind(self.organization_id)
+        .bind(actor_id)
+        .bind(idempotency_key)
+        .bind(request_digest)
+        .bind(&response)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(DeviceWriteOutcome::Created(response))
+    }
+
+    pub async fn authenticate_sync_device_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<Uuid>, sqlx::Error> {
+        let device_id = sqlx::query_scalar(
+            "SELECT id FROM devices
+             WHERE organization_id = $1 AND sync_token_hash = $2 AND state = 'ACTIVE'",
+        )
+        .bind(self.organization_id)
+        .bind(token_digest(token))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(device_id)
     }
 
     pub async fn revoke_device(

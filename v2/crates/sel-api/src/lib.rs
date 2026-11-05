@@ -8,15 +8,19 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::{Duration, Utc};
+use ed25519_dalek::{Signer, SigningKey};
 use rust_decimal::Decimal;
 use sel_contracts::{
-    catalog_snapshot_sha256, utility_snapshot_sha256, CatalogSnapshot, CatalogSnapshotPayload,
-    CorrectMeterReading, CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount,
-    CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData,
-    InvoiceIdentitySnapshot, InvoiceLineResponse, Meter, MeterReading, PaymentAllocationRequest,
-    ProblemDetails, RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse,
-    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
-    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    catalog_snapshot_sha256, offline_grant_canonical_bytes, utility_snapshot_sha256,
+    CatalogSnapshot, CatalogSnapshotPayload, CorrectMeterReading, CreateCustomer, CreateMeter,
+    CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
+    CreditNoteRequest, Customer, DocumentData, InvoiceIdentitySnapshot, InvoiceLineResponse, Meter,
+    MeterReading, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
+    ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse, SyncPullResponse,
+    SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
+    UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -31,6 +35,7 @@ pub struct AppState {
     pub organization_id: Uuid,
     pub central: Option<sel_storage::CentralStore>,
     strict_auth: bool,
+    offline_grant_signing_key: Option<SigningKey>,
     pub tariffs: Arc<RwLock<TariffBook>>,
     pub customers: Arc<RwLock<HashMap<Uuid, Customer>>>,
     pub invoices: Arc<RwLock<HashMap<Uuid, InvoiceRecord>>>,
@@ -41,7 +46,7 @@ pub struct AppState {
     pub solar_sales: Arc<RwLock<HashMap<Uuid, SolarSaleResponse>>>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct LoginRequest {
     pub identity_ref: String,
     pub password: String,
@@ -70,6 +75,21 @@ pub struct CreateAdminUserRequest {
     pub password: String,
     #[serde(default)]
     pub require_password_change: bool,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvisionDeviceRequest {
+    pub device_id: Uuid,
+    pub public_key_id: String,
+    pub sync_token_sha256: String,
+    pub user_id: Uuid,
+    pub grant_id: Uuid,
+    pub scopes: serde_json::Value,
+    #[serde(default)]
+    pub limits: serde_json::Value,
+    pub issued_at: chrono::DateTime<Utc>,
+    pub expires_at: chrono::DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -172,6 +192,9 @@ pub struct AllocatePaymentRequest {
 #[derive(Clone, Debug)]
 struct AuthenticatedPrincipal(sel_storage::postgres::AuthSessionPrincipal);
 
+#[derive(Clone, Debug)]
+struct AuthenticatedDevice(Uuid);
+
 #[derive(Clone, Default)]
 pub struct TariffBook {
     pub electricity_unit_price: Option<Decimal>,
@@ -217,6 +240,7 @@ impl AppState {
             organization_id,
             central: None,
             strict_auth: false,
+            offline_grant_signing_key: None,
             tariffs: Arc::new(RwLock::new(TariffBook::default())),
             customers: Arc::new(RwLock::new(HashMap::new())),
             invoices: Arc::new(RwLock::new(HashMap::new())),
@@ -238,6 +262,11 @@ impl AppState {
         let mut state = Self::with_central_store(store);
         state.strict_auth = true;
         state
+    }
+
+    pub fn with_offline_grant_signer(mut self, signing_key: SigningKey) -> Self {
+        self.offline_grant_signing_key = Some(signing_key);
+        self
     }
 
     pub async fn configure_tariffs(&self, tariffs: TariffBook) {
@@ -262,6 +291,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/audit-events", get(admin_list_audit_events))
         .route("/v1/admin/users/:id", patch(admin_update_user))
         .route("/v1/admin/devices", get(admin_list_devices))
+        .route(
+            "/v1/admin/devices/:id/provision",
+            post(admin_provision_device),
+        )
         .route("/v1/admin/offline-grants", get(admin_list_offline_grants))
         .route(
             "/v1/admin/offline-grants/:id/revoke",
@@ -435,6 +468,20 @@ async fn production_auth_guard(
                 .insert(AuthenticatedPrincipal(principal));
             return next.run(request).await;
         }
+        let method = request.method().clone();
+        let path = request.uri().path();
+        let sync_route = matches!(
+            (method.as_str(), path),
+            ("POST", "/v1/sync/push") | ("GET", "/v1/sync/pull") | ("GET", "/v1/sync/status")
+        );
+        if sync_route {
+            if let Ok(Some(device_id)) = store.authenticate_sync_device_token(presented).await {
+                request
+                    .extensions_mut()
+                    .insert(AuthenticatedDevice(device_id));
+                return next.run(request).await;
+            }
+        }
     }
     // The legacy shared token is retained only for explicit test fixtures. It
     // is never accepted by the production binary unless this opt-in is set.
@@ -531,6 +578,9 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
             || path_matches(path, "/v1/devices/:id/revoke")
         {
             return is_admin || is_supervisor;
+        }
+        if path_matches(path, "/v1/admin/devices/:id/provision") {
+            return is_admin;
         }
         if path == "/v1/admin/catalog/tariffs"
             || path_matches(path, "/v1/admin/catalog/tariffs/:id/approve")
@@ -1477,6 +1527,101 @@ async fn admin_list_devices(
         .await
         .map(Json)
         .map_err(storage_error)
+}
+
+async fn admin_provision_device(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(device_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ProvisionDeviceRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_admin(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    if input.device_id != device_id {
+        return Err(ApiError::unprocessable(
+            "DEVICE_ID_MISMATCH",
+            "the provisioned device id must match the route",
+        ));
+    }
+    let now = Utc::now();
+    if input.issued_at < now - Duration::minutes(5)
+        || input.issued_at > now + Duration::minutes(5)
+        || input.expires_at <= input.issued_at
+        || input.expires_at > input.issued_at + Duration::days(30)
+    {
+        return Err(ApiError::unprocessable(
+            "OFFLINE_GRANT_DATES_INVALID",
+            "the offline authorization must start near now and expire within 30 days",
+        ));
+    }
+    if input.public_key_id.trim().is_empty()
+        || input.sync_token_sha256.len() != 64
+        || !input
+            .sync_token_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || input
+            .scopes
+            .as_array()
+            .is_none_or(|scopes| scopes.is_empty())
+    {
+        return Err(ApiError::unprocessable(
+            "DEVICE_PROVISIONING_FIELDS_INVALID",
+            "a device key id, SHA-256 sync token hash, and at least one scope are required",
+        ));
+    }
+    let signing_key = state.offline_grant_signing_key.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "OFFLINE_GRANT_ISSUER_UNAVAILABLE",
+            "the production offline authorization issuer is not configured",
+        )
+    })?;
+    let canonical = offline_grant_canonical_bytes(
+        input.grant_id,
+        input.user_id,
+        input.device_id,
+        &input.scopes,
+        &input.limits,
+        input.issued_at,
+        input.expires_at,
+    )
+    .map_err(ApiError::internal)?;
+    let signature = BASE64.encode(signing_key.sign(&canonical).to_bytes());
+    let digest = digest_json(&input)?;
+    let Some(store) = &state.central else {
+        return Err(ApiError::unprocessable(
+            "CENTRAL_STORE_REQUIRED",
+            "device provisioning requires the central PostgreSQL store",
+        ));
+    };
+    store
+        .provision_device(
+            input.device_id,
+            input.public_key_id.trim(),
+            &input.sync_token_sha256,
+            input.user_id,
+            input.grant_id,
+            &input.scopes,
+            &input.limits,
+            input.issued_at,
+            input.expires_at,
+            &signature,
+            principal.user_id,
+            idempotency_key,
+            &digest,
+        )
+        .await
+        .map(|outcome| match outcome {
+            sel_storage::postgres::DeviceWriteOutcome::Created(value) => {
+                (StatusCode::CREATED, Json(value))
+            }
+            sel_storage::postgres::DeviceWriteOutcome::Replay(value) => {
+                (StatusCode::OK, Json(value))
+            }
+        })
+        .map_err(device_write_error)
 }
 
 async fn admin_list_offline_grants(
@@ -3053,10 +3198,20 @@ async fn get_statement(
 async fn sync_push(
     State(state): State<AppState>,
     headers: HeaderMap,
+    device: Option<Extension<AuthenticatedDevice>>,
     Json(input): Json<SyncPushRequest>,
 ) -> Result<Json<SyncPushResponse>, ApiError> {
     require_auth(&headers)?;
     require_idempotency(&headers)?;
+    if device
+        .as_ref()
+        .is_some_and(|Extension(device)| device.0 != input.device_id)
+    {
+        return Err(ApiError::unauthorized(
+            "SYNC_DEVICE_TOKEN_MISMATCH",
+            "the device token is not authorized for this device id",
+        ));
+    }
     if input.events.len() > 100 {
         return Err(ApiError::unprocessable(
             "SYNC_BATCH_TOO_LARGE",
@@ -3101,6 +3256,7 @@ struct SyncQuery {
 async fn sync_pull(
     State(state): State<AppState>,
     headers: HeaderMap,
+    _device: Option<Extension<AuthenticatedDevice>>,
     Query(query): Query<SyncQuery>,
 ) -> Result<Json<SyncPullResponse>, ApiError> {
     require_auth(&headers)?;
@@ -3136,6 +3292,7 @@ async fn sync_pull(
 async fn sync_status(
     State(state): State<AppState>,
     headers: HeaderMap,
+    _device: Option<Extension<AuthenticatedDevice>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_auth(&headers)?;
     if let Some(store) = &state.central {
@@ -3458,6 +3615,20 @@ fn device_write_error(error: sel_storage::postgres::DeviceWriteError) -> ApiErro
         sel_storage::postgres::DeviceWriteError::NotFound => {
             ApiError::not_found("DEVICE_NOT_FOUND", "device not found")
         }
+        sel_storage::postgres::DeviceWriteError::InvalidProvisioning => ApiError::unprocessable(
+            "DEVICE_PROVISIONING_FIELDS_INVALID",
+            "device provisioning fields are invalid",
+        ),
+        sel_storage::postgres::DeviceWriteError::InvalidProvisioningSignature => {
+            ApiError::unprocessable(
+                "OFFLINE_GRANT_SIGNATURE_INVALID",
+                "the generated offline authorization signature is invalid",
+            )
+        }
+        sel_storage::postgres::DeviceWriteError::ProvisioningContextInvalid => ApiError::forbidden(
+            "DEVICE_PROVISIONING_CONTEXT_INVALID",
+            "the administrator or target user is not active in this organization",
+        ),
         sel_storage::postgres::DeviceWriteError::Database(error) => storage_error(error),
         sel_storage::postgres::DeviceWriteError::StoredResponse(error) => ApiError::internal(error),
     }
@@ -4052,6 +4223,16 @@ mod tests {
             &Method::POST,
             "/v1/billing/utility/issue",
             "CASHIER"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            "/v1/admin/devices/00000000-0000-0000-0000-000000000001/provision",
+            "ADMIN"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            "/v1/admin/devices/00000000-0000-0000-0000-000000000001/provision",
+            "SUPERVISOR"
         ));
     }
 

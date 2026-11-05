@@ -29,7 +29,7 @@ async fn main() -> Result<(), std::io::Error> {
     };
     let state = if let Ok(database_url) = std::env::var("DATABASE_URL") {
         required_session_auth_mode()?;
-        required_offline_grant_security()?;
+        let offline_grant_signing_key = required_offline_grant_security()?;
         let pool = sel_storage::open_postgres(&database_url)
             .await
             .map_err(|error| {
@@ -49,6 +49,7 @@ async fn main() -> Result<(), std::io::Error> {
                 std::io::Error::other(format!("organization bootstrap failed: {error}"))
             })?;
         AppState::with_production_central_store(store)
+            .with_offline_grant_signer(offline_grant_signing_key)
     } else {
         AppState::new(organization_id)
     };
@@ -97,25 +98,39 @@ fn required_organization_name() -> Result<String, std::io::Error> {
     Ok(name.trim().to_owned())
 }
 
-fn required_offline_grant_security() -> Result<(), std::io::Error> {
-    let valid_key = std::env::var("SEL_OFFLINE_GRANT_PUBLIC_KEY")
+fn required_offline_grant_security() -> Result<ed25519_dalek::SigningKey, std::io::Error> {
+    let public_key = std::env::var("SEL_OFFLINE_GRANT_PUBLIC_KEY")
         .ok()
         .and_then(|value| BASE64.decode(value.trim()).ok())
         .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-        .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok())
-        .is_some();
+        .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok());
+    let signing_key = std::env::var("SEL_OFFLINE_GRANT_SIGNING_KEY")
+        .ok()
+        .and_then(|value| BASE64.decode(value.trim()).ok())
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .map(|bytes| ed25519_dalek::SigningKey::from_bytes(&bytes));
     if std::env::var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS")
         .ok()
         .as_deref()
         != Some("1")
-        || !valid_key
+        || public_key.is_none()
+        || signing_key.as_ref().is_none_or(|signer| {
+            public_key
+                .as_ref()
+                .is_none_or(|verifier| verifier != &signer.verifying_key())
+        })
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "signed offline grants and SEL_OFFLINE_GRANT_PUBLIC_KEY are required in commercial mode",
+            "matching production Ed25519 offline-grant signing and verification keys are required in commercial mode",
         ));
     }
-    Ok(())
+    signing_key.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "SEL_OFFLINE_GRANT_SIGNING_KEY is required in commercial mode",
+        )
+    })
 }
 
 fn required_uuid_value(name: &str, value: Option<String>) -> Result<Uuid, std::io::Error> {
@@ -185,6 +200,7 @@ mod tests {
     fn production_requires_signed_offline_grant_configuration() {
         std::env::remove_var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS");
         std::env::remove_var("SEL_OFFLINE_GRANT_PUBLIC_KEY");
+        std::env::remove_var("SEL_OFFLINE_GRANT_SIGNING_KEY");
         assert!(required_offline_grant_security().is_err());
         std::env::set_var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS", "1");
         std::env::set_var("SEL_OFFLINE_GRANT_PUBLIC_KEY", "fixture-key");
@@ -194,8 +210,13 @@ mod tests {
             "SEL_OFFLINE_GRANT_PUBLIC_KEY",
             BASE64.encode(signing_key.verifying_key().to_bytes()),
         );
+        std::env::set_var(
+            "SEL_OFFLINE_GRANT_SIGNING_KEY",
+            BASE64.encode(signing_key.to_bytes()),
+        );
         assert!(required_offline_grant_security().is_ok());
         std::env::remove_var("SEL_REQUIRE_SIGNED_OFFLINE_GRANTS");
         std::env::remove_var("SEL_OFFLINE_GRANT_PUBLIC_KEY");
+        std::env::remove_var("SEL_OFFLINE_GRANT_SIGNING_KEY");
     }
 }

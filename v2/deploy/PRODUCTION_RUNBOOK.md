@@ -28,7 +28,7 @@ Le client V1 SafeUpdate utilise par défaut `https://update.sel.shuleops.com/upd
 - serveur Linux administré par SEL, avec Docker/Compose, ports 80/443 accessibles et contrôle des deux enregistrements DNS ;
 - émission ACME réussie par Caddy pour `sel.shuleops.com` et `update.sel.shuleops.com` ;
 - identifiant d’organisation stable ;
-- clé publique Ed25519 de production pour les autorisations hors ligne ;
+- paire de clés Ed25519 de production pour les autorisations hors ligne, avec la clé privée uniquement sur le serveur et la clé publique correspondante dans l’API ;
 - mots de passe PostgreSQL générés hors dépôt ;
 - sauvegarde PostgreSQL testée sur une base non productive ;
 - procédure de retour arrière approuvée.
@@ -45,7 +45,9 @@ chmod 600 /srv/sel-v2/.env
 docker compose -f /srv/sel-v2/compose.yml --env-file /srv/sel-v2/.env config
 ```
 
-Le fichier `.env` doit contenir uniquement des valeurs injectées par l’administrateur : `POSTGRES_DB`, `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD`, `POSTGRES_APP_USER`, `POSTGRES_APP_PASSWORD`, `SEL_OFFLINE_GRANT_PUBLIC_KEY`, `SEL_ORGANIZATION_ID` et `SEL_ORGANIZATION_NAME`.
+Le fichier `.env` doit contenir uniquement des valeurs injectées par l’administrateur : `POSTGRES_DB`, `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD`, `POSTGRES_APP_USER`, `POSTGRES_APP_PASSWORD`, `SEL_OFFLINE_GRANT_PUBLIC_KEY`, `SEL_OFFLINE_GRANT_SIGNING_KEY`, `SEL_ORGANIZATION_ID` et `SEL_ORGANIZATION_NAME`. Protéger `.env` par `chmod 600`; ne jamais copier la clé privée dans Git, un installateur ou les logs. Au démarrage commercial, l’API vérifie que les deux clés Ed25519 correspondent et refuse le démarrage en cas de discordance.
+
+Le premier démarrage de l’application Windows requiert une connexion administrateur centrale. La commande « Activer ce poste » enrôle l’appareil et émet atomiquement une autorisation hors ligne signée, limitée à 7 jours. Le jeton de synchronisation propre au poste n’est stocké que sous forme de hash SHA-256 dans PostgreSQL et peut être invalidé par révocation de l’appareil. SEL a confirmé qu’aucun plafond de montant hors ligne n’est appliqué pour l’unique poste initial; les rôles et les portées de commandes restent contrôlés côté serveur.
 
 ## Démarrage contrôlé
 
