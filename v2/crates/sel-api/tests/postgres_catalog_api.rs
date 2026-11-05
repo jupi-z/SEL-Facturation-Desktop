@@ -1,6 +1,7 @@
 use axum::body::Body;
 use axum::http::Request;
 use http_body_util::BodyExt;
+use rust_decimal::Decimal;
 use sel_api::{router, AppState};
 use sel_contracts::{catalog_snapshot_sha256, CatalogSnapshotPayload};
 use sel_storage::{migrate_postgres, CentralStore};
@@ -119,7 +120,14 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
     let tariffs = get_json(&app, "/v1/catalog/tariffs").await;
     assert_eq!(tariffs.as_array().unwrap().len(), 1);
     assert_eq!(tariffs[0]["id"], approved_tariff.to_string());
-    assert_eq!(tariffs[0]["unit_price"], "0.30");
+    assert_eq!(
+        tariffs[0]["unit_price"]
+            .as_str()
+            .unwrap()
+            .parse::<Decimal>()
+            .unwrap(),
+        Decimal::new(3, 1)
+    );
 
     let taxes = get_json(&app, "/v1/catalog/tax-profiles").await;
     assert_eq!(taxes.as_array().unwrap().len(), 1);

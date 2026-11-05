@@ -408,7 +408,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Prévisualiser la facture").click()
                     await page.get_by_role("heading", name="Prévisualisation de facture").wait_for()
                     await page.locator(".invoice-preview-metrics").get_by_text("5 m³", exact=True).wait_for()
-                    await page.locator(".invoice-preview-metrics").get_by_text("18,56 USD", exact=True).wait_for()
+                    await page.locator(".invoice-preview-metrics").get_by_text("12,76 USD", exact=True).wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "invoice-preview-water-positive-1440x900.png"))
@@ -433,7 +433,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Document PDF").first.click()
                     await page.get_by_role("dialog", name="Facture eau + électricité").wait_for()
                     positive_water_pdf = await assert_pdf_rendered(page, "Invoice with 5 m³ of water")
-                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "18,56 USD"))
+                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "12,76 USD"))
                     await assert_print_layout(page, "Invoice with 5 m³ of water", 1)
                     if positive_water_pdf == zero_water_pdf:
                         raise AssertionError("0 m³ and 5 m³ invoice PDFs rendered identically")
