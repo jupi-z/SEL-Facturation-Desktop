@@ -1,0 +1,35 @@
+PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
+
+CREATE TABLE organizations (id TEXT PRIMARY KEY, legal_name TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE users (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), role TEXT NOT NULL, status TEXT NOT NULL, identity_ref TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE devices (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), public_key_id TEXT NOT NULL, state TEXT NOT NULL, last_seen TEXT, sync_cursor INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE offline_grants (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), device_id TEXT NOT NULL REFERENCES devices(id), scopes_json TEXT NOT NULL, limits_json TEXT NOT NULL, issued_at TEXT NOT NULL, expires_at TEXT NOT NULL, signature TEXT NOT NULL);
+CREATE TABLE customers (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), customer_code TEXT NOT NULL, legal_name TEXT NOT NULL, contact_fields_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, UNIQUE(organization_id, customer_code));
+CREATE TABLE service_accounts (id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id), service_code TEXT NOT NULL, contract_ref TEXT, connection_status TEXT NOT NULL, activated_at TEXT);
+CREATE TABLE products (id TEXT PRIMARY KEY, sku TEXT NOT NULL UNIQUE, product_type TEXT NOT NULL, label TEXT NOT NULL, price_reference TEXT NOT NULL, currency TEXT NOT NULL, active INTEGER NOT NULL);
+CREATE TABLE tariff_versions (id TEXT PRIMARY KEY, service_code TEXT NOT NULL, customer_category TEXT NOT NULL, unit TEXT NOT NULL, unit_price TEXT NOT NULL, currency TEXT NOT NULL, effective_from TEXT NOT NULL, effective_to TEXT, approval_ref TEXT NOT NULL, approved_by TEXT, status TEXT NOT NULL);
+CREATE TABLE tax_profile_versions (id TEXT PRIMARY KEY, service_code TEXT NOT NULL, jurisdiction TEXT NOT NULL, base TEXT NOT NULL, rate TEXT NOT NULL, source TEXT NOT NULL, effective_from TEXT NOT NULL, effective_to TEXT, status TEXT NOT NULL);
+CREATE TABLE fx_rate_versions (id TEXT PRIMARY KEY, from_currency TEXT NOT NULL, to_currency TEXT NOT NULL, value TEXT NOT NULL, effective_from TEXT NOT NULL, source TEXT NOT NULL, approved INTEGER NOT NULL);
+CREATE TABLE contracts (id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id), contract_type TEXT NOT NULL, status TEXT NOT NULL, terms_revision TEXT NOT NULL, signed_at TEXT);
+CREATE TABLE sales (id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id), contract_id TEXT REFERENCES contracts(id), currency TEXT NOT NULL, sold_at TEXT NOT NULL, sale_type TEXT NOT NULL, status TEXT NOT NULL);
+CREATE TABLE invoices (id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id), sale_id TEXT REFERENCES sales(id), period TEXT, invoice_number TEXT, provisional_ref TEXT, source_device_id TEXT REFERENCES devices(id), issued_at TEXT NOT NULL, currency TEXT NOT NULL, total TEXT NOT NULL CHECK(CAST(total AS NUMERIC) >= 0), template_version TEXT NOT NULL, immutable_snapshot_json TEXT NOT NULL, status TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE invoice_lines (id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES invoices(id), service_code TEXT, product_ref TEXT, quantity TEXT NOT NULL, unit TEXT NOT NULL, unit_price TEXT, subtotal TEXT NOT NULL, tax_snapshot_json TEXT NOT NULL, total TEXT NOT NULL);
+CREATE TABLE receivables (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL, customer_id TEXT NOT NULL REFERENCES customers(id), currency TEXT NOT NULL, principal_total TEXT NOT NULL, status TEXT NOT NULL, UNIQUE(source_type, source_id));
+CREATE TABLE installment_plans (id TEXT PRIMARY KEY, receivable_id TEXT NOT NULL UNIQUE REFERENCES receivables(id), contract_id TEXT NOT NULL REFERENCES contracts(id), principal_amount TEXT NOT NULL, currency TEXT NOT NULL, start_date TEXT NOT NULL, status TEXT NOT NULL, terms_snapshot_json TEXT NOT NULL);
+CREATE TABLE installment_schedule (id TEXT PRIMARY KEY, plan_id TEXT NOT NULL REFERENCES installment_plans(id), sequence INTEGER NOT NULL, due_date TEXT NOT NULL, amount_due TEXT NOT NULL, schedule_status TEXT NOT NULL, UNIQUE(plan_id, sequence));
+CREATE TABLE payments (id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id), amount_received TEXT NOT NULL, currency TEXT NOT NULL, method TEXT NOT NULL, paid_at TEXT NOT NULL, external_ref TEXT, origin_event_id TEXT UNIQUE, status TEXT NOT NULL);
+CREATE TABLE payment_allocations (id TEXT PRIMARY KEY, payment_id TEXT NOT NULL REFERENCES payments(id), receivable_id TEXT NOT NULL REFERENCES receivables(id), schedule_id TEXT REFERENCES installment_schedule(id), allocated_amount TEXT NOT NULL, currency TEXT NOT NULL);
+CREATE TABLE payment_reversals (id TEXT PRIMARY KEY, payment_id TEXT NOT NULL REFERENCES payments(id), amount TEXT NOT NULL, reason TEXT NOT NULL, initiated_by TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE audit_events (id TEXT PRIMARY KEY, actor TEXT, device TEXT, event_type TEXT NOT NULL, subject_id TEXT, occurred_at TEXT NOT NULL, redacted_metadata_json TEXT NOT NULL DEFAULT '{}');
+CREATE TABLE idempotency_keys (organization_id TEXT NOT NULL, principal_id TEXT NOT NULL, operation TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_digest TEXT NOT NULL, response_status INTEGER NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(organization_id, principal_id, operation, idempotency_key));
+CREATE TABLE command_journal (event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, aggregate_id TEXT NOT NULL, command_type TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE outbox (event_id TEXT PRIMARY KEY REFERENCES command_journal(event_id), envelope_json TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT);
+CREATE TABLE sync_inbox (device_id TEXT NOT NULL, event_id TEXT NOT NULL, result_json TEXT NOT NULL, received_at TEXT NOT NULL, PRIMARY KEY(device_id, event_id));
+CREATE TABLE central_changes (sequence INTEGER PRIMARY KEY, entity TEXT NOT NULL, entity_id TEXT NOT NULL, revision INTEGER NOT NULL, change_json TEXT NOT NULL);
+CREATE TABLE sync_conflicts (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, reason TEXT NOT NULL, central_revision INTEGER, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE document_template_registry (template_id TEXT PRIMARY KEY, semantic_version TEXT NOT NULL, schema_version INTEGER NOT NULL, sha256 TEXT NOT NULL, min_client_version TEXT NOT NULL, activated_at TEXT);
+CREATE UNIQUE INDEX one_utility_invoice_period ON invoices(customer_id, period) WHERE period IS NOT NULL AND status <> 'VOID';
+CREATE INDEX invoices_customer_idx ON invoices(customer_id, issued_at DESC);
+

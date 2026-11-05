@@ -36,10 +36,9 @@ from config_service import (
 )
 
 PAGE_SIZE = 50
-# The repository-hosted manifest is the currently published channel. An
-# operator can point this to the SEL update server with SEL_UPDATE_MANIFEST_URL
-# once that server exposes the same signed-manifest contract.
-DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/jupi-z/SEL-Facturation-Desktop/refs/heads/main/updates/latest.json'
+# The dedicated SEL update host serves the SafeUpdate manifest and signature.
+# The update remains fail-closed until its production key and signed channel exist.
+DEFAULT_UPDATE_MANIFEST_URL = 'https://update.sel.shuleops.com/updates/latest.json'
 
 DEVELOPER_LEGAL = {
     'name': 'MonarQue Group S.A.S.',

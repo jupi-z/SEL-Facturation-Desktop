@@ -43,12 +43,12 @@ def test_windows_builds_use_sel_logo_icon():
     icon = ROOT / "packaging" / "sel-facturation.ico"
     assert icon.is_file() and icon.stat().st_size > 1000
     assert "--icon" in (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
     assert "--icon packaging\\sel-facturation.ico" in workflow
 
 
 def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview_publication():
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
 
     assert "MicrosoftEdgeWebView2RuntimeInstallerX64.exe" in workflow
     assert "Invoke-WebRequest" in workflow
@@ -68,14 +68,16 @@ def test_windows_build_embeds_webview2_and_separates_signed_and_unsigned_preview
 
 def test_windows_packaging_collects_reportlab_dynamic_modules_and_smokes_the_frozen_app():
     build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
     spec = (ROOT / "SEL-Facturation.spec").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "--collect-all reportlab" in build_script
     assert "--collect-all reportlab" in workflow
     assert "collect_all('reportlab')" in spec
-    assert "--collect-all reportlab" in readme
+    assert "Les anciennes applications V1" in readme
+    assert "ne sont plus distribuables" in readme
+    assert "v2/windows-app" in readme
     assert "--sel-packaging-smoke" in workflow
 
 
@@ -89,7 +91,7 @@ def test_webview2_detection_covers_machine_and_user_runtime_locations():
 
 
 def test_signing_order_protects_embedded_payloads():
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
 
     assert workflow.index("Sign application payloads before MSI") < workflow.index("Compile MSI")
     assert workflow.index("Sign MSI before Burn") < workflow.index("wix build packaging\\bundle\\Bundle.wxs")
@@ -98,7 +100,7 @@ def test_signing_order_protects_embedded_payloads():
 
 
 def test_release_workflow_has_one_supported_installer_path():
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
     build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
 
     assert "Install Inno Setup" not in workflow
@@ -110,7 +112,7 @@ def test_release_workflow_has_one_supported_installer_path():
 
 
 def test_wix_build_resolves_paths_before_preprocessing():
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
     build_script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
     for source in (workflow, build_script):
         assert "$exePath" in source
@@ -121,7 +123,7 @@ def test_wix_build_resolves_paths_before_preprocessing():
 
 
 def test_release_tag_is_derived_from_the_application_version():
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
 
     assert "$tag = \"v$version\"" in workflow
     assert "v0.3.0-rc5" not in workflow
@@ -129,7 +131,7 @@ def test_release_tag_is_derived_from_the_application_version():
 
 
 def test_wix_workflow_installs_all_extensions_used_by_bundle_build():
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
 
     assert "wix extension add -g WixToolset.Bal.wixext/4.0.5" in workflow
     assert "wix extension add -g WixToolset.Util.wixext/4.0.5" in workflow

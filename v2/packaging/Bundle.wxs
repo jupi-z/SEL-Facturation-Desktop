@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Bundle Name="SEL Facturation V2" Manufacturer="Société d'Énergie du Lualaba" Version="$(var.ProductVersion)" UpgradeCode="A2DDF69A-11A1-4D08-A6F4-9C7E8F1D204B" IconSourceFile="$(var.IconPath)">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication LicenseUrl="" Theme="hyperlinkLicense" ShowVersion="yes" />
+    </BootstrapperApplication>
+    <util:RegistrySearch Id="WebView2RuntimeVersionMachine" Variable="WebView2RuntimeVersionMachine" Root="HKLM" Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Value="pv" Result="value" />
+    <util:RegistrySearch Id="WebView2RuntimeVersionUser" Variable="WebView2RuntimeVersionUser" Root="HKCU" Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Value="pv" Result="value" />
+    <Chain>
+      <ExePackage Id="WebView2EvergreenStandalone" SourceFile="$(var.WebView2Installer)" PerMachine="no" Permanent="yes" DetectCondition="WebView2RuntimeVersionMachine OR WebView2RuntimeVersionUser" InstallArguments="/silent /install" />
+      <MsiPackage SourceFile="$(var.MsiPath)" />
+    </Chain>
+  </Bundle>
+</Wix>

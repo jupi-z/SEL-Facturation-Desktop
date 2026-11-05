@@ -143,6 +143,7 @@ def test_desktop_script_reports_print_fallback_as_guidance():
 
 def test_temporary_pdf_cleanup_removes_only_expired_files(tmp_path, monkeypatch):
     monkeypatch.setenv("SEL_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(os, "startfile", lambda *_args: None, raising=False)
     folder = tmp_path / "documents-temporaires"
     folder.mkdir()
     expired = folder / "expired.pdf"

@@ -1,0 +1,1587 @@
+openapi: 3.1.0
+info:
+  title: SEL V2 Backend API
+  version: 0.1.0
+  description: >-
+    Structured SEL billing API. Invoice documents are JSON; PDF generation is client-side only.
+    Authenticated API requests use short-lived individual sessions. The server applies a
+    fail-closed route/method RBAC matrix for ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR,
+    and AUDITOR_READONLY. Offline sync events are additionally checked against active
+    actor/device identity, signed grant scope, expiry, and limits.
+servers:
+  - url: https://api.example.invalid
+paths:
+  /health/live:
+    get:
+      operationId: healthLive
+      responses:
+        '200': { description: Service is alive }
+  /health/ready:
+    get:
+      operationId: healthReady
+      responses:
+        '200': { description: Service readiness }
+  /v1/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identity_ref, password]
+              properties:
+                identity_ref: { type: string, minLength: 1 }
+                password: { type: string, minLength: 1, writeOnly: true }
+      responses:
+        '200': { description: Individual session and refresh token issued }
+        '401': { $ref: '#/components/responses/Problem' }
+  /v1/auth/refresh:
+    post:
+      operationId: refreshSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string, writeOnly: true }
+      responses:
+        '200': { description: Rotated individual session tokens }
+        '401': { $ref: '#/components/responses/Problem' }
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Current session revoked }
+        '401': { $ref: '#/components/responses/Problem' }
+  /v1/auth/change-password:
+    post:
+      operationId: changeOwnPassword
+      description: Any authenticated user may change their own password. A temporary-password session may use only this route or logout until the password is changed.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, minLength: 1, writeOnly: true }
+                new_password: { type: string, minLength: 8, writeOnly: true }
+      responses:
+        '204': { description: Password changed; all active sessions are revoked }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /v1/users/{id}/password:
+    post:
+      operationId: provisionUserPassword
+      description: ADMIN only. Revokes the target user's active sessions and writes a redacted audit event atomically.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, minLength: 8, writeOnly: true }
+      responses:
+        '204': { description: Password provisioned; existing user sessions revoked }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/admin/users:
+    get:
+      operationId: listAdminUsers
+      description: ADMIN only. Returns organization-scoped account metadata and never exposes password hashes.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Users and credential provisioning state }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createAdminUser
+      description: ADMIN only. Creates an account and audit record atomically; identity references are unique ignoring case within the organization.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAdminUserRequest' }
+      responses:
+        '201': { description: Account created }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/audit-events:
+    get:
+      operationId: listAdminAuditEvents
+      description: ADMIN only. Returns at most the 100 most recent redacted events associated with the authenticated organization through an actor or device; no event payloads are exposed.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Organization-scoped redacted audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, event_type, occurred_at, redacted_metadata]
+                  properties:
+                    id: { type: string, format: uuid }
+                    actor_id: { type: [string, 'null'], format: uuid }
+                    actor_identity: { type: [string, 'null'] }
+                    device_id: { type: [string, 'null'], format: uuid }
+                    event_type: { type: string }
+                    subject_id: { type: [string, 'null'], format: uuid }
+                    occurred_at: { type: string, format: date-time }
+                    redacted_metadata: { type: object }
+        '403': { $ref: '#/components/responses/Problem' }
+  /v1/admin/users/{id}:
+    patch:
+      operationId: updateAdminUserAccess
+      description: ADMIN only. Role/status changes are audited, revoke sessions and offline grants, and cannot remove the last active administrator.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateAdminUserRequest' }
+      responses:
+        '200': { description: Account access updated }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/admin/devices:
+    get:
+      operationId: listAdminDevices
+      description: ADMIN only. Lists enrolled device status and synchronization cursors for the current organization.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Organization-scoped devices }
+        '403': { $ref: '#/components/responses/Problem' }
+  /v1/admin/devices/{id}/provision:
+    post:
+      operationId: provisionCurrentDevice
+      description: ADMIN only. Atomically registers one device and issues a server-signed, expiring offline authorization. The device sync token is stored only as a SHA-256 digest.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [device_id, public_key_id, sync_token_sha256, user_id, grant_id, scopes, issued_at, expires_at]
+              properties:
+                device_id: { type: string, format: uuid }
+                public_key_id: { type: string, minLength: 1 }
+                sync_token_sha256: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+                user_id: { type: string, format: uuid }
+                grant_id: { type: string, format: uuid }
+                scopes: { type: array, minItems: 1, items: { type: string } }
+                limits: { type: object }
+                issued_at: { type: string, format: date-time }
+                expires_at: { type: string, format: date-time }
+      responses:
+        '201': { description: Device and signed offline authorization provisioned atomically }
+        '200': { description: Idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+  /v1/admin/offline-grants:
+    get:
+      operationId: listAdminOfflineGrants
+      description: ADMIN only. Lists grant scopes, limits and revocation state without returning signatures.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Organization-scoped offline grants }
+        '403': { $ref: '#/components/responses/Problem' }
+  /v1/admin/offline-grants/{id}/revoke:
+    post:
+      operationId: revokeAdminOfflineGrant
+      description: ADMIN only. Revocation is durable and audited; repeated revocation is safe.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '204': { description: Grant revoked }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/meta/capabilities:
+    get:
+      operationId: capabilities
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Protocol capabilities }
+  /v1/catalog/products:
+    get:
+      operationId: listCatalogProducts
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Active commercial products
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogProduct' } } } }
+  /v1/admin/catalog/products:
+    get:
+      operationId: listAdminSolarProductVersions
+      description: ADMIN only. Lists approved, draft, and revoked solar product versions.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Full solar product version history
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/SolarProductVersion' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createSolarProductDraft
+      description: ADMIN only. Draft is unavailable to quotes and sales until explicitly approved.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSolarProductDraftRequest' }
+      responses:
+        '201': { description: Draft created, not commercially available }
+        '200': { description: Idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/products/{id}/approve:
+    post:
+      operationId: approveSolarProductVersion
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveSolarProductRequest' }
+      responses:
+        '200': { description: Approved version; optional predecessor is closed on the prior day }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/products/{id}/revoke:
+    post:
+      operationId: revokeSolarProductVersion
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeTariffRequest' }
+      responses:
+        '200': { description: Version revoked and audit recorded }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/catalog/tariffs:
+    get:
+      operationId: listCatalogTariffs
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Approved dated utility tariffs only
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogTariff' } } } }
+  /v1/admin/catalog/tariffs:
+    get:
+      operationId: listAdminTariffVersions
+      description: ADMIN only. Lists all tariff versions and states, including drafts and revoked versions.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Full administrative tariff history
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/TariffDraft' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createTariffDraft
+      description: ADMIN only. Creates an inactive draft; this does not make a tariff applicable to billing.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTariffDraftRequest' }
+      responses:
+        '201':
+          description: Draft saved but not commercially applicable
+          content: { application/json: { schema: { $ref: '#/components/schemas/TariffDraft' } } }
+        '200': { description: Idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tariffs/{id}/approve:
+    post:
+      operationId: approveTariffDraft
+      description: ADMIN only. Requires the reference of SEL's explicit commercial approval.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveTariffDraftRequest' }
+      responses:
+        '200':
+          description: Approved tariff version
+          content: { application/json: { schema: { $ref: '#/components/schemas/TariffDraft' } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tariffs/{id}/revoke:
+    post:
+      operationId: revokeTariffVersion
+      description: ADMIN only. Append-audited revocation; issued invoice snapshots are not modified.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeTariffRequest' }
+      responses:
+        '200':
+          description: Tariff version revoked or idempotently replayed
+          content: { application/json: { schema: { $ref: '#/components/schemas/TariffDraft' } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tax-profiles:
+    get:
+      operationId: listAdminTaxProfileVersions
+      description: ADMIN only. Lists drafts and historical versions.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Tax profile version history, including drafts }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createTaxProfileDraft
+      description: ADMIN only. Creates an auditable draft; it is not used for billing until approved.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTaxProfileDraftRequest' }
+      responses:
+        '201': { description: Draft created }
+        '200': { description: Idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tax-profiles/{id}/approve:
+    post:
+      operationId: approveTaxProfileVersion
+      description: ADMIN only. Requires an explicit SEL approval reference and non-overlapping effective dates.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveReferenceDraftRequest' }
+      responses:
+        '200': { description: Approved version or idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/tax-profiles/{id}/revoke:
+    post:
+      operationId: revokeTaxProfileVersion
+      description: ADMIN only. Revokes and audits a version without changing issued document snapshots.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeTariffRequest' }
+      responses:
+        '200': { description: Revoked version or idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/fx-rates:
+    get:
+      operationId: listAdminExchangeRateVersions
+      description: ADMIN only. Lists drafts and historical versions.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Exchange rate version history, including drafts }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createExchangeRateDraft
+      description: ADMIN only. Creates an auditable draft; it cannot be used for conversion until approved.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateFxRateDraftRequest' }
+      responses:
+        '201': { description: Draft created }
+        '200': { description: Idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/fx-rates/{id}/approve:
+    post:
+      operationId: approveExchangeRateVersion
+      description: ADMIN only. Requires an explicit SEL approval reference and non-overlapping effective dates.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApproveReferenceDraftRequest' }
+      responses:
+        '200': { description: Approved version or idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/catalog/fx-rates/{id}/revoke:
+    post:
+      operationId: revokeExchangeRateVersion
+      description: ADMIN only. Revokes and audits a version without changing issued document snapshots.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeTariffRequest' }
+      responses:
+        '200': { description: Revoked version or idempotent replay }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/catalog/tax-profiles:
+    get:
+      operationId: listCatalogTaxProfiles
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Approved dated tax profiles only
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogTaxProfile' } } } }
+  /v1/catalog/fx-rates:
+    get:
+      operationId: listCatalogFxRates
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Approved exchange rates only
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogFxRate' } } } }
+  /v1/catalog/snapshot:
+    get:
+      operationId: getOfflineCatalogSnapshot
+      description: Authenticated immutable versioned projection for local offline caches. Includes approved and revoked historical versions, excludes drafts, and carries a deterministic SHA-256 over payload.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Catalog snapshot with version and integrity hash
+          content: { application/json: { schema: { $ref: '#/components/schemas/CatalogSnapshot' } } }
+        '401': { $ref: '#/components/responses/Problem' }
+  /v1/devices/enroll:
+    post:
+      operationId: enrollDevice
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EnrollDeviceRequest' } } } }
+      responses:
+        '201': { description: Device enrolled }
+        '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/devices/{id}/revoke:
+    post:
+      operationId: revokeDevice
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '204': { description: Device revoked }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/offline-grants:
+    post:
+      operationId: createOfflineGrant
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateOfflineGrantRequest' } } } }
+      responses:
+        '201': { description: Signed offline grant issued }
+        '200': { description: Idempotent retry }
+        '403': { $ref: '#/components/responses/Problem' }
+  /v1/customers:
+    get:
+      operationId: listCustomers
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Customer code returned by X-Next-Cursor }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [ACTIVE, ARCHIVED] } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 128 }, description: Case-insensitive substring search in customer code and legal name }
+      responses:
+        '200':
+          description: Customers page; the legacy array response is preserved
+          headers:
+            X-Next-Cursor: { schema: { type: string }, description: Cursor for the next page when present }
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Customer' } } } }
+    post:
+      operationId: createCustomer
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateCustomer' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Customer' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/customers/{id}:
+    get:
+      operationId: getCustomer
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Customer, content: { application/json: { schema: { $ref: '#/components/schemas/Customer' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateCustomer
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { name: If-Match, in: header, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateCustomer' } } } }
+      responses:
+        '200': { description: Updated customer }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/customers/{id}/service-accounts:
+    get:
+      operationId: listCustomerServiceAccounts
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Service accounts scoped to the authenticated organization, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ServiceAccount' } } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createCustomerServiceAccount
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateServiceAccount' } } } }
+      responses:
+        '201': { description: Service account created, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceAccount' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/service-accounts/{id}/meters:
+    get:
+      operationId: listServiceAccountMeters
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Meters scoped to the authenticated organization, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Meter' } } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createServiceAccountMeter
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateMeter' } } } }
+      responses:
+        '201': { description: Meter created, content: { application/json: { schema: { $ref: '#/components/schemas/Meter' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/service-accounts/{id}:
+    get:
+      operationId: getServiceAccount
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Service account, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceAccount' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateServiceAccount
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { name: If-Match, in: header, required: true, schema: { type: string } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateServiceAccount' } } } }
+      responses:
+        '200':
+          description: Updated service account
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceAccount' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/meters/{id}/readings:
+    get:
+      operationId: listMeterReadings
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { name: period, in: query, required: false, schema: { type: string, pattern: '^\d{4}-(0[1-9]|1[0-2])$' } }
+      responses:
+        '200': { description: Append-only meter reading history, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/MeterReading' } } } } }
+    post:
+      operationId: createMeterReading
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateMeterReading' } } } }
+      responses:
+        '201': { description: Reading stored; quantity is calculated by the backend, content: { application/json: { schema: { $ref: '#/components/schemas/MeterReading' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/meter-readings/{id}/corrections:
+    post:
+      operationId: correctMeterReading
+      description: ADMIN or SUPERVISOR only. Creates an append-only correction and preserves the superseded reading.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CorrectMeterReading' } } } }
+      responses:
+        '201': { description: Correction appended, content: { application/json: { schema: { $ref: '#/components/schemas/MeterReading' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/billing/utility/preview:
+    post:
+      operationId: previewUtility
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingRequest' } } } }
+      responses:
+        '200': { description: Two service lines, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingResponse' } } } }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/billing/utility/issue:
+    post:
+      operationId: issueUtility
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingRequest' } } } }
+      responses:
+        '201': { description: Central accepted, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingResponse' } } } }
+        '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/invoices:
+    get:
+      operationId: listInvoices
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: customer_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: period, in: query, required: false, description: Billing month in YYYY-MM format, schema: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' } }
+        - { name: status, in: query, required: false, description: Invoice lifecycle status filter, schema: { type: string, enum: [LOCAL_PENDING, CENTRAL_ACCEPTED, VOID, CONFLICT_REQUIRES_REVIEW] } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: Structured invoice history filtered by customer or billing period
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UtilityBillingResponse' }
+  /v1/invoices/{id}:
+    get:
+      operationId: getInvoice
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Structured invoice, content: { application/json: { schema: { $ref: '#/components/schemas/UtilityBillingResponse' } } } }
+  /v1/invoices/{id}/document-data:
+    get:
+      operationId: getInvoiceDocumentData
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Client rendering data only, content: { application/json: { schema: { $ref: '#/components/schemas/DocumentData' } } } }
+  /v1/invoices/{id}/void:
+    post:
+      operationId: voidInvoice
+      description: ADMIN or SUPERVISOR only. Financial correction is append-only and audited.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: Invoice void recorded }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/payments:
+    get:
+      operationId: listPayments
+      description: Bounded central payment journal. Results are scoped to the authenticated organization and may be filtered by customer and status.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: customer_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [CENTRAL_ACCEPTED, CONFLICT_REQUIRES_REVIEW, REJECTED] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Payments ordered by payment time, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PaymentListItem' }
+        '401': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: recordPayment
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RecordPaymentRequest' } } } }
+      responses:
+        '201': { description: Payment recorded }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/payments/{id}/document-data:
+    get:
+      operationId: getPaymentDocumentData
+      description: Versioned JSON facts for local receipt rendering. This endpoint never returns or stores a document file.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200':
+          description: Structured receipt facts for client-side rendering.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentReceiptData' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/payments/{id}/allocate:
+    post:
+      operationId: allocatePayment
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [allocations]
+              properties:
+                allocations:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/PaymentAllocation' }
+      responses:
+        '201': { description: Payment allocations recorded }
+        '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/payments/{id}/reverse:
+    post:
+      operationId: reversePayment
+      description: ADMIN, CASHIER, or SUPERVISOR only. Reversal is append-only and audited.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, reason]
+              properties:
+                amount: { type: string, description: Positive decimal in payment currency }
+                reason: { type: string, minLength: 1 }
+      responses:
+        '201': { description: Payment reversal recorded }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/receivables/{id}:
+    get:
+      operationId: getReceivable
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200': { description: Receivable balance projection }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/receivables/{id}/credit:
+    post:
+      operationId: createCreditNote
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreditNoteRequest' }
+      responses:
+        '201': { description: Credit note recorded append-only }
+        '200': { description: Idempotent retry }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/customers/{id}/statement:
+    get:
+      operationId: getCustomerStatement
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200':
+          description: Customer financial statement with immutable invoice history, receipts, allocations, reversals and current receivable summaries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomerStatement' }
+  /v1/sync/push:
+    post:
+      operationId: syncPush
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '200': { description: Durable event results }
+  /v1/sync/pull:
+    get:
+      operationId: syncPull
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Paged central changes }
+  /v1/config/versions:
+    get:
+      operationId: configVersions
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Declarative update metadata }
+  /v1/client-resources/manifest:
+    get:
+      operationId: clientResourcesManifest
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Signed declarative resource metadata only }
+  /v1/sync/status:
+    get:
+      operationId: syncStatus
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Honest local/central synchronization status }
+  /v1/devices/{id}/offline-grant/renew:
+    post:
+      operationId: renewDeviceOfflineGrant
+      summary: Renew the signed offline grant using the enrolled device sync token
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grant_id]
+              additionalProperties: false
+              properties:
+                grant_id: { type: string, format: uuid }
+      responses:
+        '200': { description: Existing authorization remains valid or is renewed and re-signed for seven days }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/solar/sales:
+    get:
+      operationId: listSolarSales
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Solar sales and linked receivables read from central PostgreSQL
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+        '401': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createSolarSale
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateSolarSaleRequest' } } } }
+      responses:
+        '201': { description: One sale and one receivable }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/solar/sales/{id}/document-data:
+    get:
+      operationId: getSolarSaleDocumentData
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200':
+          description: Structured central data for local PDF rendering; no document file is stored server-side
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '404': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+  /v1/solar/quotes:
+    post:
+      operationId: createSolarQuote
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateSolarQuoteRequest' } } } }
+      responses:
+        '200':
+          description: Price quote derived from the active approved solar catalog
+          content: { application/json: { schema: { $ref: '#/components/schemas/SolarQuoteResponse' } } }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/solar/contracts:
+    post:
+      operationId: createSolarContract
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ActivateSolarContractRequest' } } } }
+      responses:
+        '201': { description: Persisted solar contract and exact installment schedule }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/solar/contracts/{id}/activate:
+    post:
+      operationId: activateSolarContract
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/UuidPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ActivateSolarContractRequest' } } } }
+      responses:
+        '200': { description: Exact installment schedule accepted }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/installment-plans/{id}:
+    get:
+      operationId: getInstallmentPlan
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      responses:
+        '200':
+          description: Persisted installment plan with payment state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstallmentPlan' }
+        '404': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    UuidPath: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8 } }
+  responses:
+    Problem:
+      description: Stable problem detail
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetails' } } }
+  schemas:
+    ServiceAccount:
+      type: object
+      required: [id, customer_id, service_code, connection_status, revision]
+      properties:
+        id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        contract_ref: { type: [string, 'null'] }
+        connection_status: { type: string, enum: [CONNECTED, NOT_CONNECTED, UNKNOWN] }
+        activated_at: { type: [string, 'null'], format: date }
+        revision: { type: integer, minimum: 1 }
+    UpdateServiceAccount:
+      type: object
+      additionalProperties: false
+      properties:
+        contract_ref: { type: [string, 'null'], maxLength: 128 }
+        connection_status: { type: string, enum: [CONNECTED, NOT_CONNECTED, UNKNOWN] }
+        activated_at: { type: [string, 'null'], format: date }
+    CreateServiceAccount:
+      type: object
+      additionalProperties: false
+      required: [service_code, connection_status]
+      properties:
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        contract_ref: { type: [string, 'null'] }
+        connection_status: { type: string, enum: [CONNECTED, NOT_CONNECTED, UNKNOWN] }
+        activated_at: { type: [string, 'null'], format: date }
+    Meter:
+      type: object
+      required: [id, service_account_id, serial, unit, active]
+      properties:
+        id: { type: string, format: uuid }
+        service_account_id: { type: string, format: uuid }
+        serial: { type: string }
+        unit: { type: string, enum: [KWH, M3] }
+        active: { type: boolean }
+    CreateMeter:
+      type: object
+      additionalProperties: false
+      required: [serial, unit]
+      properties:
+        serial: { type: string, minLength: 1, maxLength: 128 }
+        unit: { type: string, enum: [KWH, M3] }
+    MeterReading:
+      type: object
+      required: [id, meter_id, period, previous, current, measured_quantity, source]
+      properties:
+        id: { type: string, format: uuid }
+        meter_id: { type: string, format: uuid }
+        period: { type: string, pattern: '^\d{4}-(0[1-9]|1[0-2])$' }
+        previous: { type: string, description: Decimal string }
+        current: { type: string, description: Decimal string }
+        measured_quantity: { type: string, description: Server-calculated current minus previous }
+        source: { type: string }
+        corrected_from_id: { type: [string, 'null'], format: uuid }
+        correction_reason: { type: [string, 'null'] }
+    CreateMeterReading:
+      type: object
+      additionalProperties: false
+      required: [period, previous, current, source]
+      properties:
+        period: { type: string, pattern: '^\d{4}-(0[1-9]|1[0-2])$' }
+        previous: { type: string }
+        current: { type: string }
+        source: { type: string, minLength: 1, maxLength: 64 }
+    CorrectMeterReading:
+      type: object
+      additionalProperties: false
+      required: [current, source, reason]
+      properties:
+        current: { type: string }
+        source: { type: string, minLength: 1, maxLength: 64 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    CreateAdminUserRequest:
+      type: object
+      required: [identity_ref, role, password]
+      properties:
+        identity_ref: { type: string, minLength: 1, maxLength: 254 }
+        role: { type: string, enum: [ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR, AUDITOR_READONLY] }
+        password: { type: string, minLength: 8, writeOnly: true }
+        require_password_change: { type: boolean, default: false, description: Require the user to replace the temporary password before accessing business routes }
+    UpdateAdminUserRequest:
+      type: object
+      minProperties: 1
+      properties:
+        role: { type: string, enum: [ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR, AUDITOR_READONLY] }
+        status: { type: string, enum: [ACTIVE, REVOKED] }
+    CatalogProduct:
+      type: object
+      required: [id, sku, product_type, label, price_reference, currency, effective_from]
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string }
+        product_type: { type: string }
+        label: { type: string }
+        price_reference: { type: string }
+        currency: { type: string }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: [string, 'null'] }
+    SolarProductVersion:
+      type: object
+      required: [id, sku, product_type, label, price_reference, currency, active, effective_from, effective_to, approval_ref, status]
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string, maxLength: 64 }
+        product_type: { type: string, enum: [SOLAR_KIT, OTHER] }
+        label: { type: string, maxLength: 160 }
+        price_reference: { type: string }
+        currency: { type: string, enum: [USD, CDF] }
+        active: { type: boolean }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: [string, 'null'] }
+        approved_by: { type: [string, 'null'], format: uuid }
+        status: { type: string, enum: [DRAFT, APPROVED, REVOKED] }
+    CreateSolarProductDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [sku, label, price_reference, currency, effective_from]
+      properties:
+        sku: { type: string, minLength: 1, maxLength: 64 }
+        label: { type: string, minLength: 1, maxLength: 160 }
+        price_reference: { type: string, pattern: '^[0-9]+(\.[0-9]{1,6})?$' }
+        currency: { type: string, enum: [USD, CDF] }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+    ApproveSolarProductRequest:
+      type: object
+      additionalProperties: false
+      required: [approval_ref]
+      properties:
+        approval_ref: { type: string, minLength: 1, maxLength: 160 }
+        supersedes_product_id: { type: [string, 'null'], format: uuid }
+    CatalogTariff:
+      type: object
+      required: [id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref]
+      properties:
+        id: { type: string, format: uuid }
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        customer_category: { type: string }
+        unit: { type: string, enum: [KWH, M3] }
+        unit_price: { type: string }
+        currency: { type: string }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: string }
+    CreateTariffDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [service_code, customer_category, unit, unit_price, currency, effective_from]
+      properties:
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        customer_category: { type: string, minLength: 1 }
+        unit: { type: string, enum: [KWH, M3] }
+        unit_price: { type: string, pattern: '^[0-9]+(\.[0-9]{1,6})?$' }
+        currency: { type: string, enum: [USD, CDF] }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+    ApproveTariffDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [approval_ref]
+      properties:
+        approval_ref: { type: string, minLength: 1, maxLength: 160 }
+        supersedes_tariff_id: { type: [string, 'null'], format: uuid }
+    RevokeTariffRequest:
+      type: object
+      additionalProperties: false
+      required: [change_ref]
+      properties:
+        change_ref: { type: string, minLength: 1, maxLength: 160 }
+    TariffDraft:
+      type: object
+      required: [id, service_code, customer_category, unit, unit_price, currency, effective_from, effective_to, status]
+      properties:
+        id: { type: string, format: uuid }
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        customer_category: { type: string }
+        unit: { type: string, enum: [KWH, M3] }
+        unit_price: { type: string }
+        currency: { type: string, enum: [USD, CDF] }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: [string, 'null'] }
+        status: { type: string, enum: [DRAFT, APPROVED, REVOKED] }
+    CatalogTaxProfile:
+      type: object
+      required: [id, service_code, jurisdiction, base, rate, source, effective_from]
+      properties:
+        id: { type: string, format: uuid }
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        jurisdiction: { type: string }
+        base: { type: string }
+        rate: { type: string }
+        source: { type: string }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        approval_ref: { type: [string, 'null'] }
+    CatalogFxRate:
+      type: object
+      required: [id, from_currency, to_currency, value, effective_from, source]
+      properties:
+        id: { type: string, format: uuid }
+        from_currency: { type: string }
+        to_currency: { type: string }
+        value: { type: string }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+        source: { type: string }
+        approval_ref: { type: [string, 'null'] }
+    CatalogSnapshot:
+      type: object
+      required: [payload, sha256]
+      properties:
+        payload: { $ref: '#/components/schemas/CatalogSnapshotPayload' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    CatalogSnapshotPayload:
+      type: object
+      required: [schema_version, products, tariffs, tax_profiles, fx_rates]
+      properties:
+        schema_version: { type: integer, enum: [1] }
+        products: { type: array, items: { type: object } }
+        tariffs: { type: array, items: { type: object } }
+        tax_profiles: { type: array, items: { type: object } }
+        fx_rates: { type: array, items: { type: object } }
+    CreateTaxProfileDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [service_code, jurisdiction, base, rate, source, effective_from]
+      properties:
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        jurisdiction: { type: string, minLength: 1, maxLength: 64 }
+        base: { type: string, minLength: 1, maxLength: 64 }
+        rate: { type: string, pattern: '^[0-9]+(\\.[0-9]{1,6})?$' }
+        source: { type: string, minLength: 1, maxLength: 160 }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+    CreateFxRateDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [from_currency, to_currency, value, source, effective_from]
+      properties:
+        from_currency: { type: string, pattern: '^[A-Z]{3}$' }
+        to_currency: { type: string, pattern: '^[A-Z]{3}$' }
+        value: { type: string, pattern: '^[0-9]+(\\.[0-9]{1,12})?$' }
+        source: { type: string, minLength: 1, maxLength: 160 }
+        effective_from: { type: string, format: date }
+        effective_to: { type: [string, 'null'], format: date }
+    ApproveReferenceDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [approval_ref]
+      properties:
+        approval_ref: { type: string, minLength: 1, maxLength: 160 }
+        supersedes_id: { type: [string, 'null'], format: uuid }
+    Customer:
+      type: object
+      required: [id, organization_id, customer_code, legal_name, customer_category, status, revision]
+      properties:
+        id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid }
+        customer_code: { type: string }
+        legal_name: { type: string }
+        customer_category: { type: [string, 'null'], description: Null only for legacy or unclassified records; billing is blocked until assigned. }
+        address: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        status: { type: string }
+        revision: { type: integer, format: int64 }
+    CreateCustomer:
+      type: object
+      required: [customer_code, legal_name]
+      properties:
+        customer_code: { type: string }
+        legal_name: { type: string }
+        customer_category: { type: [string, 'null'], description: Optional for backward-compatible imports; required by the Windows customer form and before billing. }
+        address: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+    EnrollDeviceRequest:
+      type: object
+      required: [device_id, public_key_id]
+      properties:
+        device_id: { type: string, format: uuid }
+        public_key_id: { type: string, minLength: 1 }
+    CreateOfflineGrantRequest:
+      type: object
+      required: [grant_id, user_id, device_id, scopes, limits, issued_at, expires_at, signature]
+      properties:
+        grant_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        scopes: { type: object }
+        limits: { type: object }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        signature: { type: string, minLength: 80 }
+    UpdateCustomer:
+      type: object
+      properties:
+        legal_name: { type: [string, 'null'] }
+        customer_category: { type: [string, 'null'], description: Set the tariff category or clear it; an unclassified customer cannot be billed. }
+        address: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        status: { type: [string, 'null'], enum: [ACTIVE, ARCHIVED, null] }
+    UtilityBillingRequest:
+      type: object
+      required: [customer_id, billing_period, electricity, water, water_zero_confirmed, currency, tariff_revision]
+      properties:
+        customer_id: { type: string, format: uuid }
+        billing_period: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }
+        electricity: { $ref: '#/components/schemas/ServiceInput' }
+        water: { $ref: '#/components/schemas/ServiceInput' }
+        water_zero_confirmed: { type: boolean }
+        currency: { type: string }
+        tariff_revision: { type: string }
+        due_date: { type: [string, 'null'], format: date }
+        meter_readings:
+          type: [object, 'null']
+          description: Optional source indexes; when present, the server derives both billed quantities from current readings and prevents reuse.
+          required: [electricity_reading_id, water_reading_id]
+          properties:
+            electricity_reading_id: { type: string, format: uuid }
+            water_reading_id: { type: string, format: uuid }
+    ServiceInput:
+      type: object
+      required: [quantity, unit]
+      properties:
+        quantity: { type: string, description: Decimal encoded as a JSON string }
+        unit: { type: string, enum: [KWH, M3] }
+    InvoiceLine:
+      type: object
+      required: [service_code, quantity, unit, subtotal, tax, total]
+      properties:
+        service_code: { type: string, enum: [ELECTRICITY, WATER] }
+        quantity: { type: string }
+        unit: { type: string }
+        unit_price: { type: [string, 'null'] }
+        subtotal: { type: string }
+        tax: { type: string }
+        total: { type: string }
+    UtilityBillingResponse:
+      type: object
+      required: [invoice_id, receivable_id, status, billing_period, due_date, currency, lines, subtotal, tax, total, snapshot_sha256]
+      properties:
+        invoice_id: { type: string, format: uuid }
+        receivable_id: { type: [string, 'null'], format: uuid }
+        invoice_number: { type: [string, 'null'] }
+        status: { type: string }
+        billing_period: { type: string, description: Billing period in YYYY-MM format }
+        due_date: { type: [string, 'null'], format: date }
+        currency: { type: string }
+        lines: { type: array, minItems: 2, maxItems: 2, items: { $ref: '#/components/schemas/InvoiceLine' } }
+        subtotal: { type: string }
+        tax: { type: string }
+        total: { type: string }
+        snapshot_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    CustomerStatement:
+      type: object
+      required: [customer_id, receivables, invoices, payments]
+      properties:
+        customer_id: { type: string, format: uuid }
+        receivables:
+          type: array
+          items:
+            type: object
+            description: Current receivable summary from the local or central financial ledger.
+        invoices:
+          type: array
+          items: { $ref: '#/components/schemas/UtilityBillingResponse' }
+        payments:
+          type: array
+          items: { $ref: '#/components/schemas/CustomerStatementPayment' }
+    CustomerStatementPayment:
+      type: object
+      required: [payment_id, amount_received, currency, method, paid_at, status, allocations, reversals]
+      properties:
+        payment_id: { type: string, format: uuid }
+        amount_received: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        method: { type: string }
+        paid_at: { type: string, format: date-time }
+        status: { type: string }
+        allocations:
+          type: array
+          items:
+            type: object
+            required: [receivable_id, amount, currency]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              schedule_id: { type: [string, 'null'], format: uuid }
+              amount: { type: string }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+        reversals:
+          type: array
+          items:
+            type: object
+            required: [amount, reason, created_at]
+            properties:
+              amount: { type: string }
+              reason: { type: string }
+              created_at: { type: string, format: date-time }
+    PaymentListItem:
+      type: object
+      required: [payment_id, customer_id, amount_received, currency, method, paid_at, status]
+      properties:
+        payment_id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        amount_received: { type: string }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        method: { type: string }
+        paid_at: { type: string, format: date-time }
+        status: { type: string }
+    PaymentReceiptData:
+      type: object
+      required: [document_schema_version, document_type, document_reference, qr_internal_reference, payment, customer, allocations, reversals, origin]
+      properties:
+        document_schema_version: { type: integer, const: 1 }
+        document_type: { type: string, const: PAYMENT_RECEIPT }
+        document_reference: { type: string, description: Stable internal reference derived from the payment UUID; not a tax identifier. }
+        qr_internal_reference: { type: string, description: Internal SEL reference only; not an official tax QR. }
+        payment:
+          type: object
+          required: [payment_id, customer_id, amount_received, currency, method, paid_at, status]
+          properties:
+            payment_id: { type: string, format: uuid }
+            customer_id: { type: string, format: uuid }
+            amount_received: { type: string }
+            currency: { type: string, pattern: '^[A-Z]{3}$' }
+            method: { type: string }
+            paid_at: { type: string, format: date-time }
+            status: { type: string }
+        customer:
+          description: Customer identity and contact fields reflect the customer profile at the time this data is read; payment and allocation facts remain stored financial records.
+          type: object
+          required: [customer_id, customer_code, legal_name, address, phone]
+          properties:
+            customer_id: { type: string, format: uuid }
+            customer_code: { type: string }
+            legal_name: { type: string }
+            address: { type: [string, 'null'] }
+            phone: { type: [string, 'null'] }
+        allocations:
+          type: array
+          items:
+            type: object
+            required: [receivable_id, schedule_id, amount, currency]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              schedule_id: { type: [string, 'null'], format: uuid }
+              amount: { type: string }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+        reversals:
+          type: array
+          items:
+            type: object
+            required: [amount, reason, created_at]
+            properties:
+              amount: { type: string }
+              reason: { type: string }
+              created_at: { type: string, format: date-time }
+        origin: { type: string, enum: [LOCAL, CENTRAL] }
+    PaymentAllocation:
+      type: object
+      required: [receivable_id, amount]
+      properties:
+        receivable_id: { type: string, format: uuid }
+        amount: { type: string }
+    RecordPaymentRequest:
+      type: object
+      required: [customer_id, received_amount, currency, method, occurred_at, allocations]
+      properties:
+        customer_id: { type: string, format: uuid }
+        received_amount: { type: string }
+        currency: { type: string }
+        method: { type: string }
+        occurred_at: { type: string, format: date-time }
+        allocations: { type: array, items: { $ref: '#/components/schemas/PaymentAllocation' } }
+    CreditNoteRequest:
+      type: object
+      required: [amount, reason]
+      properties:
+        amount: { type: string, description: Positive Decimal amount in the receivable currency }
+        reason: { type: string, minLength: 1 }
+    CreateSolarSaleRequest:
+      type: object
+      required: [customer_id, product_code, principal, currency, terms_revision]
+      properties:
+        customer_id: { type: string, format: uuid }
+        product_code: { type: string }
+        principal: { type: string }
+        currency: { type: string }
+        terms_revision: { type: string }
+    CreateSolarQuoteRequest:
+      type: object
+      required: [product_code, currency, terms_revision]
+      properties:
+        product_code: { type: string }
+        currency: { type: string }
+        terms_revision: { type: string }
+    SolarQuoteResponse:
+      type: object
+      required: [product_code, principal, currency, terms_revision, status]
+      properties:
+        product_code: { type: string }
+        principal: { type: string }
+        currency: { type: string }
+        terms_revision: { type: string }
+        status: { type: string, enum: [QUOTED_FROM_APPROVED_CATALOG] }
+    ActivateSolarContractRequest:
+      type: object
+      required: [sale_id, receivable_id, schedule, currency, approved_terms_revision]
+      properties:
+        sale_id: { type: string, format: uuid }
+        receivable_id: { type: string, format: uuid }
+        currency: { type: string }
+        approved_terms_revision: { type: string }
+        schedule:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [sequence, due_date, amount]
+            properties:
+              sequence: { type: integer, minimum: 1 }
+              due_date: { type: string, format: date }
+              amount: { type: string }
+    InstallmentPlan:
+      type: object
+      required: [id, receivable_id, contract_id, customer_id, principal, paid, remaining, overdue_amount, currency, start_date, stored_status, terms_snapshot, schedule]
+      properties:
+        id: { type: string, format: uuid }
+        receivable_id: { type: string, format: uuid }
+        contract_id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        principal: { type: string }
+        paid: { type: string }
+        remaining: { type: string }
+        overdue_amount: { type: string }
+        currency: { type: string }
+        start_date: { type: string, format: date }
+        stored_status: { type: string }
+        terms_snapshot: { type: object }
+        schedule:
+          type: array
+          items:
+            type: object
+            required: [id, sequence, due_date, amount_due, paid, remaining, stored_status, status, overdue]
+            properties:
+              id: { type: string, format: uuid }
+              sequence: { type: integer }
+              due_date: { type: string, format: date }
+              amount_due: { type: string }
+              paid: { type: string }
+              remaining: { type: string }
+              stored_status: { type: string }
+              status: { type: string, enum: [OPEN, OVERDUE, PAID] }
+              overdue: { type: boolean }
+    DocumentData:
+      type: object
+      required: [document_schema_version, template_version, document_reference, invoice, qr_internal_reference, origin]
+      properties:
+        document_schema_version: { type: integer }
+        template_version: { type: string }
+        document_reference: { type: string }
+        invoice: { $ref: '#/components/schemas/UtilityBillingResponse' }
+        qr_internal_reference: { type: string }
+        origin: { type: string }
+    ProblemDetails:
+      type: object
+      required: [type, title, status, code, detail, request_id]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        request_id: { type: string }
+

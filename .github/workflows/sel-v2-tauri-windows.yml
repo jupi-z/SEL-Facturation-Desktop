@@ -1,0 +1,95 @@
+name: SEL V2 Tauri Windows client
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'v2/windows-app/**'
+      - 'v2/crates/sel-api/**'
+      - 'v2/crates/sel-domain/**'
+      - 'v2/openapi/**'
+      - 'tests/test_v2_tauri_client.py'
+      - '.github/workflows/sel-v2-tauri-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-tauri-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: v2/windows-app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Test Windows client and catalog contracts
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_v2_tauri_client.py
+
+      - name: Install locked frontend dependencies
+        working-directory: v2/windows-app
+        run: npm ci
+
+      - name: Capture desktop views against the Figma frame size
+        run: |
+          python -m pip install playwright pypdf
+          python -m playwright install chromium
+          python v2/windows-app/scripts/visual_review.py
+
+      - name: Upload synthetic visual review screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: SEL-V2-Figma-Desktop-Review-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 14
+          path: artifacts/phase8-documents-figma/*.png
+
+      - name: Build the React client
+        working-directory: v2/windows-app
+        run: npm run build
+
+      - name: Test native session and central admin route allowlist
+        run: cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib --target x86_64-pc-windows-msvc
+
+      - name: Build previous NSIS package for isolated upgrade test
+        working-directory: v2/windows-app
+        run: |
+          npm run tauri -- build --bundles nsis --config '{ "version": "0.3.99" }'
+          $setup = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'Previous-version NSIS setup was not produced.' }
+          Copy-Item $setup.FullName (Join-Path $env:RUNNER_TEMP 'sel-v2-previous-setup.exe')
+
+      - name: Build MSI and NSIS setup
+        working-directory: v2/windows-app
+        run: npm run tauri -- build --bundles msi,nsis
+
+      - name: Verify user install and upgrade preserve profile data
+        run: |
+          $current = Get-ChildItem v2/windows-app/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' |
+            Where-Object { $_.Name -notmatch '0\.3\.99' } | Select-Object -First 1
+          if (-not $current) { throw 'Current-version NSIS setup was not produced.' }
+          python v2/windows-app/scripts/installer_lifecycle_smoke.py `
+            (Join-Path $env:RUNNER_TEMP 'sel-v2-previous-setup.exe') $current.FullName
+
+      - name: Upload unsigned Windows candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: SEL-V2-Tauri-Windows-${{ github.run_number }}
+          if-no-files-found: error
+          path: |
+            v2/windows-app/src-tauri/target/release/bundle/msi/*.msi
+            v2/windows-app/src-tauri/target/release/bundle/nsis/*.exe

@@ -6,6 +6,7 @@ if not importlib.util.find_spec("flask"):
     pytest.skip("Flask is unavailable", allow_module_level=True)
 
 import re
+from datetime import date
 from app import create_app
 import db
 
@@ -116,7 +117,7 @@ def test_configured_future_customer_type_can_be_billed(tmp_path, monkeypatch):
     })
     response = client.post("/invoices/new", data={
         "_csrf": re.search(r'name="_csrf" value="([^"]+)"', client.get("/invoices/new").get_data(as_text=True)).group(1),
-        "client_id": "1", "billing_period": "2026-10", "consumption_kwh": "100",
+        "client_id": "1", "billing_period": date.today().strftime("%Y-%m"), "consumption_kwh": "100",
     })
     assert response.status_code == 200
     assert "15,00" in response.get_data(as_text=True)

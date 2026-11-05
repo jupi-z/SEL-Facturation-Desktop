@@ -1,0 +1,206 @@
+name: Build Windows Desktop
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publier une release après validation de la version et de la recette'
+        required: true
+        default: false
+        type: boolean
+      sign_release:
+        description: 'Signer les artefacts avec le certificat Authenticode SEL configuré dans les secrets GitHub'
+        required: true
+        default: false
+        type: boolean
+      publish_unsigned_preview:
+        description: 'Publier une préversion GitHub non signée pour acceptation manuelle uniquement'
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+    paths: ['*.py', 'safeupdate_*.py', 'tools/**', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', 'Docs/SEL_SAFEUPDATE_V1/**', '.github/workflows/windows.yml']
+  pull_request:
+    branches: [main]
+    paths: ['*.py', 'safeupdate_*.py', 'tools/**', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', 'Docs/SEL_SAFEUPDATE_V1/**', 'Docs/SEL_RELEASE_GATE_V1/**', 'CODEX_RELEASE_GATE_START_HERE.md', '.github/workflows/windows.yml']
+permissions:
+  contents: read
+jobs:
+  test-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt pytest
+      - name: Unit and HTTP tests
+        run: python -m pytest -q
+      - name: Verify SafeUpdate release tooling without production keys
+        run: python -m pytest -q tests/test_safeupdate_crypto.py tests/test_safeupdate_transaction.py tests/test_safeupdate_release_tools.py
+      - name: Verify Windows desktop dependencies
+        run: python -c "import webview, clr; from webview import FileDialog; print('Desktop runtime import OK')"
+      - name: Build Windows EXE
+        run: pyinstaller --clean --noconfirm --onefile --noconsole --name SEL-Facturation --icon packaging\sel-facturation.ico --add-data "templates;templates" --add-data "static;static" --hidden-import clr --collect-all webview --collect-all reportlab desktop.py
+      - name: Smoke test frozen application imports without opening the UI
+        run: .\dist\SEL-Facturation.exe --sel-packaging-smoke
+      - name: Build legacy installation migrator
+        run: pyinstaller --clean --noconfirm --onefile --noconsole --paths . --name SEL-LegacyCleanup packaging\legacy_cleanup.py
+      - name: Install WiX Toolset 4
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+          wix extension add -g WixToolset.Bal.wixext/4.0.5
+          wix extension add -g WixToolset.Util.wixext/4.0.5
+      - name: Prepare Authenticode certificate
+        if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true
+        shell: pwsh
+        env:
+          SEL_CODESIGN_PFX_BASE64: ${{ secrets.SEL_CODESIGN_PFX_BASE64 }}
+          SEL_CODESIGN_PFX_PASSWORD: ${{ secrets.SEL_CODESIGN_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SEL_CODESIGN_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:SEL_CODESIGN_PFX_PASSWORD)) {
+            throw 'Secrets SEL_CODESIGN_PFX_BASE64 et SEL_CODESIGN_PFX_PASSWORD requis pour une release signée.'
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'sel-codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SEL_CODESIGN_PFX_BASE64))
+      - name: Sign application payloads before MSI
+        if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true
+        shell: pwsh
+        env:
+          SEL_CODESIGN_PFX_PASSWORD: ${{ secrets.SEL_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'sel-codesign.pfx'
+          $signtool = Get-ChildItem "$env:ProgramFiles\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'SignTool Windows SDK introuvable.' }
+          foreach ($artifact in @('dist/SEL-Facturation.exe', 'dist/SEL-LegacyCleanup.exe')) {
+            & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SEL_CODESIGN_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $artifact
+            if ($LASTEXITCODE -ne 0) { throw "Signature échouée: $artifact" }
+          }
+      - name: Compile MSI
+        shell: pwsh
+        run: |
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          New-Item -ItemType Directory -Force -Path build\webview2, dist\installer | Out-Null
+          $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $webview
+          $exePath = (Resolve-Path dist\SEL-Facturation.exe).Path
+          $legacyCleanupPath = (Resolve-Path dist\SEL-LegacyCleanup.exe).Path
+          wix build packaging\wix\Product.wxs -d "ProductVersion=$version" -d "ExePath=$exePath" -o dist\installer\SEL-Facturation.msi
+          if ($LASTEXITCODE -ne 0) { throw 'WiX MSI build failed' }
+      - name: Sign MSI before Burn
+        if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true
+        shell: pwsh
+        env:
+          SEL_CODESIGN_PFX_PASSWORD: ${{ secrets.SEL_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'sel-codesign.pfx'
+          $signtool = Get-ChildItem "$env:ProgramFiles\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'SignTool Windows SDK introuvable.' }
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SEL_CODESIGN_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 dist/installer/SEL-Facturation.msi
+          if ($LASTEXITCODE -ne 0) { throw 'Signature MSI échouée.' }
+      - name: Compile autonomous Burn bootstrapper
+        shell: pwsh
+        run: |
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          $msiPath = (Resolve-Path dist\installer\SEL-Facturation.msi).Path
+          $webview = (Resolve-Path build\webview2).Path + '\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+          $legacyCleanupPath = (Resolve-Path dist\SEL-LegacyCleanup.exe).Path
+          $iconPath = (Resolve-Path packaging\sel-facturation.ico).Path
+          wix build packaging\bundle\Bundle.wxs -ext WixToolset.Bal.wixext -ext WixToolset.Util.wixext -d "ProductVersion=$version" -d "MsiPath=$msiPath" -d "WebView2Installer=$webview" -d "LegacyCleanupPath=$legacyCleanupPath" -d "IconPath=$iconPath" -o "dist\installer\SEL-Facturation-Setup-${version}-core.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'WiX bootstrapper build failed' }
+      - name: Sign Burn core before preflight wrapper
+        if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true
+        shell: pwsh
+        env:
+          SEL_CODESIGN_PFX_PASSWORD: ${{ secrets.SEL_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'sel-codesign.pfx'
+          $signtool = Get-ChildItem "$env:ProgramFiles\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'SignTool Windows SDK introuvable.' }
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SEL_CODESIGN_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "dist/installer/SEL-Facturation-Setup-${version}-core.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Signature du bootstrapper Burn échouée.' }
+      - name: Build preflight installer
+        shell: pwsh
+        run: |
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          $corePath = (Resolve-Path "dist/installer/SEL-Facturation-Setup-${version}-core.exe").Path
+          pyinstaller --clean --noconfirm --onefile --noconsole --paths . --name "SEL-Facturation-Setup-$version" --icon packaging\sel-facturation.ico --add-binary "$corePath;." --add-data "version.py;." packaging\preflight_launcher.py
+          if ($LASTEXITCODE -ne 0) { throw 'Preflight launcher build failed' }
+          Move-Item -LiteralPath "dist/SEL-Facturation-Setup-${version}.exe" -Destination "dist/installer/SEL-Facturation-Setup-${version}.exe" -Force
+      - name: Sign final setup launcher
+        if: github.event_name == 'workflow_dispatch' && inputs.sign_release == true
+        shell: pwsh
+        env:
+          SEL_CODESIGN_PFX_PASSWORD: ${{ secrets.SEL_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'sel-codesign.pfx'
+          $signtool = Get-ChildItem "$env:ProgramFiles\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'SignTool Windows SDK introuvable.' }
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SEL_CODESIGN_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "dist/installer/SEL-Facturation-Setup-$version.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Signature du lanceur de pré-vérification échouée.' }
+          Remove-Item -LiteralPath $pfx -Force
+      - name: Publish GitHub prerelease without overwriting
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_SIGNED: ${{ inputs.sign_release }}
+          PUBLISH_UNSIGNED_PREVIEW: ${{ inputs.publish_unsigned_preview }}
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'La publication doit partir de main après fusion et CI réussie.'
+          }
+          if ($env:PUBLISH_SIGNED -ne 'true' -and $env:PUBLISH_UNSIGNED_PREVIEW -ne 'true') {
+            throw 'Publication bloquée: activez sign_release ou demandez explicitement une préversion non signée.'
+          }
+          $versionLine = Get-Content version.py | Select-String 'APP_VERSION'
+          if ($versionLine -notmatch 'APP_VERSION\s*=\s*["'']([^"'']+)["'']') { throw 'APP_VERSION introuvable' }
+          $version = $Matches[1]
+          if ($env:PUBLISH_SIGNED -eq 'true') {
+            foreach ($artifact in @('dist/SEL-Facturation.exe', 'dist/installer/SEL-Facturation.msi', "dist/installer/SEL-Facturation-Setup-$version.exe")) {
+              $signature = Get-AuthenticodeSignature $artifact
+              if ($signature.Status -ne 'Valid') { throw "Artefact non signé: $artifact" }
+            }
+            $title = "SEL Facturation Desktop v$version - installateur Windows"
+            $notes = 'Release préversion signée pour SEL : bootstrapper WebView2 autonome, MSI par utilisateur, Flask/SQLite local, facturation et PDF A4. Essai réel sur le PC cible indispensable.'
+          } else {
+            $title = "SEL Facturation Desktop v$version - aperçu non signé"
+            $notes = "Preversion non signee Authenticode, reservee a l'installation et a l'acceptation manuelles. Le canal integre ne proposera pas le paquet tant qu'une cle publique Ed25519 SEL n'est pas epinglee et qu'un manifeste signe n'est pas publie. Ce paquet n'est pas une version de production; SmartScreen ou les regles Windows du poste peuvent intervenir."
+            Write-Host 'Signature Authenticode absente : publication limitee a une preversion d acceptation manuelle.'
+          }
+          $tag = "v$version"
+          $exe = 'dist/SEL-Facturation.exe'
+          $setup = "dist/installer/SEL-Facturation-Setup-$version.exe"
+          $msi = 'dist/installer/SEL-Facturation.msi'
+          if (-not (Test-Path $exe) -or -not (Test-Path $setup) -or -not (Test-Path $msi)) { throw "Missing Windows package" }
+          gh release view $tag --repo ${{ github.repository }} 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release $tag already exists; bump the application/installer version before publishing. Existing assets are never overwritten."
+          } else {
+            gh release create $tag $exe $setup $msi --prerelease --title $title --notes $notes --repo ${{ github.repository }}
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Publication GitHub Releases failed" }
+      - name: Upload unsigned acceptance packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SEL-Facturation-Windows-${{ github.run_number }}
+          if-no-files-found: error
+          path: |
+            dist/SEL-Facturation.exe
+            dist/installer/SEL-Facturation.msi
+            dist/installer/SEL-Facturation-Setup-*.exe

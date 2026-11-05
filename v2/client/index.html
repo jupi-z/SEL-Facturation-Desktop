@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SEL Facturation V2</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <button class="brand-mark" type="button" aria-label="SEL Facturation — accueil" data-view="dashboard">
+        <img class="brand-logo" src="assets/sel-logo-dark.svg" alt="">
+      </button>
+      <nav aria-label="Navigation principale">
+        <button class="nav-item active" data-view="dashboard" aria-current="page"><span class="nav-icon" aria-hidden="true"></span><span>Vue d’ensemble</span></button>
+        <button class="nav-item" data-view="customers"><span class="nav-icon" aria-hidden="true"></span><span>Abonnés</span></button>
+        <button class="nav-item" data-view="invoice"><span class="nav-icon" aria-hidden="true"></span><span>Factures</span></button>
+        <button class="nav-item" data-view="payments"><span class="nav-icon" aria-hidden="true"></span><span>Encaissements</span></button>
+        <button class="nav-item" data-view="solar"><span class="nav-icon" aria-hidden="true"></span><span>Kits solaires</span></button>
+        <button class="nav-item" data-view="sync"><span class="nav-icon" aria-hidden="true"></span><span>Synchronisation</span></button>
+      </nav>
+      <div class="sidebar-foot"><span class="local-indicator" aria-hidden="true"></span><span>POSTE LOCAL</span><strong>Données conservées sur cet ordinateur</strong></div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">SEL / OPÉRATIONS</p>
+        </div>
+        <div class="connection-status"><span class="status-dot"></span><span id="connection-label">Connexion au service local…</span></div>
+      </header>
+
+      <div id="notice" class="notice" role="status" hidden></div>
+
+      <section id="view-dashboard" class="view active-view">
+        <div class="hero-row">
+          <div><p class="eyebrow">ACTIVITÉ LOCALE</p><h2>Vue d’ensemble</h2><p class="muted">Suivez les opérations enregistrées sur ce poste et leur état de synchronisation.</p></div>
+          <button class="button primary" data-action="refresh">Actualiser</button>
+        </div>
+        <div class="metrics" id="metrics"></div>
+        <div class="panel-grid">
+          <article class="panel"><div class="panel-heading"><h3>Factures récentes</h3><button class="link-button" data-view="invoice">Nouvelle facture</button></div><div id="recent-invoices" class="list"></div></article>
+          <article class="panel"><div class="panel-heading"><h3>État de synchronisation</h3><button class="link-button" data-view="sync">Détails</button></div><div id="sync-summary" class="empty-state">Chargement…</div></article>
+        </div>
+      </section>
+
+      <section id="view-customers" class="view" hidden>
+        <div class="section-heading"><div><p class="eyebrow">RÉPERTOIRE</p><h2>Répertoire des abonnés</h2><p class="muted">Recherchez, consultez et actualisez les dossiers abonnés.</p></div></div>
+        <div class="panel form-panel"><h3>Nouvel abonné</h3><form id="customer-form" class="form-grid"><label>Code client<input name="customer_code" required placeholder="SEL-C-00001"></label><label>Nom / raison sociale<input name="legal_name" required></label><label>Adresse<input name="address"></label><label>Téléphone<input name="phone"></label><div class="form-actions"><button class="button primary" type="submit">Enregistrer l’abonné</button></div></form></div>
+        <div class="panel"><div class="panel-heading"><h3>Abonnés enregistrés</h3><span id="customer-count" class="badge">0</span></div><div id="customers-list" class="table-wrap"></div></div>
+      </section>
+
+      <section id="view-invoice" class="view" hidden>
+        <div class="section-heading"><div><p class="eyebrow">NOUVELLE FACTURE</p><h2>Nouvelle facture</h2><p class="muted">Électricité et eau sont réunies dans un même document, même avec 0 m³ d’eau.</p></div><span class="currency-tag">USD</span></div>
+        <div class="panel form-panel"><form id="invoice-form" class="form-grid"><label class="wide">Abonné<select name="customer_id" id="invoice-customer" required><option value="">Sélectionner…</option></select></label><label>Période<input name="billing_period" type="month" required></label><label>Électricité (kWh)<input name="electricity_quantity" type="number" min="0" step="0.01" value="0" required></label><label>Eau (m³)<input name="water_quantity" id="water-quantity" type="number" min="0" step="0.01" value="0" required></label><label>Date limite<input name="due_date" type="date"></label><label>Révision tarifaire<input name="tariff_revision" value="SEL-V2" required></label><label class="checkbox-row wide"><input name="water_zero_confirmed" id="water-zero-confirmed" type="checkbox"> Je confirme que le relevé d’eau de cette période est exactement de 0 m³.</label><label class="wide">Observation<textarea name="observation" rows="3" placeholder="Optionnel"></textarea></label><div class="form-actions"><button class="button primary" type="submit">Prévisualiser la facture</button></div></form></div>
+        <div id="invoice-result" class="panel result-panel" hidden></div>
+      </section>
+
+      <section id="view-payments" class="view" hidden>
+        <div class="section-heading"><div><p class="eyebrow">ENCAISSEMENTS</p><h2>Encaissement</h2><p class="muted">Enregistrez un paiement et affectez-le à une créance disponible.</p></div></div>
+        <div class="panel form-panel"><form id="payment-form" class="form-grid"><label>Client<select name="customer_id" id="payment-customer" required><option value="">Sélectionner…</option></select></label><label>Devise<input name="currency" value="USD" required></label><label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" required></label><label>Mode de paiement<select name="method"><option value="CASH">Espèces</option><option value="BANK">Banque</option><option value="MOBILE_MONEY">Mobile Money</option><option value="OTHER">Autre</option></select></label><label class="wide">Créance à affecter<select name="receivable_id" id="payment-receivable" required disabled><option value="">Sélectionnez d’abord un client</option></select></label><div class="form-actions"><button class="button primary" type="submit">Enregistrer le règlement</button></div></form></div>
+        <div class="panel"><div class="panel-heading"><h3>Historique local</h3></div><div id="payments-list" class="table-wrap"></div></div>
+      </section>
+
+      <section id="view-solar" class="view" hidden>
+        <div class="section-heading"><div><p class="eyebrow">CATALOGUE ET VENTES</p><h2>Kits solaires</h2><p class="muted">Les tarifs sont contrôlés par le moteur Rust et le catalogue local approuvé.</p></div></div>
+        <div class="panel form-panel"><p class="muted">Cette première interface enregistre la vente selon le catalogue approuvé. L’échéancier est ensuite piloté par les routes Rust dédiées, sans calcul dans l’interface.</p><form id="solar-form" class="form-grid"><label>Client<select name="customer_id" id="solar-customer" required><option value="">Sélectionner…</option></select></label><label>Code produit<input name="product_code" required placeholder="KIT-001"></label><label>Montant principal<input name="principal" type="number" min="0.01" step="0.01" required></label><label>Devise<input name="currency" value="USD" required></label><div class="form-actions"><button class="button primary" type="submit">Enregistrer la vente</button></div></form></div>
+        <div class="panel"><div class="panel-heading"><h3>Ventes locales</h3></div><div id="solar-list" class="table-wrap"></div></div>
+      </section>
+
+      <section id="view-sync" class="view" hidden>
+        <div class="section-heading"><div><p class="eyebrow">CONTINUITÉ DE SERVICE</p><h2>Synchronisation</h2><p class="muted">Les opérations locales restent en attente jusqu’à leur confirmation durable par le serveur central.</p></div></div>
+        <div class="panel sync-panel"><div id="sync-details" class="state-card">Chargement…</div><button class="button primary" data-action="sync">Lancer une synchronisation</button></div>
+      </section>
+
+      <footer>Application développée et sécurisée par <strong>LTEX · MonarQue Group</strong></footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

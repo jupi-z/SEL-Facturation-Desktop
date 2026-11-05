@@ -65,7 +65,7 @@ def test_bundle_presents_version_and_blocks_unsafe_legacy_states():
 
 def test_builds_compile_the_migration_helper_and_pass_it_to_wix():
     script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
 
     for source in (script, workflow):
         assert "legacy_cleanup.py" in source

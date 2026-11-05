@@ -11,7 +11,7 @@
 | Domaine | Routes proposées | Règles |
 |---|---|---|
 | Contrôle API | `GET /health/live`, `GET /health/ready`, `GET /v1/meta/capabilities` | Sans frontend, version/protocol, aucun secret |
-| Auth/admin | `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/devices/enroll`, `POST /v1/offline-grants` | RBAC, enrôlement supervisé, scopes |
+| Auth/admin | `POST /v1/auth/login`, `POST /v1/auth/refresh`, `GET /v1/admin/audit-events`, `POST /v1/devices/enroll`, `POST /v1/offline-grants` | RBAC, événements redacted limités à l’organisation (100 derniers), enrôlement supervisé, scopes |
 | Abonnés | `GET/POST /v1/customers`, `GET/PATCH /v1/customers/{id}` | ID UUID, suppression sécurisée, ETag |
 | Référentiels | `GET /v1/catalog/products`, `GET /v1/catalog/tariffs`, `GET /v1/catalog/tax-profiles`, `GET /v1/catalog/fx-rates` | Versions validées/datées, lecture cache offline |
 | Énergie/eau | `POST /v1/billing/utility/preview`, `POST /v1/billing/utility/issue` | Exactement deux services, 0 M3, snapshot immuable |
@@ -22,7 +22,7 @@
 | Synchronisation | `POST /v1/sync/push`, `GET /v1/sync/pull?cursor=...&limit=...`, `GET /v1/sync/status` | Enveloppes signées/authentifiées, ack, pagination, conflits |
 | LiveUpdate | `GET /v1/config/versions`, `GET /v1/client-resources/manifest` | Métadonnées/ressources génériques signées, jamais PDF facture |
 
-**Local API `http://127.0.0.1:<port>/local/v1/`** : endpoints homologues pour tests et client existant, et `/local/v1/sync/status`, `/local/v1/sync/trigger`, `/local/v1/updates/status` ; l'agent traduit commandes offline en outbox, ne proxy pas aveuglément des POST distants. Le local doit aussi être testable sans UI via HTTP/CLI.
+**Local API `http://127.0.0.1:<port>/local/v1/`** : endpoints homologues pour tests et client, avec `/local/v1/sync/status`, `/local/v1/sync/issues`, `/local/v1/sync/trigger` et `/local/v1/updates/status`. `sync/issues` retourne au plus 100 conflits/refus sans le payload des commandes ; les opérations financières conflictuelles restent conservées et ne sont jamais résolues automatiquement. L'agent traduit les commandes offline en outbox, sans proxy aveugle de POST distants. Le local est testable sans UI via HTTP/CLI.
 
 ## Exemples contractuels (données synthétiques)
 ```json
@@ -65,5 +65,22 @@ Le paiement partiel laisse un solde, **sans** créer de plan d'échéances si l'
 
 ## Preuves
 - OpenAPI validée par un parseur, schémas des erreurs, commandes exemples et tests contractuels.
+
+## Contrat d'autorisation des routes (révision du 3 novembre 2026)
+
+Les routes protégées sous `/v1` sont autorisées par une matrice explicite méthode + chemin + rôle ; toute combinaison non classée est refusée. Les segments `{id}` doivent être des UUID valides. Une nouvelle route ne reçoit donc aucun droit par héritage.
+
+| Opération | Rôles autorisés |
+|---|---|
+| Lecture des routes explicitement listées dans OpenAPI (dont relevés clients, documents structurés et statut de synchronisation) | ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR, AUDITOR_READONLY |
+| Création/modification clients, aperçu/émission de facture, vente/devis/contrat solaire | ADMIN, BILLING_AGENT, SUPERVISOR |
+| Encaissement, affectation et contre-écriture de paiement | ADMIN, CASHIER, SUPERVISOR |
+| Synchronisation push | ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR ; chaque enveloppe est ensuite contrôlée pour le rôle métier de l'acteur, l'acteur actif, l'appareil actif, la signature du grant, son périmètre, son expiration et ses limites |
+| Annulation de facture, avoir/crédit, enrôlement/révocation d'appareil, émission de grant | ADMIN, SUPERVISOR |
+| Provisionnement/rotation de mot de passe d'un utilisateur | ADMIN uniquement |
+
+Les sessions sont individuelles. La rotation de mot de passe vérifie à nouveau le rôle ADMIN dans la transaction SQL, modifie le hash Argon2id, révoque les sessions actives de la cible et écrit un audit expurgé dans la même transaction. Aucun mot de passe ni hash n'est écrit dans l'audit.
+
+Le démarrage commercial exige `DATABASE_URL`, un UUID d'organisation non nul, un nom d'organisation non vide, le mode de sessions individuelles et la clé publique valide pour les grants signés. Le service local exige les UUID non nuls et persistés d'organisation et d'appareil ; aucun UUID nul ne constitue une identité valide.
 - Démarrage central + PG par `docker compose -f v2/deploy/compose.test.yml up`; un appel CLI doit pouvoir créer client, facture, plan solaire, payer en partie, lire solde et afficher les données JSON pour rendu.
 - Test serveur : recherche automatique et assertion aucun `Content-Type: application/pdf` ni voie de persistance de fichier facture; tests de contrôle d'accès à un customer_id non autorisé.

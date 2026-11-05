@@ -81,7 +81,7 @@ def test_invoice_confirmation_keeps_the_tariff_used_by_preview(prepared_client):
     with connect() as db:
         calc = json.loads(db.execute("SELECT calc_snapshot FROM invoices").fetchone()[0])
     assert calc["unit_price"] == "0.095"
-    assert calc["tariff_code"] == "RESIDENTIAL-2026-10"
+    assert calc["tariff_code"] == f"RESIDENTIAL-{date.today():%Y-%m}"
 
 
 def test_invalid_invoice_preview_does_not_consume_sequence(prepared_client):

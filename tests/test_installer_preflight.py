@@ -142,7 +142,7 @@ def test_preflight_launches_cached_bundle_in_repair_mode(monkeypatch, tmp_path):
 
 def test_setup_build_wraps_the_wix_bundle_with_preflight():
     script = (ROOT / "build-windows.ps1").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "legacy" / "windows-v1-local-archive.yml").read_text(encoding="utf-8")
 
     for source in (script, workflow):
         assert "preflight_launcher.py" in source

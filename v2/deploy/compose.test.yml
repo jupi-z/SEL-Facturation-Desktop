@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: sel_v2_test
+      POSTGRES_USER: sel_test
+      POSTGRES_PASSWORD: sel_test_only
+    ports: ["127.0.0.1:55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sel_test -d sel_v2_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    networks: [sel-v2-private]
+    volumes:
+      - sel-v2-pg:/var/lib/postgresql/data
+  sel-api:
+    build:
+      context: ../..
+      dockerfile: v2/deploy/Dockerfile.test
+    environment:
+      DATABASE_URL: postgres://sel_test:sel_test_only@postgres:5432/sel_v2_test
+      SEL_API_PORT: 8080
+      SEL_API_BIND: 0.0.0.0
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["127.0.0.1:18080:8080"]
+    networks: [sel-v2-private]
+networks:
+  sel-v2-private:
+    # The API is published only on loopback for test calls; PostgreSQL remains
+    # un-published and is reachable only from this Docker network.
+volumes:
+  sel-v2-pg:
+

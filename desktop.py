@@ -1,4 +1,4 @@
-"""Fenêtre Windows native pour SEL Facturation (Flask reste strictement local)."""
+"""Ancien lanceur V1, conservé pour l'historique et la migration."""
 from __future__ import annotations
 
 import base64
@@ -258,6 +258,13 @@ def main(argv=None):
     if arguments and arguments[0] == "--sel-update-supervisor":
         from safeupdate_supervisor import main as supervisor_main
         return supervisor_main(arguments)
+    print(
+        "Le client local SEL V1 est retiré et ne peut plus démarrer depuis les sources. "
+        "Utilisez le client Windows connecté au serveur SEL.",
+        file=sys.stderr,
+    )
+    return 2
+
     db.home().mkdir(parents=True, exist_ok=True)
     # A standalone EXE is allowed for diagnostics and portable use. Record
     # only copies that have actually been launched so the setup preflight can
