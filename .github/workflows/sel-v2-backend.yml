@@ -51,6 +51,7 @@ jobs:
             sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update
           sudo apt-get install --yes postgresql-client-16
+          export PATH="/usr/lib/postgresql/16/bin:$PATH"
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
           pg_dump --version | grep --extended-regexp --quiet ' 16\.'
           pg_restore --version | grep --extended-regexp --quiet ' 16\.'
