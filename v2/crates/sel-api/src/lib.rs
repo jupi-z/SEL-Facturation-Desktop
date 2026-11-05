@@ -1995,6 +1995,16 @@ async fn create_customer(
             "customer code and legal name are required",
         ));
     }
+    if input
+        .customer_category
+        .as_deref()
+        .is_some_and(|category| category.trim().is_empty())
+    {
+        return Err(ApiError::unprocessable(
+            "CUSTOMER_CATEGORY_INVALID",
+            "customer category must not be blank",
+        ));
+    }
     if let Some(store) = &state.central {
         return store
             .create_customer(&input)
@@ -2017,6 +2027,9 @@ async fn create_customer(
         organization_id: state.organization_id,
         customer_code: input.customer_code,
         legal_name: input.legal_name,
+        customer_category: input
+            .customer_category
+            .map(|category| category.trim().to_ascii_uppercase()),
         address: input.address,
         phone: input.phone,
         status: "ACTIVE".into(),
@@ -2066,6 +2079,14 @@ async fn update_customer(
             "CUSTOMER_REQUIRED",
             "legal name cannot be empty",
         ));
+    }
+    if let sel_contracts::PatchValue::Value(category) = &input.customer_category {
+        if category.trim().is_empty() {
+            return Err(ApiError::unprocessable(
+                "CUSTOMER_CATEGORY_INVALID",
+                "customer category must not be blank",
+            ));
+        }
     }
     if input
         .status
@@ -2128,6 +2149,11 @@ async fn update_customer(
     }
     customer.address = input.address.apply_to(customer.address.clone());
     customer.phone = input.phone.apply_to(customer.phone.clone());
+    customer.customer_category = input
+        .customer_category
+        .clone()
+        .apply_to(customer.customer_category.clone())
+        .map(|category| category.trim().to_ascii_uppercase());
     if let Some(status) = input.status {
         if !matches!(status.as_str(), "ACTIVE" | "ARCHIVED") {
             return Err(ApiError::unprocessable(
@@ -2511,11 +2537,23 @@ async fn calculate_utility(
         ));
     }
     let tariffs = if let Some(store) = &state.central {
+        let customer = store
+            .get_customer(input.customer_id)
+            .await
+            .map_err(storage_error)?
+            .ok_or_else(|| ApiError::not_found("CUSTOMER_NOT_FOUND", "customer not found"))?;
+        let customer_category = customer.customer_category.as_deref().ok_or_else(|| {
+            ApiError::unprocessable(
+                "CUSTOMER_CATEGORY_REQUIRED",
+                "assign a customer category before billing",
+            )
+        })?;
         let snapshot = store
             .load_tariffs(
                 &input.tariff_revision,
                 &input.currency,
                 &input.billing_period,
+                customer_category,
             )
             .await
             .map_err(storage_error)?;

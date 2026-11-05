@@ -93,7 +93,7 @@ async fn catalog_snapshot_is_authenticated_atomic_and_idempotent() {
     .expect("insert ambiguous applicable tax profile");
     assert!(
         store
-            .load_tariffs("SEL-TARIFF-1", "USD", "2026-01")
+            .load_tariffs("SEL-TARIFF-1", "USD", "2026-01", "RESIDENTIAL")
             .await
             .is_err(),
         "billing must fail closed instead of choosing an arbitrary jurisdiction tax"

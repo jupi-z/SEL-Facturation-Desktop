@@ -260,6 +260,7 @@ async fn concurrent_solar_contract_activation_creates_one_schedule_and_one_confl
     let customer = first
         .create_customer(&CreateCustomer {
             customer_code: format!("SOL-RACE-{}", &organization_id.to_string()[..8]),
+            customer_category: Some("RESIDENTIAL".into()),
             legal_name: "Concurrent solar fixture".into(),
             address: None,
             phone: None,

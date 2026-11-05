@@ -4,7 +4,8 @@ use http_body_util::BodyExt;
 use sel_api::{router, AppState};
 use sel_storage::{migrate_postgres, CentralStore};
 use serde_json::json;
-use sqlx::Row;
+use sqlx::{postgres::PgPoolOptions, Row};
+use std::str::FromStr;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -18,9 +19,26 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     let database_url = std::env::var("TEST_DATABASE_URL")
         .expect("TEST_DATABASE_URL must be provided when running ignored PostgreSQL tests");
     let organization_id = Uuid::new_v4();
-    let store = CentralStore::connect(&database_url, organization_id)
+    let schema = format!("commercial_{}", Uuid::new_v4().simple());
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
         .await
-        .expect("connect central store");
+        .expect("connect test database to create isolated schema");
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin_pool)
+        .await
+        .expect("create isolated schema");
+    let options = sqlx::postgres::PgConnectOptions::from_str(&database_url)
+        .expect("parse test database URL")
+        .options([("search_path", schema.as_str())]);
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect_with(options)
+        .await
+        .expect("connect to isolated schema");
+    admin_pool.close().await;
+    let store = CentralStore::from_pool(pool, organization_id);
     migrate_postgres(&store.pool).await.expect("run migrations");
     store
         .ensure_organization("SEL commercial PostgreSQL fixture")
@@ -57,7 +75,8 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
                 .body(Body::from(
                     serde_json::to_vec(&json!({
                         "customer_code": "PG-COMM-1",
-                        "legal_name": "Commercial persistence fixture"
+                        "legal_name": "Commercial persistence fixture",
+                        "customer_category": "RESIDENTIAL"
                     }))
                     .unwrap(),
                 ))
@@ -518,10 +537,16 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     drop(app);
     drop(store);
 
-    let reopened = CentralStore::connect(&database_url, organization_id)
+    let options = sqlx::postgres::PgConnectOptions::from_str(&database_url)
+        .expect("parse test database URL")
+        .options([("search_path", schema.as_str())]);
+    let reopened_pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect_with(options)
         .await
-        .expect("reconnect central store");
-    let app = router(AppState::with_central_store(reopened));
+        .expect("reconnect to isolated schema");
+    let reopened = CentralStore::from_pool(reopened_pool, organization_id);
+    let app = router(AppState::with_central_store(reopened.clone()));
     let loaded = app
         .oneshot(
             Request::builder()
@@ -541,6 +566,16 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(loaded_status, StatusCode::OK, "loaded body: {loaded_text}");
     let loaded_body: serde_json::Value = serde_json::from_slice(&loaded_bytes).unwrap();
     assert_eq!(loaded_body, invoice);
+    reopened.pool.close().await;
+    let cleanup_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("reconnect to clean isolated schema");
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&cleanup_pool)
+        .await
+        .expect("drop isolated schema");
 }
 
 #[tokio::test]

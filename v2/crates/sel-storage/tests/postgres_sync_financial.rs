@@ -299,7 +299,7 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
         .execute(&store.pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO customers (id, organization_id, customer_code, legal_name, status) VALUES ($1, $2, 'SYNC-UTILITY-1', 'Utility sync customer', 'ACTIVE')")
+    sqlx::query("INSERT INTO customers (id, organization_id, customer_code, legal_name, customer_category, status) VALUES ($1, $2, 'SYNC-UTILITY-1', 'Utility sync customer', 'RESIDENTIAL', 'ACTIVE')")
         .bind(customer_id)
         .bind(organization_id)
         .execute(&store.pool)

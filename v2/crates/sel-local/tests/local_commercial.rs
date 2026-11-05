@@ -58,6 +58,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
                     serde_json::to_vec(&CreateCustomer {
                         customer_code: "LOCAL-001".into(),
                         legal_name: "Local customer".into(),
+                        customer_category: Some("RESIDENTIAL".into()),
                         address: Some("Local address".into()),
                         phone: Some("+243000000000".into()),
                     })
@@ -671,6 +672,7 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .create_customer(&CreateCustomer {
             customer_code: "SOLAR-LOCAL-1".into(),
             legal_name: "Local solar customer".into(),
+            customer_category: Some("RESIDENTIAL".into()),
             address: None,
             phone: None,
         })

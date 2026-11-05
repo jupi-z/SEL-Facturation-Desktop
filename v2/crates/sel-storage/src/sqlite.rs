@@ -280,13 +280,14 @@ impl LocalStore {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO customers
-             (id, organization_id, customer_code, legal_name, contact_fields_json, status, revision, created_at)
-             VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 1, datetime('now'))",
+             (id, organization_id, customer_code, legal_name, customer_category, contact_fields_json, status, revision, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', 1, datetime('now'))",
         )
         .bind(customer_id.to_string())
         .bind(self.organization_id.to_string())
         .bind(&input.customer_code)
         .bind(&input.legal_name)
+        .bind(input.customer_category.as_deref().map(str::trim).map(str::to_ascii_uppercase))
         .bind(json!({"address": input.address, "phone": input.phone}).to_string())
         .execute(&mut *tx)
         .await?;
@@ -298,7 +299,7 @@ impl LocalStore {
 
     pub async fn get_customer(&self, id: Uuid) -> Result<Option<Customer>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT id, organization_id, customer_code, legal_name, contact_fields_json, status, revision
+            "SELECT id, organization_id, customer_code, legal_name, customer_category, contact_fields_json, status, revision
              FROM customers WHERE id = $1 AND organization_id = $2",
         )
         .bind(id.to_string())
@@ -317,7 +318,7 @@ impl LocalStore {
         let _guard = self.write_lock.lock().await;
         let mut tx = self.pool.begin().await?;
         let Some(current) = sqlx::query(
-            "SELECT id, organization_id, customer_code, legal_name, contact_fields_json, status, revision
+            "SELECT id, organization_id, customer_code, legal_name, customer_category, contact_fields_json, status, revision
              FROM customers WHERE id = $1 AND organization_id = $2 AND revision = $3",
         )
         .bind(id.to_string())
@@ -335,16 +336,21 @@ impl LocalStore {
             .unwrap_or(current_customer.legal_name.clone());
         let address = input.address.apply_to(current_customer.address);
         let phone = input.phone.apply_to(current_customer.phone);
+        let customer_category = input
+            .customer_category
+            .apply_to(current_customer.customer_category)
+            .map(|value| value.trim().to_ascii_uppercase());
         let status = input
             .status
             .clone()
             .unwrap_or(current_customer.status.clone());
         sqlx::query(
-            "UPDATE customers SET legal_name = $1, contact_fields_json = $2,
-             status = $3, revision = revision + 1
-             WHERE id = $4 AND organization_id = $5 AND revision = $6",
+            "UPDATE customers SET legal_name = $1, customer_category = $2,
+             contact_fields_json = $3, status = $4, revision = revision + 1
+             WHERE id = $5 AND organization_id = $6 AND revision = $7",
         )
         .bind(&legal_name)
+        .bind(customer_category)
         .bind(json!({"address": address, "phone": phone}).to_string())
         .bind(&status)
         .bind(id.to_string())
@@ -379,7 +385,7 @@ impl LocalStore {
         let fetch_limit = limit.max(1).saturating_add(1);
         let rows = if search.is_some() {
             sqlx::query(
-                "SELECT id, organization_id, customer_code, legal_name, contact_fields_json, status, revision
+                "SELECT id, organization_id, customer_code, legal_name, customer_category, contact_fields_json, status, revision
                  FROM customers
                  WHERE organization_id = $1
                    AND ($2 IS NULL OR customer_code > $2)
@@ -393,7 +399,7 @@ impl LocalStore {
             .await?
         } else {
             sqlx::query(
-                "SELECT id, organization_id, customer_code, legal_name, contact_fields_json, status, revision
+                "SELECT id, organization_id, customer_code, legal_name, customer_category, contact_fields_json, status, revision
                  FROM customers
                  WHERE organization_id = $1
                    AND ($2 IS NULL OR customer_code > $2)
@@ -591,22 +597,35 @@ impl LocalStore {
         revision: &str,
         currency: &str,
         period: &str,
+        customer_category: &str,
     ) -> Result<LocalTariffSnapshot, sqlx::Error> {
+        let customer_category = customer_category.trim().to_ascii_uppercase();
+        if customer_category.is_empty() {
+            return Err(sqlx::Error::Protocol(
+                "customer category is required for tariff selection".into(),
+            ));
+        }
         let effective_date = NaiveDate::parse_from_str(&format!("{period}-01"), "%Y-%m-%d")
             .map_err(|error| sqlx::Error::Protocol(format!("invalid billing period: {error}")))?;
         let date = effective_date.to_string();
         let electricity = sqlx::query(
             "SELECT unit_price FROM tariff_versions
              WHERE service_code = 'ELECTRICITY' AND unit = 'KWH' AND currency = $1
-               AND approval_ref = $2 AND status = 'APPROVED'
-               AND effective_from <= $3 AND (effective_to IS NULL OR effective_to >= $3)
-             ORDER BY effective_from DESC LIMIT 1",
+               AND approval_ref = $2 AND status = 'APPROVED' AND customer_category = $3
+               AND effective_from <= $4 AND (effective_to IS NULL OR effective_to >= $4)
+             ORDER BY effective_from DESC",
         )
         .bind(currency)
         .bind(revision)
+        .bind(&customer_category)
         .bind(&date)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
+        if electricity.len() > 1 {
+            return Err(sqlx::Error::Protocol(
+                "multiple applicable electricity tariffs exist for this category".into(),
+            ));
+        }
         let electricity_taxes = sqlx::query(
             "SELECT rate FROM tax_profile_versions
              WHERE service_code = 'ELECTRICITY' AND status = 'APPROVED'
@@ -625,15 +644,21 @@ impl LocalStore {
         let water = sqlx::query(
             "SELECT unit_price FROM tariff_versions
              WHERE service_code = 'WATER' AND unit = 'M3' AND currency = $1
-               AND approval_ref = $2 AND status = 'APPROVED'
-               AND effective_from <= $3 AND (effective_to IS NULL OR effective_to >= $3)
-             ORDER BY effective_from DESC LIMIT 1",
+               AND approval_ref = $2 AND status = 'APPROVED' AND customer_category = $3
+               AND effective_from <= $4 AND (effective_to IS NULL OR effective_to >= $4)
+             ORDER BY effective_from DESC",
         )
         .bind(currency)
         .bind(revision)
+        .bind(&customer_category)
         .bind(&date)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
+        if water.len() > 1 {
+            return Err(sqlx::Error::Protocol(
+                "multiple applicable water tariffs exist for this category".into(),
+            ));
+        }
         let water_taxes = sqlx::query(
             "SELECT rate FROM tax_profile_versions
              WHERE service_code = 'WATER' AND status = 'APPROVED'
@@ -649,9 +674,9 @@ impl LocalStore {
             ));
         }
         Ok(LocalTariffSnapshot {
-            electricity_unit_price: sqlite_decimal_column(electricity.as_ref(), "unit_price")?,
+            electricity_unit_price: sqlite_decimal_column(electricity.first(), "unit_price")?,
             electricity_tax_rate: sqlite_decimal_column(electricity_taxes.first(), "rate")?,
-            water_unit_price: sqlite_decimal_column(water.as_ref(), "unit_price")?,
+            water_unit_price: sqlite_decimal_column(water.first(), "unit_price")?,
             water_tax_rate: sqlite_decimal_column(water_taxes.first(), "rate")?,
         })
     }
@@ -3874,6 +3899,7 @@ fn customer_from_row(row: &SqliteRow) -> Result<Customer, sqlx::Error> {
             .map_err(|error| sqlx::Error::Protocol(format!("invalid organization id: {error}")))?,
         customer_code: row.try_get("customer_code")?,
         legal_name: row.try_get("legal_name")?,
+        customer_category: row.try_get("customer_category")?,
         address: contact
             .get("address")
             .and_then(serde_json::Value::as_str)
@@ -3893,7 +3919,7 @@ async fn load_customer_from_tx(
     organization_id: Uuid,
 ) -> Result<Customer, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT id, organization_id, customer_code, legal_name, contact_fields_json, status, revision
+        "SELECT id, organization_id, customer_code, legal_name, customer_category, contact_fields_json, status, revision
          FROM customers WHERE id = $1 AND organization_id = $2",
     )
     .bind(id.to_string())
@@ -4246,7 +4272,7 @@ async fn apply_customer_change(
     change: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     let existing = sqlx::query(
-        "SELECT revision, customer_code, legal_name, contact_fields_json, status
+        "SELECT revision, customer_code, legal_name, customer_category, contact_fields_json, status
          FROM customers WHERE id = $1 AND organization_id = $2",
     )
     .bind(customer_id)
@@ -4305,15 +4331,28 @@ async fn apply_customer_change(
                 .and_then(|row| row.try_get::<String, _>("status").ok())
         })
         .unwrap_or_else(|| "ACTIVE".into());
+    let customer_category = match change.get("customer_category") {
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(category)) => {
+            let category = category.trim().to_ascii_uppercase();
+            (!category.is_empty()).then_some(category)
+        }
+        Some(_) | None => existing.as_ref().and_then(|row| {
+            row.try_get::<Option<String>, _>("customer_category")
+                .ok()
+                .flatten()
+        }),
+    };
     let contact = json!({
         "address": customer_contact_value("address"),
         "phone": customer_contact_value("phone")
     });
     sqlx::query(
         "INSERT INTO customers
-         (id, organization_id, customer_code, legal_name, contact_fields_json, status, revision, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, datetime('now'))
+         (id, organization_id, customer_code, legal_name, customer_category, contact_fields_json, status, revision, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET legal_name = excluded.legal_name,
+           customer_category = excluded.customer_category,
            contact_fields_json = excluded.contact_fields_json, status = excluded.status,
            revision = excluded.revision",
     )
@@ -4321,6 +4360,7 @@ async fn apply_customer_change(
     .bind(organization_id.to_string())
     .bind(&customer_code)
     .bind(&legal_name)
+    .bind(customer_category)
     .bind(contact.to_string())
     .bind(&status)
     .bind(revision)

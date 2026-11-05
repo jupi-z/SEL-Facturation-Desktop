@@ -1341,14 +1341,15 @@ impl CentralStore {
         });
         let row = sqlx::query(
             "INSERT INTO customers
-             (id, organization_id, customer_code, legal_name, contact_fields, status, revision)
-             VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 1)
-             RETURNING id, organization_id, customer_code, legal_name, contact_fields, status, revision",
+             (id, organization_id, customer_code, legal_name, customer_category, contact_fields, status, revision)
+             VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', 1)
+             RETURNING id, organization_id, customer_code, legal_name, customer_category, contact_fields, status, revision",
         )
         .bind(id)
         .bind(self.organization_id)
         .bind(&input.customer_code)
         .bind(&input.legal_name)
+        .bind(input.customer_category.as_deref().map(str::trim).map(str::to_ascii_uppercase))
         .bind(contact_fields)
         .fetch_one(&self.pool)
         .await?;
@@ -1357,7 +1358,7 @@ impl CentralStore {
 
     pub async fn get_customer(&self, id: Uuid) -> Result<Option<Customer>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT id, organization_id, customer_code, legal_name, contact_fields, status, revision
+            "SELECT id, organization_id, customer_code, legal_name, customer_category, contact_fields, status, revision
              FROM customers WHERE id = $1 AND organization_id = $2",
         )
         .bind(id)
@@ -1383,7 +1384,7 @@ impl CentralStore {
     ) -> Result<(Vec<Customer>, Option<String>), sqlx::Error> {
         let fetch_limit = limit.max(1).saturating_add(1);
         let rows = sqlx::query(
-            "SELECT id, organization_id, customer_code, legal_name, contact_fields, status, revision
+            "SELECT id, organization_id, customer_code, legal_name, customer_category, contact_fields, status, revision
              FROM customers
              WHERE organization_id = $1
                AND ($2::text IS NULL OR customer_code > $2)
@@ -1427,15 +1428,21 @@ impl CentralStore {
         let legal_name = input.legal_name.clone().unwrap_or(current.legal_name);
         let address = input.address.apply_to(current.address);
         let phone = input.phone.apply_to(current.phone);
+        let customer_category = input
+            .customer_category
+            .apply_to(current.customer_category)
+            .map(|value| value.trim().to_ascii_uppercase());
         let status = input.status.clone().unwrap_or(current.status);
         let contact_fields = json!({"address": address, "phone": phone});
         let row = sqlx::query(
             "UPDATE customers
-             SET legal_name = $1, contact_fields = $2, status = $3, revision = revision + 1
-             WHERE id = $4 AND organization_id = $5 AND revision = $6
-             RETURNING id, organization_id, customer_code, legal_name, contact_fields, status, revision",
+             SET legal_name = $1, customer_category = $2, contact_fields = $3,
+                 status = $4, revision = revision + 1
+             WHERE id = $5 AND organization_id = $6 AND revision = $7
+             RETURNING id, organization_id, customer_code, legal_name, customer_category, contact_fields, status, revision",
         )
         .bind(legal_name)
+        .bind(customer_category)
         .bind(contact_fields)
         .bind(status)
         .bind(id)
@@ -1474,21 +1481,34 @@ impl CentralStore {
         revision: &str,
         currency: &str,
         period: &str,
+        customer_category: &str,
     ) -> Result<TariffSnapshot, sqlx::Error> {
+        let customer_category = customer_category.trim().to_ascii_uppercase();
+        if customer_category.is_empty() {
+            return Err(sqlx::Error::Protocol(
+                "customer category is required for tariff selection".into(),
+            ));
+        }
         let effective_date = NaiveDate::parse_from_str(&format!("{period}-01"), "%Y-%m-%d")
             .map_err(|error| sqlx::Error::Protocol(format!("invalid billing period: {error}")))?;
         let electricity = sqlx::query(
             "SELECT unit_price FROM tariff_versions
              WHERE service_code = 'ELECTRICITY' AND unit = 'KWH' AND currency = $1
-               AND approval_ref = $2 AND status = 'APPROVED'
-               AND effective_from <= $3 AND (effective_to IS NULL OR effective_to >= $3)
-             ORDER BY effective_from DESC LIMIT 1",
+               AND approval_ref = $2 AND status = 'APPROVED' AND customer_category = $3
+               AND effective_from <= $4 AND (effective_to IS NULL OR effective_to >= $4)
+             ORDER BY effective_from DESC",
         )
         .bind(currency)
         .bind(revision)
+        .bind(&customer_category)
         .bind(effective_date)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
+        if electricity.len() > 1 {
+            return Err(sqlx::Error::Protocol(
+                "multiple applicable electricity tariffs exist for this category".into(),
+            ));
+        }
         let electricity_taxes = sqlx::query(
             "SELECT rate FROM tax_profile_versions
              WHERE service_code = 'ELECTRICITY' AND status = 'APPROVED'
@@ -1507,15 +1527,21 @@ impl CentralStore {
         let water = sqlx::query(
             "SELECT unit_price FROM tariff_versions
              WHERE service_code = 'WATER' AND unit = 'M3' AND currency = $1
-               AND approval_ref = $2 AND status = 'APPROVED'
-               AND effective_from <= $3 AND (effective_to IS NULL OR effective_to >= $3)
-             ORDER BY effective_from DESC LIMIT 1",
+               AND approval_ref = $2 AND status = 'APPROVED' AND customer_category = $3
+               AND effective_from <= $4 AND (effective_to IS NULL OR effective_to >= $4)
+             ORDER BY effective_from DESC",
         )
         .bind(currency)
         .bind(revision)
+        .bind(&customer_category)
         .bind(effective_date)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
+        if water.len() > 1 {
+            return Err(sqlx::Error::Protocol(
+                "multiple applicable water tariffs exist for this category".into(),
+            ));
+        }
         let water_taxes = sqlx::query(
             "SELECT rate FROM tax_profile_versions
              WHERE service_code = 'WATER' AND status = 'APPROVED'
@@ -1532,7 +1558,7 @@ impl CentralStore {
         }
         Ok(TariffSnapshot {
             electricity_unit_price: electricity
-                .as_ref()
+                .first()
                 .map(|row| row.try_get("unit_price"))
                 .transpose()?,
             electricity_tax_rate: electricity_taxes
@@ -1540,7 +1566,7 @@ impl CentralStore {
                 .map(|row| row.try_get("rate"))
                 .transpose()?,
             water_unit_price: water
-                .as_ref()
+                .first()
                 .map(|row| row.try_get("unit_price"))
                 .transpose()?,
             water_tax_rate: water_taxes
@@ -5486,13 +5512,14 @@ impl CentralStore {
                 });
                 sqlx::query(
                     "INSERT INTO customers
-                     (id, organization_id, customer_code, legal_name, contact_fields, status, revision)
-                     VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 1)",
+                     (id, organization_id, customer_code, legal_name, customer_category, contact_fields, status, revision)
+                     VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', 1)",
                 )
                 .bind(event.aggregate_id)
                 .bind(self.organization_id)
                 .bind(customer_code)
                 .bind(legal_name)
+                .bind(event.payload.get("customer_category").and_then(serde_json::Value::as_str).map(str::trim).map(str::to_ascii_uppercase))
                 .bind(contact_fields)
                 .execute(&mut *tx)
                 .await?;
@@ -5545,6 +5572,10 @@ impl CentralStore {
                          legal_name = CASE
                            WHEN $1 ? 'legal_name' AND jsonb_typeof($1->'legal_name') <> 'null'
                            THEN $1->>'legal_name' ELSE legal_name END,
+                         customer_category = CASE
+                           WHEN $1 ? 'customer_category'
+                           THEN NULLIF(upper(trim($1->>'customer_category')), '')
+                           ELSE customer_category END,
                          contact_fields = jsonb_build_object(
                            'address', CASE
                              WHEN $1 ? 'address' AND ($1->>'patch_format_version' = '2' OR jsonb_typeof($1->'address') <> 'null')
@@ -5630,11 +5661,35 @@ impl CentralStore {
                         )
                         .await;
                 }
+                let customer_category = match self.get_customer(input.customer_id).await? {
+                    Some(customer) => match customer.customer_category {
+                        Some(category) if !category.trim().is_empty() => category,
+                        _ => {
+                            return self
+                                .persist_sync_rejection(
+                                    event,
+                                    "CUSTOMER_CATEGORY_REQUIRED",
+                                    "assign_a_customer_category_before_replaying_the_invoice",
+                                )
+                                .await;
+                        }
+                    },
+                    None => {
+                        return self
+                            .persist_sync_rejection(
+                                event,
+                                "CUSTOMER_NOT_FOUND",
+                                "synchronize_the_customer_before_the_invoice",
+                            )
+                            .await;
+                    }
+                };
                 let tariffs = self
                     .load_tariffs(
                         &input.tariff_revision,
                         &input.currency,
                         &input.billing_period,
+                        &customer_category,
                     )
                     .await?;
                 let water = if input.water.quantity.is_zero() {
@@ -7693,6 +7748,7 @@ fn customer_from_row(row: &sqlx::postgres::PgRow) -> Result<Customer, sqlx::Erro
         organization_id: row.try_get("organization_id")?,
         customer_code: row.try_get("customer_code")?,
         legal_name: row.try_get("legal_name")?,
+        customer_category: row.try_get("customer_category")?,
         address: contact_fields
             .get("address")
             .and_then(serde_json::Value::as_str)

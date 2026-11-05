@@ -427,6 +427,16 @@ async fn create_customer(
     State(state): State<LocalAppState>,
     Json(input): Json<CreateCustomer>,
 ) -> Result<(StatusCode, Json<Customer>), (StatusCode, String)> {
+    if input
+        .customer_category
+        .as_deref()
+        .is_some_and(|category| category.trim().is_empty())
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "customer category must not be blank".into(),
+        ));
+    }
     let (customer, _) = state
         .store
         .create_customer(&input)
@@ -518,6 +528,14 @@ async fn update_customer(
             StatusCode::UNPROCESSABLE_ENTITY,
             "legal name cannot be empty".into(),
         ));
+    }
+    if let sel_contracts::PatchValue::Value(category) = &input.customer_category {
+        if category.trim().is_empty() {
+            return Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "customer category must not be blank".into(),
+            ));
+        }
     }
     if input
         .status
@@ -767,11 +785,23 @@ async fn calculate_utility_response(
             "zero water consumption must be confirmed".into(),
         ));
     }
+    let customer = store
+        .get_customer(input.customer_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "customer not found".into()))?;
+    let customer_category = customer.customer_category.ok_or_else(|| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "assign a customer category before billing".into(),
+        )
+    })?;
     let tariffs = store
         .load_tariffs(
             &input.tariff_revision,
             &input.currency,
             &input.billing_period,
+            &customer_category,
         )
         .await
         .map_err(internal_error)?;

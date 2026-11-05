@@ -1,6 +1,6 @@
 [package]
 name = "sel-v2-windows"
-version = "0.4.1"
+version = "0.4.2"
 description = "SEL Facturation — application Windows"
 authors = ["Monarque Group · LTEX"]
 edition = "2021"

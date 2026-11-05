@@ -25,6 +25,9 @@ pub struct Customer {
     pub organization_id: Uuid,
     pub customer_code: String,
     pub legal_name: String,
+    /// `None` is retained for older records and must be resolved before billing.
+    #[serde(default)]
+    pub customer_category: Option<String>,
     pub address: Option<String>,
     pub phone: Option<String>,
     pub status: String,
@@ -35,6 +38,8 @@ pub struct Customer {
 pub struct CreateCustomer {
     pub customer_code: String,
     pub legal_name: String,
+    #[serde(default)]
+    pub customer_category: Option<String>,
     pub address: Option<String>,
     pub phone: Option<String>,
 }
@@ -84,6 +89,8 @@ impl<T: Serialize> Serialize for PatchValue<T> {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpdateCustomer {
     pub legal_name: Option<String>,
+    #[serde(default, skip_serializing_if = "PatchValue::is_missing")]
+    pub customer_category: PatchValue<String>,
     #[serde(default, skip_serializing_if = "PatchValue::is_missing")]
     pub address: PatchValue<String>,
     #[serde(default, skip_serializing_if = "PatchValue::is_missing")]

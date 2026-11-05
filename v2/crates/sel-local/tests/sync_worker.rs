@@ -49,6 +49,7 @@ async fn pulled_meter_accounts_meters_and_corrections_project_idempotently() {
         .create_customer(&sel_contracts::CreateCustomer {
             customer_code: "METER-PROJECTION-1".into(),
             legal_name: "Meter projection fixture".into(),
+            customer_category: Some("RESIDENTIAL".into()),
             address: None,
             phone: None,
         })
@@ -166,6 +167,7 @@ async fn pulled_service_account_revision_updates_existing_local_projection_idemp
         .create_customer(&sel_contracts::CreateCustomer {
             customer_code: "ACCOUNT-REV-1".into(),
             legal_name: "Account revision fixture".into(),
+            customer_category: Some("RESIDENTIAL".into()),
             address: None,
             phone: None,
         })
@@ -487,6 +489,7 @@ async fn pulled_customer_changes_are_applied_with_a_durable_cursor() {
                     "change": {
                         "customer_code":"PULLED-1",
                         "legal_name":"Pulled customer",
+                        "customer_category":"RESIDENTIAL",
                         "address":"Initial address",
                         "phone":"+243000000001",
                         "status":"ACTIVE"
@@ -497,7 +500,7 @@ async fn pulled_customer_changes_are_applied_with_a_durable_cursor() {
                     "entity": "customers",
                     "entity_id": customer_id,
                     "revision": 2,
-                    "change": {"legal_name":"Legacy update","phone":null}
+                    "change": {"legal_name":"Legacy update","customer_category":"COMMERCIAL","phone":null}
                 }),
                 serde_json::json!({
                     "sequence": 7,
@@ -506,6 +509,7 @@ async fn pulled_customer_changes_are_applied_with_a_durable_cursor() {
                     "revision": 3,
                     "change": {
                         "legal_name":"Updated customer",
+                        "customer_category":null,
                         "phone":null,
                         "patch_format_version":2
                     }
@@ -519,6 +523,7 @@ async fn pulled_customer_changes_are_applied_with_a_durable_cursor() {
     let projected = store.get_customer(customer_id).await.unwrap().unwrap();
     assert_eq!(projected.customer_code, "PULLED-1");
     assert_eq!(projected.legal_name, "Updated customer");
+    assert_eq!(projected.customer_category, None);
     assert_eq!(projected.address.as_deref(), Some("Initial address"));
     assert!(projected.phone.is_none());
     let _ = std::fs::remove_file(path);

@@ -83,6 +83,7 @@ async fn concurrent_utility_invoices_same_customer_period_return_one_business_co
     let customer = first
         .create_customer(&CreateCustomer {
             customer_code: format!("INV-CON-{}", &organization_id.to_string()[..8]),
+            customer_category: Some("RESIDENTIAL".into()),
             legal_name: "Concurrent invoice fixture".into(),
             address: None,
             phone: None,

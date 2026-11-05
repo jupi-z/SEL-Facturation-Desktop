@@ -1214,12 +1214,13 @@ components:
         supersedes_id: { type: [string, 'null'], format: uuid }
     Customer:
       type: object
-      required: [id, organization_id, customer_code, legal_name, status, revision]
+      required: [id, organization_id, customer_code, legal_name, customer_category, status, revision]
       properties:
         id: { type: string, format: uuid }
         organization_id: { type: string, format: uuid }
         customer_code: { type: string }
         legal_name: { type: string }
+        customer_category: { type: [string, 'null'], description: Null only for legacy or unclassified records; billing is blocked until assigned. }
         address: { type: [string, 'null'] }
         phone: { type: [string, 'null'] }
         status: { type: string }
@@ -1230,6 +1231,7 @@ components:
       properties:
         customer_code: { type: string }
         legal_name: { type: string }
+        customer_category: { type: [string, 'null'], description: Optional for backward-compatible imports; required by the Windows customer form and before billing. }
         address: { type: [string, 'null'] }
         phone: { type: [string, 'null'] }
     EnrollDeviceRequest:
@@ -1254,6 +1256,7 @@ components:
       type: object
       properties:
         legal_name: { type: [string, 'null'] }
+        customer_category: { type: [string, 'null'], description: Set the tariff category or clear it; an unclassified customer cannot be billed. }
         address: { type: [string, 'null'] }
         phone: { type: [string, 'null'] }
         status: { type: [string, 'null'], enum: [ACTIVE, ARCHIVED, null] }

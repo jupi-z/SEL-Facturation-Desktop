@@ -22,6 +22,7 @@ async fn receivable_summary_reports_only_unpaid_past_due_installments() {
         .create_customer(&CreateCustomer {
             customer_code: format!("OVERDUE-{}", &organization_id.to_string()[..8]),
             legal_name: "Overdue fixture".into(),
+            customer_category: Some("RESIDENTIAL".into()),
             address: None,
             phone: None,
         })

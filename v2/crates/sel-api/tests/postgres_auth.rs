@@ -535,6 +535,7 @@ async fn role_and_organization_boundaries_reject_write_escalation_and_idor() {
     let foreign_customer = foreign_store
         .create_customer(&sel_contracts::CreateCustomer {
             customer_code: format!("FOREIGN-{}", &foreign_organization_id.to_string()[..8]),
+            customer_category: Some("RESIDENTIAL".into()),
             legal_name: "Foreign organization customer".into(),
             address: None,
             phone: None,

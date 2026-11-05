@@ -152,6 +152,7 @@ async fn seed_local_customer(store: &LocalStore) -> sel_contracts::Customer {
         .create_customer(&CreateCustomer {
             customer_code: "CONVERGENCE-1".into(),
             legal_name: "Two device customer".into(),
+            customer_category: Some("RESIDENTIAL".into()),
             address: Some("Local address".into()),
             phone: None,
         })

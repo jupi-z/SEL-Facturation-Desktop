@@ -19,6 +19,7 @@ async fn customer_survives_a_fresh_postgres_store_after_restart() {
         .create_customer(&CreateCustomer {
             customer_code: format!("PG-{}", &organization_id.to_string()[..8]),
             legal_name: "PostgreSQL restart fixture".into(),
+            customer_category: Some("RESIDENTIAL".into()),
             address: Some("synthetic".into()),
             phone: None,
         })

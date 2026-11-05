@@ -621,6 +621,7 @@ async fn utility_preview_returns_both_services_without_persisting_financial_data
         .create_customer(&sel_contracts::CreateCustomer {
             customer_code: "PREVIEW-001".into(),
             legal_name: "Preview customer".into(),
+            customer_category: Some("RESIDENTIAL".into()),
             address: None,
             phone: None,
         })
@@ -722,7 +723,7 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
                     .uri("/local/v1/customers")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        json!({"customer_code":"READING-001","legal_name":"Client Relevé"})
+                        json!({"customer_code":"READING-001","legal_name":"Client Relevé","customer_category":"RESIDENTIAL"})
                             .to_string(),
                     ))
                     .unwrap(),
