@@ -600,7 +600,7 @@ async fn utility_preview_returns_both_services_without_persisting_financial_data
     sqlx::query(
         "INSERT INTO tariff_versions (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
          VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', '2026-01-01', 'local-approved-v1', 'APPROVED'),
-                ($2, 'WATER', 'RESIDENTIAL', 'M3', '1.30', 'USD', '2026-01-01', 'local-approved-v1', 'APPROVED')",
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', '0.30', 'USD', '2026-01-01', 'local-approved-v1', 'APPROVED')",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
@@ -696,7 +696,7 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
     sqlx::query(
         "INSERT INTO tariff_versions (id, service_code, customer_category, unit, unit_price, currency, effective_from, approval_ref, status)
          VALUES ($1, 'ELECTRICITY', 'RESIDENTIAL', 'KWH', '0.095', 'USD', '2026-01-01', 'meter-billing-v1', 'APPROVED'),
-                ($2, 'WATER', 'RESIDENTIAL', 'M3', '1.30', 'USD', '2026-01-01', 'meter-billing-v1', 'APPROVED')",
+                ($2, 'WATER', 'RESIDENTIAL', 'M3', '0.30', 'USD', '2026-01-01', 'meter-billing-v1', 'APPROVED')",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
@@ -865,16 +865,25 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
     assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
     assert_eq!(invoice["billing_period"], "2026-11");
     assert_eq!(invoice["due_date"], "2026-12-15");
+    assert_eq!(invoice["subtotal"], "5.50");
+    assert_eq!(invoice["tax"], "0.88");
+    assert_eq!(invoice["total"], "6.38");
     assert!(invoice["lines"]
         .as_array()
         .unwrap()
         .iter()
         .any(|line| { line["service_code"] == "ELECTRICITY" && line["quantity"] == "50" }));
-    assert!(invoice["lines"]
+    let water_line = invoice["lines"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|line| { line["service_code"] == "WATER" && line["quantity"] == "2.5" }));
+        .find(|line| line["service_code"] == "WATER")
+        .expect("the combined invoice includes its water line");
+    assert_eq!(water_line["quantity"], "2.5");
+    assert_eq!(water_line["unit_price"], "0.30");
+    assert_eq!(water_line["subtotal"], "0.75");
+    assert_eq!(water_line["tax"], "0.12");
+    assert_eq!(water_line["total"], "0.87");
 
     let invoice_id = invoice["invoice_id"].as_str().unwrap();
     let document = json_body(

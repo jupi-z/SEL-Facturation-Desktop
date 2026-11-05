@@ -974,3 +974,7 @@ Cette intervention corrige le premier parcours de connexion centrale sans config
 | Mise en service commerciale | NO_GO | Les référentiels (tarifs, profils fiscaux, produits et taux approuvés) ne sont pas actifs; l’émission de factures ne peut donc pas être validée. Aucun compte Clarisse ni nouvel EXE de production n’est livré par cette étape. |
 
 **Décision : `NO_GO` pour une livraison production.** Les correctifs de démarrage et de première connexion sont prêts dans la branche, mais une simple compilation ne résout ni le poste non enrôlé, ni la signature des autorisations hors ligne, ni l’absence de tarifs. Ne pas déployer la migration ou présenter un nouvel EXE comme exploitable avant validation PostgreSQL intégrée, parcours d’enrôlement complet, référentiels SEL approuvés et recette Windows réelle.
+
+### Précision du tarif de l’eau communiquée par le propriétaire (5 novembre 2026)
+
+Le propriétaire a confirmé que le tarif d’eau est **0,30 USD/m³**. Les exemples visuels et fixtures de facturation qui représentaient le tarif SEL à 1,30 USD/m³ ont été corrigés; une facture synthétique de 2,5 m³ vérifie un sous-total eau de 0,75 USD, une TVA de fixture de 0,12 USD et un total de ligne de 0,87 USD. Cette vérification arithmétique ne valide pas à elle seule l’assiette ou l’application fiscale de l’eau. Aucun tarif ni profil fiscal n’a été écrit dans PostgreSQL de production; le catalogue de production reste à provisionner après connexion/authentification et l’intégration de ce client.

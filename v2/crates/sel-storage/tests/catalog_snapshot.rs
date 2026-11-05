@@ -15,7 +15,7 @@ fn snapshot(product_status: &str) -> CatalogSnapshot {
         })],
         tariffs: vec![json!({
             "id": "11000000-0000-4000-8000-000000000001", "service_code": "WATER",
-            "customer_category": "RESIDENTIAL", "unit": "M3", "unit_price": "1.30",
+            "customer_category": "RESIDENTIAL", "unit": "M3", "unit_price": "0.30",
             "currency": "USD", "effective_from": "2026-01-01", "effective_to": null,
             "approval_ref": "SEL-TARIFF-1", "approved_by": null, "status": "APPROVED"
         })],
@@ -53,6 +53,13 @@ async fn catalog_snapshot_is_authenticated_atomic_and_idempotent() {
         .apply_catalog_snapshot(&approved)
         .await
         .expect("apply snapshot");
+    let water_unit_price: String = sqlx::query_scalar(
+        "SELECT unit_price FROM tariff_versions WHERE service_code = 'WATER' AND unit = 'M3'",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .expect("read the approved water tariff");
+    assert_eq!(water_unit_price, "0.30");
     store
         .apply_catalog_snapshot(&approved)
         .await

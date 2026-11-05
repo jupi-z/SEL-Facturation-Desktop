@@ -160,7 +160,7 @@ def mock_invoke_script() -> str:
         else if (path === '/local/v1/billing/utility/preview') {{
           const waterQuantity = Number(args.body?.water?.quantity ?? 0);
           body = waterQuantity > 0
-            ? {{currency:'USD',subtotal:'16.00',tax:'2.56',total:'18.56',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'1.30',subtotal:'6.50',tax:'1.04',total:'7.54'}}]}}
+            ? {{currency:'USD',subtotal:'11.00',tax:'1.76',total:'12.76',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}}]}}
             : {{currency:'USD',subtotal:'9.50',tax:'1.52',total:'11.02',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}}]}};
         }}
         else if (path.startsWith('/local/v1/customers/') && path.endsWith('/statement')) body = {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}};
@@ -174,10 +174,10 @@ def mock_invoke_script() -> str:
           const invoiceLines = [
             {{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},
             positiveWater
-              ? {{service_code:'WATER',quantity:'5',unit:'M3',unit_price:'1.30',subtotal:'6.50',tax:'1.04',total:'7.54'}}
+              ? {{service_code:'WATER',quantity:'5',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}}
               : {{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}}
           ];
-          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',origin:'LOCAL_PENDING',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'SEL V2 local organization',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'16.00':'9.50',tax:positiveWater?'2.56':'1.52',total:positiveWater?'18.56':'11.02',lines:invoiceLines}}}};
+          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',origin:'LOCAL_PENDING',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'SEL V2 local organization',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'11.00':'9.50',tax:positiveWater?'1.76':'1.52',total:positiveWater?'12.76':'11.02',lines:invoiceLines}}}};
         }}
         else if (path.startsWith('/local/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
         else if (path.startsWith('/local/v1/invoices')) body = fixtures.invoices;

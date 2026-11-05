@@ -46,7 +46,7 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
         "INSERT INTO tariff_versions
          (id, service_code, customer_category, unit, unit_price, currency,
           effective_from, approval_ref, status)
-         VALUES ($1, 'WATER', 'RESIDENTIAL', 'M3', 1.25, 'USD', '2026-01-01', $2, 'APPROVED'),
+         VALUES ($1, 'WATER', 'RESIDENTIAL', 'M3', 0.30, 'USD', '2026-01-01', $2, 'APPROVED'),
                 ($3, 'WATER', 'RESIDENTIAL', 'M3', 9.99, 'USD', '2026-01-01', $4, 'DRAFT')",
     )
     .bind(approved_tariff)
@@ -119,7 +119,7 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
     let tariffs = get_json(&app, "/v1/catalog/tariffs").await;
     assert_eq!(tariffs.as_array().unwrap().len(), 1);
     assert_eq!(tariffs[0]["id"], approved_tariff.to_string());
-    assert_eq!(tariffs[0]["unit_price"], "1.25");
+    assert_eq!(tariffs[0]["unit_price"], "0.30");
 
     let taxes = get_json(&app, "/v1/catalog/tax-profiles").await;
     assert_eq!(taxes.as_array().unwrap().len(), 1);
@@ -189,7 +189,7 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
         "service_code": "WATER",
         "customer_category": customer_category.clone(),
         "unit": "M3",
-        "unit_price": "1.30",
+        "unit_price": "0.30",
         "currency": "USD",
         "effective_from": "2026-11-04",
         "effective_to": null
@@ -502,7 +502,7 @@ async fn tariff_versions_can_be_superseded_and_revoked_without_deleting_history(
             "service_code": "WATER",
             "customer_category": category,
             "unit": "M3",
-            "unit_price": "1.30",
+            "unit_price": "0.30",
             "currency": "USD",
             "effective_from": effective_from.to_string(),
             "effective_to": null
