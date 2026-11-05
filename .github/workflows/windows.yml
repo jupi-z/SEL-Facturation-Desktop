@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   legacy-regression-tests:
+    name: test-build
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
