@@ -64,8 +64,9 @@ function periodLabel(valueToFormat: unknown): string {
   return new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" }).format(date);
 }
 
-function statusLabel(status: unknown): string {
+function statusLabel(status: unknown, invoice = false): string {
   const value = String(status ?? "—");
+  if (invoice && value === "CENTRAL_ACCEPTED") return "Facture émise";
   const labels: Record<string, string> = {
     CENTRAL_ACCEPTED: "Confirmé par le serveur",
     ISSUED: "Émis",
@@ -90,10 +91,10 @@ function baseStyles(): TDocumentDefinitions["styles"] {
   };
 }
 
-function footer(currentPage: number, pageCount: number): Content {
+function footer(currentPage: number, pageCount: number, _pageSize?: unknown, issuerLine = "Document généré par SEL à partir des données du serveur"): Content {
   return {
     columns: [
-      { text: "Document généré par SEL à partir des données du serveur", style: "muted" },
+      { text: issuerLine, style: "muted" },
       { text: `Page ${currentPage} / ${pageCount}`, alignment: "right", style: "muted" },
     ],
     margin: [45, 0, 45, 13],
@@ -108,7 +109,7 @@ function statusFill(status: unknown): string {
   return String(status) === "VOID" ? "#fce9e9" : "#e1f5ec";
 }
 
-function documentHeader(organizationName: string, reference: string, title: string, subtitle: string, status: string): Content[] {
+function documentHeader(organizationName: string, reference: string, title: string, subtitle: string, status: string, invoice = false): Content[] {
   const rightColumn: Content[] = [
     { text: organizationName, style: "brand" },
     { text: "Document de facturation SEL", style: "muted", margin: [0, 6, 0, 0] },
@@ -121,7 +122,7 @@ function documentHeader(organizationName: string, reference: string, title: stri
       ],
       columnGap: 8,
     } as Content,
-    ...titleAndReference(title, subtitle, reference, status),
+    ...titleAndReference(title, subtitle, reference, status, invoice),
   ];
 }
 
@@ -169,13 +170,13 @@ function recipientAndDocument(customer: Data, documentRows: string[]): Content {
   } as Content;
 }
 
-function titleAndReference(title: string, subtitle: string, reference: string, status: string): Content[] {
+function titleAndReference(title: string, subtitle: string, reference: string, status: string, invoice = false): Content[] {
   return [
     { text: title.toLocaleUpperCase("fr"), style: "documentTitle", margin: [0, 18, 0, 3] },
     { text: subtitle, color: "#5b6f87", fontSize: 11, margin: [0, 0, 0, 18] },
     {
       columns: [
-        { width: 150, table: { widths: ["*"], body: [[{ text: statusLabel(status).toLocaleUpperCase("fr"), color: statusColor(status), bold: true, fontSize: 7, margin: [7, 7, 5, 7] }]] }, layout: { fillColor: () => statusFill(status), hLineWidth: () => 0, vLineWidth: () => 0 } },
+        { width: 150, table: { widths: ["*"], body: [[{ text: statusLabel(status, invoice).toLocaleUpperCase("fr"), color: statusColor(status), bold: true, fontSize: 7, margin: [7, 7, 5, 7] }]] }, layout: { fillColor: () => statusFill(status), hLineWidth: () => 0, vLineWidth: () => 0 } },
         { width: "*", stack: [
           { text: "RÉFÉRENCE DOCUMENT", style: "muted", alignment: "right", fontSize: 7 },
           { text: reference, color: "#152c4b", bold: true, fontSize: 10, alignment: "right", margin: [0, 3, 0, 0] },
@@ -204,16 +205,16 @@ function financialSummary(label: string, subtotalLabel: string, subtotal: string
   ];
 }
 
-function qrFooter(reference: string, explanatoryLine: string): Content[] {
+function qrFooter(reference: string, explanatoryLine: string, invoice = false): Content[] {
   return [
     separator(17, 11),
     {
       columns: [
         { width: 54, qr: reference, fit: 48, alignment: "center", margin: [2, 1, 2, 1] },
         { width: "*", stack: [
-          { text: "Référence interne SEL", color: "#152c4b", bold: true, fontSize: 8, margin: [0, 3, 0, 5] },
-          { text: "QR interne de repérage · sans authentification fiscale", style: "muted", fontSize: 7 },
-          { text: explanatoryLine, style: "muted", fontSize: 7, margin: [0, 5, 0, 0] },
+          { text: invoice ? "QR d’identification" : "Référence interne SEL", color: "#152c4b", bold: true, fontSize: 8, margin: [0, 3, 0, 5] },
+          { text: invoice ? "Identification interne de la facture" : "QR interne de repérage · sans authentification fiscale", style: "muted", fontSize: 7 },
+          ...(!invoice && explanatoryLine ? [{ text: explanatoryLine, style: "muted", fontSize: 7, margin: [0, 5, 0, 0] } as Content] : []),
         ], margin: [10, 0, 0, 0] },
       ],
     } as Content,
@@ -240,6 +241,7 @@ function invoiceDefinition(data: Data): TDocumentDefinitions {
   const reference = value(invoice, "invoice_number", value(invoice, "invoice_id"));
   const internalQr = value(data, "qr_internal_reference", value(data, "document_reference"));
   const issueTitle = String(invoice.status) === "VOID" ? "FACTURE ANNULÉE" : "FACTURE DE CONSOMMATION";
+  const invoiceStatus = String(invoice.status ?? data.origin);
   const subtitle = "Électricité et eau · Facture combinée";
   const documentRows = [
     ...(data.issued_at ? [`Émission : ${dateLabel(data.issued_at)}`] : []),
@@ -247,18 +249,19 @@ function invoiceDefinition(data: Data): TDocumentDefinitions {
     ...(invoice.due_date ? [`Échéance : ${dateLabel(invoice.due_date)}`] : []),
   ].filter((row) => !row.endsWith(": "));
   return {
-    pageSize: "A4", pageMargins: [45, 26, 45, 36], defaultStyle: { font: "Roboto", fontSize: 9, color: "#152c4b" }, styles: baseStyles(), footer,
+    pageSize: "A4", pageMargins: [45, 26, 45, 36], defaultStyle: { font: "Roboto", fontSize: 9, color: "#152c4b" }, styles: baseStyles(),
     background: () => ({ canvas: [{ type: "rect", x: 0, y: 0, w: 595, h: 6, color: "#012a5e" }] }),
     content: [
-      ...documentHeader(value(identity, "organization_name", "Société d’Énergie du Lualaba"), reference, issueTitle, subtitle, String(data.origin ?? invoice.status)),
+      ...documentHeader(value(identity, "organization_name", "Société d’Énergie du Lualaba"), reference, issueTitle, subtitle, invoiceStatus, true),
       separator(17, 17),
       recipientAndDocument(customer, documentRows),
       separator(17, 17),
       { text: "DÉTAIL DES PRESTATIONS", style: "section", margin: [0, 0, 0, 13] },
       detailsTable(["DÉSIGNATION", "QUANTITÉ", "PRIX U.", "BASE", "TVA", "TOTAL"], body),
       ...financialSummary("Total de la facture", "Sous-total", money(invoice.subtotal, invoice.currency), "TVA", money(invoice.tax, invoice.currency), money(invoice.total, invoice.currency)),
-      ...qrFooter(internalQr, "Données du document rendues sur ce poste. Aucun PDF n’est conservé sur le serveur."),
+      ...qrFooter(internalQr, "", true),
     ],
+    footer: (currentPage, pageCount, pageSize) => footer(currentPage, pageCount, pageSize, "Facture émise par la Société d’Énergie du Lualaba, SEL"),
   };
 }
 
@@ -269,7 +272,7 @@ function paymentDefinition(data: Data): TDocumentDefinitions {
   const amount = money(payment.amount_received, payment.currency);
   const invoiceRefs = [...new Set(allocations.map((allocation) => value(allocation, "source_reference", value(allocation, "receivable_id"))))];
   const documentRows = [
-    `Émission : ${dateLabel(payment.paid_at)}`,
+    `Émission : ${dateLabel(payment.issued_at ?? payment.paid_at)}`,
     ...(invoiceRefs.length ? [`Facture / créance liée : ${invoiceRefs.join(", ")}`] : []),
     `Mode : ${value(payment, "method")}`,
   ];
@@ -336,9 +339,11 @@ function solarDefinition(data: Data): TDocumentDefinitions {
 
 export async function buildClientPdf(documentType: "invoice" | "payment" | "solar", data: Data): Promise<PdfDocument> {
   const definitions = documentType === "invoice" ? invoiceDefinition(data) : documentType === "payment" ? paymentDefinition(data) : solarDefinition(data);
-  const reference = documentType === "invoice" ? value(object(data.invoice), "invoice_number", value(object(data.invoice), "invoice_id")) : value(data, "document_reference");
+  const invoice = object(data.invoice);
+  const reference = documentType === "invoice" ? value(invoice, "invoice_number", value(invoice, "invoice_id")) : value(data, "document_reference");
+  const internalId = documentType === "invoice" ? value(invoice, "invoice_id") : documentType === "payment" ? value(object(data.payment), "payment_id") : value(object(data.sale), "sale_id");
   const title = documentType === "invoice" ? "Facture eau + électricité" : documentType === "payment" ? "Reçu de paiement" : "Facture de vente solaire";
-  const filename = `${documentType === "invoice" ? "SEL-Facture" : documentType === "payment" ? "SEL-Recu" : "SEL-Vente-Solaire"}-${reference.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
+  const filename = `${documentType === "invoice" ? "SEL-Facture" : documentType === "payment" ? "SEL-Recu" : "SEL-Vente-Solaire"}-${reference.replace(/[^a-zA-Z0-9_-]/g, "-")}-${internalId.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
   const runtime = await loadPdfRuntime();
   const pdf = runtime.createPdf(definitions);
   return { blob: await pdf.getBlob(), pdf, filename, title };

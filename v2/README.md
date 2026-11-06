@@ -30,6 +30,11 @@ expiration absolue après trois jours. Les PDF sont composés sur le poste depui
 les données structurées renvoyées par l'API; aucun fichier de facture n'est
 transmis au serveur.
 
+Les nouvelles factures affichent une référence `SEL-AAAAMMJJ-HHMMSS` selon le
+fuseau de Lubumbashi (UTC+2). L’identifiant unique reste dans le QR interne;
+les factures historiques gardent leur référence d’origine. Les reçus et ventes
+solaires conservent un suffixe unique dans leur référence.
+
 Les anciennes sources de l’agent local et de synchronisation sont conservées
 dans le dépôt pour préserver l’historique technique. Elles ne sont plus
 compilées, embarquées, exécutées ni utilisées par les workflows de distribution

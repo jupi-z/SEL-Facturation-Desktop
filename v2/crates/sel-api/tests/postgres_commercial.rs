@@ -134,6 +134,33 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(invoice["total"], "22.62");
     assert_eq!(invoice["billing_period"], "2026-11");
     assert_eq!(invoice["due_date"], "2026-12-15");
+    let invoice_reference = invoice["invoice_number"]
+        .as_str()
+        .expect("issued reference");
+    assert!(invoice_reference.starts_with("SEL-"));
+    assert_eq!(invoice_reference.len(), 19);
+
+    let invoice_document = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/invoices/{}/document-data",
+                    invoice["invoice_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invoice_document.status(), StatusCode::OK);
+    let invoice_document = json_body(invoice_document).await;
+    assert_eq!(invoice_document["document_reference"], invoice_reference);
+    assert_eq!(
+        invoice_document["qr_internal_reference"],
+        format!("SEL-V2-{}", invoice["invoice_id"].as_str().unwrap())
+    );
 
     let history = app
         .clone()
@@ -157,6 +184,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(history[0]["period"], "2026-11");
     assert_eq!(history[0]["billing_period"], "2026-11");
     assert_eq!(history[0]["due_date"], "2026-12-15");
+    assert_eq!(history[0]["invoice_number"], invoice_reference);
     assert!(history[0]["issued_at"].as_str().is_some());
 
     let retry = app.clone().oneshot(issue_request()).await.unwrap();
@@ -531,6 +559,12 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(receipt["document_schema_version"], 1);
     assert_eq!(receipt["document_type"], "PAYMENT_RECEIPT");
     assert_eq!(receipt["payment"]["payment_id"], payment["payment_id"]);
+    assert!(receipt["document_reference"]
+        .as_str()
+        .unwrap()
+        .starts_with("SEL-"));
+    assert_eq!(receipt["document_reference"], payment["payment_number"]);
+    assert!(receipt["payment"]["issued_at"].is_string());
     assert_eq!(receipt["payment"]["amount_received"], "3.00");
     assert_eq!(
         receipt["customer"]["legal_name"],

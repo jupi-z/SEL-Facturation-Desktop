@@ -2964,7 +2964,10 @@ async fn get_document_data(
             .await
             .map_err(storage_error)?
             .ok_or_else(|| ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found"))?;
-        let reference = format!("SEL-V2-{id}");
+        let reference = invoice
+            .invoice_number
+            .clone()
+            .unwrap_or_else(|| format!("SEL-V2-{id}"));
         return Ok(Json(DocumentData {
             document_schema_version: 1,
             template_version: "v2-a4-2".into(),
@@ -2979,7 +2982,7 @@ async fn get_document_data(
                 .get_invoice_issued_at(id)
                 .await
                 .map_err(storage_error)?,
-            qr_internal_reference: reference,
+            qr_internal_reference: format!("SEL-V2-{id}"),
             origin: "CENTRAL_ACCEPTED".into(),
         }));
     }
