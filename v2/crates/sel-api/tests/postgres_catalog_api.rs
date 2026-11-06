@@ -155,6 +155,14 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
         "snapshot includes historical revoked profiles"
     );
     assert_eq!(payload.fx_rates.len(), 1);
+    let communication_charges =
+        get_json_authenticated(&app, "/v1/catalog/communication-charge", "catalog-fixture").await;
+    assert!(communication_charges
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|charge| charge["currency"] == "USD" && charge["amount"] == "10"));
+    assert!(!payload.communication_charges.is_empty());
 }
 
 #[tokio::test]
@@ -447,6 +455,62 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
     .await
     .expect("count concurrently approved tariffs");
     assert_eq!(approved_count, 1);
+
+    let communication_draft = post_json(
+        &app,
+        "/v1/admin/catalog/communication-charge",
+        Some(&access_token),
+        Some("communication-charge-draft-001"),
+        json!({
+            "amount": "12.50",
+            "currency": "USD",
+            "effective_from": "2026-11-07",
+            "effective_to": null
+        }),
+    )
+    .await;
+    assert_eq!(
+        communication_draft.status(),
+        axum::http::StatusCode::CREATED
+    );
+    let communication_draft = json_body(communication_draft).await;
+    assert_eq!(communication_draft["status"], "DRAFT");
+    let communication_id = communication_draft["id"].as_str().unwrap();
+    let communication_approval = post_json(
+        &app,
+        &format!("/v1/admin/catalog/communication-charge/{communication_id}/approve"),
+        Some(&access_token),
+        Some("communication-charge-approve-001"),
+        json!({
+            "approval_ref": "SEL-COMMUNICATION-APPROVAL-1",
+            "supersedes_id": "21c00100-0000-4000-8000-000000000001"
+        }),
+    )
+    .await;
+    assert_eq!(communication_approval.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        json_body(communication_approval).await["status"],
+        "APPROVED"
+    );
+    let communication_versions = get_json_authenticated(
+        &app,
+        "/v1/admin/catalog/communication-charge",
+        &access_token,
+    )
+    .await;
+    assert!(communication_versions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|version| {
+            version["id"] == communication_id
+                && version["payload"]["amount"]
+                    .as_str()
+                    .and_then(|amount| amount.parse::<Decimal>().ok())
+                    == Some(Decimal::new(125, 1))
+        }),
+        "approved communication version should be visible in the admin catalog: {communication_versions:#}"
+    );
 }
 
 #[tokio::test]

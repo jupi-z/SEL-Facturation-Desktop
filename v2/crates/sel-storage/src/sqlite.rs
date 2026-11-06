@@ -580,10 +580,73 @@ impl LocalStore {
             .execute(&mut *tx)
             .await?;
         }
+        for charge in &snapshot.payload.communication_charges {
+            let status = required_catalog_text(charge, "status")?;
+            if !matches!(status.as_str(), "APPROVED" | "REVOKED") {
+                return Err(sqlx::Error::Protocol(
+                    "catalog snapshot contains a draft communication charge".into(),
+                ));
+            }
+            let payload = charge.get("payload").ok_or_else(|| {
+                sqlx::Error::Protocol("communication charge payload is missing".into())
+            })?;
+            let currency = required_catalog_text(payload, "currency")?;
+            let label = required_catalog_text(payload, "label")?;
+            let amount = required_catalog_text(payload, "amount")?;
+            amount.parse::<Decimal>().map_err(|_| {
+                sqlx::Error::Protocol("communication charge amount is invalid".into())
+            })?;
+            sqlx::query(
+                "INSERT INTO communication_charge_versions
+                 (id, currency, label, amount, effective_from, effective_to, status, approval_ref)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                 ON CONFLICT(id) DO UPDATE SET currency=excluded.currency,
+                   label=excluded.label, amount=excluded.amount,
+                   effective_from=excluded.effective_from, effective_to=excluded.effective_to,
+                   status=excluded.status, approval_ref=excluded.approval_ref",
+            )
+            .bind(required_catalog_text(charge, "id")?)
+            .bind(currency.to_ascii_uppercase())
+            .bind(label)
+            .bind(amount)
+            .bind(required_catalog_text(charge, "effective_from")?)
+            .bind(optional_catalog_text(charge, "effective_to"))
+            .bind(&status)
+            .bind(optional_catalog_text(charge, "approval_ref"))
+            .execute(&mut *tx)
+            .await?;
+        }
         sqlx::query("INSERT INTO catalog_sync_state (key,value,updated_at) VALUES ('sha256',$1,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at")
             .bind(&snapshot.sha256).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn load_communication_charge(
+        &self,
+        currency: &str,
+        on_date: NaiveDate,
+    ) -> Result<Option<Decimal>, sqlx::Error> {
+        let amount = sqlx::query_scalar::<_, String>(
+            "SELECT amount FROM communication_charge_versions
+             WHERE currency = $1 AND status = 'APPROVED' AND effective_from <= $2
+               AND (effective_to IS NULL OR effective_to >= $2)
+             ORDER BY effective_from DESC, id DESC LIMIT 1",
+        )
+        .bind(currency.trim().to_ascii_uppercase())
+        .bind(on_date.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        amount
+            .map(|value| {
+                value.parse::<Decimal>().map_err(|_| {
+                    sqlx::Error::Decode(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid communication charge amount",
+                    )))
+                })
+            })
+            .transpose()
     }
 
     pub async fn catalog_snapshot_hash(&self) -> Result<Option<String>, sqlx::Error> {

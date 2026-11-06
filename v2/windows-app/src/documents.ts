@@ -45,7 +45,7 @@ function unitPrice(amount: unknown, currency: unknown): string {
 
 function serviceUnit(unit: unknown): string {
   const code = String(unit ?? "").toUpperCase();
-  return code === "KWH" ? "kWh" : code === "M3" ? "m³" : String(unit ?? "—");
+  return code === "KWH" ? "kWh" : code === "M3" ? "m³" : code === "FORFAIT" ? "forfait" : String(unit ?? "—");
 }
 
 function dateLabel(valueToFormat: unknown): string {
@@ -229,7 +229,7 @@ function invoiceDefinition(data: Data): TDocumentDefinitions {
   for (const line of lines) {
     const service = value(line, "service_code");
     body.push([
-      { text: service === "ELECTRICITY" ? "Électricité" : service === "WATER" ? "Eau" : service, style: "body" },
+      { text: service === "ELECTRICITY" ? "Électricité" : service === "WATER" ? "Eau" : service === "COMMUNICATION" ? "Ligne de communication" : service, style: "body" },
       { text: `${value(line, "quantity")} ${serviceUnit(line.unit)}`, style: "body", alignment: "center" },
       { text: line.unit_price === null ? "—" : unitPrice(line.unit_price, invoice.currency), style: "body", alignment: "center" },
       { text: money(line.subtotal, invoice.currency), style: "body", alignment: "center" },
@@ -255,8 +255,8 @@ function invoiceDefinition(data: Data): TDocumentDefinitions {
       recipientAndDocument(customer, documentRows),
       separator(17, 17),
       { text: "DÉTAIL DES PRESTATIONS", style: "section", margin: [0, 0, 0, 13] },
-      detailsTable(["DÉSIGNATION", "QUANTITÉ", "PRIX U.", "BASE", "TAXES", "TOTAL"], body),
-      ...financialSummary("Total de la facture", "Sous-total", money(invoice.subtotal, invoice.currency), "Taxes", money(invoice.tax, invoice.currency), money(invoice.total, invoice.currency)),
+      detailsTable(["DÉSIGNATION", "QUANTITÉ", "PRIX U.", "BASE", "TVA", "TOTAL"], body),
+      ...financialSummary("Total de la facture", "Sous-total", money(invoice.subtotal, invoice.currency), "TVA", money(invoice.tax, invoice.currency), money(invoice.total, invoice.currency)),
       ...qrFooter(internalQr, "Données du document rendues sur ce poste. Aucun PDF n’est conservé sur le serveur."),
     ],
   };

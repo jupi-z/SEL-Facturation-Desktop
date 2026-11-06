@@ -260,6 +260,7 @@ pub struct TariffSnapshot {
     pub electricity_tax_rate: Option<Decimal>,
     pub water_unit_price: Option<Decimal>,
     pub water_tax_rate: Option<Decimal>,
+    pub revision: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -1621,6 +1622,32 @@ impl CentralStore {
         }
         let effective_date = NaiveDate::parse_from_str(&format!("{period}-01"), "%Y-%m-%d")
             .map_err(|error| sqlx::Error::Protocol(format!("invalid billing period: {error}")))?;
+        // The server is authoritative for tariff selection. Older/newer clients may
+        // omit the display-only revision; in that case resolve the single approved
+        // electricity revision for the customer's category and billing period.
+        let revision = if revision.trim().is_empty() {
+            let revisions = sqlx::query_scalar::<_, String>(
+                "SELECT DISTINCT approval_ref FROM tariff_versions
+                 WHERE service_code = 'ELECTRICITY' AND unit = 'KWH' AND currency = $1
+                   AND status = 'APPROVED' AND customer_category = $2
+                   AND effective_from <= $3 AND (effective_to IS NULL OR effective_to >= $3)
+                 ORDER BY approval_ref",
+            )
+            .bind(currency)
+            .bind(&customer_category)
+            .bind(effective_date)
+            .fetch_all(&self.pool)
+            .await?;
+            if revisions.len() > 1 {
+                return Err(sqlx::Error::Protocol(
+                    "multiple approved tariff revisions apply to this customer category and period"
+                        .into(),
+                ));
+            }
+            revisions.into_iter().next().unwrap_or_default()
+        } else {
+            revision.trim().to_owned()
+        };
         let electricity = sqlx::query(
             "SELECT unit_price FROM tariff_versions
              WHERE service_code = 'ELECTRICITY' AND unit = 'KWH' AND currency = $1
@@ -1629,7 +1656,7 @@ impl CentralStore {
              ORDER BY effective_from DESC",
         )
         .bind(currency)
-        .bind(revision)
+        .bind(&revision)
         .bind(&customer_category)
         .bind(effective_date)
         .fetch_all(&self.pool)
@@ -1662,7 +1689,7 @@ impl CentralStore {
              ORDER BY effective_from DESC",
         )
         .bind(currency)
-        .bind(revision)
+        .bind(&revision)
         .bind(&customer_category)
         .bind(effective_date)
         .fetch_all(&self.pool)
@@ -1703,6 +1730,7 @@ impl CentralStore {
                 .first()
                 .map(|row| row.try_get("rate"))
                 .transpose()?,
+            revision: (!revision.is_empty()).then_some(revision),
         })
     }
 
@@ -2740,6 +2768,66 @@ impl CentralStore {
             .collect()
     }
 
+    pub async fn load_communication_charge(
+        &self,
+        currency: &str,
+        on_date: NaiveDate,
+    ) -> Result<Option<Decimal>, sqlx::Error> {
+        let amount = sqlx::query_scalar::<_, String>(
+            "SELECT payload->>'amount' FROM catalog_reference_versions
+             WHERE reference_type = 'COMMUNICATION_CHARGE'
+               AND natural_key = upper($1) AND status = 'APPROVED'
+               AND effective_from <= $2 AND (effective_to IS NULL OR effective_to >= $2)
+             ORDER BY effective_from DESC, id DESC LIMIT 1",
+        )
+        .bind(currency.trim())
+        .bind(on_date)
+        .fetch_optional(&self.pool)
+        .await?;
+        amount
+            .map(|value| {
+                value.parse::<Decimal>().map_err(|_| {
+                    sqlx::Error::Decode(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid communication charge amount",
+                    )))
+                })
+            })
+            .transpose()
+    }
+
+    pub async fn catalog_communication_charges(
+        &self,
+        on_date: NaiveDate,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, payload, natural_key, effective_from, effective_to, approval_ref
+             FROM catalog_reference_versions
+             WHERE reference_type = 'COMMUNICATION_CHARGE' AND status = 'APPROVED'
+               AND effective_from <= $1 AND (effective_to IS NULL OR effective_to >= $1)
+             ORDER BY natural_key, effective_from DESC, id",
+        )
+        .bind(on_date)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let payload: serde_json::Value = row.try_get("payload")?;
+                let effective_from: NaiveDate = row.try_get("effective_from")?;
+                let effective_to: Option<NaiveDate> = row.try_get("effective_to")?;
+                Ok(json!({
+                    "id": row.try_get::<Uuid, _>("id")?,
+                    "label": payload["label"],
+                    "amount": payload["amount"],
+                    "currency": payload["currency"],
+                    "effective_from": effective_from.to_string(),
+                    "effective_to": effective_to.map(|date| date.to_string()),
+                    "approval_ref": row.try_get::<Option<String>, _>("approval_ref")?
+                }))
+            })
+            .collect()
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn create_reference_draft(
         &self,
@@ -2752,8 +2840,10 @@ impl CentralStore {
         idempotency_key: &str,
         request_digest: &str,
     ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
-        if !matches!(reference_type, "TAX_PROFILE" | "FX_RATE")
-            || natural_key.trim().is_empty()
+        if !matches!(
+            reference_type,
+            "TAX_PROFILE" | "FX_RATE" | "COMMUNICATION_CHARGE"
+        ) || natural_key.trim().is_empty()
             || idempotency_key.trim().is_empty()
             || request_digest.trim().is_empty()
             || effective_to.is_some_and(|date| date < effective_from)
@@ -2828,10 +2918,10 @@ impl CentralStore {
         .bind(actor_id)
         .execute(&mut *tx)
         .await?;
-        let event_type = if reference_type == "TAX_PROFILE" {
-            "TAX_PROFILE_VERSION_DRAFTED"
-        } else {
-            "FX_RATE_VERSION_DRAFTED"
+        let event_type = match reference_type {
+            "TAX_PROFILE" => "TAX_PROFILE_VERSION_DRAFTED",
+            "FX_RATE" => "FX_RATE_VERSION_DRAFTED",
+            _ => "COMMUNICATION_CHARGE_VERSION_DRAFTED",
         };
         sqlx::query(
             "INSERT INTO audit_events
@@ -2967,6 +3057,45 @@ impl CentralStore {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub async fn create_communication_charge_draft(
+        &self,
+        amount: Decimal,
+        currency: &str,
+        effective_from: NaiveDate,
+        effective_to: Option<NaiveDate>,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
+        let currency = currency.trim().to_ascii_uppercase();
+        if currency.len() != 3
+            || !currency.bytes().all(|byte| byte.is_ascii_uppercase())
+            || amount <= Decimal::ZERO
+            || amount.normalize().scale() > 6
+        {
+            return Err(ReferenceCatalogWriteError::InvalidFields);
+        }
+        let natural_key = currency.clone();
+        let payload = json!({
+            "label": "Ligne de communication",
+            "amount": amount.normalize().to_string(),
+            "currency": currency,
+            "taxable": true
+        });
+        self.create_reference_draft(
+            "COMMUNICATION_CHARGE",
+            &natural_key,
+            payload,
+            effective_from,
+            effective_to,
+            actor_id,
+            idempotency_key,
+            request_digest,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub async fn approve_reference_draft(
         &self,
         reference_id: Uuid,
@@ -2978,8 +3107,10 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
         let approval_ref = approval_ref.trim();
-        if !matches!(expected_type, "TAX_PROFILE" | "FX_RATE")
-            || approval_ref.is_empty()
+        if !matches!(
+            expected_type,
+            "TAX_PROFILE" | "FX_RATE" | "COMMUNICATION_CHARGE"
+        ) || approval_ref.is_empty()
             || approval_ref.len() > 160
             || idempotency_key.trim().is_empty()
             || request_digest.trim().is_empty()
@@ -3096,7 +3227,7 @@ impl CentralStore {
                     .bind(prior_end)
                     .execute(&mut *tx)
                     .await?;
-            } else {
+            } else if reference_type == "FX_RATE" {
                 sqlx::query("UPDATE fx_rate_versions SET effective_to = $2 WHERE id = $1")
                     .bind(previous_id)
                     .bind(prior_end)
@@ -3135,7 +3266,7 @@ impl CentralStore {
             .bind(actor_id)
             .execute(&mut *tx)
             .await?;
-        } else {
+        } else if reference_type == "FX_RATE" {
             sqlx::query(
                 "INSERT INTO fx_rate_versions
                  (id, from_currency, to_currency, value, effective_from, effective_to,
@@ -3154,10 +3285,10 @@ impl CentralStore {
             .execute(&mut *tx)
             .await?;
         }
-        let event_type = if reference_type == "TAX_PROFILE" {
-            "TAX_PROFILE_VERSION_APPROVED"
-        } else {
-            "FX_RATE_VERSION_APPROVED"
+        let event_type = match reference_type.as_str() {
+            "TAX_PROFILE" => "TAX_PROFILE_VERSION_APPROVED",
+            "FX_RATE" => "FX_RATE_VERSION_APPROVED",
+            _ => "COMMUNICATION_CHARGE_VERSION_APPROVED",
         };
         sqlx::query(
             "INSERT INTO audit_events
@@ -3209,8 +3340,10 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
         let change_ref = change_ref.trim();
-        if !matches!(expected_type, "TAX_PROFILE" | "FX_RATE")
-            || change_ref.is_empty()
+        if !matches!(
+            expected_type,
+            "TAX_PROFILE" | "FX_RATE" | "COMMUNICATION_CHARGE"
+        ) || change_ref.is_empty()
             || change_ref.len() > 160
             || idempotency_key.trim().is_empty()
             || request_digest.trim().is_empty()
@@ -3267,7 +3400,7 @@ impl CentralStore {
                     .bind(reference_id)
                     .execute(&mut *tx)
                     .await?;
-            } else {
+            } else if reference_type == "FX_RATE" {
                 sqlx::query(
                     "UPDATE fx_rate_versions SET status = 'REVOKED', approved = FALSE WHERE id = $1",
                 )
@@ -3275,10 +3408,10 @@ impl CentralStore {
                 .execute(&mut *tx)
                 .await?;
             }
-            let event_type = if reference_type == "TAX_PROFILE" {
-                "TAX_PROFILE_VERSION_REVOKED"
-            } else {
-                "FX_RATE_VERSION_REVOKED"
+            let event_type = match reference_type.as_str() {
+                "TAX_PROFILE" => "TAX_PROFILE_VERSION_REVOKED",
+                "FX_RATE" => "FX_RATE_VERSION_REVOKED",
+                _ => "COMMUNICATION_CHARGE_VERSION_REVOKED",
             };
             sqlx::query(
                 "INSERT INTO audit_events
@@ -6025,6 +6158,22 @@ impl CentralStore {
                     electricity_tax_rate,
                     water_tariff: tariffs.water_unit_price,
                     water_tax_rate: tariffs.water_tax_rate,
+                    communication_charge: match self
+                        .load_communication_charge(&input.currency, Utc::now().date_naive())
+                        .await?
+                    {
+                        Some(amount) => amount,
+                        None => {
+                            return self
+                                .persist_sync_rejection(
+                                    event,
+                                    "COMMUNICATION_CHARGE_UNAVAILABLE",
+                                    "approve_a_communication_charge_for_the_invoice_currency",
+                                )
+                                .await;
+                        }
+                    },
+                    communication_tax_rate: electricity_tax_rate,
                     currency: input.currency.clone(),
                 }) {
                     Ok(calculated) => calculated,

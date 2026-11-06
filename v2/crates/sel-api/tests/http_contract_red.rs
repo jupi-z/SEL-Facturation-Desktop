@@ -15,6 +15,7 @@ async fn utility_invoice_always_returns_electricity_and_zero_water_as_json() {
             electricity_tax_rate: Some("0.16".parse().unwrap()),
             water_unit_price: None,
             water_tax_rate: None,
+            communication_charge: Some("10".parse().unwrap()),
             revision: Some("fixture-approved-v1".into()),
         })
         .await;
@@ -78,9 +79,10 @@ async fn utility_invoice_always_returns_electricity_and_zero_water_as_json() {
     assert_eq!(response.headers()["content-type"], "application/json");
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let invoice: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(invoice["lines"].as_array().unwrap().len(), 3);
     assert_eq!(invoice["lines"][1]["service_code"], "WATER");
     assert_eq!(invoice["lines"][1]["quantity"], "0");
+    assert_eq!(invoice["lines"][2]["service_code"], "COMMUNICATION");
     let receivable = app
         .oneshot(
             Request::builder()
