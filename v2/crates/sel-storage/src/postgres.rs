@@ -5032,7 +5032,9 @@ impl CentralStore {
             return Ok(None);
         }
         let rows = sqlx::query(
-            "SELECT r.id, r.currency, r.principal_total,
+            "SELECT r.id, r.source_type, r.source_id, r.currency, r.principal_total,
+                    CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number, r.source_id::text)
+                         ELSE r.source_id::text END AS source_reference,
                     COALESCE((
                         SELECT SUM(
                             pa.allocated_amount * GREATEST(
@@ -5052,8 +5054,9 @@ impl CentralStore {
                     ), 0) AS paid,
                     COALESCE((SELECT SUM(amount) FROM credit_notes WHERE receivable_id = r.id), 0) AS credited
              FROM receivables r
+             LEFT JOIN invoices i ON i.id = r.source_id AND r.source_type = 'INVOICE'
              WHERE r.customer_id = $1
-             GROUP BY r.id, r.currency, r.principal_total
+             GROUP BY r.id, r.source_type, r.source_id, r.currency, r.principal_total, i.invoice_number
              ORDER BY r.id",
         )
         .bind(customer_id)
@@ -5072,6 +5075,8 @@ impl CentralStore {
                 let balance = (principal - paid - credited).round_dp(2);
                 Ok(json!({
                     "receivable_id": row.try_get::<Uuid, _>("id")?,
+                    "source_type": row.try_get::<String, _>("source_type")?,
+                    "source_reference": row.try_get::<String, _>("source_reference")?,
                     "currency": row.try_get::<String, _>("currency")?,
                     "principal": format!("{principal:.2}"),
                     "paid": format!("{paid:.2}"),

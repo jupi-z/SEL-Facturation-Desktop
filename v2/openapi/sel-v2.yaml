@@ -1409,6 +1409,16 @@ components:
           items:
             type: object
             description: Current receivable summary from the local or central financial ledger.
+            required: [receivable_id, source_type, source_reference, currency, principal, paid, credited, balance]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              source_type: { type: string, enum: [INVOICE, SALE] }
+              source_reference: { type: string, description: Immutable invoice number or sale identifier }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+              principal: { type: string }
+              paid: { type: string }
+              credited: { type: string }
+              balance: { type: string }
         invoices:
           type: array
           items: { $ref: '#/components/schemas/UtilityBillingResponse' }

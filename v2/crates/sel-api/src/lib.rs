@@ -221,6 +221,8 @@ pub struct InvoiceRecord {
 pub struct ReceivableRecord {
     pub id: Uuid,
     pub customer_id: Uuid,
+    pub source_type: String,
+    pub source_reference: String,
     pub currency: String,
     pub principal: Decimal,
 }
@@ -2625,6 +2627,11 @@ async fn issue_utility(
         ReceivableRecord {
             id: receivable_id,
             customer_id: resolved_input.customer_id,
+            source_type: "INVOICE".to_owned(),
+            source_reference: committed
+                .invoice_number
+                .clone()
+                .unwrap_or_else(|| invoice_id.to_string()),
             currency: resolved_input.currency.clone(),
             principal: committed.total,
         },
@@ -3367,7 +3374,7 @@ async fn get_statement(
     let payments = state.payments.read().await;
     let entries = receivables.into_iter().map(|receivable| {
         let paid: Decimal = payments.values().flat_map(|payment| payment.allocations.iter()).filter(|allocation| allocation.receivable_id == receivable.id).map(|allocation| allocation.amount).sum();
-        json!({"receivable_id":receivable.id,"currency":receivable.currency,"principal":receivable.principal,"paid":paid,"balance":receivable.principal-paid})
+        json!({"receivable_id":receivable.id,"source_type":receivable.source_type,"source_reference":receivable.source_reference,"currency":receivable.currency,"principal":receivable.principal,"paid":paid,"balance":receivable.principal-paid})
     }).collect::<Vec<_>>();
     Ok(Json(
         json!({"customer_id":customer_id,"receivables":entries}),
@@ -3548,6 +3555,8 @@ async fn create_solar_sale(
         ReceivableRecord {
             id: receivable_id,
             customer_id: input.customer_id,
+            source_type: "SALE".to_owned(),
+            source_reference: sale_id.to_string(),
             currency: input.currency,
             principal: input.principal,
         },

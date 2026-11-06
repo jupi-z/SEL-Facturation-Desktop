@@ -143,6 +143,7 @@ def mock_invoke_script() -> str:
     }, ensure_ascii=False)
     return f"""
       const fixtures = {fixtures};
+      window.__paymentPostCount = 0;
       window.__TAURI_INTERNALS__ = {{ invoke: async (command, args = {{}}) => {{
         if (command === 'central_status') return {{status:'CENTRAL_CONNECTED',configured:true}};
         if (command === 'central_session_status') return window.__ADMIN_DEMO_SESSION__ ? {{authenticated:true,user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}} : {{authenticated:false}};
@@ -150,6 +151,7 @@ def mock_invoke_script() -> str:
         if (command === 'central_logout') {{ window.__ADMIN_DEMO_SESSION__ = false; return null; }}
         if (command === 'central_admin_request') {{
           const adminPath = args.path || '';
+          if (window.__rejectCatalogDraft && adminPath.endsWith('/tariffs') && args.method === 'POST') return {{status:422,body:{{code:'DEMO_VALIDATION_ERROR',message:'Validation refusal simulated'}}}};
           let adminBody = [];
           if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
           else if (adminPath === '/v1/admin/audit-events') adminBody = [{{id:'demo-audit-0001',event_type:'USER_CREATED',actor_identity:'admin-demo',subject_id:'demo-agent-0001',occurred_at:'2026-11-04T08:10:00Z',redacted_metadata:{{role:'BILLING_AGENT'}}}}];
@@ -169,7 +171,7 @@ def mock_invoke_script() -> str:
             ? {{currency:'USD',subtotal:'11.00',tax:'1.76',total:'12.76',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}}]}}
             : {{currency:'USD',subtotal:'9.50',tax:'1.52',total:'11.02',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}}]}};
         }}
-        else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) {{ const customerId = path.split('/')[3]; body = customerId === 'demo-customer-0001' ? {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}} : {{invoices:[],receivables:[]}}; }}
+        else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) {{ const customerId = path.split('/')[3]; body = customerId === 'demo-customer-0001' ? {{invoices:fixtures.invoices,receivables:[{{receivable_id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'INVOICE',source_reference:'SEL-20261103-103000'}},{{receivable_id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SALE',source_reference:'demo-sale-0001'}}]}} : {{invoices:[],receivables:[]}}; }}
         else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts')) {{ const customerId = path.split('/')[3]; body = fixtures.serviceAccounts.filter((account) => account.customer_id === customerId); }}
         else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[3]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
         else if (path.startsWith('/v1/meters/') && path.endsWith('/replace')) {{
@@ -196,6 +198,7 @@ def mock_invoke_script() -> str:
         }}
         else if (path.startsWith('/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
         else if (path.startsWith('/v1/invoices')) body = fixtures.invoices;
+        else if (path === '/v1/payments' && args.method === 'POST') {{ window.__paymentPostCount += 1; body = {{...fixtures.payments[0],payment_id:'demo-payment-created-0001',amount_received:args.body?.received_amount}}; }}
         else if (path.startsWith('/v1/payments/') && path.endsWith('/document-data')) body = {{document_schema_version:1,document_reference:'SEL-PAY-DEMO-0001',qr_internal_reference:'SEL:PAYMENT:demo-payment-0001',payment:{{payment_id:'demo-payment-0001',amount_received:'3.00',currency:'USD',method:'CASH',paid_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},allocations:[{{receivable_id:'demo-receivable-0001',amount:'3.00',currency:'USD'}}],reversals:[],origin:'CENTRAL'}};
         else if (path.startsWith('/v1/payments')) body = fixtures.payments;
         else if (path.startsWith('/v1/solar/sales/') && path.endsWith('/document-data')) {{
@@ -393,6 +396,13 @@ async def capture_views() -> None:
                     await page.locator('input[name="received_amount"]').fill("3.00")
                     await page.locator('.allocation-card input[type="number"]').fill("3.00")
                     await page.locator('input[name="occurred_at"]').fill("2026-11-04T10:00")
+                    await page.get_by_role("button", name="Vérifier le règlement").click()
+                    await page.get_by_role("heading", name="Confirmer le règlement").wait_for()
+                    await page.screenshot(path=str(OUTPUT / "payment-review-1440x900.png"))
+                    if await page.evaluate("window.__paymentPostCount") != 0:
+                        raise AssertionError("Payment review step must not post a payment to the server")
+                    await page.get_by_role("button", name="Confirmer et enregistrer").click()
+                    await page.wait_for_function("window.__paymentPostCount === 1")
                 if slug == "solar":
                     await page.get_by_label("Vente à financer").select_option("demo-sale-0001")
                     await page.get_by_label("Échéance 1 · Date").fill("2026-12-01")
@@ -558,6 +568,19 @@ async def capture_views() -> None:
                     await page.get_by_role("heading", name="Utilisateurs et rôles").wait_for()
                     await page.get_by_role("cell", name="admin-demo").first.wait_for()
                     await page.screenshot(path=str(OUTPUT / "admin-full-1440x900.png"), full_page=True)
+                    tariff_form = page.locator("form.admin-catalog-form").first
+                    await tariff_form.locator('input[name="service_code"]').fill("ELECTRICITY")
+                    await tariff_form.locator('input[name="customer_category"]').fill("DEMO")
+                    await tariff_form.locator('input[name="unit"]').fill("KWH")
+                    await tariff_form.locator('input[name="unit_price"]').fill("0.095")
+                    await tariff_form.locator('input[name="currency"]').fill("USD")
+                    await tariff_form.locator('input[name="effective_from"]').fill("2026-01-01")
+                    await page.evaluate("window.__rejectCatalogDraft = true")
+                    await tariff_form.get_by_role("button", name="Créer un brouillon").click()
+                    await page.get_by_role("alert").filter(has_text="Validation refusal simulated").wait_for()
+                    if await tariff_form.locator('input[name="service_code"]').input_value() != "ELECTRICITY":
+                        raise AssertionError("Catalog draft input must be retained when the server rejects creation")
+                    await page.evaluate("window.__rejectCatalogDraft = false")
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")

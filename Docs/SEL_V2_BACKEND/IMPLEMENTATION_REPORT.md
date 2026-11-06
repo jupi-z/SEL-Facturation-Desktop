@@ -1193,3 +1193,25 @@ Le parcours dossier abonné permet maintenant de remplacer un compteur physique 
 | Backend de production | NON TOUCHÉ | Aucun appel ou changement de données/configuration en production. |
 
 **État UX3 après ce lot :** B1 est implémenté et validé par les tests HTTP/PostgreSQL de CI, ainsi que par le build et la recette Windows synthétique. B2 (rectification/annulation d’une vente solaire), B3 (avenant/résiliation d’un contrat) et B4 (modification/abandon d’un brouillon de référentiel) restent ouverts : leurs règles financières ou de versionnement doivent être établies avant d’exposer une action active. La PR UX3 n’est pas fusionnée; aucune publication ni mise en production n’a eu lieu.
+
+#### UX3 — revue préalable des paiements et références de créances — 6 novembre 2026
+
+La saisie d’un paiement n’envoie plus directement `POST /v1/payments`. Le premier clic fige les valeurs saisies et présente, dans le panneau récapitulatif, le client, le montant, le mode, la date et les affectations. L’opérateur peut revenir modifier la saisie; seule l’action « Confirmer et enregistrer » envoie la commande. Un verrou synchrone côté composant empêche le double clic pendant l’envoi, tandis que la clé d’idempotence existante du transport reste active. Un refus conserve le formulaire rempli.
+
+L’audit a aussi relevé que la réponse `GET /v1/customers/{id}/statement` renvoyait les soldes des créances sans leur nature ni leur référence source. Le serveur central ajoute désormais `source_type` et `source_reference` (numéro de facture immuable pour une facture, identifiant de vente pour une vente solaire) au résumé. Le contrat OpenAPI, le chemin de repli en mémoire de l’API et le test d’intégration PostgreSQL ont été alignés. Le sélecteur et l’écran de confirmation affichent cette référence; aucun montant n’est recalculé en JavaScript.
+
+Enfin, la création d’un brouillon de catalogue conserve les champs si le serveur refuse le POST et ne les réinitialise qu’après un succès confirmé.
+
+| Vérification | Résultat | Preuve / limite |
+|---|---|---|
+| Contrats UI | PASS local | `python -m pytest tests/test_v2_tauri_client.py -q` : 57 réussis, dont confirmation distincte, POST unique, verrou anti-double clic, affichage des références et conservation du brouillon après erreur. |
+| Parcours navigateur desktop | PASS local, fixtures synthétiques | `python v2/windows-app/scripts/visual_review.py` : code 0; assertions qu’aucun POST paiement n’est envoyé avant confirmation, qu’un POST suit la confirmation et qu’un brouillon de tarif reste présent après HTTP 422. Capture versionnée `Docs/SEL_V2_UX3_CODEX/evidence/payment-review-1440x900.png`. Le serveur Rust est simulé dans ce test visuel. |
+| Rendu de la confirmation | PASS visuel 1440×900 | La synthèse et les deux actions restent visibles dans la colonne récapitulative; le formulaire demeure éditable jusqu’à confirmation. |
+| Build React/TypeScript | PASS local | `npm ci --ignore-scripts` : 58 paquets ajoutés, 0 vulnérabilité rapportée; `npm run build` : TypeScript + Vite réussis. Avertissement non bloquant sur les chunks PDF/polices de plus de 500 kB. |
+| Tests unitaires API Rust | PASS local | `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` : 12 réussis. |
+| Test d’intégration PostgreSQL modifié | COMPILE PASS / EXÉCUTION NON FAITE | `cargo test --manifest-path v2/Cargo.toml -p sel-api --test postgres_commercial --no-run` compile. L’exécution réelle est ignorée sans `TEST_DATABASE_URL`; aucune URL de production n’a été utilisée. À exécuter dans le service PostgreSQL éphémère de CI. |
+| Formats Rust | PASS local après `cargo fmt` | Le formatage a été appliqué aux sources Rust modifiées; relancer `cargo fmt --all -- --check` avant le commit final. |
+| Windows natif / installateur | NOT_RUN pour ce dernier diff | Le workflow Windows doit être relancé après push; la capture Chromium ne constitue pas une installation Tauri native. |
+| Production | NON TOUCHÉ | Aucune requête, écriture, migration ou configuration de backend de production n’a été effectuée. |
+
+**État après cette tranche :** les parcours paiement et création de brouillon ont des confirmations et une gestion d’échec plus sûres. L’enrichissement de la situation client est rétrocompatible (champs JSON additifs) et ne change ni soldes ni écritures. Il reste à exécuter PostgreSQL en CI sur le nouveau SHA, relancer la CI Windows, compléter les scénarios d’administration/facturation et traiter les lacunes métier/API encore réellement requises. La PR reste non fusionnée et aucune version n’est publiée.

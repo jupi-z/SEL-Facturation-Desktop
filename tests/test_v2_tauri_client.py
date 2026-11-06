@@ -390,7 +390,41 @@ def test_payment_form_clears_previous_customer_receivables_while_loading() -> No
     assert "setReceivables([]); setReceivablesLoading(true); setReceivablesError(\"\")" in payment_form
     assert "disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}" in payment_form
     assert "const paymentBlocked = receivablesLoading || Boolean(receivablesError) || !allocationsReady" in payment_form
-    assert "disabled={paymentBlocked}" in payment_form
+    assert "disabled={paymentBlocked || Boolean(paymentReview)}" in payment_form
+
+
+def test_payment_requires_a_separate_review_before_posting_to_server() -> None:
+    app = (ROOT / "v2" / "windows-app" / "src" / "App.tsx").read_text(encoding="utf-8")
+    payment_form = app.split("function PaymentForm(", 1)[1].split("\n}\n\nfunction MeterReadingsView", 1)[0]
+
+    initial_submit = payment_form.split('onSubmit={(event) => {', 1)[1].split("}}>\n    <label", 1)[0]
+    assert "event.preventDefault()" in initial_submit
+    assert "setPaymentReview({" in initial_submit
+    assert "onSubmit(form, \"/v1/payments\"" not in initial_submit
+    assert 'paymentReview ? <section className="payment-review"' in payment_form
+    assert 'saving ? "Enregistrement…"' in payment_form
+    assert 'onClick={() => void confirmPayment()}' in payment_form
+    assert "disabled={saving}" in payment_form
+    assert "savingRef.current" in payment_form
+
+
+def test_payment_receivable_choices_show_server_invoice_or_sale_reference() -> None:
+    app = (ROOT / "v2" / "windows-app" / "src" / "App.tsx").read_text(encoding="utf-8")
+    payment_form = app.split("function PaymentForm(", 1)[1].split("\n}\n\nfunction MeterReadingsView", 1)[0]
+    openapi = (ROOT / "v2" / "openapi" / "sel-v2.yaml").read_text(encoding="utf-8")
+
+    assert "text(item.source_reference, id)" in payment_form
+    assert "source_type: { type: string, enum: [INVOICE, SALE] }" in openapi
+
+
+def test_catalog_draft_form_resets_only_after_server_accepts_creation() -> None:
+    app = (ROOT / "v2" / "windows-app" / "src" / "App.tsx").read_text(encoding="utf-8")
+    panel = app.split("function AdminCatalogPanel(", 1)[1].split("\nfunction AdminConsole", 1)[0]
+    create = panel.split("async function create(", 1)[1].split("\n  return <Panel", 1)[0]
+
+    assert "if (await onCreate(kind, values)) form.reset()" in create
+    assert "onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>" in panel
+    assert "return false" in app.split("async function createCatalogDraft(", 1)[1].split("\n  async function approveCatalogDraft", 1)[0]
 
 
 def test_payment_form_can_allocate_one_receipt_to_multiple_real_receivables() -> None:

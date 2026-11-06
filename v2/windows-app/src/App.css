@@ -176,6 +176,11 @@ table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .payment-summary-values strong { color: var(--navy); font-size: 12px; overflow-wrap: anywhere; }
 .payment-amount { color: var(--navy); font-size: 27px; line-height: 1.15; }
 .payment-summary > .button { width: 100%; margin-top: auto; }
+.payment-review { display: block; margin: 16px 0 0; }
+.payment-review h3 { margin: 0 0 10px; color: var(--navy); font-size: 16px; }
+.payment-review p { margin: 8px 0; }
+.payment-review ul { display: grid; gap: 6px; margin: 8px 0; padding-left: 22px; }
+.payment-review .form-actions { justify-content: flex-end; margin-top: 14px; }
 .reading-entry { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-top: 16px; border-top: 1px solid var(--line); }
 .reading-entry .help { align-self: end; padding-bottom: 10px; }
 .reading-message { margin: 12px 0; color: var(--green); font-size: 12px; }

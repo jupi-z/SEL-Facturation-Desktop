@@ -113,7 +113,9 @@ function domainLabel(value: unknown): string {
   const raw = text(value, "");
   const labels: Record<string, string> = {
     UTILITY_INVOICE: "Facture eau + électricité",
+    INVOICE: "Facture eau + électricité",
     SOLAR_SALE: "Vente de kit solaire",
+    SALE: "Vente de kit solaire",
     CASH: "Espèces",
     BANK: "Banque",
     MOBILE_MONEY: "Mobile Money",
@@ -378,9 +380,7 @@ export default function App() {
     return !query || [customer.customer_code, customer.legal_name, customer.address, customer.phone]
       .some((value) => text(value, "").toLocaleLowerCase("fr").includes(query));
   }), [customers, customerFilter]);
-  async function submit(event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string): Promise<boolean> {
-    event.preventDefault();
-    const form = event.currentTarget;
+  async function submit(form: HTMLFormElement, path: string, payload: Row, success: string): Promise<boolean> {
     try {
       await centralRequest(path, "POST", payload);
       setDraftDirty(false);
@@ -989,7 +989,8 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { customers: Row[]; sales: Row[]; initialCustomerId: string; onSubmit: (event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) => Promise<boolean> }) {
+function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { customers: Row[]; sales: Row[]; initialCustomerId: string; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
+  const formRef = useRef<HTMLFormElement>(null);
   const [customerId, setCustomerId] = useState(initialCustomerId);
   const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: "", amount: "", scheduleId: "" }]);
   const [receivables, setReceivables] = useState<Row[]>([]);
@@ -998,6 +999,9 @@ function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { custom
   const [planSchedules, setPlanSchedules] = useState<Record<string, { schedule: Row[]; currency: string; loading: boolean; error: string }>>({});
   const [receivedAmount, setReceivedAmount] = useState("");
   const [occurredAt, setOccurredAt] = useState(dateTimeInputValue);
+  const [paymentReview, setPaymentReview] = useState<Row | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
 
   useEffect(() => { setCustomerId(initialCustomerId); }, [initialCustomerId]);
 
@@ -1062,13 +1066,34 @@ function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { custom
       : allocation));
   }
 
-  return <div className="payment-workspace"><Panel title="Informations du règlement"><form data-preserve-draft id="central-payment-form" className="form-grid" onSubmit={async (event) => {
+  async function confirmPayment() {
+    const form = formRef.current;
+    if (!form || !paymentReview || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const saved = await onSubmit(form, "/v1/payments", paymentReview, "Règlement enregistré par le serveur SEL.");
+      if (saved) {
+        setPaymentReview(null);
+        setCustomerId("");
+        setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]);
+        setReceivedAmount("");
+        setOccurredAt(dateTimeInputValue());
+      }
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  return <div className="payment-workspace"><Panel title="Informations du règlement"><form ref={formRef} data-preserve-draft id="central-payment-form" className="form-grid" onChange={() => setPaymentReview(null)} onSubmit={(event) => {
+    event.preventDefault();
+    if (paymentBlocked || !event.currentTarget.reportValidity()) return;
     const form = new FormData(event.currentTarget);
-    const saved = await onSubmit(event, "/v1/payments", {
+    setPaymentReview({
       customer_id: form.get("customer_id"), received_amount: form.get("received_amount"), currency, method: form.get("method"), occurred_at: new Date(String(form.get("occurred_at"))).toISOString(),
       allocations: allocationRows.map((allocation) => ({ receivable_id: allocation.receivableId, amount: allocation.amount, schedule_id: allocation.scheduleId || null })),
-    }, "Règlement enregistré par le serveur SEL.");
-    if (saved) { setCustomerId(""); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); setReceivedAmount(""); setOccurredAt(dateTimeInputValue()); }
+    });
   }}>
     <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
     <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)} required /></label>
@@ -1081,7 +1106,7 @@ function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { custom
         const planState = planId ? planSchedules[planId] : undefined;
         const openSchedule = planState?.schedule.filter((item) => text(item.status).toUpperCase() !== "PAID") ?? [];
         return <fieldset className="allocation-card" key={allocation.key}><legend>Affectation {index + 1}</legend>
-          <label>Créance<select value={allocation.receivableId} onChange={(event) => updateAllocation(allocation.key, "receivableId", event.target.value)} required disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}><option value="">{!customerId ? "Sélectionnez d’abord un abonné" : receivablesLoading ? "Chargement des créances…" : "Sélectionner une créance"}</option>{receivables.map((item) => { const id = text(item.receivable_id ?? item.id); const usedElsewhere = allocationRows.some((other) => other.key !== allocation.key && other.receivableId === id); const wrongCurrency = text(item.currency, "USD") !== currency; return <option key={id} value={id} disabled={usedElsewhere || wrongCurrency}>{domainLabel(item.source_type ?? item.status)} · {formatMoney(item.balance, item.currency)}{usedElsewhere ? " · déjà sélectionnée" : wrongCurrency ? " · devise différente" : ""}</option>; })}</select></label>
+          <label>Créance<select value={allocation.receivableId} onChange={(event) => updateAllocation(allocation.key, "receivableId", event.target.value)} required disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}><option value="">{!customerId ? "Sélectionnez d’abord un abonné" : receivablesLoading ? "Chargement des créances…" : "Sélectionner une créance"}</option>{receivables.map((item) => { const id = text(item.receivable_id ?? item.id); const usedElsewhere = allocationRows.some((other) => other.key !== allocation.key && other.receivableId === id); const wrongCurrency = text(item.currency, "USD") !== currency; return <option key={id} value={id} disabled={usedElsewhere || wrongCurrency}>{domainLabel(item.source_type ?? item.status)} · {text(item.source_reference, id)} · {formatMoney(item.balance, item.currency)}{usedElsewhere ? " · déjà sélectionnée" : wrongCurrency ? " · devise différente" : ""}</option>; })}</select></label>
           <label>Montant affecté<input type="number" min="0.01" step="0.01" value={allocation.amount} onChange={(event) => updateAllocation(allocation.key, "amount", event.target.value)} required /></label>
           {planId && <label className="span-two">Échéance solaire<select value={allocation.scheduleId} onChange={(event) => updateAllocation(allocation.key, "scheduleId", event.target.value)} required disabled={!planState || planState.loading || Boolean(planState.error)}><option value="">{planState?.loading ? "Chargement de l’échéancier…" : "Sélectionner une échéance…"}</option>{openSchedule.map((item) => <option key={text(item.id)} value={text(item.id)}>N° {text(item.sequence)} · {text(item.due_date)} · restant {formatMoney(item.remaining, planState?.currency)}</option>)}</select></label>}
           {planState?.error && <p className="help error-text span-two" role="alert">Impossible de vérifier l’échéancier : {planState.error} Le règlement est bloqué.</p>}
@@ -1095,7 +1120,30 @@ function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { custom
       <p className="help">Les montants, échéances et soldes sont vérifiés atomiquement par le moteur Rust. Chaque ligne reste affectée à une créance distincte.</p>
     </div>
     <label>Référence interne<input value="Générée par Rust à l’enregistrement" readOnly /></label>
-  </form></Panel><Panel title="Récapitulatif"><div className="payment-summary"><p className="eyebrow">PRÉPARATION DU RÈGLEMENT</p><h2>Règlement</h2><p className="muted">{primaryReceivable ? `${domainLabel(primaryReceivable.source_type ?? primaryReceivable.status)} · soldes retournés par Rust` : "Choisissez un abonné puis les créances à affecter."}</p><div className="payment-summary-values"><div><span>Abonné</span><strong>{customerId ? customerLabel(customerId, customers) : "—"}</strong></div><div><span>Créances sélectionnées</span><strong>{allocationRows.filter((allocation) => allocation.receivableId).length}</strong></div><div><span>Devise</span><strong>{currency}</strong></div></div><p className="eyebrow">MONTANT À CONFIRMER</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong><span className={`status-badge${primaryReceivable ? " pending" : ""}`}>{primaryReceivable ? "En attente d’enregistrement" : "Aucune créance sélectionnée"}</span><p className="help">Rust contrôle le montant reçu, l’ensemble des affectations, les devises et chaque solde avant d’enregistrer le règlement.</p><Button primary type="submit" form="central-payment-form" disabled={paymentBlocked}>Enregistrer le règlement</Button></div></Panel></div>;
+  </form></Panel><Panel title={paymentReview ? "Confirmation du règlement" : "Récapitulatif"}><div className="payment-summary">{paymentReview ? <section className="payment-review" aria-live="polite">
+    <p className="eyebrow">DERNIÈRE VÉRIFICATION</p>
+    <h2>Confirmer le règlement</h2>
+    <div className="payment-summary-values">
+      <div><span>Abonné</span><strong>{customerLabel(text(paymentReview.customer_id), customers)}</strong></div>
+      <div><span>Montant reçu</span><strong>{formatMoney(paymentReview.received_amount, paymentReview.currency)} · {domainLabel(paymentReview.method)}</strong></div>
+      <div><span>Date</span><strong>{new Date(String(paymentReview.occurred_at)).toLocaleString("fr-CD")}</strong></div>
+      <div><span>Affectations</span><strong>{rows<Row>(paymentReview.allocations).length}</strong></div>
+    </div>
+    <ul>{rows<Row>(paymentReview.allocations).map((allocation) => {
+      const receivable = receivables.find((item) => text(item.receivable_id ?? item.id) === text(allocation.receivable_id));
+      return <li key={text(allocation.receivable_id)}>{domainLabel(receivable?.source_type ?? receivable?.status)} · {text(receivable?.source_reference, text(allocation.receivable_id))} — {formatMoney(allocation.amount, paymentReview.currency)}{allocation.schedule_id ? " · échéance solaire sélectionnée" : ""}</li>;
+    })}</ul>
+    <p className="help">Le serveur Rust recontrôlera atomiquement le montant et les soldes avant validation.</p>
+    <div className="form-actions"><Button type="button" disabled={saving} onClick={() => setPaymentReview(null)}>Modifier</Button><Button primary type="button" disabled={saving} onClick={() => void confirmPayment()}>{saving ? "Enregistrement…" : "Confirmer et enregistrer"}</Button></div>
+  </section> : <>
+    <p className="eyebrow">PRÉPARATION DU RÈGLEMENT</p><h2>Règlement</h2>
+    <p className="muted">{primaryReceivable ? `${domainLabel(primaryReceivable.source_type ?? primaryReceivable.status)} · soldes retournés par Rust` : "Choisissez un abonné puis les créances à affecter."}</p>
+    <div className="payment-summary-values"><div><span>Abonné</span><strong>{customerId ? customerLabel(customerId, customers) : "—"}</strong></div><div><span>Créances sélectionnées</span><strong>{allocationRows.filter((allocation) => allocation.receivableId).length}</strong></div><div><span>Devise</span><strong>{currency}</strong></div></div>
+    <p className="eyebrow">MONTANT À CONFIRMER</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong>
+    <span className={`status-badge${primaryReceivable ? " pending" : ""}`}>{primaryReceivable ? "En attente d’enregistrement" : "Aucune créance sélectionnée"}</span>
+    <p className="help">Rust contrôle le montant reçu, l’ensemble des affectations, les devises et chaque solde avant d’enregistrer le règlement.</p>
+    <Button primary type="submit" form="central-payment-form" disabled={paymentBlocked || Boolean(paymentReview)}>Vérifier le règlement</Button>
+  </>}</div></Panel></div>;
 }
 
 function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacement }: { customerId: string; canManageMeters: boolean; onConfirmReplacement: (oldSerial: string, newSerial: string, reason: string) => Promise<boolean> }) {
@@ -1501,18 +1549,17 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
 
 function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }: {
   kind: AdminCatalog; items: Row[]; busy: boolean;
-  onCreate: (kind: AdminCatalog, values: Record<string, string>) => void;
+  onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>;
   onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => void;
   onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => void;
 }) {
   const definition = adminCatalogDefinitions[kind];
   const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
-  function create(event: FormEvent<HTMLFormElement>) {
+  async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const values = Object.fromEntries([...new FormData(form).entries()].map(([key, value]) => [key, String(value).trim()]));
-    onCreate(kind, values);
-    form.reset();
+    if (await onCreate(kind, values)) form.reset();
   }
   return <Panel title={definition.title}>
     <form className="form-grid admin-catalog-form" onSubmit={create}>
@@ -1635,13 +1682,14 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
     } catch (reason) { form.reset(); setMessage(humanError(reason)); setError(true); }
   }
 
-  async function createCatalogDraft(kind: AdminCatalog, values: Record<string, string>) {
+  async function createCatalogDraft(kind: AdminCatalog, values: Record<string, string>): Promise<boolean> {
     setCatalogBusy(true);
     try {
       const body = { ...values, effective_to: values.effective_to || null };
       await centralAdminRequest(`/v1/admin/catalog/${kind}`, "POST", body);
       setMessage(`Brouillon ${adminCatalogDefinitions[kind].title.toLocaleLowerCase("fr")} transmis au serveur. Il n’est pas encore applicable.`); setError(false); await loadData();
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+      return true;
+    } catch (reason) { setMessage(humanError(reason)); setError(true); return false; }
     finally { setCatalogBusy(false); }
   }
 
