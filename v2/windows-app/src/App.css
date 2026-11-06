@@ -118,6 +118,8 @@ button { cursor: pointer; }
 .invoice-history-caption { margin: -2px 0 12px; }
 .invoice-next-actions { display: grid; gap: 8px; }
 .invoice-next-actions .button { width: 100%; min-height: 39px; text-align: left; }
+.invoice-verification-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(250px, .82fr); align-items: stretch; gap: 14px; }
+.invoice-verification-layout > .panel { min-height: 300px; }
 .invoice-editor { min-height: 390px; padding: 25px 27px; }
 .invoice-form { gap: 20px 18px; }
 .invoice-form input, .invoice-form select { min-height: 46px; padding: 11px 12px; }
@@ -285,7 +287,7 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
   .sidebar { flex-basis: 230px; width: 230px; }
   .metric { padding-right: 14px; padding-left: 14px; }
   .columns, .customer-layout { grid-template-columns: 1fr; }
-  .invoice-workspace, .invoice-history-layout, .reading-workspace, .payment-workspace { grid-template-columns: 1fr; }
+  .invoice-workspace, .invoice-history-layout, .invoice-verification-layout, .reading-workspace, .payment-workspace { grid-template-columns: 1fr; }
   .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

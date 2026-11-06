@@ -223,6 +223,8 @@ export default function App() {
   const [statementState, setStatementState] = useState<{ customerId: string; data: Row | null; loading: boolean; error: string }>({ customerId: "", data: null, loading: false, error: "" });
   const [preview, setPreview] = useState<Row | null>(null);
   const [invoiceDraft, setInvoiceDraft] = useState<Row | null>(null);
+  const [invoiceIssueBusy, setInvoiceIssueBusy] = useState(false);
+  const invoiceIssueBusyRef = useRef(false);
   const [selectedInvoice, setSelectedInvoice] = useState<Row | null>(null);
   const [zeroConfirmed, setZeroConfirmed] = useState(false);
   const [invoiceFormKey, setInvoiceFormKey] = useState(0);
@@ -514,7 +516,9 @@ export default function App() {
   }
 
   async function confirmInvoice() {
-    if (!invoiceDraft) return;
+    if (!invoiceDraft || invoiceIssueBusyRef.current) return;
+    invoiceIssueBusyRef.current = true;
+    setInvoiceIssueBusy(true);
     try {
       await centralRequest("/v1/billing/utility/issue", "POST", invoiceDraft);
       setDraftDirty(false);
@@ -525,6 +529,7 @@ export default function App() {
       setNotice({ message: "Facture enregistrée par le serveur SEL." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { invoiceIssueBusyRef.current = false; setInvoiceIssueBusy(false); }
   }
 
   async function openInvoice(invoice: Row) {
@@ -708,6 +713,16 @@ export default function App() {
     setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null);
   }
 
+  async function returnToInvoiceHistory() {
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la facture ?", description: "Cette facture n’est pas encore émise. Ses saisies seront effacées si vous revenez à l’historique.", confirmLabel: "Abandonner et continuer" })) return;
+    setDraftDirty(false);
+    setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
+    setInvoiceFormKey((key) => key + 1);
+    setInvoiceCustomerId(""); setInvoiceBillingPeriod(""); setInvoiceWaterQuantity("0");
+    setSelectedInvoice(null);
+    setInvoiceWorkspace("history");
+  }
+
   async function navigateTo(nextView: View, customerId?: string) {
     if (nextView === view && !customerId) return false;
     if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous changez d’écran.", confirmLabel: "Abandonner et continuer" })) return false;
@@ -715,7 +730,10 @@ export default function App() {
     setViewHistory((history) => [...history, view]);
     setNotice(null);
     if (customerId) setSelectedCustomer(customerId);
-    if (nextView === "invoices") setInvoiceWorkspace(customerId ? "create" : "history");
+    if (nextView === "invoices") {
+      setInvoiceWorkspace(customerId ? "create" : "history");
+      if (customerId) setInvoiceCustomerId(customerId);
+    }
     setView(nextView);
     return true;
   }
@@ -751,9 +769,6 @@ export default function App() {
 
   const activePage = pageTitle[view];
   const previewLines = rows<Row>(preview?.lines);
-  const previewElectricity = previewLines.find((line) => text(line.service_code).toUpperCase() === "ELECTRICITY");
-  const previewWater = previewLines.find((line) => text(line.service_code).toUpperCase() === "WATER");
-  const previewCommunication = previewLines.find((line) => text(line.service_code).toUpperCase() === "COMMUNICATION");
 
   if (authChecking) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><div className="auth-card" role="status"><p className="eyebrow">VÉRIFICATION SÉCURISÉE</p><h2>Connexion au serveur SEL</h2><p className="muted">Vérification de la session et de la disponibilité du service central…</p></div></div></section>;
 
@@ -892,7 +907,7 @@ export default function App() {
           {selectedInvoice && <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />}
         </>}
         {invoiceWorkspace === "create" && <div hidden={Boolean(preview)}>
-          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / NOUVELLE FACTURE" title="Factures eau + électricité" description="Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust." action={<Button onClick={() => { setInvoiceWorkspace("history"); setSelectedInvoice(null); }}>Retour à l’historique</Button>} />
+          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / NOUVELLE FACTURE" title="Factures eau + électricité" description="Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust." action={<Button onClick={() => void returnToInvoiceHistory()}>Retour à l’historique</Button>} />
           <div className="invoice-workspace">
             <Panel title="Paramètres de facturation">
               <form data-preserve-draft id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
@@ -917,15 +932,25 @@ export default function App() {
           </div>
         </div>}
         {preview && <>
-          <PageHeading eyebrow="CORE / FACTURATION" title="Prévisualisation de facture" description="Vérifier les lignes, les taxes et les références avant d’émettre." action={<div className="page-actions"><Button onClick={() => { setPreview(null); setInvoiceDraft(null); setInvoiceWorkspace("create"); }}>Modifier la saisie</Button><Button onClick={() => { setPreview(null); setInvoiceDraft(null); setInvoiceWorkspace("history"); }}>Retour à l’historique des factures</Button><Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button></div>} />
+          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / VÉRIFICATION" title="Vérifier une facture" description="Relisez les lignes, les taxes et le total avant l’émission définitive." action={<Button onClick={() => { setPreview(null); setInvoiceDraft(null); setInvoiceWorkspace("create"); }}>Corriger la saisie</Button>} />
           <div className="invoice-preview-metrics metrics">
-            <Metric label="Électricité" value={previewElectricity ? formatQuantity(previewElectricity.quantity, previewElectricity.unit) : "—"} note={previewElectricity ? `${formatMoney(previewElectricity.subtotal, preview.currency)} hors taxe` : "Ligne indisponible"} />
-            <Metric label="Eau" value={previewWater ? formatQuantity(previewWater.quantity, previewWater.unit) : "—"} note={previewWater ? formatMoney(previewWater.total, preview.currency) : "Ligne indisponible"} />
-            <Metric label="Ligne de communication" value={previewCommunication ? formatMoney(previewCommunication.subtotal, preview.currency) : "—"} note="Forfait SEL hors TVA" />
-            <Metric label="Taxes" value={formatMoney(preview.tax, preview.currency)} note="Calcul retourné par Rust" />
-            <Metric label="Montant total" value={formatMoney(preview.total, preview.currency)} note="À confirmer avant émission" />
+            <Metric label="Abonné" value={text(invoiceCustomer?.customer_code, "—")} note={text(invoiceCustomer?.legal_name, "Dossier sélectionné")} />
+            <Metric label="Période" value={invoiceBillingPeriod || "—"} note="Période de facturation" />
+            <Metric label="Lignes" value={previewLines.length} note="Prestations calculées par Rust" />
+            <Metric label="Total TTC" value={formatMoney(preview.total, preview.currency)} note="Montant calculé par le moteur Rust" />
           </div>
-          <Preview data={preview} title="Lignes de la facture" />
+          <div className="invoice-verification-layout">
+            <Preview data={preview} title="Aperçu de facture" />
+            <Panel title="Actions suivantes">
+              <p className="help">Aucune facture n’est encore émise. Vérifiez le document, puis confirmez son enregistrement central.</p>
+              <span className="status-badge pending">En attente de confirmation</span>
+              <div className="invoice-next-actions">
+                <Button onClick={() => { setPreview(null); setInvoiceDraft(null); setInvoiceWorkspace("create"); }}>Corriger la saisie</Button>
+                <Button onClick={() => void returnToInvoiceHistory()}>Retour à l’historique</Button>
+                <Button primary disabled={invoiceIssueBusy} onClick={() => void confirmInvoice()}>{invoiceIssueBusy ? "Émission en cours…" : "Confirmer l’émission"}</Button>
+              </div>
+            </Panel>
+          </div>
           <p className="help invoice-preview-status" role="status">Le calcul et les taxes viennent du moteur Rust. Cette prévisualisation n’a pas encore créé de facture.</p>
         </>}
       </>}

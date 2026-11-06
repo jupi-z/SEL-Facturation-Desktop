@@ -220,7 +220,7 @@ def test_invoice_workspace_matches_figma_two_column_preview_flow() -> None:
     assert 'form="utility-invoice-form"' in app
     assert "formatMoney(preview.total, preview.currency)" in app
     assert ".invoice-workspace { display: grid; grid-template-columns:" in css
-    assert 'f"invoice-preview-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"invoice-verification-{SHOT_SUFFIX}.png"' in visual_review
     assert "path === '/v1/billing/utility/preview'" in visual_review
 
 
@@ -231,15 +231,20 @@ def test_invoice_preview_is_a_distinct_figma_aligned_step_before_emission() -> N
 
     assert '{!preview && invoiceWorkspace === "history"' in invoice_view
     assert 'invoiceWorkspace === "create" && <div hidden={Boolean(preview)}>' in invoice_view
-    assert 'setInvoiceWorkspace("history")' in invoice_view
-    assert 'title="Prévisualisation de facture"' in invoice_view
+    assert 'returnToInvoiceHistory()' in invoice_view
+    assert 'title="Vérifier une facture"' in invoice_view
     assert 'className="invoice-preview-metrics metrics"' in invoice_view
-    assert 'label="Électricité"' in invoice_view
-    assert 'label="Eau"' in invoice_view
+    assert 'className="invoice-verification-layout"' in invoice_view
+    assert 'title="Aperçu de facture"' in invoice_view
+    assert 'label="Total TTC"' in invoice_view
     assert 'setInvoiceWorkspace("create")' in invoice_view
-    assert 'onClick={() => void confirmInvoice()}>Émettre la facture' in invoice_view
-    assert 'get_by_role("heading", name="Prévisualisation de facture")' in visual_review
-    assert 'get_by_role("button", name="Modifier la saisie")' in visual_review
+    assert 'onClick={() => void confirmInvoice()}' in invoice_view
+    assert '"Confirmer l’émission"' in invoice_view
+    assert 'function returnToInvoiceHistory()' in app
+    assert 'title: "Abandonner la facture ?"' in app
+    assert 'get_by_role("heading", name="Vérifier une facture")' in visual_review
+    assert 'get_by_role("button", name="Corriger la saisie")' in visual_review
+    assert "invoiceIssueBusyRef.current" in app
 
 
 def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> None:
@@ -669,13 +674,13 @@ def test_visual_review_covers_water_meter_and_positive_water_invoice() -> None:
     assert '"unit": "M3"' in visual_review
     assert '"demo-meter-water-0001"' in visual_review
     assert 'f"water-reading-preview-{SHOT_SUFFIX}.png"' in visual_review
-    assert 'f"invoice-preview-water-positive-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"invoice-verification-water-positive-{SHOT_SUFFIX}.png"' in visual_review
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     assert 'className="help invoice-preview-status"' in app
     assert "Le calcul et les taxes viennent du moteur Rust." in app
-    assert 'get_by_role("heading", name="Prévisualisation de facture").wait_for()' in visual_review
+    assert 'get_by_role("heading", name="Vérifier une facture").wait_for()' in visual_review
     assert "Number(args.body?.water?.quantity ?? 0)" in visual_review
-    assert 'locator(".invoice-preview-metrics").get_by_text("5 m³", exact=True).wait_for()' in visual_review
+    assert 'locator(".invoice-verification-layout").get_by_text("5 m³", exact=True).wait_for()' in visual_review
     assert 'locator(".invoice-preview-metrics").get_by_text("24,36 USD", exact=True).wait_for()' in visual_review
     assert "Ligne de communication" in visual_review
     assert 'await page.get_by_label("Eau consommée (m³)").fill("5")' in visual_review

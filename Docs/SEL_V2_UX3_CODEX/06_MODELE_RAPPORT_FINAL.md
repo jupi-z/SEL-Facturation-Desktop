@@ -22,6 +22,24 @@
 
 F07 est implémenté et validé dans l’application de test; cette preuve ne valide ni l’impression sur l’équipement SEL ni les données du serveur de production.
 
+### F06 — Vérification avant émission
+
+- Comparaison directe au frame Figma `178:1832` : l’étape s’intitule maintenant « Vérifier une facture » et présente le dossier, la période, le nombre de lignes et le TTC calculé par Rust, puis le tableau détaillé et un panneau d’actions.
+- Les commandes sont séparées : corriger la saisie, revenir à l’historique (avec confirmation d’abandon si le brouillon a changé) ou confirmer l’émission. Après confirmation, un verrou UI empêche les clics/requêtes répétés pendant l’enregistrement central.
+- Le brouillon de saisie reste monté pendant l’aperçu afin que « Corriger la saisie » restaure les valeurs sans perte.
+- Captures synthétiques : `evidence/invoice-verification-f06-2026-11-07-1440x900.png` et `evidence/invoice-verification-f06-2026-11-07-1280x720.png`.
+
+| Contrôle F06 | Résultat |
+|---|---|
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/React compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 63 tests |
+| Recette navigateur 1440×900 et 1280×720 | PASS — aperçu, retour à la saisie sans perte, confirmation d’abandon au retour historique, émission simulée et exactement un POST sous double déclenchement |
+| `git diff --check` | PASS |
+| Nature de la recette | API et montants synthétiques; aucune facture réelle créée |
+| CI couvrant F06 | À vérifier après publication du commit |
+
+F06 est implémenté et validé sur l’application synthétique. L’émission réelle, l’autorisation utilisateur contre PostgreSQL de production et la validation sur poste SEL ne sont pas couvertes par ce scénario.
+
 ### Isolation des données financières entre abonnés
 
 - Reproduction Playwright : après ouverture du dossier A, passage par Relevés, sélection du dossier B et ouverture immédiate pendant que l’API de B est volontairement suspendue, le relevé A restait visible dans le dossier B.
@@ -109,7 +127,7 @@ Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440
 | C01–C06, C30–C31 abonnés | création, recherche, dossier, modification, archivage/réactivation; création et édition relues avant écriture; état initial `ACTIVE` annoncé comme fixé par l’API | Playwright synthétique : annulation sans POST/PATCH, saisie conservée, confirmation avec un seul appel; captures `evidence/customer-create-confirmation-1440x900.png`, `evidence/customer-edit-confirmation-1280x720.png` | PARTIAL — état initial non configurable par le contrat API; conflit 409 réel à valider de bout en bout |
 | O01–O03, C07–C10, C32 services/compteurs | services avec ou sans compteur; rattachement, ajout et remplacement non destructif relus avant écriture; édition du raccordement relue avant PATCH | revue Playwright à 1440×900 et 1280×720; annulation sans requête et saisie préservée; captures `evidence/service-account-confirmation-1280x720.png`, `evidence/meter-create-confirmation-1280x720.png`, `evidence/service-account-edit-confirmation-1280x720.png`; test HTTP/PostgreSQL de remplacement inclus dans CI backend | PARTIAL — détails Figma à contrôler sur chaque écran |
 | O04–O05, C11–C12, C33 relevés | saisie, aperçu, historique et correction append-only | visual review; tests API backend en CI | PARTIAL |
-| F05–F07, C13–C14 facture | aperçu sans écriture, confirmation d’émission, historique F07 séparé et rapproché de Figma, document-data local, annulation avec motif | tests domaine/API, 63 tests client, captures F07 1440×900/1280×720 et recette PDF synthétique | PARTIAL — comparaison et recette F05/F06, imprimante cible et validation sur poste SEL restent à faire |
+| F05–F07, C13–C14 facture | aperçu F06 et historique F07 rapprochés de Figma, confirmation explicite, conservation du brouillon, document-data local, annulation avec motif | 63 tests client; captures F06/F07 1440×900 et 1280×720; recette PDF et émission synthétiques | PARTIAL — comparaison F05, API réelle, imprimante cible et validation sur poste SEL restent à faire |
 | F01–F04, C15–C17, C34 paiements | sélection client/créances, récapitulatif avant POST, verrou anti-double clic, allocation, reçu, contrepassation | 57 tests Python; capture payment review; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette |
 | F08, C18–C19, C35 créances | consultation, références source, avoir via API | réponse JSON additive, test PostgreSQL en CI, écran visuel | PARTIAL |
 | O06–O10, C20–C22, C28 solaire | catalogue/ventes et contrats/échéanciers ont des onglets séparés; transitions avec brouillon protégées; suivi expose les métriques renvoyées par le serveur et son CTA mène à l’encaissement prérempli avec client/créance/prochaine échéance; contrat revu avant POST | Playwright synthétique à 1440×900 et 1280×720 : refus de navigation conserve le brouillon, validation l’abandonne; un seul POST contrat après acceptation; la transition O10 sélectionne l’abonné, la créance et l’échéance sans créer de paiement; captures `evidence/solar-contract-workspace-1440x900.png`, `evidence/solar-payment-prefill-1280x720.png` | PARTIAL — annulation vente et avenant/résiliation contrat non exposés; autres détails O06–O10 à comparer |

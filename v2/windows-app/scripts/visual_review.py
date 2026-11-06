@@ -208,6 +208,12 @@ def mock_invoke_script() -> str:
             ? {{currency:'USD',subtotal:'21.00',tax:'3.36',total:'24.36',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}},{{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}]}}
             : {{currency:'USD',subtotal:'19.50',tax:'3.12',total:'22.62',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}},{{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}]}};
         }}
+        else if (path === '/v1/billing/utility/issue') {{
+          window.__invoiceIssueRequestStarted = true;
+          if (window.__delayInvoiceIssue) await new Promise(resolve => {{ window.__releaseInvoiceIssue = resolve; }});
+          body = {{invoice_id:'demo-invoice-issued-ux3',invoice_number:'SEL-DEMO-ISSUED',status:'CENTRAL_ACCEPTED',billing_period:args.body?.billing_period}};
+          fixtures.invoices.unshift(body);
+        }}
         else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) {{ const customerId = path.split('/')[3]; body = customerId === 'demo-customer-0001' ? {{invoices:fixtures.invoices,receivables:[{{receivable_id:'demo-receivable-0001',balance:'19.62',currency:'USD',status:'OPEN',source_type:'INVOICE',source_reference:'SEL-20261103-103000'}},{{receivable_id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SALE',source_reference:'demo-sale-0001'}}]}} : {{invoices:[],receivables:[]}}; }}
         else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts')) {{ const customerId = path.split('/')[3]; body = fixtures.serviceAccounts.filter((account) => account.customer_id === customerId); }}
         else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[3]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
@@ -688,22 +694,24 @@ async def capture_views() -> None:
                     await page.get_by_label("Eau consommée (m³)").fill("0")
                     await page.get_by_label("Je confirme que le relevé d’eau est exactement de 0 m³.").check()
                     await page.get_by_role("button", name="Prévisualiser la facture").click()
-                    await page.get_by_role("heading", name="Prévisualisation de facture").wait_for()
+                    await page.get_by_role("heading", name="Vérifier une facture").wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
-                    await page.screenshot(path=str(OUTPUT / f"invoice-preview-{SHOT_SUFFIX}.png"))
-                    await page.get_by_role("button", name="Modifier la saisie").click()
+                    await page.screenshot(path=str(OUTPUT / f"invoice-verification-{SHOT_SUFFIX}.png"))
+                    await page.get_by_role("button", name="Corriger la saisie").first.click()
                     if await page.locator('input[name="electricity_quantity"]').input_value() != "100":
                         raise AssertionError("Invoice input was not preserved when returning from the preview")
                     await page.get_by_label("Eau consommée (m³)").fill("5")
                     await page.get_by_role("button", name="Prévisualiser la facture").click()
-                    await page.get_by_role("heading", name="Prévisualisation de facture").wait_for()
-                    await page.locator(".invoice-preview-metrics").get_by_text("5 m³", exact=True).wait_for()
+                    await page.get_by_role("heading", name="Vérifier une facture").wait_for()
+                    await page.locator(".invoice-verification-layout").get_by_text("5 m³", exact=True).wait_for()
                     await page.locator(".invoice-preview-metrics").get_by_text("24,36 USD", exact=True).wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
-                    await page.screenshot(path=str(OUTPUT / f"invoice-preview-water-positive-{SHOT_SUFFIX}.png"))
-                    await page.get_by_role("button", name="Retour à l’historique des factures", exact=True).click()
+                    await page.screenshot(path=str(OUTPUT / f"invoice-verification-water-positive-{SHOT_SUFFIX}.png"))
+                    await page.get_by_role("button", name="Retour à l’historique", exact=True).click()
+                    await page.get_by_role("alertdialog", name="Abandonner la facture ?").wait_for()
+                    await page.get_by_role("alertdialog").get_by_role("button", name="Abandonner et continuer").click()
                     await page.get_by_role("heading", name="Historique des factures").wait_for()
                     await page.get_by_role("button", name="Document PDF").first.click()
                     try:
@@ -733,6 +741,27 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "invoice-pdf-lower-water-positive.png"))
                     await page.get_by_role("button", name="Fermer l’aperçu").click()
+                    await page.get_by_role("heading", name="Historique des factures").wait_for()
+                    await page.get_by_role("button", name="Nouvelle facture", exact=True).click()
+                    await page.get_by_role("heading", name="Factures eau + électricité").wait_for()
+                    await page.locator('select[name="customer_id"]').select_option("demo-customer-0001")
+                    await page.get_by_label("Période de facturation").fill("2026-10")
+                    await page.get_by_label("Électricité consommée (kWh)").fill("100")
+                    await page.get_by_label("Eau consommée (m³)").fill("0")
+                    await page.get_by_label("Je confirme que le relevé d’eau est exactement de 0 m³.").check()
+                    await page.get_by_role("button", name="Prévisualiser la facture").click()
+                    await page.get_by_role("heading", name="Vérifier une facture").wait_for()
+                    await page.evaluate("window.__delayInvoiceIssue = true; window.__invoiceIssueRequestStarted = false")
+                    await page.get_by_role("button", name="Confirmer l’émission").click()
+                    await page.wait_for_function("window.__invoiceIssueRequestStarted === true")
+                    issue_button = page.get_by_role("button", name="Émission en cours…")
+                    await issue_button.dispatch_event("click")
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.path === '/v1/billing/utility/issue' && entry.method === 'POST').length") != 1:
+                        raise AssertionError("Repeated confirmation created more than one invoice issue request")
+                    await page.evaluate("window.__releaseInvoiceIssue?.()")
+                    await page.get_by_role("heading", name="Historique des factures").wait_for()
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.path === '/v1/billing/utility/issue' && entry.method === 'POST').length") != 1:
+                        raise AssertionError("Invoice issue was submitted more than once")
                 if slug == "solar":
                     await page.get_by_role("button", name="Catalogue et ventes").click()
                     await page.get_by_role("button", name="Confirmation PDF").first.click()
