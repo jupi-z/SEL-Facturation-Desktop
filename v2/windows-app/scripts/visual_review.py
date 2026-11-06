@@ -153,6 +153,7 @@ def mock_invoke_script() -> str:
     return f"""
       const fixtures = {fixtures};
       window.__paymentPostCount = 0;
+      window.__adminWriteLog = [];
       window.__TAURI_INTERNALS__ = {{ invoke: async (command, args = {{}}) => {{
         if (command === 'central_status') return {{status:'CENTRAL_CONNECTED',configured:true}};
         if (command === 'central_session_status') return window.__ADMIN_DEMO_SESSION__ ? {{authenticated:true,user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}} : {{authenticated:false}};
@@ -160,6 +161,7 @@ def mock_invoke_script() -> str:
         if (command === 'central_logout') {{ window.__ADMIN_DEMO_SESSION__ = false; return null; }}
         if (command === 'central_admin_request') {{
           const adminPath = args.path || '';
+          if (args.method !== 'GET') window.__adminWriteLog.push({{path: adminPath, method: args.method, body: args.body}});
           if (window.__rejectCatalogDraft && adminPath.endsWith('/tariffs') && args.method === 'POST') return {{status:422,body:{{code:'DEMO_VALIDATION_ERROR',message:'Validation refusal simulated'}}}};
           let adminBody = [];
           if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
@@ -584,6 +586,41 @@ async def capture_views() -> None:
                     await page.get_by_role("heading", name="Utilisateurs et rôles").wait_for()
                     await page.get_by_role("cell", name="admin-demo").first.wait_for()
                     await page.screenshot(path=str(OUTPUT / f"admin-full-{SHOT_SUFFIX}.png"), full_page=True)
+                    user_form = page.locator("form.admin-create-user")
+                    await user_form.locator('input[name="identity_ref"]').fill("agent-test-ux3")
+                    await user_form.locator('select[name="role"]').select_option("CASHIER")
+                    await user_form.locator('input[name="password"]').fill("synthetic-secret-123")
+                    await user_form.locator('input[name="password_confirm"]').fill("synthetic-secret-mismatch")
+                    await user_form.get_by_role("button", name="Vérifier la création").click()
+                    await page.get_by_role("alert").filter(has_text="Les deux mots de passe ne correspondent pas.").wait_for()
+                    if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users' && entry.method === 'POST').length") != 0:
+                        raise AssertionError("Mismatched initial passwords must not send a write request")
+                    await user_form.locator('input[name="password_confirm"]').fill("synthetic-secret-123")
+                    await user_form.get_by_role("button", name="Vérifier la création").click()
+                    user_review = page.get_by_role("alertdialog", name="Vérifier la création du compte")
+                    await user_review.wait_for()
+                    review_text = await user_review.inner_text()
+                    if "agent-test-ux3" not in review_text or "Caissier" not in review_text or "synthetic-secret-123" in review_text:
+                        raise AssertionError("User confirmation must show identity and role while keeping the password secret")
+                    await user_review.get_by_role("button", name="Annuler").click()
+                    if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users' && entry.method === 'POST').length") != 0:
+                        raise AssertionError("Canceling user creation must not send a write request")
+                    await user_form.get_by_role("button", name="Vérifier la création").click()
+                    await page.get_by_role("alertdialog", name="Vérifier la création du compte").get_by_role("button", name="Créer le compte").click()
+                    await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users' && entry.method === 'POST').length === 1")
+                    agent_role = page.get_by_label("Rôle de agent-demo")
+                    await agent_role.select_option("SUPERVISOR")
+                    await page.get_by_role("button", name="Enregistrer", exact=True).last.click()
+                    await page.get_by_role("alertdialog", name="Vérifier le changement de rôle").wait_for()
+                    if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.role === 'SUPERVISOR').length") != 0:
+                        raise AssertionError("Role updates must wait for explicit confirmation")
+                    await page.get_by_role("alertdialog", name="Vérifier le changement de rôle").get_by_role("button", name="Enregistrer le rôle").click()
+                    await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.role === 'SUPERVISOR').length === 1")
+                    agent_row = page.get_by_role("row").filter(has_text="agent-demo")
+                    await agent_row.get_by_role("button", name="Désactiver").click()
+                    await page.get_by_role("alertdialog", name="Désactiver ce compte ?").wait_for()
+                    await page.get_by_role("alertdialog", name="Désactiver ce compte ?").get_by_role("button", name="Désactiver le compte").click()
+                    await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.status === 'REVOKED').length === 1")
                     tariff_form = page.locator("form.admin-catalog-form").first
                     await tariff_form.locator('select[name="service_code"]').select_option("ELECTRICITY")
                     await tariff_form.locator('input[name="customer_category"]').fill("DEMO")

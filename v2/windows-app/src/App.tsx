@@ -701,7 +701,7 @@ export default function App() {
 
   if (session.require_password_change) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Votre compte SEL,<br />sécurisé dès le départ.</h1><p>Modifiez votre mot de passe temporaire pour continuer.</p></div><small>Application connectée au serveur central</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">PREMIÈRE CONNEXION</p><h2>Changer le mot de passe</h2><PasswordChangeForm onComplete={() => { setSession({ authenticated: false }); setAuthMessage("Mot de passe modifié. Connectez-vous avec votre nouveau mot de passe."); }} /></div></div></section>;
 
-  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
+  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -899,7 +899,7 @@ export default function App() {
 
       {view === "admin" && <>
         <PageHeading eyebrow="ADMIN / RÉFÉRENTIELS" title="Administration" description="Les écrans administratifs suivent les permissions et les paramètres effectivement exposés par le service Rust." />
-        <AdminConsole session={session} onSignedOut={() => void signOut()} />
+        <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} />
       </>}
 
       {documentPreview && <div className="document-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDocumentPreview(); }}>
@@ -1656,7 +1656,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }:
   </Panel>;
 }
 
-function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; onSignedOut: () => void }) {
+function AdminConsole({ session, onSignedOut, confirmAction }: { session: CentralSessionInfo; onSignedOut: () => void; confirmAction: (request: ConfirmationRequest) => Promise<boolean> }) {
   const [users, setUsers] = useState<Row[]>([]);
   const [tariffs, setTariffs] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
@@ -1670,6 +1670,7 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const [userMutationBusy, setUserMutationBusy] = useState(false);
   const authenticated = useRef(false);
 
   function clearAdminSession() {
@@ -1712,36 +1713,76 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
+    const identityRef = String(values.get("identity_ref") ?? "").trim();
+    const role = String(values.get("role") ?? "BILLING_AGENT");
+    const password = String(values.get("password") ?? "");
+    const passwordConfirm = String(values.get("password_confirm") ?? "");
+    const requirePasswordChange = values.get("require_password_change") === "on";
+    if (password !== passwordConfirm) {
+      setMessage("Les deux mots de passe ne correspondent pas."); setError(true);
+      (form.elements.namedItem("password_confirm") as HTMLInputElement | null)?.focus();
+      return;
+    }
+    const roleLabels: Record<string, string> = { ADMIN: "Administrateur", BILLING_AGENT: "Agent facturation", CASHIER: "Caissier", SUPERVISOR: "Superviseur", AUDITOR_READONLY: "Auditeur lecture seule" };
+    setUserMutationBusy(true);
     try {
+      const accepted = await confirmAction({
+        title: "Vérifier la création du compte",
+        description: `Identifiant : ${identityRef}. Rôle : ${roleLabels[role] ?? role}. ${requirePasswordChange ? "Le changement du mot de passe sera exigé à la première connexion." : "Le compte pourra se connecter avec le mot de passe défini."} Le mot de passe reste masqué.`,
+        confirmLabel: "Créer le compte",
+      });
+      if (!accepted) return;
       await centralAdminRequest("/v1/admin/users", "POST", {
-        identity_ref: String(values.get("identity_ref") ?? "").trim(),
-        role: String(values.get("role") ?? "BILLING_AGENT"),
-        password: String(values.get("password") ?? ""),
-        require_password_change: values.get("require_password_change") === "on",
+        identity_ref: identityRef,
+        role,
+        password,
+        require_password_change: requirePasswordChange,
       });
       form.reset(); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setUserMutationBusy(false); }
   }
 
   async function toggleUser(user: Row) {
     const id = text(user.id ?? user.user_id, "");
     const status = text(user.status).toUpperCase() === "ACTIVE" ? "REVOKED" : "ACTIVE";
     if (!id) return;
+    const identity = text(user.identity_ref, "ce compte SEL");
+    const disabling = status === "REVOKED";
+    if (!await confirmAction({
+      title: disabling ? "Désactiver ce compte ?" : "Réactiver ce compte ?",
+      description: disabling
+        ? `Le compte ${identity} ne pourra plus ouvrir de session. Ses sessions seront révoquées ; les opérations déjà enregistrées restent conservées.`
+        : `Le compte ${identity} pourra à nouveau ouvrir une session avec son rôle actuel.`,
+      confirmLabel: disabling ? "Désactiver le compte" : "Réactiver le compte",
+      tone: disabling ? "warning" : "neutral",
+    })) return;
+    setUserMutationBusy(true);
     try {
       await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { status });
       setMessage(status === "ACTIVE" ? "Compte réactivé." : "Compte révoqué. Les sessions associées sont révoquées côté serveur.");
       setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setUserMutationBusy(false); }
   }
 
   async function updateUserRole(user: Row) {
     const id = text(user.id ?? user.user_id, "");
     const role = roleDrafts[id];
     if (!id || !role || role === text(user.role)) return;
+    const roleLabels: Record<string, string> = { ADMIN: "Administrateur", BILLING_AGENT: "Agent facturation", CASHIER: "Caissier", SUPERVISOR: "Superviseur", AUDITOR_READONLY: "Auditeur lecture seule" };
+    if (!await confirmAction({
+      title: "Vérifier le changement de rôle",
+      description: `Compte : ${text(user.identity_ref)}. Rôle actuel : ${roleLabels[text(user.role)] ?? text(user.role)}. Nouveau rôle : ${roleLabels[role] ?? role}. Les autorisations effectives seront appliquées par le serveur SEL.`,
+      confirmLabel: "Enregistrer le rôle",
+      tone: "warning",
+    })) return;
+    setUserMutationBusy(true);
     try {
       await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { role });
       setMessage("Rôle modifié par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setUserMutationBusy(false); }
   }
 
   async function resetUserPassword(event: FormEvent<HTMLFormElement>) {
@@ -1802,15 +1843,16 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
     </Panel>
     <Panel title="Utilisateurs et rôles">
       <form className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
-        <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required /></label>
-        <label>Rôle<select name="role" defaultValue="BILLING_AGENT"><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
-        <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required /></label>
-        <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked /> Exiger le changement du mot de passe à la première connexion</span></label>
-        <div className="form-actions"><Button primary type="submit">Créer l’utilisateur</Button></div>
+        <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required disabled={userMutationBusy} /></label>
+        <label>Rôle<select name="role" defaultValue="BILLING_AGENT" disabled={userMutationBusy}><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
+        <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
+        <label>Confirmer le mot de passe<input name="password_confirm" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
+        <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked disabled={userMutationBusy} /> Exiger le changement du mot de passe à la première connexion</span></label>
+        <div className="form-actions"><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Vérification…" : "Vérifier la création"}</Button></div>
       </form>
       <Table headers={["Identifiant", "Rôle", "État", "Actions"]} empty="Aucun utilisateur retourné par le serveur." data={users.map((user) => {
         const id = text(user.id ?? user.user_id, "");
-        return [text(user.identity_ref), <div className="admin-role-control"><select aria-label={`Rôle de ${text(user.identity_ref)}`} value={roleDrafts[id] ?? text(user.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [id]: event.target.value }))}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select><Button disabled={!roleDrafts[id] || roleDrafts[id] === text(user.role)} onClick={() => void updateUserRole(user)}>Enregistrer</Button></div>, <Status value={user.status} />, <div className="admin-user-actions"><Button onClick={() => setPasswordTarget(id)}>Réinitialiser le mot de passe</Button><Button onClick={() => void toggleUser(user)}>{text(user.status).toUpperCase() === "ACTIVE" ? "Désactiver" : "Réactiver"}</Button></div>];
+        return [text(user.identity_ref), <div className="admin-role-control"><select aria-label={`Rôle de ${text(user.identity_ref)}`} value={roleDrafts[id] ?? text(user.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [id]: event.target.value }))} disabled={userMutationBusy}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select><Button disabled={userMutationBusy || !roleDrafts[id] || roleDrafts[id] === text(user.role)} onClick={() => void updateUserRole(user)}>{userMutationBusy ? "Vérification…" : "Enregistrer"}</Button></div>, <Status value={user.status} />, <div className="admin-user-actions"><Button disabled={userMutationBusy} onClick={() => setPasswordTarget(id)}>Réinitialiser le mot de passe</Button><Button disabled={userMutationBusy} onClick={() => void toggleUser(user)}>{text(user.status).toUpperCase() === "ACTIVE" ? "Désactiver" : "Réactiver"}</Button></div>];
       })} />
       {passwordTarget && <form className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Les sessions existantes de ce compte seront révoquées après validation côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required /></label><div className="page-actions"><Button type="button" onClick={() => setPasswordTarget("")}>Annuler</Button><Button primary type="submit">Confirmer le changement</Button></div></form>}
     </Panel>

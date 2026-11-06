@@ -290,7 +290,7 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert '"/v1/admin/offline-grants"' not in app
     assert '"/v1/admin/audit-events"' in app
     assert "API locale d’administration non exposée" not in app
-    assert "Créer l’utilisateur" in app
+    assert "Vérifier la création" in app
     assert "Désactiver" in app and "Réactiver" in app
     assert "Réinitialiser le mot de passe" in app
     assert '`/v1/devices/${encodeURIComponent(id)}/revoke`' not in app
@@ -315,6 +315,25 @@ def test_admin_initial_password_checkbox_keeps_intrinsic_control_size() -> None:
     assert '.admin-create-user input[type="checkbox"]' in styles
     assert "width: 17px; min-width: 17px; min-height: 17px; height: 17px" in styles
     assert ".admin-create-user label > span:last-child { display: flex; align-items: center" in styles
+
+
+def test_admin_user_mutations_require_a_review_and_keep_password_out_of_dialog() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert "confirmAction({" in app
+    assert 'title: "Vérifier la création du compte"' in app
+    assert 'title: disabling ? "Désactiver ce compte ?" : "Réactiver ce compte ?"' in app
+    assert 'title: "Vérifier le changement de rôle"' in app
+    assert "Le mot de passe reste masqué." in app
+    assert 'name="password_confirm"' in app
+    assert "Les deux mots de passe ne correspondent pas." in app
+    assert "userMutationBusy" in app
+    assert "window.__adminWriteLog" in visual_review
+    assert "Canceling user creation must not send a write request" in visual_review
+    assert "window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users' && entry.method === 'POST').length === 1" in visual_review
+    assert "Role updates must wait for explicit confirmation" in visual_review
+    assert "Mismatched initial passwords must not send a write request" in visual_review
 
 
 def test_native_central_admin_bridge_is_allowlisted_and_never_uses_sync_token_as_user_session() -> None:
