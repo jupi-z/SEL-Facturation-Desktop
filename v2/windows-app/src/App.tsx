@@ -191,6 +191,7 @@ export default function App() {
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [view, setView] = useState<View>("dashboard");
   const [solarWorkspace, setSolarWorkspace] = useState<"sales" | "contracts">("sales");
+  const [invoiceWorkspace, setInvoiceWorkspace] = useState<"history" | "create">("history");
   const [viewHistory, setViewHistory] = useState<View[]>([]);
   const [draftDirty, setDraftDirty] = useState(false);
   const [financialAction, setFinancialAction] = useState<FinancialAction | null>(null);
@@ -518,6 +519,7 @@ export default function App() {
       await centralRequest("/v1/billing/utility/issue", "POST", invoiceDraft);
       setDraftDirty(false);
       setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
+      setInvoiceWorkspace("history");
       setInvoiceFormKey((key) => key + 1);
       setInvoiceCustomerId(""); setInvoiceBillingPeriod(""); setInvoiceWaterQuantity("0");
       setNotice({ message: "Facture enregistrée par le serveur SEL." });
@@ -713,8 +715,19 @@ export default function App() {
     setViewHistory((history) => [...history, view]);
     setNotice(null);
     if (customerId) setSelectedCustomer(customerId);
+    if (nextView === "invoices") setInvoiceWorkspace(customerId ? "create" : "history");
     setView(nextView);
     return true;
+  }
+
+  async function openInvoiceCreation(customerId?: string) {
+    if (view !== "invoices") {
+      const navigated = await navigateTo("invoices", customerId);
+      if (!navigated) return;
+    } else if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous démarrez une nouvelle facture.", confirmLabel: "Abandonner et continuer" })) return;
+    if (draftDirty) discardPendingDraft();
+    if (customerId) setInvoiceCustomerId(customerId);
+    setInvoiceWorkspace("create");
   }
 
   async function navigateSolarWorkspace(next: "sales" | "contracts") {
@@ -779,7 +792,7 @@ export default function App() {
       {loading && <div className="loading-line" role="status">Chargement des données centrales…</div>}
 
       {view === "dashboard" && <>
-        <div className="page-heading"><div><p className="eyebrow">SEL / ACCUEIL / OPÉRATIONS</p><h1>Bienvenue dans SEL Facturation</h1><p className="muted">Accédez directement aux opérations, sans parcourir plusieurs tableaux.</p></div><Button primary onClick={() => navigateTo("invoices")}>Nouvelle facture</Button></div>
+        <div className="page-heading"><div><p className="eyebrow">SEL / ACCUEIL / OPÉRATIONS</p><h1>Bienvenue dans SEL Facturation</h1><p className="muted">Accédez directement aux opérations, sans parcourir plusieurs tableaux.</p></div><Button primary onClick={() => void openInvoiceCreation()}>Nouvelle facture</Button></div>
         <div className="metrics">
           <Metric label="Abonnés" value={customers.length} note="Dossiers chargés du serveur SEL" />
           <Metric label="Factures" value={invoices.length} note="Documents enregistrés au serveur" />
@@ -791,7 +804,7 @@ export default function App() {
             <p className="muted">Sélectionnez une action pour retrouver directement le bon parcours.</p>
             <div className="quick-actions">
               <button onClick={() => navigateTo("customers")}><strong>Gérer les abonnés <span aria-hidden="true">›</span></strong><small>Fiches, services et compteurs</small></button>
-              <button onClick={() => navigateTo("invoices")}><strong>Émettre une facture <span aria-hidden="true">›</span></strong><small>Eau et électricité sur le même document</small></button>
+              <button onClick={() => void openInvoiceCreation()}><strong>Émettre une facture <span aria-hidden="true">›</span></strong><small>Eau et électricité sur le même document</small></button>
               <button onClick={() => navigateTo("payments")}><strong>Encaisser un règlement <span aria-hidden="true">›</span></strong><small>Paiement, affectation et reçu</small></button>
               <button onClick={() => navigateTo("readings")}><strong>Saisir un relevé <span aria-hidden="true">›</span></strong><small>Index, contrôle et correction</small></button>
               <button onClick={() => navigateTo("solar")}><strong>Vendre un kit solaire <span aria-hidden="true">›</span></strong><small>Catalogue, vente et échéancier</small></button>
@@ -850,8 +863,36 @@ export default function App() {
       }} />}
 
       {view === "invoices" && <>
-        <div hidden={Boolean(preview)}>
-          <div className="page-heading"><div><p className="eyebrow">CORE / FACTURATION</p><h1>Factures eau + électricité</h1><p className="muted">Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust.</p></div><span className="tag">USD</span></div>
+        {!preview && invoiceWorkspace === "history" && <>
+          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / HISTORIQUE" title="Historique des factures" description="Rechercher, ouvrir et remettre des factures aux clients." action={<Button primary onClick={() => void openInvoiceCreation()}>Nouvelle facture</Button>} />
+          <div className="metrics invoice-history-metrics">
+            <Metric label="Factures" value={invoices.length} note="Données du serveur SEL" />
+            <Metric label="Périodes" value={new Set(invoices.map((row) => text(row.period ?? row.billing_period, "")).filter(Boolean)).size} note="Périodes facturées" />
+            <Metric label="Documents" value={invoices.filter((row) => text(row.invoice_id ?? row.id, "")).length} note="Références disponibles au serveur" />
+            <Metric label="Statut" value={invoices.filter((row) => text(row.status).toUpperCase() === "CENTRAL_ACCEPTED").length} note="Confirmées par le serveur SEL" />
+          </div>
+          <div className="invoice-history-layout">
+            <Panel title="Factures enregistrées" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
+              <p className="help invoice-history-caption">Les informations et statuts affichés proviennent du serveur SEL.</p>
+              <Table headers={["Facture", "Abonné", "Période", "État", "Actions"]} empty={loading ? "Chargement des factures du serveur…" : "Aucune facture retournée par le serveur."} data={filteredInvoices.map((row) => {
+                const invoiceId = text(row.invoice_id ?? row.id, "");
+                const invoiceStatus = text(row.status).toUpperCase();
+                return [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", invoiceId)}>Document PDF</Button>{["ADMIN", "SUPERVISOR"].includes(text(session?.role).toUpperCase()) && invoiceId && !["VOID", "CANCELLED"].includes(invoiceStatus) && <Button onClick={() => beginFinancialAction({ kind: "void-invoice", id: invoiceId, reference: text(row.invoice_number ?? invoiceId) })}>Annuler avec motif</Button>}</div>];
+              })} />
+            </Panel>
+            <Panel title="Actions suivantes">
+              <p className="help">Choisissez une étape ou ouvrez une facture existante.</p>
+              <div className="invoice-next-actions">
+                <Button onClick={() => void openInvoiceCreation()}>Émettre une facture combinée</Button>
+                <Button disabled={!filteredInvoices.length} onClick={() => filteredInvoices[0] && void openInvoice(filteredInvoices[0])}>Détail d’une facture</Button>
+              </div>
+              <p className="help">La génération PDF est lancée depuis la ligne de facture et reste sur ce poste.</p>
+            </Panel>
+          </div>
+          {selectedInvoice && <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />}
+        </>}
+        {invoiceWorkspace === "create" && <div hidden={Boolean(preview)}>
+          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / NOUVELLE FACTURE" title="Factures eau + électricité" description="Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust." action={<Button onClick={() => { setInvoiceWorkspace("history"); setSelectedInvoice(null); }}>Retour à l’historique</Button>} />
           <div className="invoice-workspace">
             <Panel title="Paramètres de facturation">
               <form data-preserve-draft id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
@@ -874,20 +915,9 @@ export default function App() {
               <Button primary type="submit" form="utility-invoice-form" disabled={!invoiceTariffRevision}>Prévisualiser la facture</Button>
             </aside>
           </div>
-          <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
-            <Table headers={["Référence", "Abonné", "Période", "État", "Actions"]} empty="Aucune facture retournée par le serveur." data={filteredInvoices.map((row) => {
-              const invoiceId = text(row.invoice_id ?? row.id, "");
-              const invoiceStatus = text(row.status).toUpperCase();
-              return [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", invoiceId)}>Document PDF</Button>{["ADMIN", "SUPERVISOR"].includes(text(session?.role).toUpperCase()) && invoiceId && !["VOID", "CANCELLED"].includes(invoiceStatus) && <Button onClick={() => beginFinancialAction({ kind: "void-invoice", id: invoiceId, reference: text(row.invoice_number ?? invoiceId) })}>Annuler avec motif</Button>}</div>];
-            })} />
-          </Panel>
-          {selectedInvoice && <>
-            <p className="muted">Période {text(selectedInvoice.billing_period)} · Échéance {text(selectedInvoice.due_date)} · <Status value={selectedInvoice.status} /></p>
-            <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />
-          </>}
-        </div>
+        </div>}
         {preview && <>
-          <PageHeading eyebrow="CORE / FACTURATION" title="Prévisualisation de facture" description="Vérifier les lignes, les taxes et les références avant d’émettre." action={<div className="page-actions"><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Modifier la saisie</Button><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Retour à l’historique des factures</Button><Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button></div>} />
+          <PageHeading eyebrow="CORE / FACTURATION" title="Prévisualisation de facture" description="Vérifier les lignes, les taxes et les références avant d’émettre." action={<div className="page-actions"><Button onClick={() => { setPreview(null); setInvoiceDraft(null); setInvoiceWorkspace("create"); }}>Modifier la saisie</Button><Button onClick={() => { setPreview(null); setInvoiceDraft(null); setInvoiceWorkspace("history"); }}>Retour à l’historique des factures</Button><Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button></div>} />
           <div className="invoice-preview-metrics metrics">
             <Metric label="Électricité" value={previewElectricity ? formatQuantity(previewElectricity.quantity, previewElectricity.unit) : "—"} note={previewElectricity ? `${formatMoney(previewElectricity.subtotal, preview.currency)} hors taxe` : "Ligne indisponible"} />
             <Metric label="Eau" value={previewWater ? formatQuantity(previewWater.quantity, previewWater.unit) : "—"} note={previewWater ? formatMoney(previewWater.total, preview.currency) : "Ligne indisponible"} />

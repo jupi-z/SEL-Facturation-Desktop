@@ -157,7 +157,7 @@ def test_dashboard_prioritizes_central_workflows_without_demo_financial_data() -
     assert "Vendre un kit solaire" in app
     assert "value={customers.length}" in app
     assert "value={invoices.length}" in app
-    assert 'onClick={() => navigateTo("invoices")}>Nouvelle facture' in app
+    assert 'onClick={() => void openInvoiceCreation()}>Nouvelle facture' in app
     assert "218,40" not in app
     assert "1 124,20" not in app
 
@@ -229,12 +229,14 @@ def test_invoice_preview_is_a_distinct_figma_aligned_step_before_emission() -> N
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     invoice_view = app.split('{view === "invoices"', 1)[1].split('{view === "payments"', 1)[0]
 
-    assert 'hidden={Boolean(preview)}' in invoice_view
+    assert '{!preview && invoiceWorkspace === "history"' in invoice_view
+    assert 'invoiceWorkspace === "create" && <div hidden={Boolean(preview)}>' in invoice_view
+    assert 'setInvoiceWorkspace("history")' in invoice_view
     assert 'title="Prévisualisation de facture"' in invoice_view
     assert 'className="invoice-preview-metrics metrics"' in invoice_view
     assert 'label="Électricité"' in invoice_view
     assert 'label="Eau"' in invoice_view
-    assert 'onClick={() => { setPreview(null); setInvoiceDraft(null); }}' in invoice_view
+    assert 'setInvoiceWorkspace("create")' in invoice_view
     assert 'onClick={() => void confirmInvoice()}>Émettre la facture' in invoice_view
     assert 'get_by_role("heading", name="Prévisualisation de facture")' in visual_review
     assert 'get_by_role("button", name="Modifier la saisie")' in visual_review
@@ -269,7 +271,23 @@ def test_navigation_clears_transient_notices_from_the_previous_screen() -> None:
     assert "setNotice(null)" in navigation
     assert "setView(nextView)" in navigation
     assert "onClick={() => navigateTo(item.target)}" in app
-    assert 'onClick={() => navigateTo("invoices")}>Nouvelle facture' in app
+    assert 'onClick={() => void openInvoiceCreation()}>Nouvelle facture' in app
+
+
+def test_invoice_history_matches_figma_f07_and_keeps_creation_separate() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'title="Historique des factures"' in app
+    assert 'className="metrics invoice-history-metrics"' in app
+    assert 'className="invoice-history-layout"' in app
+    assert 'title="Actions suivantes"' in app
+    assert 'Nouvelle facture' in app and 'Émettre une facture combinée' in app
+    assert 'Factures enregistrées' in app
+    assert '.invoice-history-layout { display: grid;' in css
+    assert 'invoice-history-{SHOT_SUFFIX}.png' in visual_review
+    assert 'four server-derived metrics from Figma F07' in visual_review
 
 
 def test_solar_sales_show_customer_names_instead_of_internal_ids() -> None:

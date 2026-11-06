@@ -675,6 +675,13 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / f"receivables-statement-{SHOT_SUFFIX}.png"))
                 if slug == "invoices":
+                    await page.get_by_role("heading", name="Historique des factures").wait_for()
+                    if await page.locator(".invoice-history-metrics .metric").count() != 4:
+                        raise AssertionError("Invoice history must show the four server-derived metrics from Figma F07")
+                    await page.get_by_role("heading", name="Actions suivantes").wait_for()
+                    await page.get_by_role("button", name="Détail d’une facture").wait_for()
+                    await page.screenshot(path=str(OUTPUT / f"invoice-history-{SHOT_SUFFIX}.png"))
+                    await page.get_by_role("button", name="Nouvelle facture", exact=True).click()
                     await page.locator('select[name="customer_id"]').select_option("demo-customer-0001")
                     await page.get_by_label("Période de facturation").fill("2026-10")
                     await page.get_by_label("Électricité consommée (kWh)").fill("100")
@@ -697,7 +704,7 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / f"invoice-preview-water-positive-{SHOT_SUFFIX}.png"))
                     await page.get_by_role("button", name="Retour à l’historique des factures", exact=True).click()
-                    await page.get_by_role("heading", name="Factures eau + électricité").wait_for()
+                    await page.get_by_role("heading", name="Historique des factures").wait_for()
                     await page.get_by_role("button", name="Document PDF").first.click()
                     try:
                         await page.get_by_role("dialog", name="Facture eau + électricité").wait_for(timeout=5000)
