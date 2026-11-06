@@ -528,7 +528,8 @@ def test_visual_review_covers_water_meter_and_positive_water_invoice() -> None:
     assert 'get_by_role("heading", name="Prévisualisation de facture").wait_for()' in visual_review
     assert "Number(args.body?.water?.quantity ?? 0)" in visual_review
     assert 'locator(".invoice-preview-metrics").get_by_text("5 m³", exact=True).wait_for()' in visual_review
-    assert 'locator(".invoice-preview-metrics").get_by_text("12,76 USD", exact=True).wait_for()' in visual_review
+    assert 'locator(".invoice-preview-metrics").get_by_text("24,36 USD", exact=True).wait_for()' in visual_review
+    assert "Ligne de communication" in visual_review
     assert 'await page.get_by_label("Eau consommée (m³)").fill("5")' in visual_review
     assert 'unitCode === "KWH" ? "kWh" : unitCode === "M3" ? "m³"' in (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
