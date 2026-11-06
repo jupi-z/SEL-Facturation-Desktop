@@ -1,6 +1,6 @@
 # SEL V2 — paquet serveur contrôlé
 
-Ce dossier prépare un déploiement central, mais ne contient aucun secret, aucune clé Ed25519 privée et aucune donnée SEL réelle. Le fichier `compose.test.yml` reste réservé aux tests ; `compose.production.example.yml` est un modèle à copier dans un environnement protégé.
+Ce dossier décrit le déploiement central; le dépôt ne contient aucun secret, aucune clé Ed25519 privée ni copie de données SEL réelles. L’instance de production utilise PostgreSQL et contient des données opérationnelles. Le fichier `compose.test.yml` reste réservé aux tests ; `compose.production.example.yml` est un modèle à copier dans un environnement protégé.
 
 ## Hôtes publics configurés
 
@@ -49,15 +49,21 @@ Le fichier `.env` doit contenir uniquement des valeurs injectées par l’admini
 
 Le premier démarrage de l’application Windows requiert une connexion administrateur centrale. La commande « Activer ce poste » enrôle l’appareil et émet atomiquement une autorisation hors ligne signée, limitée à 7 jours. Le jeton de synchronisation propre au poste n’est stocké que sous forme de hash SHA-256 dans PostgreSQL et peut être invalidé par révocation de l’appareil. SEL a confirmé qu’aucun plafond de montant hors ligne n’est appliqué pour l’unique poste initial; les rôles et les portées de commandes restent contrôlés côté serveur.
 
-## Démarrage contrôlé
+## Déploiement contrôlé
 
-```bash
-docker compose -f /srv/sel-v2/compose.yml --env-file /srv/sel-v2/.env build --pull
-docker compose -f /srv/sel-v2/compose.yml --env-file /srv/sel-v2/.env up -d
-curl --fail --silent https://sel.shuleops.com/health/ready
-```
+Les sources destinées à une migration SQLx doivent être récupérées sur Linux à partir du commit immuable à déployer (`git checkout --detach <commit>`, `core.autocrlf=false`). Ne construisez pas le contexte Docker depuis une archive Git créée sous Windows : la conversion CRLF peut changer les checksums intégrés aux migrations, même si le SQL paraît identique.
 
-Après publication d’un manifeste signé, contrôler aussi `curl --head --fail https://update.sel.shuleops.com/updates/latest.json`. Avant cette publication, le `404` du canal d’updates est attendu. Vérifier les certificats des deux hôtes avant d’installer/configurer un client. Les migrations sont exécutées par l’API au démarrage via SQLx. Toute erreur arrête le conteneur ; aucune migration destructive n’est autorisée par cette procédure.
+Avant de remplacer l’API :
+
+1. Identifiez et conservez le digest de l’image actuellement en service.
+2. Créez un dump PostgreSQL daté et privé, puis vérifiez qu’il est listable avec `pg_restore -l`; consignez son SHA-256.
+3. Comparez les SHA-384 des migrations déjà appliquées avec les checksums de `_sqlx_migrations` sur la base cible. Tout écart doit bloquer le déploiement avant l’arrêt de l’API.
+4. Construisez le candidat depuis le checkout Linux exact, puis démarrez uniquement `sel-api`.
+5. Vérifiez `/health/ready`, l’état Docker, le nombre/version de migrations et les données de catalogue attendues.
+
+Les migrations s’exécutent au démarrage via SQLx; toute erreur arrête l’API. Préparez l’image de retour arrière avant la bascule. Aucune migration destructive n’est autorisée par cette procédure.
+
+Après publication d’un manifeste signé, contrôler aussi `curl --head --fail https://update.sel.shuleops.com/updates/latest.json`. Avant cette publication, le `404` du canal d’updates est attendu. La release Windows manuelle ne rend pas SafeUpdate natif opérationnel. Vérifier les certificats des deux hôtes avant d’installer/configurer un client.
 
 ## Sauvegarde et retour arrière
 
@@ -65,6 +71,6 @@ Utiliser `sel-cli backup-postgres` dans un conteneur temporaire avec `DATABASE_U
 
 Le retour arrière consiste à redéployer l’image précédente identifiée par son digest, sans supprimer le volume PostgreSQL. Pour le canal updates, ne remplacer le manifeste publié qu’après validation de la signature, de la séquence, des empreintes et de la compatibilité; conserver une copie de la dernière paire manifeste/signature connue bonne hors du serveur. Si une migration non rétrocompatible est introduite, le déploiement est bloqué jusqu’à une procédure de migration/rollback dédiée.
 
-## Statut de ce dépôt
+## État de production
 
-Les enregistrements DNS des deux hôtes ont été résolus depuis l’environnement de développement vers `187.77.175.51`. Au contrôle HTTPS, `sel.shuleops.com/health/ready` retournait `404` et le certificat présenté par `update.sel.shuleops.com` ne correspondait pas au nom demandé. Ces réponses montrent que les noms ne desservent pas encore le service SEL attendu avec des certificats corrects. Le Caddyfile et Compose sont configurés, mais aucun déploiement serveur, renouvellement TLS, secret PostgreSQL, clé de production, publication de manifeste ou restauration sur infrastructure SEL n’a été effectué. La mise en service reste bloquée jusqu’à vérification de l’hébergement/proxy sur l’adresse résolue et de l’émission des certificats.
+Les observations DNS/HTTPS ci-dessus dans l’historique du projet décrivent le contrôle initial et ne sont plus l’état courant. Au 6 novembre 2026, `https://sel.shuleops.com/health/ready` retourne `configured:true`; l’API et PostgreSQL sont sains. Le commit déployé est `c8f1fc47d113314a2408d342e06e8b57d9d776cf`, 21 migrations sont appliquées et le déploiement de la ligne de communication est détaillé dans `Docs/SEL_V2_BACKEND/IMPLEMENTATION_REPORT.md`. Le canal SafeUpdate reste non publié : `https://update.sel.shuleops.com/updates/latest.json` retourne 404 tant qu’un manifeste de production correctement signé n’a pas été provisionné.
