@@ -165,7 +165,7 @@ def mock_invoke_script() -> str:
         if (command === 'central_admin_request') {{
           const adminPath = args.path || '';
           if (args.method !== 'GET') window.__adminWriteLog.push({{path: adminPath, method: args.method, body: args.body}});
-          if (window.__rejectAdminConflict && adminPath === '/v1/admin/users/demo-admin-0001' && args.method === 'PATCH' && args.body?.role === 'SUPERVISOR') return {{status:409,body:{{code:'SELF_MODIFICATION_DENIED',detail:'an administrator cannot change their own role or status'}}}};
+          if (window.__rejectDuplicateUser && adminPath === '/v1/admin/users' && args.method === 'POST') return {{status:409,body:{{code:'USER_IDENTITY_EXISTS',detail:'identity_ref is empty or already exists in this organization'}}}};
           if (window.__rejectCatalogDraft && adminPath.endsWith('/tariffs') && args.method === 'POST') return {{status:422,body:{{code:'DEMO_VALIDATION_ERROR',message:'Validation refusal simulated'}}}};
           let adminBody = [];
           if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
@@ -719,9 +719,12 @@ async def capture_views() -> None:
                     await page.screenshot(path=str(OUTPUT / f"solar-new-sale-{SHOT_SUFFIX}.png"))
                     await page.get_by_role("button", name="Fermer", exact=True).click()
                 if slug == "admin":
-                    await page.get_by_role("heading", name="Utilisateurs et rôles").wait_for()
+                    await page.get_by_role("heading", name="Utilisateurs et autorisations").wait_for()
                     await page.get_by_role("cell", name="admin-demo").first.wait_for()
                     await page.screenshot(path=str(OUTPUT / f"admin-full-{SHOT_SUFFIX}.png"), full_page=True)
+                    await page.screenshot(path=str(OUTPUT / f"admin-user-directory-{SHOT_SUFFIX}.png"), full_page=True)
+                    await page.get_by_role("button", name="Créer un utilisateur", exact=True).click()
+                    await page.get_by_role("heading", name="Créer un utilisateur SEL").wait_for()
                     user_form = page.locator("form.admin-create-user")
                     await user_form.locator('input[name="identity_ref"]').fill("agent-test-ux3")
                     await user_form.locator('select[name="role"]').select_option("CASHIER")
@@ -745,33 +748,63 @@ async def capture_views() -> None:
                     await user_form.get_by_role("button", name="Vérifier la création").click()
                     await page.get_by_role("alertdialog", name="Vérifier la création du compte").get_by_role("button", name="Créer le compte").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users' && entry.method === 'POST').length === 1")
-                    agent_role = page.get_by_label("Rôle de agent-demo")
+                    await page.get_by_role("button", name="Créer un utilisateur", exact=True).click()
+                    duplicate_form = page.locator("form.admin-create-user")
+                    await duplicate_form.locator('input[name="identity_ref"]').fill("admin-demo")
+                    await duplicate_form.locator('select[name="role"]').select_option("BILLING_AGENT")
+                    await duplicate_form.locator('input[name="password"]').fill("synthetic-secret-duplicate")
+                    await duplicate_form.locator('input[name="password_confirm"]').fill("synthetic-secret-duplicate")
+                    await page.evaluate("window.__rejectDuplicateUser = true")
+                    await duplicate_form.get_by_role("button", name="Vérifier la création").click()
+                    await page.get_by_role("alertdialog", name="Vérifier la création du compte").get_by_role("button", name="Créer le compte").click()
+                    duplicate_notice = page.get_by_role("alert")
+                    await duplicate_notice.get_by_text("Cet identifiant SEL est déjà utilisé ou invalide.").wait_for()
+                    duplicate_text = await duplicate_notice.inner_text()
+                    if "identity_ref is empty" in duplicate_text or "/v1/admin/users" in duplicate_text:
+                        raise AssertionError("Duplicate identity conflict must be localized without exposing raw API details")
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.screenshot(path=str(OUTPUT / f"admin-duplicate-user-conflict-{SHOT_SUFFIX}.png"), full_page=True)
+                    await page.evaluate("window.__rejectDuplicateUser = false")
+                    await page.get_by_role("button", name="Revenir au répertoire").click()
+                    duplicate_discard = page.get_by_role("alertdialog", name="Abandonner les modifications ?")
+                    await duplicate_discard.get_by_role("button", name="Abandonner et continuer").click()
+                    agent_row = page.get_by_role("row").filter(has_text="agent-demo")
+                    await agent_row.get_by_role("button", name="Voir").click()
+                    await page.get_by_role("heading", name="Modifier les accès d’un compte").wait_for()
+                    agent_role = page.get_by_label("Nouveau rôle de agent-demo")
                     await agent_role.select_option("SUPERVISOR")
-                    await page.get_by_role("button", name="Enregistrer", exact=True).last.click()
+                    await page.get_by_role("button", name="Vérifier la modification").click()
                     await page.get_by_role("alertdialog", name="Vérifier le changement de rôle").wait_for()
                     if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.role === 'SUPERVISOR').length") != 0:
                         raise AssertionError("Role updates must wait for explicit confirmation")
                     await page.get_by_role("alertdialog", name="Vérifier le changement de rôle").get_by_role("button", name="Enregistrer le rôle").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.role === 'SUPERVISOR').length === 1")
-                    await page.evaluate("window.__rejectAdminConflict = true")
-                    admin_role = page.get_by_label("Rôle de admin-demo")
-                    await admin_role.select_option("SUPERVISOR")
+                    await page.get_by_role("button", name="Retour utilisateurs").click()
                     admin_row = page.get_by_role("row").filter(has_text="admin-demo")
-                    await admin_row.get_by_role("button", name="Enregistrer", exact=True).click()
-                    await page.get_by_role("alertdialog", name="Vérifier le changement de rôle").get_by_role("button", name="Enregistrer le rôle").click()
-                    conflict_notice = page.get_by_role("alert")
-                    await conflict_notice.get_by_text("Un administrateur ne peut pas modifier son propre rôle ou statut.").wait_for()
-                    conflict_text = await conflict_notice.inner_text()
-                    if "an administrator cannot change their own role" in conflict_text or "/v1/admin/users" in conflict_text:
-                        raise AssertionError("A self-modification conflict must be explained in French without exposing the API path")
-                    await page.screenshot(path=str(OUTPUT / f"admin-self-role-conflict-{SHOT_SUFFIX}.png"))
-                    await page.evaluate("window.__rejectAdminConflict = false")
+                    await admin_row.get_by_role("button", name="Voir").click()
+                    admin_role = page.get_by_label("Nouveau rôle de admin-demo")
+                    if not await admin_role.is_disabled():
+                        raise AssertionError("The current administrator must not be able to edit their own role")
+                    admin_status_action = page.get_by_role("button", name="Désactiver ce compte")
+                    if not await admin_status_action.is_disabled():
+                        raise AssertionError("The current administrator must not be able to disable their own account")
+                    locked_role_button = page.get_by_role("button", name="Vérifier la modification")
+                    locked_style = await locked_role_button.evaluate("element => getComputedStyle(element).backgroundColor")
+                    if locked_style != "rgb(237, 241, 246)":
+                        raise AssertionError("A disabled primary action must not look active")
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.screenshot(path=str(OUTPUT / f"admin-self-access-locked-{SHOT_SUFFIX}.png"), full_page=True)
+                    await page.get_by_role("button", name="Retour utilisateurs").click()
+                    discard_role_review = page.get_by_role("alertdialog", name="Abandonner les modifications ?")
+                    if await discard_role_review.count():
+                        await discard_role_review.get_by_role("button", name="Abandonner et continuer").click()
                     agent_row = page.get_by_role("row").filter(has_text="agent-demo")
-                    await agent_row.get_by_role("button", name="Désactiver").click()
+                    await agent_row.get_by_role("button", name="Voir").click()
+                    await page.get_by_role("button", name="Désactiver ce compte").click()
                     await page.get_by_role("alertdialog", name="Désactiver ce compte ?").wait_for()
                     await page.get_by_role("alertdialog", name="Désactiver ce compte ?").get_by_role("button", name="Désactiver le compte").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.status === 'REVOKED').length === 1")
-                    await agent_row.get_by_role("button", name="Réinitialiser le mot de passe").click()
+                    await page.get_by_role("button", name="Réinitialiser le mot de passe").click()
                     reset_form = page.locator("form.admin-password-reset")
                     await reset_form.get_by_label("Nouveau mot de passe").fill("synthetic-password-456")
                     await reset_form.get_by_role("button", name="Confirmer le changement").click()
@@ -786,6 +819,7 @@ async def capture_views() -> None:
                     await reset_form.get_by_role("button", name="Confirmer le changement").click()
                     await page.get_by_role("alertdialog", name="Vérifier la réinitialisation du mot de passe").get_by_role("button", name="Confirmer le changement").click()
                     await page.wait_for_function(f"window.__adminWriteLog.filter(entry => entry.path === '{password_path}' && entry.method === 'POST').length === 1")
+                    await page.get_by_role("button", name="Référentiels", exact=True).click()
                     tariff_panel = page.locator(".admin-catalog-grid .panel").first
                     draft_tariff = tariff_panel.get_by_role("row").filter(has_text="Brouillon").first
                     await draft_tariff.get_by_label("Référence de la décision d’approbation SEL").fill("DEMO-APPROVAL-UX3")

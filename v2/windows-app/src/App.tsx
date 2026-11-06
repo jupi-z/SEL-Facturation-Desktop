@@ -742,7 +742,7 @@ export default function App() {
 
   if (session.require_password_change) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Votre compte SEL,<br />sécurisé dès le départ.</h1><p>Modifiez votre mot de passe temporaire pour continuer.</p></div><small>Application connectée au serveur central</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">PREMIÈRE CONNEXION</p><h2>Changer le mot de passe</h2><PasswordChangeForm onComplete={() => { setSession({ authenticated: false }); setAuthMessage("Mot de passe modifié. Connectez-vous avec votre nouveau mot de passe."); }} /></div></div></section>;
 
-  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
+  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} draftDirty={draftDirty} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -949,7 +949,7 @@ export default function App() {
 
       {view === "admin" && <>
         <PageHeading eyebrow="ADMIN / RÉFÉRENTIELS" title="Administration" description="Les écrans administratifs suivent les permissions et les paramètres effectivement exposés par le service Rust." />
-        <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} />
+        <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} draftDirty={draftDirty} />
       </>}
 
       {documentPreview && <div className="document-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDocumentPreview(); }}>
@@ -1750,7 +1750,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
   </Panel>;
 }
 
-function AdminConsole({ session, onSignedOut, confirmAction }: { session: CentralSessionInfo; onSignedOut: () => void; confirmAction: (request: ConfirmationRequest) => Promise<boolean> }) {
+function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { session: CentralSessionInfo; onSignedOut: () => void; confirmAction: (request: ConfirmationRequest) => Promise<boolean>; draftDirty: boolean }) {
   const [users, setUsers] = useState<Row[]>([]);
   const [tariffs, setTariffs] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
@@ -1760,12 +1760,32 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
   const [auditEvents, setAuditEvents] = useState<Row[]>([]);
   const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
   const [passwordTarget, setPasswordTarget] = useState("");
+  const [adminArea, setAdminArea] = useState<"users" | "catalogs" | "audit">("users");
+  const [adminUserView, setAdminUserView] = useState<"directory" | "create" | "security">("directory");
+  const [selectedAdminUserId, setSelectedAdminUserId] = useState("");
+  const [userSearch, setUserSearch] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [userMutationBusy, setUserMutationBusy] = useState(false);
   const authenticated = useRef(false);
+
+  async function navigateAdminArea(next: "users" | "catalogs" | "audit", openCreate = false) {
+    if (draftDirty && !await confirmAction({
+      title: "Abandonner les modifications ?",
+      description: "Les saisies non enregistrées dans cette rubrique d’administration seront perdues.",
+      confirmLabel: "Abandonner et continuer",
+    })) return;
+    if (draftDirty) {
+      announceDraftSaved();
+      setRoleDrafts({});
+      setPasswordTarget("");
+    }
+    setAdminArea(next);
+    setAdminUserView(next === "users" && openCreate ? "create" : "directory");
+    setPasswordTarget("");
+  }
 
   function clearAdminSession() {
     authenticated.current = false;
@@ -1832,7 +1852,7 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
         password,
         require_password_change: requirePasswordChange,
       });
-      form.reset(); announceDraftSaved(); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
+      form.reset(); announceDraftSaved(); setAdminUserView("directory"); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
     finally { setUserMutationBusy(false); }
   }
@@ -1874,7 +1894,8 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
     setUserMutationBusy(true);
     try {
       await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { role });
-      setMessage("Rôle modifié par le serveur central."); setError(false); await loadData();
+      setRoleDrafts((current) => { const next = { ...current }; delete next[id]; return next; });
+      announceDraftSaved(); setMessage("Rôle modifié par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
     finally { setUserMutationBusy(false); }
   }
@@ -1958,33 +1979,95 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
     <div className="form-actions"><Button onClick={onSignedOut}>Fermer la session</Button></div>
   </Panel>;
 
+  const filteredUsers = users.filter((user) => {
+    const query = userSearch.trim().toLocaleLowerCase("fr");
+    return !query || [user.identity_ref, user.role, user.status].some((value) => text(value, "").toLocaleLowerCase("fr").includes(query));
+  });
+  const catalogEntries = [...tariffs, ...products, ...taxProfiles, ...fxRates, ...communicationCharges];
+  const approvedCatalogCount = catalogEntries.filter((item) => text(item.status).toUpperCase() === "APPROVED").length;
+  const selectedAdminUser = users.find((user) => text(user.id ?? user.user_id, "") === selectedAdminUserId) ?? null;
+
   return <>
     {message && <div className={`notice${error ? " error" : ""}`} role={error ? "alert" : "status"}>{message}</div>}
     <Panel title="Session administrateur" action={<div className="page-actions"><Button onClick={() => void loadData()} disabled={loading}>{loading ? "Actualisation…" : "Actualiser"}</Button><Button onClick={onSignedOut}>Se déconnecter</Button></div>}>
       <dl className="customer-details admin-session"><div><dt>Utilisateur</dt><dd>{text(session.user_id)}</dd></div><div><dt>Rôle</dt><dd>{text(session.role)}</dd></div><div><dt>Organisation</dt><dd>{text(session.organization_id)}</dd></div></dl>
     </Panel>
-    <Panel title="Utilisateurs et rôles">
-      <form data-preserve-draft className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
-        <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required disabled={userMutationBusy} /></label>
-        <label>Rôle<select name="role" defaultValue="BILLING_AGENT" disabled={userMutationBusy}><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
-        <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
-        <label>Confirmer le mot de passe<input name="password_confirm" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
-        <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked disabled={userMutationBusy} /> Exiger le changement du mot de passe à la première connexion</span></label>
-        <div className="form-actions"><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Vérification…" : "Vérifier la création"}</Button></div>
-      </form>
-      <Table headers={["Identifiant", "Rôle", "État", "Actions"]} empty="Aucun utilisateur retourné par le serveur." data={users.map((user) => {
-        const id = text(user.id ?? user.user_id, "");
-        return [text(user.identity_ref), <div className="admin-role-control"><select aria-label={`Rôle de ${text(user.identity_ref)}`} value={roleDrafts[id] ?? text(user.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [id]: event.target.value }))} disabled={userMutationBusy}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select><Button disabled={userMutationBusy || !roleDrafts[id] || roleDrafts[id] === text(user.role)} onClick={() => void updateUserRole(user)}>{userMutationBusy ? "Vérification…" : "Enregistrer"}</Button></div>, <Status value={user.status} />, <div className="admin-user-actions"><Button disabled={userMutationBusy} onClick={() => setPasswordTarget(id)}>Réinitialiser le mot de passe</Button><Button disabled={userMutationBusy} onClick={() => void toggleUser(user)}>{text(user.status).toUpperCase() === "ACTIVE" ? "Désactiver" : "Réactiver"}</Button></div>];
-      })} />
-      {passwordTarget && <form data-preserve-draft className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Les sessions existantes de ce compte seront révoquées après validation côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label><div className="page-actions"><Button type="button" disabled={userMutationBusy} onClick={() => { announceDraftSaved(); setPasswordTarget(""); }}>Annuler</Button><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Enregistrement…" : "Confirmer le changement"}</Button></div></form>}
-    </Panel>
-    <div className="admin-grid admin-catalog-grid">
+    <nav className="admin-workspace-tabs" aria-label="Rubriques d’administration">
+      <Button className={adminArea === "users" ? "is-active" : ""} aria-pressed={adminArea === "users"} onClick={() => void navigateAdminArea("users")}>Utilisateurs</Button>
+      <Button className={adminArea === "catalogs" ? "is-active" : ""} aria-pressed={adminArea === "catalogs"} onClick={() => void navigateAdminArea("catalogs")}>Référentiels</Button>
+      <Button className={adminArea === "audit" ? "is-active" : ""} aria-pressed={adminArea === "audit"} onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button>
+    </nav>
+    {adminArea === "users" && <>
+      {adminUserView === "create" ? <>
+        <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / UTILISATEURS / CRÉATION</p><h2>Créer un utilisateur SEL</h2><p className="muted">Création isolée et attribution explicite d’un rôle.</p></div><Button onClick={() => void navigateAdminArea("users")}>Revenir au répertoire</Button></header>
+        <div className="admin-metrics">
+          <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
+          <Metric label="Référentiels approuvés" value={String(approvedCatalogCount)} note="Valeur du serveur SEL" />
+          <Metric label="Comptes actifs" value={String(users.filter((user) => text(user.status).toUpperCase() === "ACTIVE").length)} note="Valeur du serveur SEL" />
+          <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
+        </div>
+        <Panel title="Identité et autorisations">
+          <form data-preserve-draft className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
+            <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required disabled={userMutationBusy} /></label>
+            <label>Rôle<select name="role" defaultValue="BILLING_AGENT" disabled={userMutationBusy}><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
+            <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
+            <label>Confirmer le mot de passe<input name="password_confirm" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
+            <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked disabled={userMutationBusy} /> Exiger le changement du mot de passe à la première connexion</span></label>
+            <p className="help">Le compte est créé actif par le serveur. Le statut initial n’est pas modifiable par ce contrat API.</p>
+            <div className="form-actions"><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Vérification…" : "Vérifier la création"}</Button></div>
+          </form>
+        </Panel>
+        <Panel title="Étapes suivantes"><p className="muted">Après création, vérifiez le rôle et l’état du compte dans le répertoire. Le serveur SEL reste l’autorité sur les accès.</p><Button onClick={() => void navigateAdminArea("users")}>Utilisateurs et autorisations</Button></Panel>
+      </> : adminUserView === "security" && selectedAdminUser ? <>
+        <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / UTILISATEURS / SÉCURITÉ</p><h2>Modifier les accès d’un compte</h2><p className="muted">Changer un rôle, suspendre un compte ou réinitialiser son mot de passe.</p></div><Button onClick={() => void navigateAdminArea("users")}>Retour utilisateurs</Button></header>
+        <div className="admin-metrics">
+          <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
+          <Metric label="Référentiels approuvés" value={String(approvedCatalogCount)} note="Valeur du serveur SEL" />
+          <Metric label="Comptes actifs" value={String(users.filter((user) => text(user.status).toUpperCase() === "ACTIVE").length)} note="Valeur du serveur SEL" />
+          <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
+        </div>
+        <div className="admin-directory-layout">
+          <Panel title="Révision du compte">
+            <p className="help">Les modifications et la révocation des sessions sont validées par le serveur SEL.</p>
+            <dl className="customer-details admin-user-summary"><div><dt>Utilisateur sélectionné</dt><dd>{text(selectedAdminUser.identity_ref)}</dd></div><div><dt>Rôle actuel</dt><dd>{text(selectedAdminUser.role)}</dd></div><div><dt>État</dt><dd><Status value={selectedAdminUser.status} /></dd></div></dl>
+            {text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "") && <p className="notice">Votre propre rôle et statut ne peuvent pas être modifiés depuis cette session.</p>}
+            <form data-preserve-draft className="admin-role-edit" onSubmit={(event) => { event.preventDefault(); void updateUserRole(selectedAdminUser); }}>
+              <label>Nouveau rôle<select aria-label={`Nouveau rôle de ${text(selectedAdminUser.identity_ref)}`} value={roleDrafts[selectedAdminUserId] ?? text(selectedAdminUser.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [selectedAdminUserId]: event.target.value }))} disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "")}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select></label>
+              <Button primary type="submit" disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "") || !roleDrafts[selectedAdminUserId] || roleDrafts[selectedAdminUserId] === text(selectedAdminUser.role)}>{userMutationBusy ? "Vérification…" : "Vérifier la modification"}</Button>
+            </form>
+            <div className="admin-security-actions"><Button disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "")} onClick={() => void toggleUser(selectedAdminUser)}>{text(selectedAdminUser.status).toUpperCase() === "ACTIVE" ? "Désactiver ce compte" : "Réactiver ce compte"}</Button><Button disabled={userMutationBusy} onClick={() => setPasswordTarget(selectedAdminUserId)}>Réinitialiser le mot de passe</Button></div>
+            {passwordTarget === selectedAdminUserId && <form data-preserve-draft className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Le nouveau mot de passe reste masqué. Les sessions existantes seront révoquées côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label><div className="page-actions"><Button type="button" disabled={userMutationBusy} onClick={() => { announceDraftSaved(); setPasswordTarget(""); }}>Annuler</Button><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Enregistrement…" : "Confirmer le changement"}</Button></div></form>}
+          </Panel>
+          <Panel title="Actions suivantes"><div className="admin-next-actions"><Button onClick={() => void navigateAdminArea("users")}>Utilisateurs et autorisations</Button><Button onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button></div><p className="help">Aucun compte ni historique n’est supprimé physiquement.</p></Panel>
+        </div>
+      </> : <>
+        <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / RÉPERTOIRE</p><h2>Utilisateurs et autorisations</h2><p className="muted">Administrer les comptes sans mélanger les autres référentiels.</p></div><Button primary onClick={() => void navigateAdminArea("users", true)}>Créer un utilisateur</Button></header>
+        <div className="admin-metrics">
+          <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
+          <Metric label="Référentiels approuvés" value={String(approvedCatalogCount)} note="Valeur du serveur SEL" />
+          <Metric label="Comptes actifs" value={String(users.filter((user) => text(user.status).toUpperCase() === "ACTIVE").length)} note="Valeur du serveur SEL" />
+          <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
+        </div>
+        <div className="admin-directory-layout">
+          <Panel title="Répertoire des utilisateurs">
+            <p className="help">Recherchez un compte, puis ouvrez son dossier de sécurité.</p>
+            <input className="table-search" aria-label="Rechercher un compte" placeholder="Nom de compte, rôle ou état" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} />
+            <Table headers={["Identifiant", "Rôle", "État", "Action"]} empty={users.length ? "Aucun compte ne correspond à cette recherche." : "Aucun utilisateur retourné par le serveur."} data={filteredUsers.map((user) => {
+              const id = text(user.id ?? user.user_id, "");
+              return [text(user.identity_ref), text(user.role), <Status value={user.status} />, <Button aria-label={`Voir les accès de ${text(user.identity_ref)}`} disabled={userMutationBusy} onClick={() => { setSelectedAdminUserId(id); setAdminUserView("security"); }}>Voir</Button>];
+            })} />
+          </Panel>
+          <Panel title="Actions suivantes"><p className="help">Choisissez une étape ou revenez au répertoire.</p><div className="admin-next-actions"><Button onClick={() => void navigateAdminArea("users", true)}>Créer un utilisateur SEL</Button><Button onClick={() => void navigateAdminArea("catalogs")}>Tarifs et référentiels</Button><Button onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button></div><p className="help">Les opérations ne sont enregistrées qu’après confirmation.</p></Panel>
+        </div>
+      </>}
+    </>}
+    {adminArea === "catalogs" && <div className="admin-grid admin-catalog-grid">
       <AdminCatalogPanel kind="tariffs" items={tariffs} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
       <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
       <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
       <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
       <AdminCatalogPanel kind="communication-charge" items={communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
-    </div>
-    <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>
+    </div>}
+    {adminArea === "audit" && <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>}
   </>;
 }

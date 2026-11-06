@@ -1,6 +1,34 @@
-# Rapport d’exécution UX3 — état au 6 novembre 2026
+# Rapport d’exécution UX3 — état au 7 novembre 2026
 
 > Rapport d’étape, non rapport de clôture. Les statuts reflètent les preuves exécutées; la recette complète et la validation Figma de toutes les frames ne sont pas terminées.
+
+## Progression vérifiée — 7 novembre 2026
+
+### Administration A01 / A02 / A03
+
+- A01 sépare le répertoire, la recherche, les indicateurs et les actions suivantes; les modifications de compte sont déplacées dans une fiche de sécurité dédiée.
+- A02 présente la création d’un utilisateur dans un écran distinct. Une identité déjà utilisée déclenche un conflit API `USER_IDENTITY_EXISTS`, traduit en français, sans exposer le détail brut ni la route centrale.
+- A03 regroupe rôle, état et réinitialisation du mot de passe. Le compte de la session courante ne peut pas changer son propre rôle ni désactiver son propre compte. Ces contrôles sont désactivés dans le DOM et visuellement distincts des actions disponibles.
+- Le refus d’auto-modification continue d’être couvert par le test unitaire de traduction de l’erreur centrale; la recette navigateur vérifie désormais le verrouillage préventif et teste à la place un conflit de doublon réaliste.
+- Les erreurs de navigation préservent le brouillon et demandent une confirmation avant abandon. Les captures visuelles montrent la page entière.
+
+### Preuves locales
+
+| Contrôle | Résultat au 7 novembre |
+|---|---|
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 61 tests |
+| `npm run build` (`v2/windows-app`) | PASS — build React/TypeScript; avertissement non bloquant sur les gros chunks PDF/fonts |
+| `python v2/windows-app/scripts/visual_review.py`, fenêtre 1440×900 | PASS — parcours synthétiques complets, conflits doublon, verrouillage des droits propres et apparence calculée des boutons désactivés |
+| Même recette, fenêtre 1280×720 | PASS — mêmes parcours; aucune surlargeur horizontale détectée |
+| PostgreSQL réel SEL, production, imprimante et poste utilisateur | NOT_RUN — aucun accès ni test réel dans ce lot |
+
+Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440x900.png`, `admin-duplicate-user-conflict-2026-11-07-1440x900.png`, `admin-self-access-locked-2026-11-07-1440x900.png`, et leurs versions 1280×720. Les anciennes captures nommées `admin-self-role-conflict-*` documentent un scénario de test antérieur et ne représentent plus le parcours actuel.
+
+### État de livraison
+
+- Ces changements restent sur la branche UX3 et la PR #60, sans fusion dans `main`, publication ni déploiement.
+- La vérification de CI sera rattachée au SHA exact après publication de cet incrément; aucune CI postérieure à ce changement n’est présumée verte.
+- Le découpage A01–A03 améliore cette zone seulement. L’ensemble UX3 reste PARTIAL et la comparaison des 85 frames, les recettes des autres parcours et les limites API métier restent à traiter.
 
 ## 1. Références d’exécution
 

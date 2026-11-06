@@ -308,6 +308,14 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert '`/v1/admin/offline-grants/${encodeURIComponent(id)}/revoke`' not in app
     assert "minLength={8}" in app
     assert "AdminCatalogPanel" in app
+    assert 'className="admin-workspace-tabs"' in app
+    assert 'className="admin-directory-layout"' in app
+    assert 'className="customer-details admin-user-summary"' in app
+    assert 'aria-label={`Voir les accès de ${text(user.identity_ref)}`}' in app
+    assert 'Modifier les accès d’un compte' in app
+    assert 'Nouveau rôle de ${text(selectedAdminUser.identity_ref)}' in app
+    assert 'navigateAdminArea("users", true)' in app
+    assert ">Référentiels</Button>" in app and ">Journal d’audit</Button>" in app
     assert "Créer un brouillon" in app
     assert "Référence de la décision d’approbation SEL" in app
     assert "Journal d’audit récent" in app
@@ -776,15 +784,20 @@ def test_tauri_error_messages_are_preserved_in_ui() -> None:
 
 def test_central_http_conflicts_are_localized_without_exposing_routes() -> None:
     api = (APP / "src" / "api.ts").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
     assert 'LAST_ADMINISTRATOR: "Impossible de désactiver ou rétrograder le dernier administrateur actif."' in api
     assert 'SELF_MODIFICATION_DENIED: "Un administrateur ne peut pas modifier son propre rôle ou statut."' in api
     assert 'if (status === 403)' in api
     assert 'if (status === 409)' in api
-    assert 'window.__rejectAdminConflict' in visual_review
-    assert 'admin-self-role-conflict-' in visual_review
-    assert '"/v1/admin/users" in conflict_text' in visual_review
+    assert 'window.__rejectDuplicateUser' in visual_review
+    assert 'admin-duplicate-user-conflict-' in visual_review
+    assert 'admin-self-access-locked-' in visual_review
+    assert 'The current administrator must not be able to edit their own role' in visual_review
+    assert 'Duplicate identity conflict must be localized without exposing raw API details' in visual_review
+    assert '.button:disabled, .button:disabled:hover' in css
+    assert 'A disabled primary action must not look active' in visual_review
 
 
 def test_central_admin_can_bootstrap_before_device_enrollment() -> None:
