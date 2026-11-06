@@ -665,6 +665,12 @@ def test_service_and_meter_changes_are_reviewed_before_central_writes() -> None:
     assert "Aucun compteur ne sera créé." in app
     assert "Service attachment must not be sent before confirmation" in visual_review
     assert "Canceling service attachment review must preserve the chosen service" in visual_review
+    assert "Meter must not be recorded before confirmation" in visual_review
+    assert "Canceling meter confirmation must preserve the entered serial" in visual_review
+    assert "Service-account edits must wait for confirmation" in visual_review
+    assert "Canceling service-account review must preserve the entered state" in visual_review
+    assert 'f"meter-create-confirmation-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"service-account-edit-confirmation-{SHOT_SUFFIX}.png"' in visual_review
 
 
 def test_customer_directory_surfaces_truthful_central_metrics_before_the_table() -> None:

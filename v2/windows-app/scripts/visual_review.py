@@ -180,6 +180,9 @@ def mock_invoke_script() -> str:
         let body = [];
         if (path === '/v1/customers' && args.method === 'POST') {{ body = {{...args.body,customer_id:'demo-customer-created-ux3',status:'ACTIVE',revision:1}}; }}
         else if (path.startsWith('/v1/customers/') && args.method === 'PATCH') body = {{...fixtures.customers[0],...args.body,revision:2}};
+        else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts') && args.method === 'POST') {{ const customerId = path.split('/')[3]; body = {{...args.body,id:'demo-service-account-added',customer_id:customerId,revision:1}}; fixtures.serviceAccounts.push(body); }}
+        else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters') && args.method === 'POST') {{ const serviceAccountId = path.split('/')[3]; body = {{...args.body,id:'demo-meter-added',service_account_id:serviceAccountId,active:true}}; fixtures.meters.push(body); }}
+        else if (path.startsWith('/v1/service-accounts/') && args.method === 'PATCH') {{ const accountId = path.split('/')[3]; const account = fixtures.serviceAccounts.find((item) => item.id === accountId); if (account) Object.assign(account,args.body,{{revision:2}}); body = account ?? {{...args.body,id:accountId,revision:2}}; }}
         else if (path.startsWith('/v1/customers?') || path === '/v1/customers') body = fixtures.customers;
         else if (path === '/v1/catalog/tariffs') body = fixtures.tariffs;
         else if (path === '/v1/billing/utility/preview') {{
@@ -552,6 +555,37 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Rattacher le service").click()
                     await page.get_by_role("alertdialog", name="Vérifier le rattachement du service").get_by_role("button", name="Rattacher le service").click()
                     await page.wait_for_function("window.__centralWriteLog.filter(entry => entry.method === 'POST' && entry.path.endsWith('/service-accounts')).length === 1")
+                    await page.get_by_role("button", name="Ajouter un compteur").click()
+                    await page.get_by_label("Numéro réel du compteur").fill("DEMO-WATER-002")
+                    await page.get_by_role("button", name="Enregistrer le compteur").click()
+                    meter_review = page.get_by_role("alertdialog", name="Vérifier le numéro du compteur")
+                    await meter_review.wait_for()
+                    if "DEMO-WATER-002" not in await meter_review.inner_text() or "m³" not in await meter_review.inner_text():
+                        raise AssertionError("Meter confirmation must identify the actual serial and unit")
+                    await page.screenshot(path=str(OUTPUT / f"meter-create-confirmation-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.method === 'POST' && entry.path.endsWith('/meters')).length") != 0:
+                        raise AssertionError("Meter must not be recorded before confirmation")
+                    await meter_review.get_by_role("button", name="Annuler").click()
+                    if await page.get_by_label("Numéro réel du compteur").input_value() != "DEMO-WATER-002":
+                        raise AssertionError("Canceling meter confirmation must preserve the entered serial")
+                    await page.get_by_role("button", name="Enregistrer le compteur").click()
+                    await page.get_by_role("alertdialog", name="Vérifier le numéro du compteur").get_by_role("button", name="Enregistrer le compteur").click()
+                    await page.wait_for_function("window.__centralWriteLog.filter(entry => entry.method === 'POST' && entry.path.endsWith('/meters')).length === 1")
+                    await page.get_by_text("DEMO-WATER-002", exact=True).wait_for()
+                    await page.get_by_role("button", name="Modifier le raccordement").click()
+                    await page.get_by_label("État du raccordement").select_option("NOT_CONNECTED")
+                    await page.get_by_role("button", name="Enregistrer la modification").click()
+                    account_review = page.get_by_role("alertdialog", name="Vérifier le raccordement")
+                    await account_review.wait_for()
+                    await page.screenshot(path=str(OUTPUT / f"service-account-edit-confirmation-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.method === 'PATCH' && entry.path.includes('/service-accounts/')).length") != 0:
+                        raise AssertionError("Service-account edits must wait for confirmation")
+                    await account_review.get_by_role("button", name="Annuler").click()
+                    if await page.get_by_label("État du raccordement").input_value() != "NOT_CONNECTED":
+                        raise AssertionError("Canceling service-account review must preserve the entered state")
+                    await page.get_by_role("button", name="Enregistrer la modification").click()
+                    await page.get_by_role("alertdialog", name="Vérifier le raccordement").get_by_role("button", name="Enregistrer le raccordement").click()
+                    await page.wait_for_function("window.__centralWriteLog.filter(entry => entry.method === 'PATCH' && entry.path.includes('/service-accounts/')).length === 1")
                 if slug == "receivables":
                     await page.get_by_label("Abonné").select_option("demo-customer-0001")
                     await page.get_by_text("demo-receivable-0001").wait_for()
