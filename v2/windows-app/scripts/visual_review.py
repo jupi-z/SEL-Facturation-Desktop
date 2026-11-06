@@ -157,6 +157,8 @@ def mock_invoke_script() -> str:
       window.__paymentPostCount = 0;
       window.__adminWriteLog = [];
       window.__centralWriteLog = [];
+      window.__statementRequestStarted = false;
+      window.__releaseCustomerStatement = null;
       window.__TAURI_INTERNALS__ = {{ invoke: async (command, args = {{}}) => {{
         if (command === 'central_status') return {{status:'CENTRAL_CONNECTED',configured:true}};
         if (command === 'central_session_status') return window.__ADMIN_DEMO_SESSION__ ? {{authenticated:true,user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}} : {{authenticated:false}};
@@ -181,7 +183,19 @@ def mock_invoke_script() -> str:
         const path = args.path || '';
         if (args.method !== 'GET') window.__centralWriteLog.push({{path,method:args.method,body:args.body}});
         let body = [];
-        if (path === '/v1/customers' && args.method === 'POST') {{ body = {{...args.body,customer_id:'demo-customer-created-ux3',status:'ACTIVE',revision:1}}; }}
+        if (path.endsWith('/statement')) {{
+          const customerId = path.split('/')[3];
+          if (customerId === window.__delayStatementForCustomer) {{
+            window.__statementRequestStarted = true;
+            await new Promise(resolve => {{ window.__releaseCustomerStatement = resolve; }});
+          }}
+          body = customerId === 'demo-customer-0001'
+            ? {{invoices:[{{invoice_id:'demo-invoice-customer-0001',invoice_number:'STATEMENT-CUSTOMER-A',billing_period:'2026-10',status:'CENTRAL_ACCEPTED'}}],payments:[],receivables:[{{receivable_id:'demo-receivable-0001',balance:'19.62',currency:'USD',status:'OPEN',source_type:'INVOICE',source_reference:'SEL-20261103-103000'}},{{receivable_id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SALE',source_reference:'demo-sale-0001'}}]}}
+            : customerId === 'demo-customer-0002'
+              ? {{invoices:[{{invoice_id:'demo-invoice-customer-0002',invoice_number:'STATEMENT-CUSTOMER-B',billing_period:'2026-11',status:'CENTRAL_ACCEPTED'}}],payments:[],receivables:[{{receivable_id:'demo-receivable-0002',balance:'8.00',currency:'USD',status:'OPEN',source_type:'INVOICE'}}]}}
+              : {{invoices:[],payments:[],receivables:[]}};
+        }}
+        else if (path === '/v1/customers' && args.method === 'POST') {{ body = {{...args.body,customer_id:'demo-customer-created-ux3',status:'ACTIVE',revision:1}}; }}
         else if (path.startsWith('/v1/customers/') && args.method === 'PATCH') body = {{...fixtures.customers[0],...args.body,revision:2}};
         else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts') && args.method === 'POST') {{ const customerId = path.split('/')[3]; body = {{...args.body,id:'demo-service-account-added',customer_id:customerId,revision:1}}; fixtures.serviceAccounts.push(body); }}
         else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters') && args.method === 'POST') {{ const serviceAccountId = path.split('/')[3]; body = {{...args.body,id:'demo-meter-added',service_account_id:serviceAccountId,active:true}}; fixtures.meters.push(body); }}
@@ -396,6 +410,22 @@ async def capture_views() -> None:
                     await pending_confirmation.get_by_role("button", name="Abandonner et continuer").click()
                 if page_label:
                     await page.locator(".workspace-tabs").get_by_role("button", name=page_label, exact=True).click()
+                if slug == "customers":
+                    await page.get_by_role("row").filter(has_text="SEL-DÉMO-0001").get_by_role("button", name="Ouvrir le dossier").click()
+                    await page.get_by_text("STATEMENT-CUSTOMER-A", exact=True).wait_for()
+                    await page.get_by_role("button", name="Relevés", exact=True).click()
+                    await page.locator(".reading-filters select").nth(0).select_option("demo-customer-0002")
+                    await page.evaluate("window.__delayStatementForCustomer = 'demo-customer-0002'")
+                    await page.locator(".service-empty-state").get_by_role("button", name="Ouvrir le dossier abonné").click()
+                    await page.wait_for_function("window.__statementRequestStarted === true")
+                    dossier_statement = page.locator(".panel").filter(has_text="Situation du compte")
+                    stale_invoice = await dossier_statement.get_by_text("STATEMENT-CUSTOMER-A", exact=True).count()
+                    if stale_invoice:
+                        raise AssertionError("A previous customer's statement remained visible while the next customer's statement was loading")
+                    await page.evaluate("window.__releaseCustomerStatement?.()")
+                    await page.get_by_text("STATEMENT-CUSTOMER-B", exact=True).wait_for()
+                    await page.screenshot(path=str(OUTPUT / f"customer-statement-switch-{SHOT_SUFFIX}.png"))
+                    await page.get_by_role("button", name="Retour au répertoire").click()
                 if slug == "readings":
                     selects = page.locator(".reading-filters select")
                     await selects.nth(0).select_option("demo-customer-0001")

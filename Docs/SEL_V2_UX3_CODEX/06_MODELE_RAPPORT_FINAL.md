@@ -4,6 +4,25 @@
 
 ## Progression vérifiée — 7 novembre 2026
 
+### Isolation des données financières entre abonnés
+
+- Reproduction Playwright : après ouverture du dossier A, passage par Relevés, sélection du dossier B et ouverture immédiate pendant que l’API de B est volontairement suspendue, le relevé A restait visible dans le dossier B.
+- Correction : chaque état de relevé porte maintenant l’identifiant de son abonné; le rendu n’expose un relevé que si cet identifiant correspond à l’abonné sélectionné. Le chargement et l’erreur sont affichés distinctement et les anciennes données sont écartées.
+- La même protection s’applique au panneau des créances. Aucun endpoint, calcul financier ou état de production n’a été modifié.
+- Captures synthétiques : `evidence/customer-statement-switch-2026-11-07-1440x900.png` et `evidence/customer-statement-switch-2026-11-07-1280x720.png`.
+
+| Contrôle de cet incrément | Résultat |
+|---|---|
+| Reproduction avant correction | FAIL attendu — la facture synthétique de A restait visible pendant le chargement de B |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 62 tests |
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/React compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python v2/windows-app/scripts/visual_review.py`, 1440×900 et 1280×720 | PASS — bascule A→B avec réponse B retardée, absence du document de A, arrivée du document de B; reste de la recette synthétique exécuté |
+| `git diff --check` | PASS |
+| CI GitHub du parent `224f97261c6718b8d848af00094b0ebe59dc045c` | PASS — backend [42307206930](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206930), serveur [42307206491](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206491), régression V1 [42307206533](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206533), Tauri Windows/installeurs/upgrade [42307206466](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206466) |
+| CI couvrant ce correctif précis | À relancer après push du commit de cet incrément |
+
+La recette visuelle utilise des fixtures synthétiques et ne constitue pas une validation sur les données SEL ni sur le poste cible.
+
 ### Administration A01 / A02 / A03
 
 - A01 sépare le répertoire, la recherche, les indicateurs et les actions suivantes; les modifications de compte sont déplacées dans une fiche de sécurité dédiée.
@@ -17,7 +36,7 @@
 
 | Contrôle | Résultat au 7 novembre |
 |---|---|
-| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 61 tests |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 62 tests |
 | `npm run build` (`v2/windows-app`) | PASS — build React/TypeScript; avertissement non bloquant sur les gros chunks PDF/fonts |
 | `python v2/windows-app/scripts/visual_review.py`, fenêtre 1440×900 | PASS — parcours synthétiques complets, conflits doublon, verrouillage des droits propres et apparence calculée des boutons désactivés |
 | Même recette, fenêtre 1280×720 | PASS — mêmes parcours; aucune surlargeur horizontale détectée |
@@ -26,17 +45,17 @@
 
 Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440x900.png`, `admin-duplicate-user-conflict-2026-11-07-1440x900.png`, `admin-self-access-locked-2026-11-07-1440x900.png`, `customer-archive-keyboard-focus-2026-11-07-1440x900.png`, et leurs versions 1280×720. Les anciennes captures nommées `admin-self-role-conflict-*` documentent un scénario de test antérieur et ne représentent plus le parcours actuel.
 
-### État CI au SHA poussé `37d1305b93829e1f50e9d950b1f0c214e115f2af`
+### État CI au SHA poussé `224f97261c6718b8d848af00094b0ebe59dc045c`
 
-- PASS : backend — [42305246886](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42305246886).
-- PASS : paquet serveur — [42305246853](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42305246853).
-- PASS : régression V1 — [42305246834](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42305246834).
-- EN COURS au dernier contrôle : client Tauri Windows, dont compilation des installeurs et test isolé d’installation/mise à niveau — [42305246842](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42305246842).
+- PASS : backend — [42307206930](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206930).
+- PASS : paquet serveur — [42307206491](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206491).
+- PASS : régression V1 — [42307206533](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206533).
+- PASS : client Tauri Windows, compilation MSI/NSIS et test isolé installation/mise à niveau — [42307206466](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206466).
 
 ### État de livraison
 
 - Ces changements restent sur la branche UX3 et la PR #60, sans fusion dans `main`, publication ni déploiement.
-- Les statuts CI ci-dessus ne couvrent que le SHA indiqué; le workflow Windows reste le contrôle bloquant en cours.
+- Les statuts CI ci-dessus couvrent le SHA `224f972`; les modifications d’isolation décrites ci-dessus attendent encore leur propre CI après push.
 - Le découpage A01–A03 améliore cette zone seulement. L’ensemble UX3 reste PARTIAL et la comparaison des 85 frames, les recettes des autres parcours et les limites API métier restent à traiter.
 
 ## 1. Références d’exécution

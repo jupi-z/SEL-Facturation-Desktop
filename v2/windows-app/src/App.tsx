@@ -219,7 +219,7 @@ export default function App() {
   const [customerEditOpen, setCustomerEditOpen] = useState(false);
   const [customerEditBusy, setCustomerEditBusy] = useState(false);
   const [customerCreateBusy, setCustomerCreateBusy] = useState(false);
-  const [statement, setStatement] = useState<Row | null>(null);
+  const [statementState, setStatementState] = useState<{ customerId: string; data: Row | null; loading: boolean; error: string }>({ customerId: "", data: null, loading: false, error: "" });
   const [preview, setPreview] = useState<Row | null>(null);
   const [invoiceDraft, setInvoiceDraft] = useState<Row | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Row | null>(null);
@@ -283,7 +283,7 @@ export default function App() {
       setServerReady(false);
       setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]);
       setTariffCatalog([]);
-      setStatement(null); setSelectedCustomerData(null); setSelectedInvoice(null); setPreview(null);
+      setStatementState({ customerId: "", data: null, loading: false, error: "" }); setSelectedCustomerData(null); setSelectedInvoice(null); setPreview(null);
       setNotice({ message: "Le serveur SEL est indisponible ou non configuré. Les données métier sont masquées jusqu’au rétablissement du service.", error: true });
     };
     window.addEventListener("sel-session-expired", expired);
@@ -378,13 +378,21 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!selectedCustomer) { setStatement(null); return; }
+    if (!selectedCustomer) { setStatementState({ customerId: "", data: null, loading: false, error: "" }); return; }
     let active = true;
+    setStatementState({ customerId: selectedCustomer, data: null, loading: true, error: "" });
     centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}/statement`)
-      .then((data) => { if (active) setStatement(data); })
-      .catch((error: unknown) => { if (active) setNotice({ message: humanError(error), error: true }); });
+      .then((data) => { if (active) setStatementState({ customerId: selectedCustomer, data, loading: false, error: "" }); })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const message = humanError(error);
+        setStatementState({ customerId: selectedCustomer, data: null, loading: false, error: message });
+        setNotice({ message, error: true });
+      });
     return () => { active = false; };
   }, [selectedCustomer]);
+
+  const currentStatement = statementState.customerId === selectedCustomer ? statementState : null;
 
   const filteredInvoices = useMemo(() => invoices.filter((invoice) => {
     const query = invoiceFilter.trim().toLocaleLowerCase("fr");
@@ -800,7 +808,7 @@ export default function App() {
         <PageHeading eyebrow="CORE / CLIENTS" title="Dossier abonné" description={`${text(selectedCustomerData?.customer_code)} · ${text(selectedCustomerData?.legal_name)}`} action={<div className="page-actions"><Button aria-label="Retour au répertoire" onClick={async () => {
           if (draftDirty && !await requestConfirmation({ title: "Abandonner les modifications ?", description: "Les changements non enregistrés dans la fiche seront perdus.", confirmLabel: "Abandonner et revenir" })) return;
           if (draftDirty) discardPendingDraft();
-          setSelectedCustomer(""); setSelectedCustomerData(null); setStatement(null); setCustomerEditOpen(false);
+          setSelectedCustomer(""); setSelectedCustomerData(null); setStatementState({ customerId: "", data: null, loading: false, error: "" }); setCustomerEditOpen(false);
         }}>Retour au répertoire</Button><Button onClick={() => navigateTo("readings", selectedCustomer)}>Relevés</Button><Button onClick={() => navigateTo("payments", selectedCustomer)}>Encaisser</Button><Button primary onClick={() => navigateTo("invoices", selectedCustomer)}>Nouvelle facture</Button><Button onClick={() => { if (customerEditOpen) setDraftDirty(false); setCustomerEditOpen((open) => !open); }}>{customerEditOpen ? "Annuler la modification" : "Modifier la fiche"}</Button><Button onClick={() => void toggleCustomerArchive()}>{text(selectedCustomerData?.status).toUpperCase() === "ARCHIVED" ? "Réactiver" : "Archiver"}</Button></div>} />
         <Panel title={`Fiche abonné · ${text(selectedCustomerData?.customer_code)}`}>
           {selectedCustomerData ? customerEditOpen ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
@@ -813,7 +821,7 @@ export default function App() {
           </form> : <dl className="customer-details"><div><dt>Nom / raison sociale</dt><dd>{text(selectedCustomerData.legal_name)}</dd></div><div><dt>Code abonné</dt><dd>{text(selectedCustomerData.customer_code)}</dd></div><div><dt>Catégorie tarifaire</dt><dd>{text(selectedCustomerData.customer_category, "À compléter")}</dd></div><div><dt>Adresse</dt><dd>{text(selectedCustomerData.address)}</dd></div><div><dt>Téléphone</dt><dd>{text(selectedCustomerData.phone)}</dd></div><div><dt>Révision du dossier</dt><dd>{text(selectedCustomerData.revision)}</dd></div></dl> : <div className="empty-state">Chargement du dossier abonné…</div>}
         </Panel>
         <ServiceAccountsManager customerId={selectedCustomer} canManageMeters={["ADMIN", "SUPERVISOR", "BILLING_AGENT"].includes(text(session?.role).toUpperCase())} onConfirmReplacement={confirmMeterReplacement} confirmAction={requestConfirmation} />
-        <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} customerCode={text(selectedCustomerData?.customer_code)} statement={statement} />
+        <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} customerCode={text(selectedCustomerData?.customer_code)} statement={currentStatement?.data ?? null} loading={currentStatement?.loading ?? Boolean(selectedCustomer)} error={currentStatement?.error ?? ""} />
       </> : <>
       <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => { if (customerCreateOpen) setDraftDirty(false); setCustomerCreateOpen((open) => !open); }}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
         <div className="metrics customer-metrics">
@@ -935,10 +943,14 @@ export default function App() {
       {view === "receivables" && <>
         <PageHeading eyebrow="FINANCE / SOLDES" title="Suivi des créances" description="Soldes et obligations renvoyés par le serveur, sans recalcul dans l’interface." />
         <Panel title="Situation d’un abonné"><label className="customer-picker">Abonné<select value={selectedCustomer} onChange={(event) => setSelectedCustomer(event.target.value)}><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-          {statement ? <Table headers={["Référence", "Nature", "Solde", "Situation", "Actions"]} empty="Aucune créance associée." data={rows<Row>(statement.receivables).map((row) => {
+          {(currentStatement?.loading || (!currentStatement && Boolean(selectedCustomer))) && <div className="empty-state" role="status">Chargement de la situation de cet abonné…</div>}
+          {currentStatement?.error && <div className="notice error" role="alert">{currentStatement.error}</div>}
+          {currentStatement?.data && <Table headers={["Référence", "Nature", "Solde", "Situation", "Actions"]} empty="Aucune créance associée." data={rows<Row>(currentStatement.data.receivables).map((row) => {
             const receivableId = text(row.receivable_id ?? row.id, "");
             return [<strong>{receivableId}</strong>, domainLabel(row.source_type), formatMoney(row.balance, row.currency), <Status value={row.status} />, receivableId && Number(row.balance) > 0 ? <Button onClick={() => beginFinancialAction({ kind: "credit-receivable", id: receivableId, reference: receivableId })}>Créer un avoir</Button> : "—"];
-          })} /> : <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
+          })} />}
+          {!selectedCustomer && <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
+          {selectedCustomer && currentStatement && !currentStatement.loading && !currentStatement.error && !currentStatement.data && <div className="empty-state">Aucune situation financière n’est disponible pour cet abonné.</div>}
         </Panel>
       </>}
 
@@ -1651,9 +1663,9 @@ function SolarContractManager({ sales, customers, onCreated, confirmAction, onRe
   </>;
 }
 
-function CustomerStatement({ customerName, customerCode, statement }: { customerName: string; customerCode: string; statement: Row | null }) {
+function CustomerStatement({ customerName, customerCode, statement, loading, error }: { customerName: string; customerCode: string; statement: Row | null; loading: boolean; error: string }) {
   return <Panel title={`Situation du compte · ${customerName}`}>
-    {statement ? <><div className="dossier-metrics metrics compact-metrics"><Metric label="Compte client" value={customerCode} note="Référence abonné" /><Metric label="Factures" value={rows(statement.invoices).length} note="Documents conservés" /><Metric label="Versements" value={rows(statement.payments).length} note="Encaissements enregistrés" /><Metric label="Créances" value={rows(statement.receivables).length} note="Obligations suivies" /></div><div className="columns"><div><p><strong>Factures</strong></p><Table headers={["Référence", "Période", "État"]} empty="Aucune facture dans le relevé." data={rows<Row>(statement.invoices).map((item) => [text(item.invoice_number ?? item.invoice_id), text(item.period ?? item.billing_period), <Status value={item.status} />])} /></div><div><p><strong>Créances</strong></p><Table headers={["Référence", "Solde", "Situation"]} empty="Aucune créance dans le relevé." data={rows<Row>(statement.receivables).map((item) => [text(item.id ?? item.receivable_id), formatMoney(item.balance, item.currency), <Status value={item.status} />])} /></div></div></> : <div className="empty-state">Chargement du relevé abonné…</div>}
+    {error ? <div className="notice error" role="alert">{error}</div> : loading ? <div className="empty-state" role="status">Chargement du relevé de cet abonné…</div> : statement ? <><div className="dossier-metrics metrics compact-metrics"><Metric label="Compte client" value={customerCode} note="Référence abonné" /><Metric label="Factures" value={rows(statement.invoices).length} note="Documents conservés" /><Metric label="Versements" value={rows(statement.payments).length} note="Encaissements enregistrés" /><Metric label="Créances" value={rows(statement.receivables).length} note="Obligations suivies" /></div><div className="columns"><div><p><strong>Factures</strong></p><Table headers={["Référence", "Période", "État"]} empty="Aucune facture dans le relevé." data={rows<Row>(statement.invoices).map((item) => [text(item.invoice_number ?? item.invoice_id), text(item.period ?? item.billing_period), <Status value={item.status} />])} /></div><div><p><strong>Créances</strong></p><Table headers={["Référence", "Solde", "Situation"]} empty="Aucune créance dans le relevé." data={rows<Row>(statement.receivables).map((item) => [text(item.id ?? item.receivable_id), formatMoney(item.balance, item.currency), <Status value={item.status} />])} /></div></div></> : <div className="empty-state">Aucune situation financière n’est disponible pour cet abonné.</div>}
   </Panel>;
 }
 

@@ -526,6 +526,18 @@ def test_customer_statement_uses_localized_status_badges() -> None:
     assert '<CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)}' in app
 
 
+def test_customer_statement_is_scoped_to_the_selected_customer_during_loading() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert "const currentStatement = statementState.customerId === selectedCustomer ? statementState : null;" in app
+    assert "setStatementState({ customerId: selectedCustomer, data: null, loading: true, error: \"\" });" in app
+    assert "loading={currentStatement?.loading ?? Boolean(selectedCustomer)}" in app
+    assert "window.__delayStatementForCustomer = 'demo-customer-0002'" in visual_review
+    assert "A previous customer's statement remained visible" in visual_review
+    assert 'f"customer-statement-switch-{SHOT_SUFFIX}.png"' in visual_review
+
+
 def test_solar_contract_choices_and_history_show_customer_names() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     manager = app.split("function SolarContractManager(", 1)[1].split("\nfunction CustomerStatement(", 1)[0]
