@@ -8,6 +8,7 @@ use crate::money::{money, non_negative};
 pub enum ServiceCode {
     Electricity,
     Water,
+    Communication,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -24,6 +25,8 @@ pub struct UtilityInput {
     pub electricity_tax_rate: Decimal,
     pub water_tariff: Option<Decimal>,
     pub water_tax_rate: Option<Decimal>,
+    pub communication_charge: Decimal,
+    pub communication_tax_rate: Decimal,
     pub currency: String,
 }
 
@@ -59,6 +62,10 @@ pub enum BillingError {
     MissingWaterTax,
     #[error("currency is required")]
     EmptyCurrency,
+    #[error("communication charge cannot be negative")]
+    InvalidCommunicationCharge,
+    #[error("one VAT rate must apply to all taxable invoice lines")]
+    TaxRateMismatch,
 }
 
 pub fn calculate_utility(input: UtilityInput) -> Result<UtilityResult, BillingError> {
@@ -71,6 +78,10 @@ pub fn calculate_utility(input: UtilityInput) -> Result<UtilityResult, BillingEr
         .map_err(|_| BillingError::Negative("electricity tariff".into()))?;
     non_negative(input.electricity_tax_rate, "electricity tax")
         .map_err(|_| BillingError::Negative("electricity tax".into()))?;
+    non_negative(input.communication_charge, "communication charge")
+        .map_err(|_| BillingError::InvalidCommunicationCharge)?;
+    non_negative(input.communication_tax_rate, "communication tax")
+        .map_err(|_| BillingError::Negative("communication tax".into()))?;
 
     let electricity_subtotal = money(input.electricity_kwh * input.electricity_unit_price);
     let electricity_tax = money(electricity_subtotal * input.electricity_tax_rate);
@@ -103,6 +114,9 @@ pub fn calculate_utility(input: UtilityInput) -> Result<UtilityResult, BillingEr
                 .map_err(|_| BillingError::Negative("water tariff".into()))?;
             non_negative(tax_rate, "water tax")
                 .map_err(|_| BillingError::Negative("water tax".into()))?;
+            if tax_rate != input.electricity_tax_rate {
+                return Err(BillingError::TaxRateMismatch);
+            }
             let subtotal = money(quantity * price);
             let tax = money(subtotal * tax_rate);
             UtilityLine {
@@ -117,9 +131,31 @@ pub fn calculate_utility(input: UtilityInput) -> Result<UtilityResult, BillingEr
         }
     };
 
-    let lines = vec![electricity, water];
-    let subtotal = money(lines.iter().map(|line| line.subtotal).sum());
-    let tax = money(lines.iter().map(|line| line.tax).sum());
+    let communication_subtotal = money(input.communication_charge);
+    let communication_tax = money(communication_subtotal * input.communication_tax_rate);
+    let mut communication = UtilityLine {
+        service: ServiceCode::Communication,
+        quantity: Decimal::ONE,
+        unit: "FORFAIT",
+        unit_price: Some(communication_subtotal),
+        subtotal: communication_subtotal,
+        tax: communication_tax,
+        total: money(communication_subtotal + communication_tax),
+    };
+
+    let mut lines = vec![electricity, water];
+    let subtotal =
+        money(lines.iter().map(|line| line.subtotal).sum::<Decimal>() + communication.subtotal);
+    // VAT is computed once on the full taxable base (including the SEL
+    // communication charge). Reconcile the rounded line breakdown to that
+    // invoice-level result so displayed VAT and invoice totals always agree.
+    let tax = money(subtotal * input.electricity_tax_rate);
+    let line_tax_total =
+        money(lines.iter().map(|line| line.tax).sum::<Decimal>() + communication.tax);
+    let adjustment = money(tax - line_tax_total);
+    communication.tax = money(communication.tax + adjustment);
+    communication.total = money(communication.subtotal + communication.tax);
+    lines.push(communication);
     Ok(UtilityResult {
         currency: input.currency,
         lines,

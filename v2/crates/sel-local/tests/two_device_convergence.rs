@@ -57,6 +57,16 @@ async fn seed_local_catalog(store: &LocalStore, effective_from: chrono::NaiveDat
     .await
     .unwrap();
     sqlx::query(
+        "INSERT INTO communication_charge_versions
+         (id, currency, label, amount, effective_from, status, approval_ref)
+         VALUES ($1, 'USD', 'Ligne de communication', '10', $2, 'APPROVED', 'convergence-v1')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(effective_from.to_string())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
          VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', $3, 'APPROVED'),
@@ -689,7 +699,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
             .unwrap()
             .unwrap();
         assert_eq!(balance["paid"], "3.00");
-        assert_eq!(balance["balance"], "9.47");
+        assert_eq!(balance["balance"], "21.07");
     }
     let central_utility_balance = central_for_verify
         .get_receivable_summary(local_receivable_id)
@@ -697,7 +707,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .unwrap()
         .unwrap();
     assert_eq!(central_utility_balance["paid"], "3.00");
-    assert_eq!(central_utility_balance["balance"], "9.47");
+    assert_eq!(central_utility_balance["balance"], "21.07");
 
     let (sale, _) = first
         .create_solar_sale_offline(&sel_contracts::CreateSolarSaleRequest {

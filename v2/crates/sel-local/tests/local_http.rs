@@ -556,6 +556,7 @@ async fn catalog_refresh_fetches_and_persists_verified_snapshot_once() {
         tariffs: vec![],
         tax_profiles: vec![],
         fx_rates: vec![],
+        communication_charges: vec![],
     };
     let snapshot = CatalogSnapshot {
         sha256: catalog_snapshot_sha256(&payload),
@@ -607,6 +608,15 @@ async fn utility_preview_returns_both_services_without_persisting_financial_data
     .execute(&store.pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO communication_charge_versions
+         (id, currency, label, amount, effective_from, status, approval_ref)
+         VALUES ($1, 'USD', 'Ligne de communication', '10', '2026-01-01', 'APPROVED', 'fixture')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed approved communication charge");
     sqlx::query(
         "INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status)
          VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED'),
@@ -663,7 +673,7 @@ async fn utility_preview_returns_both_services_without_persisting_financial_data
     let body = json_body(response).await;
     assert_eq!(body["status"], "LOCAL_PREVIEW");
     assert_eq!(body["receivable_id"], serde_json::Value::Null);
-    assert_eq!(body["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(body["lines"].as_array().unwrap().len(), 3);
     assert!(body["lines"]
         .as_array()
         .unwrap()
@@ -700,6 +710,15 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
                 ($2, 'WATER', 'RESIDENTIAL', 'M3', '0.30', 'USD', '2026-01-01', 'meter-billing-v1', 'APPROVED')",
     )
     .bind(Uuid::new_v4().to_string())
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO communication_charge_versions
+         (id, currency, label, amount, effective_from, status, approval_ref)
+         VALUES ($1, 'USD', 'Ligne de communication', '10', '2026-01-01', 'APPROVED', 'fixture')",
+    )
     .bind(Uuid::new_v4().to_string())
     .execute(&store.pool)
     .await
@@ -863,12 +882,12 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
         .unwrap();
     assert_eq!(response.status(), axum::http::StatusCode::CREATED);
     let invoice = json_body(response).await;
-    assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(invoice["lines"].as_array().unwrap().len(), 3);
     assert_eq!(invoice["billing_period"], "2026-11");
     assert_eq!(invoice["due_date"], "2026-12-15");
-    assert_eq!(invoice["subtotal"], "5.50");
-    assert_eq!(invoice["tax"], "0.88");
-    assert_eq!(invoice["total"], "6.38");
+    assert_eq!(invoice["subtotal"], "15.50");
+    assert_eq!(invoice["tax"], "2.48");
+    assert_eq!(invoice["total"], "17.98");
     assert!(invoice["lines"]
         .as_array()
         .unwrap()

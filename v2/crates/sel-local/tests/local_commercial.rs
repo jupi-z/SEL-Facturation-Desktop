@@ -45,6 +45,15 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     .execute(&store.pool)
     .await
     .expect("seed local taxes");
+    sqlx::query(
+        "INSERT INTO communication_charge_versions
+         (id, currency, label, amount, effective_from, status, approval_ref)
+         VALUES ($1, 'USD', 'Ligne de communication', '10', '2026-01-01', 'APPROVED', 'fixture')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed approved communication charge");
 
     let app = router_with_store(store.clone());
     let customer = app
@@ -135,9 +144,9 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert_eq!(invoice.status(), StatusCode::CREATED);
     let invoice = json_body(invoice).await;
     assert_eq!(invoice["status"], "LOCAL_PENDING");
-    assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(invoice["lines"].as_array().unwrap().len(), 3);
     assert_eq!(invoice["lines"][1]["quantity"], "0");
-    assert_eq!(invoice["total"], "11.02");
+    assert_eq!(invoice["total"], "22.62");
 
     let void_invoice_request = json!({
         "customer_id": customer["id"],
@@ -294,7 +303,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     );
     let receivable: serde_json::Value = serde_json::from_slice(&receivable_bytes).unwrap();
     assert_eq!(receivable["paid"], "4.00");
-    assert_eq!(receivable["balance"], "7.02");
+    assert_eq!(receivable["balance"], "18.62");
 
     let statement = app
         .clone()
@@ -332,7 +341,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| { entry["id"] == invoice["receivable_id"] && entry["balance"] == "7.02" }));
+        .any(|entry| { entry["id"] == invoice["receivable_id"] && entry["balance"] == "18.62" }));
 
     let invoices = app
         .clone()
@@ -349,7 +358,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     assert!(invoices.as_array().unwrap().iter().any(|entry| {
         entry["invoice_id"] == invoice["invoice_id"]
             && entry["status"] == "LOCAL_PENDING"
-            && entry["lines"].as_array().unwrap().len() == 2
+            && entry["lines"].as_array().unwrap().len() == 3
     }));
 
     let filtered_invoices = app
@@ -493,7 +502,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     );
     let after_reversal: serde_json::Value = serde_json::from_slice(&after_reversal_body).unwrap();
     assert_eq!(after_reversal["paid"], "3.00");
-    assert_eq!(after_reversal["balance"], "8.02");
+    assert_eq!(after_reversal["balance"], "19.62");
     let statement_after_reversal = app
         .clone()
         .oneshot(
@@ -551,7 +560,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     );
     let credit: serde_json::Value = serde_json::from_slice(&credit_bytes).unwrap();
     assert_eq!(credit["status"], "LOCAL_PENDING");
-    assert_eq!(credit["remaining_balance"], "6.02");
+    assert_eq!(credit["remaining_balance"], "17.62");
     let credit_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM credit_notes WHERE receivable_id = $1")
             .bind(invoice["receivable_id"].as_str().unwrap())
@@ -565,7 +574,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .expect("read credited receivable")
         .expect("credited receivable exists");
     assert_eq!(credited_receivable["credited"], "2.00");
-    assert_eq!(credited_receivable["balance"], "6.02");
+    assert_eq!(credited_receivable["balance"], "17.62");
 
     let receipt = app
         .clone()
@@ -624,7 +633,7 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
         .unwrap()
         .iter()
         .any(|receivable| receivable["id"] == invoice["receivable_id"]
-            && receivable["balance"] == "6.02"));
+            && receivable["balance"] == "17.62"));
 
     drop(app);
     drop(store);

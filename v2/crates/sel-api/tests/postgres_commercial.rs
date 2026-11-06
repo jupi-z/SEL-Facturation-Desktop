@@ -64,6 +64,22 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .expect("electricity tax");
 
     let app = router(AppState::with_central_store(store.clone()));
+    let charge = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/catalog/communication-charge")
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(charge.status(), StatusCode::OK);
+    let charge = json_body(charge).await;
+    assert_eq!(charge.as_array().unwrap().len(), 1);
+    assert_eq!(charge[0]["amount"], "10");
+    assert_eq!(charge[0]["currency"], "USD");
     let customer = app
         .clone()
         .oneshot(
@@ -93,7 +109,9 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         "water": {"quantity": "0", "unit": "M3"},
         "water_zero_confirmed": true,
         "currency": "USD",
-        "tariff_revision": "fixture-approved-v1",
+        // The revision is display metadata; the API resolves the unique approved
+        // revision from the customer category and billing period.
+        "tariff_revision": "",
         "due_date": "2026-12-15"
     });
     let issue_request = || {
@@ -109,9 +127,11 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     let first = app.clone().oneshot(issue_request()).await.unwrap();
     assert_eq!(first.status(), StatusCode::CREATED);
     let invoice = json_body(first).await;
-    assert_eq!(invoice["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(invoice["lines"].as_array().unwrap().len(), 3);
     assert_eq!(invoice["lines"][1]["quantity"], "0");
-    assert_eq!(invoice["total"], "11.02");
+    assert_eq!(invoice["lines"][2]["service_code"], "COMMUNICATION");
+    assert_eq!(invoice["lines"][2]["subtotal"], "10");
+    assert_eq!(invoice["total"], "22.62");
     assert_eq!(invoice["billing_period"], "2026-11");
     assert_eq!(invoice["due_date"], "2026-12-15");
 
@@ -149,7 +169,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .await
         .unwrap();
     assert_eq!(counts.get::<i64, _>("invoices"), 1);
-    assert_eq!(counts.get::<i64, _>("lines"), 2);
+    assert_eq!(counts.get::<i64, _>("lines"), 3);
     assert_eq!(counts.get::<i64, _>("receivables"), 1);
     let payment_request = json!({
         "customer_id": customer["id"],
@@ -276,7 +296,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         "receivable body: {receivable}"
     );
     assert_eq!(receivable["paid"], "3.00");
-    assert_eq!(receivable["balance"], "8.02");
+    assert_eq!(receivable["balance"], "19.62");
 
     let statement = app
         .clone()
@@ -354,7 +374,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(after_partial.status(), StatusCode::OK);
     let after_partial = json_body(after_partial).await;
     assert_eq!(after_partial["paid"], "2.00");
-    assert_eq!(after_partial["balance"], "9.02");
+    assert_eq!(after_partial["balance"], "20.62");
 
     let final_reversal = app
         .clone()
@@ -431,7 +451,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(after_full.status(), StatusCode::OK);
     let after_full = json_body(after_full).await;
     assert_eq!(after_full["paid"], "0.00");
-    assert_eq!(after_full["balance"], "11.02");
+    assert_eq!(after_full["balance"], "22.62");
 
     let credit_request = json!({
         "amount": "2.00",
@@ -455,7 +475,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(credit.status(), StatusCode::CREATED);
     let credit = json_body(credit).await;
     assert_eq!(credit["amount"], "2.00");
-    assert_eq!(credit["remaining_balance"], "9.02");
+    assert_eq!(credit["remaining_balance"], "20.62");
     let credit_retry = app.clone().oneshot(credit_builder()).await.unwrap();
     assert_eq!(credit_retry.status(), StatusCode::OK);
     assert_eq!(json_body(credit_retry).await, credit);
@@ -476,7 +496,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(after_credit.status(), StatusCode::OK);
     let after_credit = json_body(after_credit).await;
     assert_eq!(after_credit["credited"], "2.00");
-    assert_eq!(after_credit["balance"], "9.02");
+    assert_eq!(after_credit["balance"], "20.62");
     let credit_publications: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM central_changes WHERE organization_id = $1 AND entity = 'credit_notes'",
     )
