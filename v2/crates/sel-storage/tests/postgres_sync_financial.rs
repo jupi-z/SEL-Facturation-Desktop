@@ -265,7 +265,7 @@ async fn payment_sync_is_applied_before_the_central_ack_and_is_idempotent() {
 
 #[tokio::test]
 #[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
-async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
+async fn utility_invoice_sync_persists_required_lines_including_zero_water() {
     let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
     let organization_id = Uuid::new_v4();
     let device_id = Uuid::new_v4();
@@ -374,7 +374,7 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
             .fetch_one(&store.pool)
             .await
             .unwrap();
-    assert_eq!(line_count, 2);
+    assert_eq!(line_count, 3);
     let water_quantity: Decimal = sqlx::query_scalar(
         "SELECT quantity FROM invoice_lines WHERE invoice_id = $1 AND service_code = 'WATER'",
     )
@@ -383,6 +383,14 @@ async fn utility_invoice_sync_persists_two_lines_including_zero_water() {
     .await
     .unwrap();
     assert_eq!(water_quantity, Decimal::ZERO);
+    let communication_subtotal: Decimal = sqlx::query_scalar(
+        "SELECT subtotal FROM invoice_lines WHERE invoice_id = $1 AND service_code = 'COMMUNICATION'",
+    )
+    .bind(invoice_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(communication_subtotal, Decimal::new(10, 0));
     let stored_receivable_id: Uuid = sqlx::query_scalar(
         "SELECT id FROM receivables WHERE source_type = 'INVOICE' AND source_id = $1",
     )
