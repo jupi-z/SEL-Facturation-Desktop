@@ -7,7 +7,7 @@
 - Dépôt : `jupi-z/SEL-Facturation-Desktop`
 - Branche : `monarque/sel-v2-ux3-implementation-20261106`
 - Base intégrée : `main@0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6`
-- Derniers commits UX3 : `d74166df21a0b3f7a07ab917aef8a1a9bda615d7` (H00 / responsive), `d9ca03ad7296066483295e9c7536e1472b2bb2b8` (confirmations administration), `d6d20a3829d6a0f85a7cc43b9c7e2e6d15971e6f` (preuve admin), `342f456913ce645a1fc91c8fa4ce223b8a7d423e` (approbation/révocation référentiels), `3c8f71ccf6a02c503c337a95ab10a76eabdb3935` (confirmation création abonné), `4dec135768a35e3b90bbd000dca0e87e18269a64` (confirmation édition abonné), `1958fe3cc4fd1d8a1dd48397250edbbd27ee515f` (confirmations services et compteurs).
+- Derniers commits UX3 : `d74166df21a0b3f7a07ab917aef8a1a9bda615d7` (H00 / responsive), `d9ca03ad7296066483295e9c7536e1472b2bb2b8` (confirmations administration), `d6d20a3829d6a0f85a7cc43b9c7e2e6d15971e6f` (preuve admin), `342f456913ce645a1fc91c8fa4ce223b8a7d423e` (approbation/révocation référentiels), `3c8f71ccf6a02c503c337a95ab10a76eabdb3935` (confirmation création abonné), `4dec135768a35e3b90bbd000dca0e87e18269a64` (confirmation édition abonné), `1958fe3cc4fd1d8a1dd48397250edbbd27ee515f` (confirmations services et compteurs), `5689f652ca193eab5474c216eb7622c7409338d8` (preuves navigateur complémentaires).
 - PR #60 : https://github.com/jupi-z/SEL-Facturation-Desktop/pull/60 — ouverte, non fusionnée, base `main`.
 - Figma page 16 : noms et structure des 76 écrans principaux et 9 overlays (85 frames au total) inventoriés; contextes haute fidélité consultés pour H00, A02, C01, F02, F05 et O06. La comparaison visuelle complète de toutes les frames reste à faire.
 - Figma page 17 : les trois frames de documentation recensées; contexte haute fidélité lu pour `191:76` (écarts API et décisions). Les exigences sont croisées au dossier UX3 du dépôt.
@@ -33,7 +33,7 @@
 |---|---|---|---|
 | H00 et navigation six domaines | Accueil, raccourcis, session centrale, contexte/retour; tableau de bord rapproché de la frame H00 | captures 1440×900; recette browser 34 captures; le correctif enlève le tableau hors-maquette au bas de l’accueil | PARTIAL — H00 traité, toutes les frames non comparées |
 | C01–C06, C30–C31 abonnés | création, recherche, dossier, modification, archivage/réactivation; création et édition relues avant écriture; état initial `ACTIVE` annoncé comme fixé par l’API | Playwright synthétique : annulation sans POST/PATCH, saisie conservée, confirmation avec un seul appel; captures `evidence/customer-create-confirmation-1440x900.png`, `evidence/customer-edit-confirmation-1280x720.png` | PARTIAL — état initial non configurable par le contrat API; conflit 409 réel à valider de bout en bout |
-| O01–O03, C07–C10, C32 services/compteurs | services avec ou sans compteur; rattachement, ajout et remplacement non destructif relus avant écriture; édition du raccordement relue avant PATCH | revue Playwright à 1440×900 et 1280×720; annulation sans requête et saisie préservée; capture `evidence/service-account-confirmation-1280x720.png`; test HTTP/PostgreSQL de remplacement inclus dans CI backend | PARTIAL — détails Figma à contrôler sur chaque écran |
+| O01–O03, C07–C10, C32 services/compteurs | services avec ou sans compteur; rattachement, ajout et remplacement non destructif relus avant écriture; édition du raccordement relue avant PATCH | revue Playwright à 1440×900 et 1280×720; annulation sans requête et saisie préservée; captures `evidence/service-account-confirmation-1280x720.png`, `evidence/meter-create-confirmation-1280x720.png`, `evidence/service-account-edit-confirmation-1280x720.png`; test HTTP/PostgreSQL de remplacement inclus dans CI backend | PARTIAL — détails Figma à contrôler sur chaque écran |
 | O04–O05, C11–C12, C33 relevés | saisie, aperçu, historique et correction append-only | visual review; tests API backend en CI | PARTIAL |
 | F05–F07, C13–C14 facture | aperçu sans écriture, confirmation d’émission, historique, document-data local, annulation avec motif | tests domaine/API et captures facture/PDF; build React local | PARTIAL — comparaison aux frames F06/F07 et recette imprimante à faire |
 | F01–F04, C15–C17, C34 paiements | sélection client/créances, récapitulatif avant POST, verrou anti-double clic, allocation, reçu, contrepassation | 57 tests Python; capture payment review; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette |
@@ -53,19 +53,19 @@
 
 ## 5. Tests et preuves observés
 
-| Commande / scénario | Résultat réel au commit `1958fe3` |
+| Commande / scénario | Résultat réel au commit `5689f65` |
 |---|---|
-| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 59 tests au code `1958fe3`, y compris confirmations, préservation des saisies annulées et absence d'écritures anticipées |
-| `npm run build` (`v2/windows-app`) | PASS au code applicatif `1958fe3`; avertissement non bloquant pour les chunks PDF/fonts volumineux |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 59 tests au code `5689f65`, y compris confirmations, préservation des saisies annulées et absence d'écritures anticipées |
+| `npm run build` (`v2/windows-app`) | PASS au code applicatif `1958fe3`; seuls les scripts de recette et preuves ont changé ensuite; avertissement non bloquant pour les chunks PDF/fonts volumineux |
 | `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` | PASS |
 | `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 12 tests |
 | `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test |
 | `cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib` | PASS — 5 tests whitelist/session Tauri |
 | `cargo test --manifest-path v2/Cargo.toml --workspace` local | FAIL d’environnement de build, LNK1207/PDB incompatible à l’édition de liens de `postgres_catalog_api`; aucune assertion rapportée en échec |
 | Workflows GitHub sur `d74166d` | PASS — backend, serveur package, régression V1, build MSI/NSIS et installation/upgrade isolé avec profil préservé. Cette preuve ne couvre pas les modifications d’administration ultérieures. https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573787 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573819 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573823 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573796 |
-| Workflows GitHub sur `4dec135` | Backend, serveur package et régression V1 : PASS; Tauri Windows : EN COURS au dernier contrôle. Ils précèdent `1958fe3`; la CI sera relancée sur la tête consolidée après push. |
-| `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS au code `1958fe3` — revue synthétique, confirmations d’abonné, édition et opérations existantes; aucun test sur serveur SEL réel |
-| `python v2/windows-app/scripts/visual_review.py` à 1280×720 | PASS au code `1958fe3` — 37 vues, assertions d’absence de débordement pour les écrans exercés; confirmation service/compteur incluse |
+| Workflows GitHub sur `1f223cb` | Backend et régression V1 : PASS; paquet serveur et Tauri Windows : EN COURS au dernier contrôle. Ce commit précède `5689f65`; nouvelle CI attendue après push. |
+| `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS au code UI `1958fe3` — revue synthétique, confirmations d’abonné, édition et opérations existantes; aucun test sur serveur SEL réel |
+| `python v2/windows-app/scripts/visual_review.py` à 1280×720 | PASS au code UI `1958fe3` — 37 vues, assertions d’absence de débordement pour les écrans exercés; confirmations service/compteur incluses |
 | PostgreSQL local / HTTP contre base réelle | NOT_RUN localement; CI PostgreSQL dédiée PASS au commit cité |
 | Impression sur imprimante SEL et installation poste cible | NOT_RUN — aucun poste/imprimante cible utilisé dans cette étape |
 | Données réelles / backend production | NON TOUCHÉ — aucune connexion, migration, écriture ou configuration de production |
