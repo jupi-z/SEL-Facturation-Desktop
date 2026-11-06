@@ -5,6 +5,7 @@ import hashlib
 from io import BytesIO
 import json
 import os
+import socket
 import subprocess
 import time
 import urllib.request
@@ -17,7 +18,6 @@ from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / "v2" / "windows-app"
 OUTPUT = Path(os.environ.get("SEL_VISUAL_OUTPUT", ROOT / "artifacts" / "phase8-documents-figma"))
-URL = "http://127.0.0.1:1420"
 
 CUSTOMERS = [{
     "id": "demo-customer-0001",
@@ -212,13 +212,13 @@ def mock_invoke_script() -> str:
     """
 
 
-async def wait_for_server(process: subprocess.Popen[bytes]) -> None:
+async def wait_for_server(process: subprocess.Popen[bytes], url: str) -> None:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"Vite exited before ready with status {process.returncode}")
         try:
-            with urllib.request.urlopen(URL, timeout=2):
+            with urllib.request.urlopen(url, timeout=2):
                 return
         except Exception:
             time.sleep(0.5)
@@ -259,7 +259,7 @@ async def assert_generated_pdf_contract(page, label: str, expected_pages: int | 
     text = "\n".join(pdf_page.extract_text() or "" for pdf_page in reader.pages)
     for token in required_text:
         if token.casefold() not in text.casefold():
-            raise AssertionError(f"{label}: expected PDF text {token!r} was missing")
+            raise AssertionError(f"{label}: expected PDF text {token!r} was missing; extracted PDF text: {text!r}")
     if label.startswith("Invoice"):
         for token in ("QR d’identification", "Identification interne de la facture"):
             if token.casefold() not in text.casefold():
@@ -302,14 +302,18 @@ async def assert_print_layout(page, label: str, expected_pages: int) -> None:
 
 async def capture_views() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    with socket.socket() as port_probe:
+        port_probe.bind(("127.0.0.1", 0))
+        port = port_probe.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
     process = subprocess.Popen(
-        ["npm.cmd", "run", "dev", "--", "--host", "127.0.0.1"],
+        ["npm.cmd", "run", "dev", "--", "--host", "127.0.0.1", "--port", str(port), "--strictPort"],
         cwd=APP,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
     )
     try:
-        await wait_for_server(process)
+        await wait_for_server(process, url)
         async with async_playwright() as playwright:
             browser_channel = os.environ.get("SEL_VISUAL_BROWSER")
             browser_options = {"headless": True}
@@ -326,7 +330,7 @@ async def capture_views() -> None:
                 return bytes;
               };
             })();""")
-            await page.goto(URL, wait_until="domcontentloaded")
+            await page.goto(url, wait_until="domcontentloaded")
             await page.get_by_role("heading", name="Connexion à SEL Facturation").wait_for()
             await page.screenshot(path=str(OUTPUT / "login-1440x900.png"))
             await page.get_by_label("Identifiant SEL").fill("agent-demo")
