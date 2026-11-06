@@ -417,7 +417,6 @@ async def capture_views() -> None:
                     await page.get_by_label("Période de facturation").fill("2026-10")
                     await page.get_by_label("Électricité consommée (kWh)").fill("100")
                     await page.get_by_label("Eau consommée (m³)").fill("0")
-                    await page.get_by_label("Révision tarifaire approuvée").fill("DÉMO — DONNÉE FICTIVE")
                     await page.get_by_label("Je confirme que le relevé d’eau est exactement de 0 m³.").check()
                     await page.get_by_role("button", name="Prévisualiser la facture").click()
                     await page.get_by_role("heading", name="Prévisualisation de facture").wait_for()
