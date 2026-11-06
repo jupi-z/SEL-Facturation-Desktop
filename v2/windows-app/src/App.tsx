@@ -190,6 +190,7 @@ export default function App() {
   const [serverReady, setServerReady] = useState<boolean | null>(null);
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [view, setView] = useState<View>("dashboard");
+  const [solarWorkspace, setSolarWorkspace] = useState<"sales" | "contracts">("sales");
   const [viewHistory, setViewHistory] = useState<View[]>([]);
   const [draftDirty, setDraftDirty] = useState(false);
   const [financialAction, setFinancialAction] = useState<FinancialAction | null>(null);
@@ -706,6 +707,16 @@ export default function App() {
     setView(nextView);
   }
 
+  async function navigateSolarWorkspace(next: "sales" | "contracts") {
+    if (next === solarWorkspace) return;
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie solaire ?", description: "Les champs du formulaire solaire non envoyés seront perdus si vous changez d’onglet.", confirmLabel: "Abandonner et continuer" })) return;
+    if (draftDirty) discardPendingDraft();
+    setSolarSaleOpen(false);
+    setSolarQuote(null);
+    setSolarSaleDraft(null);
+    setSolarWorkspace(next);
+  }
+
   async function navigateBack() {
     if (!viewHistory.length) return;
     if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous revenez à l’écran précédent.", confirmLabel: "Abandonner et revenir" })) return;
@@ -749,6 +760,10 @@ export default function App() {
       </header>
       {domainViews[domainByView[view]] && <nav className="workspace-tabs" aria-label={`Pages ${navigation.find((item) => item.id === domainByView[view])?.label ?? ""}`}>
         {domainViews[domainByView[view]]?.map((item) => <button key={item.id} className={`workspace-tab${view === item.id ? " active" : ""}`} aria-current={view === item.id ? "page" : undefined} onClick={() => navigateTo(item.id)}>{item.label}</button>)}
+      </nav>}
+      {view === "solar" && <nav className="workspace-tabs" aria-label="Pages solaire">
+        <button className={`workspace-tab${solarWorkspace === "sales" ? " active" : ""}`} aria-current={solarWorkspace === "sales" ? "page" : undefined} onClick={() => void navigateSolarWorkspace("sales")}>Catalogue et ventes</button>
+        <button className={`workspace-tab${solarWorkspace === "contracts" ? " active" : ""}`} aria-current={solarWorkspace === "contracts" ? "page" : undefined} onClick={() => void navigateSolarWorkspace("contracts")}>Contrats et échéanciers</button>
       </nav>}
       {notice && <div className={`notice${notice.error ? " error" : ""}`} role={notice.error ? "alert" : "status"}>{notice.message}<button aria-label="Fermer le message" onClick={() => setNotice(null)}>×</button></div>}
       {loading && <div className="loading-line" role="status">Chargement des données centrales…</div>}
@@ -887,7 +902,14 @@ export default function App() {
       </>}
 
       {view === "solar" && <>
-        <PageHeading eyebrow="COMMERCE / FINANCE" title="Catalogue des kits solaires" description="Consultez les produits approuvés et les ventes enregistrées par le serveur." action={<Button primary onClick={() => setSolarSaleOpen(true)}>Créer une vente</Button>} />
+        <PageHeading eyebrow="COMMERCE / FINANCE" title={solarWorkspace === "sales" ? "Catalogue des kits solaires" : "Contrats et échéanciers"} description={solarWorkspace === "sales" ? "Consultez les produits approuvés et les ventes enregistrées par le serveur." : "Vérifiez les échéances d’une vente approuvée avant de créer son contrat."} action={solarWorkspace === "sales" ? <Button primary onClick={() => { setSolarWorkspace("sales"); setSolarSaleOpen(true); }}>Créer une vente</Button> : undefined} />
+        <div className="metrics solar-metrics">
+          <Metric label="Produits disponibles" value={solarProducts.length} note="Catalogue central approuvé" />
+          <Metric label="Ventes enregistrées" value={sales.length} note="Historique chargé du serveur" />
+          <Metric label="Contrats à échéances" value={sales.filter((sale) => Boolean(sale.installment_plan_id)).length} note="Échéanciers associés" />
+          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Opérations centralisées" />
+        </div>
+        {solarWorkspace === "sales" ? <>
         {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); setDraftDirty(false); }}>Fermer</Button>}><form data-preserve-draft className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
           <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
           <label>Produit approuvé<select name="product_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
@@ -897,17 +919,13 @@ export default function App() {
           <div className="form-actions span-two"><Button primary type="submit">Vérifier le devis</Button></div>
         </form></Panel>}
         {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
-        <div className="metrics solar-metrics">
-          <Metric label="Produits disponibles" value={solarProducts.length} note="Catalogue central approuvé" />
-          <Metric label="Ventes enregistrées" value={sales.length} note="Historique chargé du serveur" />
-          <Metric label="Contrats à échéances" value={sales.filter((sale) => Boolean(sale.installment_plan_id)).length} note="Échéanciers associés" />
-          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Opérations centralisées" />
-        </div>
         <Panel title="Catalogue approuvé">
           <Table headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]} empty="Aucun produit solaire approuvé et applicable n’est disponible sur le serveur." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), product.category ? domainLabel(product.category) : "—", formatMoney(product.price_reference, product.currency), <span className="status-badge success">Disponible</span>])} />
         </Panel>
         <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
+        </> :
         <SolarContractManager sales={sales} customers={customers} onCreated={refresh} confirmAction={requestConfirmation} />
+        }
       </>}
 
       {view === "receivables" && <>

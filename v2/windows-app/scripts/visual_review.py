@@ -431,6 +431,20 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Confirmer et enregistrer").click()
                     await page.wait_for_function("window.__paymentPostCount === 1")
                 if slug == "solar":
+                    await page.get_by_role("button", name="Créer une vente").click()
+                    await page.locator('form[data-preserve-draft] select[name="customer_id"]').select_option("demo-customer-0001")
+                    await page.get_by_role("button", name="Contrats et échéanciers").click()
+                    solar_draft_review = page.get_by_role("alertdialog", name="Abandonner la saisie solaire ?")
+                    await solar_draft_review.wait_for()
+                    await solar_draft_review.get_by_role("button", name="Annuler").click()
+                    if not await page.locator('form[data-preserve-draft]').count():
+                        raise AssertionError("Canceling solar workspace navigation must preserve the open sale form")
+                    await page.get_by_role("button", name="Contrats et échéanciers").click()
+                    await page.get_by_role("alertdialog", name="Abandonner la saisie solaire ?").get_by_role("button", name="Abandonner et continuer").click()
+                    await page.get_by_role("heading", name="Contrats et échéanciers solaires").wait_for()
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / f"solar-contract-workspace-{SHOT_SUFFIX}.png"))
                     await page.get_by_label("Vente à financer").select_option("demo-sale-0001")
                     await page.get_by_label("Échéance 1 · Date").fill("2026-12-01")
                     await page.get_by_label("Montant dû").fill("60.00")
@@ -659,6 +673,7 @@ async def capture_views() -> None:
                     await page.screenshot(path=str(OUTPUT / "invoice-pdf-lower-water-positive.png"))
                     await page.get_by_role("button", name="Fermer l’aperçu").click()
                 if slug == "solar":
+                    await page.get_by_role("button", name="Catalogue et ventes").click()
                     await page.get_by_role("button", name="Confirmation PDF").first.click()
                     try:
                         await page.get_by_role("dialog", name="Facture de vente solaire").wait_for(timeout=5000)

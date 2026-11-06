@@ -242,7 +242,11 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
     css = (APP / "src" / "App.css").read_text(encoding="utf-8")
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
-    assert 'title="Catalogue des kits solaires"' in app
+    assert 'title={solarWorkspace === "sales" ? "Catalogue des kits solaires" : "Contrats et échéanciers"}' in app
+    assert 'aria-label="Pages solaire"' in app
+    assert 'navigateSolarWorkspace("contracts")' in app
+    assert 'navigateSolarWorkspace("sales")' in app
+    assert 'title: "Abandonner la saisie solaire ?"' in app
     assert "Créer une vente" in app
     assert 'className="metrics solar-metrics"' in app
     assert 'headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]}' in app
@@ -250,6 +254,8 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
     assert ".solar-metrics { grid-template-columns: repeat(4, minmax(0, 1fr));" in css
     assert 'f"{slug}-{SHOT_SUFFIX}.png"' in visual_review
     assert 'f"solar-new-sale-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"solar-contracts-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'solar_draft_review' in visual_review
 
 
 def test_navigation_clears_transient_notices_from_the_previous_screen() -> None:
@@ -717,13 +723,10 @@ def test_visual_review_captures_customer_record_and_receivable_statement() -> No
 
 def test_solar_contract_visual_evidence_uses_a_desktop_viewport() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
-    solar_capture = visual_review.split('if slug == "solar":', 1)[1].split(
-        'await page.evaluate("window.scrollTo(0, 0)")', 1
-    )[0]
 
-    assert "element.scrollIntoView({ block: 'start' })" in solar_capture
-    assert 'path=str(OUTPUT / f"solar-contracts-{SHOT_SUFFIX}.png")' in solar_capture
-    assert "full_page=True" not in solar_capture
+    assert 'path=str(OUTPUT / f"solar-contract-workspace-{SHOT_SUFFIX}.png")' in visual_review
+    assert 'path=str(OUTPUT / f"solar-contracts-{SHOT_SUFFIX}.png")' in visual_review
+    assert 'await page.evaluate("window.scrollTo(0, 0)")' in visual_review
 
 
 def test_historical_invoice_view_never_offers_to_issue_an_existing_invoice() -> None:
