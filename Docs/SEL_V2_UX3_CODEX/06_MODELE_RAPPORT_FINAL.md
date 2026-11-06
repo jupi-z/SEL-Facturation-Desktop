@@ -7,7 +7,7 @@
 - Dépôt : `jupi-z/SEL-Facturation-Desktop`
 - Branche : `monarque/sel-v2-ux3-implementation-20261106`
 - Base intégrée : `main@0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6`
-- Derniers commits UX3 : `d74166df21a0b3f7a07ab917aef8a1a9bda615d7` (H00 / responsive), `d9ca03ad7296066483295e9c7536e1472b2bb2b8` (confirmations administration), `d6d20a3829d6a0f85a7cc43b9c7e2e6d15971e6f` (preuve de recette admin).
+- Derniers commits UX3 : `d74166df21a0b3f7a07ab917aef8a1a9bda615d7` (H00 / responsive), `d9ca03ad7296066483295e9c7536e1472b2bb2b8` (confirmations administration), `d6d20a3829d6a0f85a7cc43b9c7e2e6d15971e6f` (preuve admin), `342f456913ce645a1fc91c8fa4ce223b8a7d423e` (approbation/révocation référentiels).
 - PR #60 : https://github.com/jupi-z/SEL-Facturation-Desktop/pull/60 — ouverte, non fusionnée, base `main`.
 - Figma page 16 : noms et structure des 76 écrans principaux et 9 overlays (85 frames au total) inventoriés; contextes haute fidélité consultés pour H00, A02, C01, F02, F05 et O06. La comparaison visuelle complète de toutes les frames reste à faire.
 - Figma page 17 : les trois frames de documentation recensées; contexte haute fidélité lu pour `191:76` (écarts API et décisions). Les exigences sont croisées au dossier UX3 du dépôt.
@@ -39,7 +39,7 @@
 | F01–F04, C15–C17, C34 paiements | sélection client/créances, récapitulatif avant POST, verrou anti-double clic, allocation, reçu, contrepassation | 57 tests Python; capture payment review; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette |
 | F08, C18–C19, C35 créances | consultation, références source, avoir via API | réponse JSON additive, test PostgreSQL en CI, écran visuel | PARTIAL |
 | O06–O10, C20–C22, C28 solaire | catalogue, devis/vente, document, contrat/échéancier | visual review, tests API/backend en CI | PARTIAL — annulation vente et avenant/résiliation contrat non exposés |
-| A01–A09, C23–C25, C29 administration | utilisateurs/roles, catalogues versionnés, approbation/révocation, audit; création d’utilisateur avec confirmation (secret masqué), confirmation des changements de rôle/statut et garde anti-double clic | recette Playwright synthétique : mot de passe divergent rejeté sans POST, annulation sans POST, confirmation avec un seul POST, changements rôle/statut après confirmation; capture `evidence/admin-user-confirmation-1440x900.png` | PARTIAL — revoir tous les formulaires Figma et compléter les règles de protection du dernier administrateur |
+| A01–A09, C23–C25, C29 administration | utilisateurs/rôles, catalogues versionnés, approbation/révocation, audit; création d’utilisateur avec confirmation (secret masqué), confirmation des changements de rôle/statut et des approbations/révocations de référentiels | recette Playwright synthétique : mot de passe divergent et annulations sans POST, confirmation avec une seule écriture, conservation du motif après annulation; captures `evidence/admin-user-confirmation-1440x900.png`, `evidence/admin-catalog-approval-1440x900.png`, `evidence/admin-catalog-revocation-1440x900.png` | PARTIAL — revoir tous les formulaires Figma et compléter les règles de protection du dernier administrateur |
 | E01–E11, C26–C27 états | états auth/erreurs, confirmation intégrée, validation et reprise | tests UI et script browser | PARTIAL — recette exhaustive 401/403/409/422/503 encore requise |
 
 ## 4. Lacunes API et décisions
@@ -55,15 +55,16 @@
 
 | Commande / scénario | Résultat réel au commit `14823d0` |
 |---|---|
-| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 58 tests au code `d6d20a3`, y compris confirmation et absence de POST lors d’une annulation |
-| `npm run build` (`v2/windows-app`) | PASS au code applicatif `d9ca03a`; avertissement non bloquant pour les chunks PDF/fonts volumineux |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 58 tests au code `342f456`, y compris confirmations et absence de POST lors d’une annulation |
+| `npm run build` (`v2/windows-app`) | PASS au code applicatif `342f456`; avertissement non bloquant pour les chunks PDF/fonts volumineux |
 | `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` | PASS |
 | `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 12 tests |
 | `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test |
 | `cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib` | PASS — 5 tests whitelist/session Tauri |
 | `cargo test --manifest-path v2/Cargo.toml --workspace` local | FAIL d’environnement de build, LNK1207/PDB incompatible à l’édition de liens de `postgres_catalog_api`; aucune assertion rapportée en échec |
-| Workflows GitHub sur `d74166d` | Backend, serveur package et régression V1 : PASS; Tauri Windows : EN COURS (capture/build React/tests natifs PASS, génération MSI/NSIS et vérification installation/upgrade en cours). Ces résultats ne couvrent pas les commits `d9ca03a` et `d6d20a3`; relancer sur le HEAD courant. https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573787 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573819 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573823 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573796 |
-| `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS au code `d6d20a3` — revue synthétique incluant le parcours admin; aucun test sur serveur SEL réel |
+| Workflows GitHub sur `d74166d` | PASS — backend, serveur package, régression V1, build MSI/NSIS et installation/upgrade isolé avec profil préservé. Cette preuve ne couvre pas les modifications d’administration ultérieures. https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573787 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573819 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573823 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573796 |
+| Workflows GitHub sur `15fd89a` | Backend, serveur package et régression V1 : PASS; Tauri Windows : EN COURS. Ils ne couvrent pas encore `342f456`, à relancer après push du HEAD actuel. https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42285682983 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42285682989 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42285683415 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42285683103 |
+| `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS au code `342f456` — revue synthétique incluant les confirmations utilisateur et catalogue; aucun test sur serveur SEL réel |
 | Recette visuelle 1280×720 | premier run FAIL (débordement horizontal 14 px des onglets); correctif CSS appliqué, second run PASS — code 0 sur les écrans exercés |
 | PostgreSQL local / HTTP contre base réelle | NOT_RUN localement; CI PostgreSQL dédiée PASS au commit cité |
 | Impression sur imprimante SEL et installation poste cible | NOT_RUN — aucun poste/imprimante cible utilisé dans cette étape |
@@ -71,10 +72,10 @@
 
 ## 6. Diff et risques
 
-- Changements UX3 : `v2/windows-app/src/App.tsx`, `App.css`, `api.ts`, `src-tauri/src/lib.rs`, tests Python, script Playwright, OpenAPI/API Rust pour les lacunes nécessaires et preuves visuelles. L’administration demande maintenant une revue explicite des créations/changements de rôle/statut; le secret n’est pas inclus dans le dialogue. La vérification du mot de passe initial est côté client avant l’appel API.
+- Changements UX3 : `v2/windows-app/src/App.tsx`, `App.css`, `api.ts`, `src-tauri/src/lib.rs`, tests Python, script Playwright, OpenAPI/API Rust pour les lacunes nécessaires et preuves visuelles. L’administration demande une revue explicite des créations, changements de rôle/statut, approbations et révocations de référentiels; les secrets restent masqués et les saisies sont conservées si une revue est annulée.
 - Migrations : la branche intègre les migrations de `main` déjà publiées dans le code; aucune migration exécutée sur un environnement réel.
 - Le dernier changement visuel supprime le tableau d’activité supplémentaire du dashboard, pour respecter la frame H00 et éviter un panneau coupé en bas de fenêtre. Les historiques restent dans leurs écrans.
-- Risques résiduels : comparaison exhaustive des 76 écrans non effectuée; recettes 1280×720 et 125/150 % non toutes couvertes; workflows de packaging Windows à relancer sur le HEAD courant; opérations B2/B3/B4 sans contrat métier suffisant.
+- Risques résiduels : comparaison exhaustive des 76 écrans non effectuée; recettes 1280×720 et 125/150 % non toutes couvertes; CI Tauri/MSI/NSIS à terminer sur le HEAD courant; opérations B2/B3/B4 sans contrat métier suffisant.
 - Retour arrière : revert des commits UX3 ciblés sur la branche; aucune réécriture de données n’est introduite.
 - Actions non prises en charge : ne pas afficher/activer annulation d’une vente solaire ni avenant/résiliation du contrat tant que les APIs ne sont pas définies et prouvées.
 
