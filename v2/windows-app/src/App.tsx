@@ -215,6 +215,7 @@ export default function App() {
   const [selectedCustomer, setSelectedCustomer] = useState("");
   const [selectedCustomerData, setSelectedCustomerData] = useState<Row | null>(null);
   const [customerEditOpen, setCustomerEditOpen] = useState(false);
+  const [customerCreateBusy, setCustomerCreateBusy] = useState(false);
   const [statement, setStatement] = useState<Row | null>(null);
   const [preview, setPreview] = useState<Row | null>(null);
   const [invoiceDraft, setInvoiceDraft] = useState<Row | null>(null);
@@ -434,14 +435,31 @@ export default function App() {
   async function createCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
+    const values = new FormData(form);
+    const payload = {
+      customer_code: String(values.get("customer_code") ?? "").trim(),
+      legal_name: String(values.get("legal_name") ?? "").trim(),
+      customer_category: String(values.get("customer_category") ?? "").trim(),
+      address: String(values.get("address") ?? "").trim(),
+      phone: String(values.get("phone") ?? "").trim(),
+    };
+    const categoryLabel = payload.customer_category === "RESIDENTIAL" ? "Résidentiel" : payload.customer_category === "COMMERCIAL" ? "Commercial" : payload.customer_category;
+    setCustomerCreateBusy(true);
     try {
-      await centralRequest("/v1/customers", "POST", Object.fromEntries(new FormData(form)) as Row);
+      const accepted = await requestConfirmation({
+        title: "Vérifier le nouvel abonné",
+        description: `Code : ${payload.customer_code}. Nom : ${payload.legal_name}. Catégorie tarifaire : ${categoryLabel}. Adresse : ${payload.address || "non renseignée"}. Téléphone : ${payload.phone || "non renseigné"}. État initial : Actif, selon la règle du serveur SEL.`,
+        confirmLabel: "Créer l’abonné",
+      });
+      if (!accepted) return;
+      await centralRequest("/v1/customers", "POST", payload);
       setDraftDirty(false);
       setNotice({ message: "Abonné enregistré sur le serveur SEL." });
       form.reset();
       setCustomerCreateOpen(false);
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { setCustomerCreateBusy(false); }
   }
 
   async function previewInvoice(event: FormEvent<HTMLFormElement>) {
@@ -777,12 +795,12 @@ export default function App() {
           <Metric label="Versements" value={payments.length} note="Règlements enregistrés au serveur" />
           <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Source unique : serveur SEL" />
         </div>
-        {customerCreateOpen && <Panel title="Nouvel abonné"><form data-preserve-draft className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
-            <label>Code abonné<input name="customer_code" required /></label><label>Nom / raison sociale<input name="legal_name" required /></label>
-            <label>Catégorie tarifaire<select name="customer_category" required defaultValue=""><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
-            <label>Adresse<input name="address" /></label><label>Téléphone<input name="phone" /></label>
+        {customerCreateOpen && <Panel title="Créer un abonné"><form data-preserve-draft className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
+            <label>Code abonné<input name="customer_code" required disabled={customerCreateBusy} /></label><label>Nom / raison sociale<input name="legal_name" required disabled={customerCreateBusy} /></label>
+            <label>Catégorie tarifaire<select name="customer_category" required defaultValue="" disabled={customerCreateBusy}><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
+            <label>Adresse<input name="address" disabled={customerCreateBusy} /></label><label>Téléphone<input name="phone" disabled={customerCreateBusy} /></label>
             <p className="help span-two">Les informations pourront être complétées dans le dossier de l’abonné.</p>
-            <div className="form-actions span-two"><Button primary type="submit">Enregistrer l’abonné</Button></div>
+            <div className="form-actions span-two"><Button primary type="submit" disabled={customerCreateBusy}>{customerCreateBusy ? "Vérification…" : "Vérifier la création"}</Button></div>
           </form></Panel>}
         <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "État", "Action"]} empty="Aucun abonné retourné par le serveur." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <Status value={row.status} />, <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); setCustomerEditOpen(false); }}>Ouvrir le dossier →</button>])} /></Panel>
       </>)}

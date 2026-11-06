@@ -154,6 +154,7 @@ def mock_invoke_script() -> str:
       const fixtures = {fixtures};
       window.__paymentPostCount = 0;
       window.__adminWriteLog = [];
+      window.__centralWriteLog = [];
       window.__TAURI_INTERNALS__ = {{ invoke: async (command, args = {{}}) => {{
         if (command === 'central_status') return {{status:'CENTRAL_CONNECTED',configured:true}};
         if (command === 'central_session_status') return window.__ADMIN_DEMO_SESSION__ ? {{authenticated:true,user_id:'demo-admin-0001',organization_id:'demo-org-0001',role:'ADMIN'}} : {{authenticated:false}};
@@ -176,7 +177,8 @@ def mock_invoke_script() -> str:
         if (command !== 'central_request') throw new Error('Unexpected visual smoke command: ' + command);
         const path = args.path || '';
         let body = [];
-        if (path.startsWith('/v1/customers?') || path === '/v1/customers') body = fixtures.customers;
+        if (path === '/v1/customers' && args.method === 'POST') {{ window.__centralWriteLog.push({{path,method:args.method,body:args.body}}); body = {{...args.body,customer_id:'demo-customer-created-ux3',status:'ACTIVE',revision:1}}; }}
+        else if (path.startsWith('/v1/customers?') || path === '/v1/customers') body = fixtures.customers;
         else if (path === '/v1/catalog/tariffs') body = fixtures.tariffs;
         else if (path === '/v1/billing/utility/preview') {{
           const waterQuantity = Number(args.body?.water?.quantity ?? 0);
@@ -443,10 +445,33 @@ async def capture_views() -> None:
                 await page.screenshot(path=str(OUTPUT / f"{slug}-{SHOT_SUFFIX}.png"))
                 if slug == "customers":
                     await page.get_by_role("button", name="+ Ajouter un abonné").click()
-                    await page.get_by_role("heading", name="Nouvel abonné").wait_for()
+                    await page.get_by_role("heading", name="Créer un abonné").wait_for()
+                    customer_form = page.locator("form.customer-create-form")
+                    await customer_form.locator('input[name="customer_code"]').fill("SEL-DÉMO-CRÉATION")
+                    await customer_form.locator('input[name="legal_name"]').fill("Client de test UX3")
+                    await customer_form.locator('select[name="customer_category"]').select_option("RESIDENTIAL")
+                    await customer_form.locator('input[name="address"]').fill("Quartier de démonstration")
+                    await customer_form.locator('input[name="phone"]').fill("+243000000099")
+                    await customer_form.get_by_role("button", name="Vérifier la création").click()
+                    customer_review = page.get_by_role("alertdialog", name="Vérifier le nouvel abonné")
+                    await customer_review.wait_for()
+                    customer_review_text = await customer_review.inner_text()
+                    if "SEL-DÉMO-CRÉATION" not in customer_review_text or "Client de test UX3" not in customer_review_text or "Résidentiel" not in customer_review_text or "Actif" not in customer_review_text:
+                        raise AssertionError("Customer review must summarize the entered customer and the API-defined initial state")
+                    await page.screenshot(path=str(OUTPUT / f"customer-create-confirmation-{SHOT_SUFFIX}.png"))
+                    await customer_review.get_by_role("button", name="Annuler").click()
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.path === '/v1/customers' && entry.method === 'POST').length") != 0:
+                        raise AssertionError("Canceling customer creation must not send a write request")
+                    if await customer_form.locator('input[name="customer_code"]').input_value() != "SEL-DÉMO-CRÉATION":
+                        raise AssertionError("Canceling customer review must preserve the entered customer data")
+                    await customer_form.get_by_role("button", name="Vérifier la création").click()
+                    await page.get_by_role("alertdialog", name="Vérifier le nouvel abonné").get_by_role("button", name="Créer l’abonné").click()
+                    await page.wait_for_function("window.__centralWriteLog.filter(entry => entry.path === '/v1/customers' && entry.method === 'POST').length === 1")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / f"customer-new-{SHOT_SUFFIX}.png"))
-                    await page.get_by_role("button", name="Fermer le formulaire").click()
+                    close_customer_form = page.get_by_role("button", name="Fermer le formulaire")
+                    if await close_customer_form.count():
+                        await close_customer_form.click()
                     await page.get_by_role("button", name="Ouvrir le dossier →").first.click()
                     await page.get_by_role("heading", name="Dossier abonné").wait_for()
                     await page.get_by_role("heading", name="Situation du compte · Client Alpha").wait_for()

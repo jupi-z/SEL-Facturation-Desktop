@@ -72,7 +72,7 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
     assert 'id: "readings", label: "Relevés"' in app
 
     assert 'name="tax_id"' not in app
-    assert 'customerCreateOpen && <Panel title="Nouvel abonné"' in app
+    assert 'customerCreateOpen && <Panel title="Créer un abonné"' in app
     assert '"+ Ajouter un abonné"' in app
 
 
@@ -625,10 +625,16 @@ def test_customer_creation_form_is_revealed_from_the_directory_action() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
-    assert 'customerCreateOpen && <Panel title="Nouvel abonné"' in app
+    assert 'customerCreateOpen && <Panel title="Créer un abonné"' in app
     assert 'setCustomerCreateOpen((open) => !open)' in app
     assert '"+ Ajouter un abonné"' in app
     assert 'f"customer-new-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'title: "Vérifier le nouvel abonné"' in app
+    assert "customerCreateBusy" in app
+    assert "Canceling customer creation must not send a write request" in visual_review
+    assert "Canceling customer review must preserve the entered customer data" in visual_review
+    assert "window.__centralWriteLog.filter(entry => entry.path === '/v1/customers' && entry.method === 'POST').length === 1" in visual_review
+    assert 'f"customer-create-confirmation-{SHOT_SUFFIX}.png"' in visual_review
 
 
 def test_customer_dossier_has_read_only_overview_and_explicit_edit_mode() -> None:
