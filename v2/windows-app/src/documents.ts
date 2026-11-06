@@ -3,6 +3,14 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import selLogoSvg from "./assets/sel-logo-light.svg?raw";
 
+// Company identity from the approved SEL A4 document design (Figma page 07).
+const SEL_COMPANY_IDENTITY = {
+  address: "225, Boulevard LD Kabila, C. Manika",
+  localityAndPhone: "Kolwezi, Lualaba – RDC · +243 902 190 779",
+  rccm: "CD/KVZ/RCCM/25-B-00736",
+  nif: "A26206722",
+} as const;
+
 type Data = Record<string, unknown>;
 type PdfDocument = { blob: Blob; pdf: TCreatedPdf; filename: string; title: string };
 
@@ -94,7 +102,10 @@ function baseStyles(): TDocumentDefinitions["styles"] {
 function footer(currentPage: number, pageCount: number, _pageSize?: unknown, issuerLine = "Document généré par SEL à partir des données du serveur"): Content {
   return {
     columns: [
-      { text: issuerLine, style: "muted" },
+      { stack: [
+        { text: `RCCM : ${SEL_COMPANY_IDENTITY.rccm}    ·    NIF : ${SEL_COMPANY_IDENTITY.nif}`, color: "#152c4b", fontSize: 6.5 },
+        { text: issuerLine, style: "muted", margin: [0, 3, 0, 0] },
+      ] },
       { text: `Page ${currentPage} / ${pageCount}`, alignment: "right", style: "muted" },
     ],
     margin: [45, 0, 45, 13],
@@ -111,8 +122,9 @@ function statusFill(status: unknown): string {
 
 function documentHeader(organizationName: string, reference: string, title: string, subtitle: string, status: string, invoice = false): Content[] {
   const rightColumn: Content[] = [
-    { text: organizationName, style: "brand" },
-    { text: "Document de facturation SEL", style: "muted", margin: [0, 6, 0, 0] },
+    { text: organizationName.toLocaleUpperCase("fr"), style: "brand" },
+    { text: SEL_COMPANY_IDENTITY.address, style: "muted", fontSize: 7.5, margin: [0, 5, 0, 0] },
+    { text: SEL_COMPANY_IDENTITY.localityAndPhone, style: "muted", fontSize: 7.5, margin: [0, 3, 0, 0] },
   ];
   return [
     {

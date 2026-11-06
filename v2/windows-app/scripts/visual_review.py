@@ -462,7 +462,7 @@ async def capture_views() -> None:
                         raise AssertionError(f"Invoice PDF preview did not open: {notice}") from error
                     await page.screenshot(path=str(OUTPUT / "invoice-pdf-diagnostic.png"))
                     zero_water_pdf = await assert_pdf_rendered(page, "Invoice with 0 m³ of water")
-                    await assert_generated_pdf_contract(page, "Invoice with 0 m³ of water", 1, ("Électricité", "Eau", "0 m³", "Ligne de communication", "22,62 USD", "FACTURE ÉMISE", "Facture émise par la Société d’Énergie du Lualaba, SEL"))
+                    await assert_generated_pdf_contract(page, "Invoice with 0 m³ of water", 1, ("Électricité", "Eau", "0 m³", "Ligne de communication", "22,62 USD", "FACTURE ÉMISE", "SOCIÉTÉ D’ÉNERGIE DU LUALABA", "225, Boulevard LD Kabila", "+243 902 190 779", "CD/KVZ/RCCM/25-B-00736", "A26206722", "Facture émise par la Société d’Énergie du Lualaba, SEL"))
                     await assert_print_layout(page, "Invoice with 0 m³ of water", 1)
                     await page.screenshot(path=str(OUTPUT / "invoice-pdf-preview-1440x900.png"))
                     await page.locator(".document-pdf-stage").evaluate("element => element.scrollTop = element.scrollHeight")
@@ -473,7 +473,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Document PDF").first.click()
                     await page.get_by_role("dialog", name="Facture eau + électricité").wait_for()
                     positive_water_pdf = await assert_pdf_rendered(page, "Invoice with 5 m³ of water")
-                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "Ligne de communication", "24,36 USD", "FACTURE ÉMISE", "Facture émise par la Société d’Énergie du Lualaba, SEL"))
+                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "Ligne de communication", "24,36 USD", "FACTURE ÉMISE", "SOCIÉTÉ D’ÉNERGIE DU LUALABA", "225, Boulevard LD Kabila", "+243 902 190 779", "CD/KVZ/RCCM/25-B-00736", "A26206722", "Facture émise par la Société d’Énergie du Lualaba, SEL"))
                     await assert_print_layout(page, "Invoice with 5 m³ of water", 1)
                     if positive_water_pdf == zero_water_pdf:
                         raise AssertionError("0 m³ and 5 m³ invoice PDFs rendered identically")
