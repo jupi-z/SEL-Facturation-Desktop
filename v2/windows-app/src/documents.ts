@@ -269,7 +269,7 @@ function paymentDefinition(data: Data): TDocumentDefinitions {
   const amount = money(payment.amount_received, payment.currency);
   const invoiceRefs = [...new Set(allocations.map((allocation) => value(allocation, "source_reference", value(allocation, "receivable_id"))))];
   const documentRows = [
-    `Émission : ${dateLabel(payment.paid_at)}`,
+    `Émission : ${dateLabel(payment.issued_at ?? payment.paid_at)}`,
     ...(invoiceRefs.length ? [`Facture / créance liée : ${invoiceRefs.join(", ")}`] : []),
     `Mode : ${value(payment, "method")}`,
   ];
@@ -336,9 +336,11 @@ function solarDefinition(data: Data): TDocumentDefinitions {
 
 export async function buildClientPdf(documentType: "invoice" | "payment" | "solar", data: Data): Promise<PdfDocument> {
   const definitions = documentType === "invoice" ? invoiceDefinition(data) : documentType === "payment" ? paymentDefinition(data) : solarDefinition(data);
-  const reference = documentType === "invoice" ? value(object(data.invoice), "invoice_number", value(object(data.invoice), "invoice_id")) : value(data, "document_reference");
+  const invoice = object(data.invoice);
+  const reference = documentType === "invoice" ? value(invoice, "invoice_number", value(invoice, "invoice_id")) : value(data, "document_reference");
+  const internalId = documentType === "invoice" ? value(invoice, "invoice_id") : documentType === "payment" ? value(object(data.payment), "payment_id") : value(object(data.sale), "sale_id");
   const title = documentType === "invoice" ? "Facture eau + électricité" : documentType === "payment" ? "Reçu de paiement" : "Facture de vente solaire";
-  const filename = `${documentType === "invoice" ? "SEL-Facture" : documentType === "payment" ? "SEL-Recu" : "SEL-Vente-Solaire"}-${reference.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
+  const filename = `${documentType === "invoice" ? "SEL-Facture" : documentType === "payment" ? "SEL-Recu" : "SEL-Vente-Solaire"}-${reference.replace(/[^a-zA-Z0-9_-]/g, "-")}-${internalId.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
   const runtime = await loadPdfRuntime();
   const pdf = runtime.createPdf(definitions);
   return { blob: await pdf.getBlob(), pdf, filename, title };

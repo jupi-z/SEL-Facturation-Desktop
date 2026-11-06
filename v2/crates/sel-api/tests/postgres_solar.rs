@@ -255,6 +255,14 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     let document_body = json_body(document).await;
     assert_eq!(document_body["origin"], "CENTRAL_ACCEPTED");
     assert_eq!(document_body["sale"]["sale_id"], sale_body["sale_id"]);
+    assert!(document_body["document_reference"]
+        .as_str()
+        .unwrap()
+        .starts_with("SEL-"));
+    assert_eq!(
+        document_body["document_reference"],
+        sales_body[0]["sale_number"]
+    );
     assert_eq!(
         document_body["customer"]["customer_code"],
         customer["customer_code"]

@@ -18,7 +18,10 @@ use sel_contracts::{
     UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
     UtilityMeterReadingRefs,
 };
-use sel_domain::billing;
+use sel_domain::{
+    billing,
+    document_reference::{issued_document_reference, issued_invoice_reference},
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
@@ -3580,18 +3583,25 @@ impl CentralStore {
                 load_invoice_identity_snapshot(tx, self.organization_id, input.customer_id).await?
             }
         };
+        let issued_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+            .fetch_one(&mut *tx)
+            .await?;
+        let mut issued_response = response.clone();
+        issued_response.invoice_number = Some(issued_invoice_reference(issued_at));
         let document_snapshot = serde_json::to_value(&identity_snapshot)?;
-        let snapshot = serde_json::to_value(response)?;
+        let snapshot = serde_json::to_value(&issued_response)?;
         let invoice_insert = sqlx::query(
             "INSERT INTO invoices
-             (id, customer_id, period, issued_at, currency, total, template_version, immutable_snapshot, status, version, document_snapshot)
-             VALUES ($1, $2, $3, now(), $4, $5, $6, $7, 'CENTRAL_ACCEPTED', 1, $8)",
+             (id, customer_id, period, invoice_number, issued_at, currency, total, template_version, immutable_snapshot, status, version, document_snapshot)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'CENTRAL_ACCEPTED', 1, $10)",
         )
         .bind(response.invoice_id)
         .bind(input.customer_id)
         .bind(&input.billing_period)
-        .bind(&response.currency)
-        .bind(response.total)
+        .bind(&issued_response.invoice_number)
+        .bind(issued_at)
+        .bind(&issued_response.currency)
+        .bind(issued_response.total)
         .bind("v2-a4-2")
         .bind(snapshot.clone())
         .bind(document_snapshot.clone())
@@ -3606,14 +3616,14 @@ impl CentralStore {
             }
             Err(error) => return Err(error.into()),
         }
-        for line in &response.lines {
+        for line in &issued_response.lines {
             sqlx::query(
                 "INSERT INTO invoice_lines
                  (id, invoice_id, service_code, quantity, unit, unit_price, subtotal, tax_snapshot, total)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(Uuid::new_v4())
-            .bind(response.invoice_id)
+            .bind(issued_response.invoice_id)
             .bind(&line.service_code)
             .bind(line.quantity)
             .bind(&line.unit)
@@ -3629,7 +3639,7 @@ impl CentralStore {
                 "INSERT INTO invoice_meter_readings (invoice_id, meter_reading_id, service_code)
                  VALUES ($1, $2, 'ELECTRICITY'), ($1, $3, 'WATER')",
             )
-            .bind(response.invoice_id)
+            .bind(issued_response.invoice_id)
             .bind(refs.electricity_reading_id)
             .bind(refs.water_reading_id)
             .execute(&mut *tx)
@@ -3651,10 +3661,10 @@ impl CentralStore {
              VALUES ($1, 'INVOICE', $2, $3, $4, $5, 'OPEN')",
         )
         .bind(receivable_id)
-        .bind(response.invoice_id)
+        .bind(issued_response.invoice_id)
         .bind(input.customer_id)
-        .bind(&response.currency)
-        .bind(response.total)
+        .bind(&issued_response.currency)
+        .bind(issued_response.total)
         .execute(&mut *tx)
         .await?;
         sqlx::query(
@@ -3670,7 +3680,7 @@ impl CentralStore {
         .bind(snapshot)
         .execute(&mut *tx)
         .await?;
-        Ok(UtilityIssueOutcome::Created(response.clone()))
+        Ok(UtilityIssueOutcome::Created(issued_response))
     }
 
     pub async fn get_invoice_response(
@@ -3678,7 +3688,7 @@ impl CentralStore {
         id: Uuid,
     ) -> Result<Option<UtilityBillingResponse>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT immutable_snapshot, period FROM invoices WHERE id = $1 AND customer_id IN
+            "SELECT immutable_snapshot, period, invoice_number FROM invoices WHERE id = $1 AND customer_id IN
              (SELECT id FROM customers WHERE organization_id = $2)",
         )
         .bind(id)
@@ -3695,6 +3705,7 @@ impl CentralStore {
             if response.billing_period.is_empty() {
                 response.billing_period = row.try_get("period")?;
             }
+            response.invoice_number = row.try_get("invoice_number")?;
             Ok(response)
         })
         .transpose()
@@ -3800,7 +3811,7 @@ impl CentralStore {
         limit: i64,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT p.id, p.customer_id, p.amount_received, p.currency,
+            "SELECT p.id, p.document_reference, p.customer_id, p.amount_received, p.currency,
                     p.method, p.paid_at, p.status
              FROM payments p
              JOIN customers c ON c.id = p.customer_id
@@ -3820,8 +3831,11 @@ impl CentralStore {
             .map(|row| {
                 let amount: Decimal = row.try_get("amount_received")?;
                 let paid_at: DateTime<Utc> = row.try_get("paid_at")?;
+                let payment_id: Uuid = row.try_get("id")?;
+                let document_reference: Option<String> = row.try_get("document_reference")?;
                 Ok(json!({
-                    "payment_id": row.try_get::<Uuid, _>("id")?,
+                    "payment_id": payment_id,
+                    "payment_number": document_reference.unwrap_or_else(|| payment_id.to_string()),
                     "customer_id": row.try_get::<Uuid, _>("customer_id")?,
                     "amount_received": format!("{:.2}", amount.round_dp(2)),
                     "currency": row.try_get::<String, _>("currency")?,
@@ -3838,7 +3852,7 @@ impl CentralStore {
         payment_id: Uuid,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let payment = sqlx::query(
-            "SELECT p.id, p.customer_id, p.amount_received, p.currency, p.method,
+            "SELECT p.id, p.document_reference, p.issued_at, p.customer_id, p.amount_received, p.currency, p.method,
                     p.paid_at, p.status, c.customer_code, c.legal_name, o.legal_name AS organization_name,
                     c.contact_fields::text AS contact_fields_json
              FROM payments p
@@ -3906,10 +3920,12 @@ impl CentralStore {
         let customer_id: Uuid = payment.try_get("customer_id")?;
         let amount: Decimal = payment.try_get("amount_received")?;
         let paid_at: DateTime<Utc> = payment.try_get("paid_at")?;
+        let issued_at: Option<DateTime<Utc>> = payment.try_get("issued_at")?;
+        let document_reference: Option<String> = payment.try_get("document_reference")?;
         Ok(Some(json!({
             "document_schema_version": 1,
             "document_type": "PAYMENT_RECEIPT",
-            "document_reference": format!("SEL-PAY-{}", payment_id.simple().to_string().to_uppercase()),
+            "document_reference": document_reference.unwrap_or_else(|| format!("SEL-PAY-{}", payment_id.simple().to_string().to_uppercase())),
             "qr_internal_reference": format!("SEL:PAYMENT:{payment_id}"),
             "organization_name": payment.try_get::<String, _>("organization_name")?,
             "payment": {
@@ -3919,6 +3935,7 @@ impl CentralStore {
                 "currency": payment.try_get::<String, _>("currency")?,
                 "method": payment.try_get::<String, _>("method")?,
                 "paid_at": paid_at.to_rfc3339(),
+                "issued_at": issued_at.map(|value| value.to_rfc3339()),
                 "status": payment.try_get::<String, _>("status")?
             },
             "customer": {
@@ -4458,10 +4475,14 @@ impl CentralStore {
                 }
             }
         }
+        let issued_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+            .fetch_one(&mut *tx)
+            .await?;
+        let document_reference = issued_document_reference(issued_at, payment_id);
         sqlx::query(
             "INSERT INTO payments
-             (id, customer_id, amount_received, currency, method, paid_at, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 'CENTRAL_ACCEPTED')",
+             (id, customer_id, amount_received, currency, method, paid_at, issued_at, status, document_reference)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'CENTRAL_ACCEPTED', $8)",
         )
         .bind(payment_id)
         .bind(input.customer_id)
@@ -4469,6 +4490,8 @@ impl CentralStore {
         .bind(&input.currency)
         .bind(&input.method)
         .bind(input.occurred_at)
+        .bind(issued_at)
+        .bind(&document_reference)
         .execute(&mut *tx)
         .await?;
         for ((receivable_id, schedule_id), allocated_amount) in persisted_allocations {
@@ -4488,6 +4511,7 @@ impl CentralStore {
         }
         let body = json!({
             "payment_id": payment_id,
+            "payment_number": document_reference,
             "status": "CENTRAL_ACCEPTED",
             "amount": input.received_amount,
             "currency": input.currency
@@ -5345,7 +5369,7 @@ impl CentralStore {
         limit: u32,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT s.id, s.customer_id, s.contract_id, s.currency, s.sold_at,
+            "SELECT s.id, s.document_reference, s.customer_id, s.contract_id, s.currency, s.sold_at,
                     s.sale_type, s.status, r.id AS receivable_id, r.principal_total,
                     ip.id AS installment_plan_id,
                     (SELECT p.sku FROM sale_lines sl JOIN products p ON p.id = sl.product_id
@@ -5367,8 +5391,11 @@ impl CentralStore {
             .map(|row| {
                 let sold_at: DateTime<Utc> = row.try_get("sold_at")?;
                 let principal: Option<Decimal> = row.try_get("principal_total")?;
+                let sale_id: Uuid = row.try_get("id")?;
+                let document_reference: Option<String> = row.try_get("document_reference")?;
                 Ok(json!({
-                    "sale_id": row.try_get::<Uuid, _>("id")?,
+                    "sale_id": sale_id,
+                    "sale_number": document_reference.unwrap_or_else(|| sale_id.to_string()),
                     "customer_id": row.try_get::<Uuid, _>("customer_id")?,
                     "contract_id": row.try_get::<Option<Uuid>, _>("contract_id")?,
                     "installment_plan_id": row.try_get::<Option<Uuid>, _>("installment_plan_id")?,
@@ -5391,7 +5418,7 @@ impl CentralStore {
         sale_id: Uuid,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let sale = sqlx::query(
-            "SELECT s.id, s.customer_id, s.contract_id, s.currency, s.sold_at, s.status,
+            "SELECT s.id, s.document_reference, s.customer_id, s.contract_id, s.currency, s.sold_at, s.status,
                     r.id AS receivable_id, r.principal_total,
                     c.customer_code, c.legal_name, c.contact_fields,
                     o.legal_name AS organization_name
@@ -5483,10 +5510,11 @@ impl CentralStore {
         let status: String = sale.try_get("status")?;
         let contacts: serde_json::Value = sale.try_get("contact_fields")?;
         let principal: Option<Decimal> = sale.try_get("principal_total")?;
+        let document_reference: Option<String> = sale.try_get("document_reference")?;
         Ok(Some(json!({
             "document_schema_version": 1,
             "document_type": "SOLAR_SALE_CONFIRMATION",
-            "document_reference": format!("SEL-SOLAR-{}", sale_id.simple().to_string().to_uppercase()),
+            "document_reference": document_reference.unwrap_or_else(|| format!("SEL-SOLAR-{}", sale_id.simple().to_string().to_uppercase())),
             "qr_internal_reference": format!("SEL:SOLAR-SALE:{sale_id}"),
             "organization_name": sale.try_get::<String, _>("organization_name")?,
             "sale": {
@@ -5568,6 +5596,10 @@ impl CentralStore {
         if input.principal.round_dp(2) != product_price.round_dp(2) {
             return Err(SolarSaleWriteError::PriceMismatch);
         }
+        let sold_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+            .fetch_one(&mut *tx)
+            .await?;
+        let document_reference = issued_document_reference(sold_at, sale_id);
         let response = SolarSaleResponse {
             sale_id,
             receivable_id,
@@ -5580,12 +5612,14 @@ impl CentralStore {
         let snapshot = serde_json::to_value(&response)?;
         sqlx::query(
             "INSERT INTO sales
-             (id, customer_id, currency, sold_at, sale_type, status)
-             VALUES ($1, $2, $3, now(), 'SOLAR_KIT', 'CENTRAL_ACCEPTED')",
+             (id, customer_id, currency, sold_at, sale_type, status, document_reference)
+             VALUES ($1, $2, $3, $4, 'SOLAR_KIT', 'CENTRAL_ACCEPTED', $5)",
         )
         .bind(sale_id)
         .bind(input.customer_id)
         .bind(&input.currency)
+        .bind(sold_at)
+        .bind(&document_reference)
         .execute(&mut *tx)
         .await?;
         let product_id: Uuid = sqlx::query(
