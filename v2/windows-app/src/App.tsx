@@ -214,6 +214,7 @@ export default function App() {
   const [notice, setNotice] = useState<Notice>(null);
   const [loading, setLoading] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState("");
+  const [paymentPrefill, setPaymentPrefill] = useState<{ receivableId: string; scheduleId: string } | null>(null);
   const [selectedCustomerData, setSelectedCustomerData] = useState<Row | null>(null);
   const [customerEditOpen, setCustomerEditOpen] = useState(false);
   const [customerEditBusy, setCustomerEditBusy] = useState(false);
@@ -698,13 +699,14 @@ export default function App() {
   }
 
   async function navigateTo(nextView: View, customerId?: string) {
-    if (nextView === view && !customerId) return;
-    if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous changez d’écran.", confirmLabel: "Abandonner et continuer" })) return;
+    if (nextView === view && !customerId) return false;
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous changez d’écran.", confirmLabel: "Abandonner et continuer" })) return false;
     if (draftDirty) discardPendingDraft();
     setViewHistory((history) => [...history, view]);
     setNotice(null);
     if (customerId) setSelectedCustomer(customerId);
     setView(nextView);
+    return true;
   }
 
   async function navigateSolarWorkspace(next: "sales" | "contracts") {
@@ -892,7 +894,7 @@ export default function App() {
 
       {view === "payments" && <>
         <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
-        <PaymentForm customers={customers} sales={sales} initialCustomerId={selectedCustomer} onSubmit={submit} />
+        <PaymentForm customers={customers} sales={sales} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onSubmit={submit} />
         <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État", "Document / corrections"]} empty="Aucun encaissement retourné par le serveur." data={payments.map((row) => {
           const paymentId = text(row.payment_id ?? row.id, "");
           const paymentAmount = text(row.amount_received ?? row.received_amount, "");
@@ -924,7 +926,9 @@ export default function App() {
         </Panel>
         <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
         </> :
-        <SolarContractManager sales={sales} customers={customers} onCreated={refresh} confirmAction={requestConfirmation} />
+        <SolarContractManager sales={sales} customers={customers} onCreated={refresh} confirmAction={requestConfirmation} onRecordPayment={async (customerId, receivableId, scheduleId) => {
+          if (await navigateTo("payments", customerId)) setPaymentPrefill({ receivableId, scheduleId });
+        }} />
         }
       </>}
 
@@ -1091,10 +1095,10 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { customers: Row[]; sales: Row[]; initialCustomerId: string; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
+function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId, initialScheduleId, onPrefillConsumed, onSubmit }: { customers: Row[]; sales: Row[]; initialCustomerId: string; initialReceivableId: string; initialScheduleId: string; onPrefillConsumed: () => void; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [customerId, setCustomerId] = useState(initialCustomerId);
-  const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: "", amount: "", scheduleId: "" }]);
+  const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: initialReceivableId, amount: "", scheduleId: initialScheduleId }]);
   const [receivables, setReceivables] = useState<Row[]>([]);
   const [receivablesLoading, setReceivablesLoading] = useState(false);
   const [receivablesError, setReceivablesError] = useState("");
@@ -1106,6 +1110,11 @@ function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { custom
   const savingRef = useRef(false);
 
   useEffect(() => { setCustomerId(initialCustomerId); }, [initialCustomerId]);
+  useEffect(() => {
+    if (!initialReceivableId) return;
+    setAllocationRows([{ key: `solar-prefill-${initialReceivableId}`, receivableId: initialReceivableId, amount: "", scheduleId: initialScheduleId }]);
+    onPrefillConsumed();
+  }, [initialReceivableId, initialScheduleId, onPrefillConsumed]);
 
   useEffect(() => {
     if (!customerId) { setReceivables([]); setReceivablesLoading(false); setReceivablesError(""); return; }
@@ -1574,7 +1583,7 @@ function MeterReadingsView({ customers, initialCustomerId, canCorrect, onOpenInv
   </>;
 }
 
-function SolarContractManager({ sales, customers, onCreated, confirmAction }: { sales: Row[]; customers: Row[]; onCreated: () => Promise<void>; confirmAction: (request: ConfirmationRequest) => Promise<boolean> }) {
+function SolarContractManager({ sales, customers, onCreated, confirmAction, onRecordPayment }: { sales: Row[]; customers: Row[]; onCreated: () => Promise<void>; confirmAction: (request: ConfirmationRequest) => Promise<boolean>; onRecordPayment: (customerId: string, receivableId: string, scheduleId: string) => void }) {
   const [saleId, setSaleId] = useState("");
   const [schedule, setSchedule] = useState([{ due_date: "", amount: "" }]);
   const [plan, setPlan] = useState<Row | null>(null);
@@ -1620,6 +1629,7 @@ function SolarContractManager({ sales, customers, onCreated, confirmAction }: { 
   }
 
   const planRows = rows<Row>(plan?.schedule);
+  const nextOpenSchedule = planRows.find((item) => text(item.status).toUpperCase() !== "PAID");
   return <>
     <Panel title="Contrats et échéanciers solaires">
       {availableSales.length ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void saveContract(event)}>
@@ -1637,7 +1647,7 @@ function SolarContractManager({ sales, customers, onCreated, confirmAction }: { 
       {message && <p role="status" className="reading-message">{message}</p>}
       {sales.some((sale) => sale.installment_plan_id) && <div className="table-scroll"><table><thead><tr><th>Abonné</th><th>Vente</th><th>Montant</th><th>Situation</th><th>Échéancier</th></tr></thead><tbody>{sales.filter((sale) => sale.installment_plan_id).map((sale) => <tr key={text(sale.sale_id)}><td>{customerLabel(sale.customer_id, customers)}</td><td><strong>{text(sale.sale_id)}</strong></td><td>{formatMoney(sale.principal, sale.currency)}</td><td><Status value={sale.status} /></td><td><button className="text-button" onClick={() => void viewPlan(text(sale.installment_plan_id))}>Consulter</button></td></tr>)}</tbody></table></div>}
     </Panel>
-    {plan && <Panel title="Échéancier consulté"><div className="metrics compact-metrics"><Metric label="Principal" value={formatMoney(plan.principal, plan.currency)} note="Créance du contrat" /><Metric label="Payé" value={formatMoney(plan.paid, plan.currency)} note="Règlements affectés" /><Metric label="Restant" value={formatMoney(plan.remaining, plan.currency)} note="Solde de la créance" /><Metric label="En retard" value={formatMoney(plan.overdue_amount, plan.currency)} note="Échéances échues" /></div><Table headers={["N°", "Échéance", "Montant dû", "Payé", "Restant", "État"]} empty="Aucune échéance." data={planRows.map((item) => [text(item.sequence), text(item.due_date), formatMoney(item.amount_due, plan.currency), formatMoney(item.paid, plan.currency), formatMoney(item.remaining, plan.currency), <Status value={item.status} />])} /></Panel>}
+    {plan && <Panel title="Échéancier consulté" action={nextOpenSchedule ? <Button primary onClick={() => onRecordPayment(text(plan.customer_id), text(plan.receivable_id), text(nextOpenSchedule.id))}>Enregistrer un versement</Button> : undefined}><div className="metrics compact-metrics"><Metric label="Principal" value={formatMoney(plan.principal, plan.currency)} note="Créance du contrat" /><Metric label="Payé" value={formatMoney(plan.paid, plan.currency)} note="Règlements affectés" /><Metric label="Restant" value={formatMoney(plan.remaining, plan.currency)} note="Solde de la créance" /><Metric label="En retard" value={formatMoney(plan.overdue_amount, plan.currency)} note="Échéances échues" /></div><Table headers={["N°", "Échéance", "Montant dû", "Payé", "Restant", "État"]} empty="Aucune échéance." data={planRows.map((item) => [text(item.sequence), text(item.due_date), formatMoney(item.amount_due, plan.currency), formatMoney(item.paid, plan.currency), formatMoney(item.remaining, plan.currency), <Status value={item.status} />])} /></Panel>}
   </>;
 }
 

@@ -72,6 +72,8 @@ SALES = [{
 }]
 SOLAR_PLAN = {
     "id": "demo-plan-0001",
+    "receivable_id": "demo-receivable-solar-0001",
+    "customer_id": "demo-customer-0001",
     "principal": "120.00",
     "paid": "0.00",
     "remaining": "120.00",
@@ -473,6 +475,15 @@ async def capture_views() -> None:
                     )
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / f"solar-contracts-{SHOT_SUFFIX}.png"))
+                    await page.get_by_role("button", name="Enregistrer un versement").click()
+                    await page.get_by_role("heading", name="Journal de caisse").wait_for()
+                    await page.wait_for_function("document.querySelector('#central-payment-form select[name=customer_id]')?.value === 'demo-customer-0001'")
+                    if await page.locator(".allocation-card select").first.input_value() != "demo-receivable-solar-0001":
+                        raise AssertionError("Solar plan payment shortcut must preselect its original receivable")
+                    if await page.locator(".allocation-card select").nth(1).input_value() != "demo-solar-schedule-0001":
+                        raise AssertionError("Solar plan payment shortcut must preselect the next open installment")
+                    await page.screenshot(path=str(OUTPUT / f"solar-payment-prefill-{SHOT_SUFFIX}.png"))
+                    await page.get_by_role("navigation", name="Navigation principale").get_by_role("button", name="Solaire", exact=True).click()
                 await page.evaluate("window.scrollTo(0, 0)")
                 await page.wait_for_timeout(120)
                 await page.screenshot(path=str(OUTPUT / f"{slug}-{SHOT_SUFFIX}.png"))

@@ -275,6 +275,11 @@ def test_solar_sales_show_customer_names_instead_of_internal_ids() -> None:
     assert "function customerLabel(customerId: unknown, customers: Row[])" in app
     assert "customerLabel(row.customer_id, customers)" in app
     assert "<SolarContractManager sales={sales} customers={customers}" in app
+    assert "onRecordPayment={async (customerId, receivableId, scheduleId)" in app
+    assert 'onClick={() => onRecordPayment(text(plan.customer_id), text(plan.receivable_id), text(nextOpenSchedule.id))}' in app
+    assert "initialReceivableId={paymentPrefill?.receivableId ?? \"\"}" in app
+    assert "initialScheduleId={paymentPrefill?.scheduleId ?? \"\"}" in app
+    assert 'get_by_role("button", name="Enregistrer un versement")' in (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
 
 def test_solar_catalog_route_uses_local_api_error_contract() -> None:
