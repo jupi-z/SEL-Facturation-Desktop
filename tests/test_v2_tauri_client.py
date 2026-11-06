@@ -87,7 +87,7 @@ def test_meter_reading_screen_uses_central_routes_and_displays_rust_measurements
     assert 'Number(form.get("previous"))' not in app
     assert '/meter-readings/${encodeURIComponent(text(correctingReading.id))}/corrections' in app
     assert "Le relevé initial est conservé." in app
-    assert '"readings", "Relevés"' in visual_review
+    assert '("readings", "Facturation", "Relevés")' in visual_review
     assert '"DEMO-KWH-001"' in visual_review
     assert 'title={isWaterMeter ? "Relevé d’eau au m³" : "Relevés de compteurs"}' in app
 
@@ -292,6 +292,13 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert "central_session" in native
     assert "/v1/auth/login" in native
     assert "Authorization" not in adapter
+
+
+def test_admin_initial_password_checkbox_keeps_intrinsic_control_size() -> None:
+    styles = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    assert '.admin-create-user input[type="checkbox"]' in styles
+    assert "width: 17px; min-width: 17px; min-height: 17px; height: 17px" in styles
+    assert ".admin-create-user label > span:last-child { display: flex; align-items: center" in styles
 
 
 def test_native_central_admin_bridge_is_allowlisted_and_never_uses_sync_token_as_user_session() -> None:

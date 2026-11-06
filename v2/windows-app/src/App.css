@@ -219,6 +219,8 @@ input:disabled, select:disabled { color: #77869a; background: #f2f5f9; }
 .admin-login { max-width: 760px; margin-top: 18px; }
 .admin-create-user { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; margin: 4px 0 18px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .admin-create-user .form-actions { grid-column: auto; }
+.admin-create-user label > span:last-child { display: flex; align-items: center; gap: 8px; line-height: 1.45; }
+.admin-create-user input[type="checkbox"] { width: 17px; min-width: 17px; min-height: 17px; height: 17px; padding: 0; accent-color: var(--blue); }
 .admin-session { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .admin-grid > .panel { min-width: 0; }
 .admin-grid table { min-width: 560px; }

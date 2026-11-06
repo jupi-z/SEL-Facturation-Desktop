@@ -5,6 +5,7 @@ import hashlib
 from io import BytesIO
 import json
 import os
+import socket
 import subprocess
 import time
 import urllib.request
@@ -17,7 +18,6 @@ from pypdf import PdfReader
 ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / "v2" / "windows-app"
 OUTPUT = Path(os.environ.get("SEL_VISUAL_OUTPUT", ROOT / "artifacts" / "phase8-documents-figma"))
-URL = "http://127.0.0.1:1420"
 
 CUSTOMERS = [{
     "id": "demo-customer-0001",
@@ -162,7 +162,7 @@ def mock_invoke_script() -> str:
         if (command !== 'central_request') throw new Error('Unexpected visual smoke command: ' + command);
         const path = args.path || '';
         let body = [];
-        if (path === '/v1/customers') body = fixtures.customers;
+        if (path.startsWith('/v1/customers?') || path === '/v1/customers') body = fixtures.customers;
         else if (path === '/v1/billing/utility/preview') {{
           const waterQuantity = Number(args.body?.water?.quantity ?? 0);
           body = waterQuantity > 0
@@ -204,13 +204,13 @@ def mock_invoke_script() -> str:
     """
 
 
-async def wait_for_server(process: subprocess.Popen[bytes]) -> None:
+async def wait_for_server(process: subprocess.Popen[bytes], url: str) -> None:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"Vite exited before ready with status {process.returncode}")
         try:
-            with urllib.request.urlopen(URL, timeout=2):
+            with urllib.request.urlopen(url, timeout=2):
                 return
         except Exception:
             time.sleep(0.5)
@@ -288,14 +288,18 @@ async def assert_print_layout(page, label: str, expected_pages: int) -> None:
 
 async def capture_views() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
     process = subprocess.Popen(
-        ["npm.cmd", "run", "dev", "--", "--host", "127.0.0.1"],
+        ["npm.cmd", "run", "dev", "--", "--host", "127.0.0.1", "--port", str(port), "--strictPort"],
         cwd=APP,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
     )
     try:
-        await wait_for_server(process)
+        await wait_for_server(process, url)
         async with async_playwright() as playwright:
             browser_channel = os.environ.get("SEL_VISUAL_BROWSER")
             browser_options = {"headless": True}
@@ -303,6 +307,9 @@ async def capture_views() -> None:
                 browser_options["channel"] = browser_channel
             browser = await playwright.chromium.launch(**browser_options)
             page = await browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=1, locale="fr-CD")
+            browser_errors: list[str] = []
+            page.on("pageerror", lambda error: browser_errors.append(str(error)))
+            page.on("dialog", lambda dialog: asyncio.create_task(dialog.accept()))
             await page.add_init_script(mock_invoke_script())
             await page.add_init_script("""(() => {
               const original = Blob.prototype.arrayBuffer;
@@ -312,26 +319,35 @@ async def capture_views() -> None:
                 return bytes;
               };
             })();""")
-            await page.goto(URL, wait_until="domcontentloaded")
+            await page.goto(url, wait_until="domcontentloaded")
             await page.get_by_role("heading", name="Connexion à SEL Facturation").wait_for()
             await page.screenshot(path=str(OUTPUT / "login-1440x900.png"))
             await page.get_by_label("Identifiant SEL").fill("agent-demo")
             await page.get_by_label("Mot de passe").fill("synthetic-password")
             await page.get_by_role("button", name="Se connecter").click()
-            await page.get_by_role("heading", name="Vue d’ensemble").wait_for()
+            try:
+                await page.get_by_role("heading", name="Bienvenue dans SEL Facturation").wait_for(timeout=10000)
+            except Exception as error:
+                await page.screenshot(path=str(OUTPUT / "login-after-submit-diagnostic.png"))
+                body = (await page.locator("body").inner_text())[:2000]
+                raise AssertionError(f"Dashboard did not open after synthetic login. Page errors: {browser_errors}; body: {body}") from error
             views = [
-                ("dashboard", "Vue d’ensemble"),
-                ("customers", "Abonnés"),
-                ("readings", "Relevés"),
-                ("invoices", "Factures"),
-                ("payments", "Encaissements"),
-                ("solar", "Kits solaires"),
-                ("receivables", "Créances"),
-                ("server", "Serveur"),
-                ("admin", "Administration"),
+                ("dashboard", "Accueil", None),
+                ("customers", "Abonnés", None),
+                ("readings", "Facturation", "Relevés"),
+                ("invoices", "Facturation", "Factures"),
+                ("payments", "Paiements", "Journal de caisse"),
+                ("solar", "Solaire", None),
+                ("receivables", "Paiements", "Créances"),
+                ("server", "Administration", "État du serveur"),
+                ("admin", "Administration", "Administration"),
             ]
-            for slug, label in views:
-                await page.get_by_role("button", name=label, exact=True).click()
+            for slug, domain_label, page_label in views:
+                await page.get_by_role("navigation", name="Navigation principale").get_by_role(
+                    "button", name=domain_label, exact=True
+                ).click()
+                if page_label:
+                    await page.locator(".workspace-tabs").get_by_role("button", name=page_label, exact=True).click()
                 if slug == "readings":
                     selects = page.locator(".reading-filters select")
                     await selects.nth(0).select_option("demo-customer-0001")
@@ -505,7 +521,8 @@ async def capture_views() -> None:
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")
-            await page.get_by_role("button", name="Encaissements", exact=True).click()
+            await page.get_by_role("button", name="Paiements", exact=True).click()
+            await page.locator(".workspace-tabs").get_by_role("button", name="Journal de caisse", exact=True).click()
             await page.locator('.payment-workspace form select[name="customer_id"]').select_option("demo-customer-0001")
             await page.get_by_role("button", name="+ Ajouter une créance").click()
             await page.locator('.allocation-card select').first.locator('option[value="demo-receivable-0001"]').wait_for(state="attached")
