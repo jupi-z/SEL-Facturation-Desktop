@@ -907,7 +907,7 @@ export default function App() {
           <Table headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]} empty="Aucun produit solaire approuvé et applicable n’est disponible sur le serveur." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), product.category ? domainLabel(product.category) : "—", formatMoney(product.price_reference, product.currency), <span className="status-badge success">Disponible</span>])} />
         </Panel>
         <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
-        <SolarContractManager sales={sales} customers={customers} onCreated={refresh} />
+        <SolarContractManager sales={sales} customers={customers} onCreated={refresh} confirmAction={requestConfirmation} />
       </>}
 
       {view === "receivables" && <>
@@ -1556,7 +1556,7 @@ function MeterReadingsView({ customers, initialCustomerId, canCorrect, onOpenInv
   </>;
 }
 
-function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; customers: Row[]; onCreated: () => Promise<void> }) {
+function SolarContractManager({ sales, customers, onCreated, confirmAction }: { sales: Row[]; customers: Row[]; onCreated: () => Promise<void>; confirmAction: (request: ConfirmationRequest) => Promise<boolean> }) {
   const [saleId, setSaleId] = useState("");
   const [schedule, setSchedule] = useState([{ due_date: "", amount: "" }]);
   const [plan, setPlan] = useState<Row | null>(null);
@@ -1576,12 +1576,20 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
     if (!sale || !sale.receivable_id) return;
     setSaving(true); setMessage("");
     try {
+      const approvedTermsRevision = String(form.get("approved_terms_revision") ?? "").trim();
+      const scheduleSummary = schedule.map((entry, index) => `Échéance ${index + 1} : ${entry.due_date}, ${entry.amount} ${sale.currency}`).join(" ; ");
+      const accepted = await confirmAction({
+        title: "Vérifier le contrat solaire",
+        description: `Vente ${text(sale.sale_id)} · créance existante ${text(sale.receivable_id)} · principal ${formatMoney(sale.principal, sale.currency)}. Échéancier : ${scheduleSummary}. Conditions approuvées : ${approvedTermsRevision}. Aucun intérêt ni frais supplémentaire.`,
+        confirmLabel: "Créer le contrat et l’échéancier",
+      });
+      if (!accepted) return;
       const result = await centralRequest<Row>("/v1/solar/contracts", "POST", {
         sale_id: sale.sale_id,
         receivable_id: sale.receivable_id,
         schedule: schedule.map((entry, index) => ({ sequence: index + 1, due_date: entry.due_date, amount: entry.amount })),
         currency: sale.currency,
-        approved_terms_revision: form.get("approved_terms_revision"),
+        approved_terms_revision: approvedTermsRevision,
       });
       const planId = text(result.installment_plan_id, "");
       if (planId) setPlan(await centralRequest<Row>(`/v1/installment-plans/${encodeURIComponent(planId)}`));
@@ -1597,16 +1605,16 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
   return <>
     <Panel title="Contrats et échéanciers solaires">
       {availableSales.length ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void saveContract(event)}>
-        <label className="span-two">Vente à financer<select value={saleId} onChange={(event) => setSaleId(event.target.value)} required><option value="">Sélectionner une vente…</option>{availableSales.map((sale) => <option key={text(sale.sale_id)} value={text(sale.sale_id)}>{customerLabel(sale.customer_id, customers)} · {text(sale.sale_id)} · {formatMoney(sale.principal, sale.currency)}</option>)}</select></label>
+        <label className="span-two">Vente à financer<select value={saleId} onChange={(event) => setSaleId(event.target.value)} required disabled={saving}><option value="">Sélectionner une vente…</option>{availableSales.map((sale) => <option key={text(sale.sale_id)} value={text(sale.sale_id)}>{customerLabel(sale.customer_id, customers)} · {text(sale.sale_id)} · {formatMoney(sale.principal, sale.currency)}</option>)}</select></label>
         {schedule.map((entry, index) => <div className="schedule-entry span-two" key={index}>
-          <label>Échéance {index + 1} · Date<input type="date" required value={entry.due_date} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, due_date: event.target.value } : item))} /></label>
-          <label>Montant dû<input type="number" min="0.01" step="0.01" required value={entry.amount} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item))} /></label>
-          {schedule.length > 1 && <button className="text-button remove-installment" type="button" onClick={() => setSchedule((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Retirer</button>}
+          <label>Échéance {index + 1} · Date<input type="date" required value={entry.due_date} disabled={saving} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, due_date: event.target.value } : item))} /></label>
+          <label>Montant dû<input type="number" min="0.01" step="0.01" required value={entry.amount} disabled={saving} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item))} /></label>
+          {schedule.length > 1 && <button className="text-button remove-installment" type="button" disabled={saving} onClick={() => setSchedule((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Retirer</button>}
         </div>)}
-        <div className="schedule-actions span-two"><button className="text-button" type="button" onClick={() => setSchedule((current) => [...current, { due_date: "", amount: "" }])}>+ Ajouter une échéance</button></div>
-        <label className="span-two">Référence des conditions approuvées<input name="approved_terms_revision" required /></label>
+        <div className="schedule-actions span-two"><button className="text-button" type="button" disabled={saving} onClick={() => setSchedule((current) => [...current, { due_date: "", amount: "" }])}>+ Ajouter une échéance</button></div>
+        <label className="span-two">Référence des conditions approuvées<input name="approved_terms_revision" required disabled={saving} /></label>
         <p className="help span-two">Le moteur vérifie les échéances et leur total par rapport à la créance. Aucun intérêt ni frais n’est ajouté.</p>
-        <div className="form-actions span-two"><Button primary type="submit" disabled={saving || !saleId}>{saving ? "Enregistrement…" : "Créer le contrat"}</Button></div>
+        <div className="form-actions span-two"><Button primary type="submit" disabled={saving || !saleId}>{saving ? "Vérification…" : "Vérifier le contrat"}</Button></div>
       </form> : <div className="empty-state">Aucune vente sans échéancier n’est disponible pour créer un contrat.</div>}
       {message && <p role="status" className="reading-message">{message}</p>}
       {sales.some((sale) => sale.installment_plan_id) && <div className="table-scroll"><table><thead><tr><th>Abonné</th><th>Vente</th><th>Montant</th><th>Situation</th><th>Échéancier</th></tr></thead><tbody>{sales.filter((sale) => sale.installment_plan_id).map((sale) => <tr key={text(sale.sale_id)}><td>{customerLabel(sale.customer_id, customers)}</td><td><strong>{text(sale.sale_id)}</strong></td><td>{formatMoney(sale.principal, sale.currency)}</td><td><Status value={sale.status} /></td><td><button className="text-button" onClick={() => void viewPlan(text(sale.installment_plan_id))}>Consulter</button></td></tr>)}</tbody></table></div>}

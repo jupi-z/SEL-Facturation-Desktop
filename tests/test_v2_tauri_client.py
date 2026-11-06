@@ -673,6 +673,18 @@ def test_service_and_meter_changes_are_reviewed_before_central_writes() -> None:
     assert 'f"service-account-edit-confirmation-{SHOT_SUFFIX}.png"' in visual_review
 
 
+def test_solar_contract_is_reviewed_before_creating_installments() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'title: "Vérifier le contrat solaire"' in app
+    assert "créance existante" in app
+    assert "Aucun intérêt ni frais supplémentaire." in app
+    assert "Solar contract must not be created before explicit confirmation" in visual_review
+    assert "Canceling solar contract review must preserve the entered terms reference" in visual_review
+    assert 'f"solar-contract-confirmation-{SHOT_SUFFIX}.png"' in visual_review
+
+
 def test_customer_directory_surfaces_truthful_central_metrics_before_the_table() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     directory = app.split('title="Répertoire des abonnés"', 1)[1].split(

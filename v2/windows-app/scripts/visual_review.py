@@ -438,7 +438,21 @@ async def capture_views() -> None:
                     await page.get_by_label("Échéance 2 · Date").fill("2027-01-01")
                     await page.locator("label", has_text="Montant dû").nth(1).locator("input").fill("60.00")
                     await page.get_by_label("Référence des conditions approuvées").fill("DEMO-SOLAR-TERMS")
-                    await page.get_by_role("button", name="Créer le contrat").click()
+                    await page.get_by_role("button", name="Vérifier le contrat").click()
+                    contract_review = page.get_by_role("alertdialog", name="Vérifier le contrat solaire")
+                    await contract_review.wait_for()
+                    contract_review_text = await contract_review.inner_text()
+                    if "demo-sale-0001" not in contract_review_text or "demo-receivable-solar-0001" not in contract_review_text or "Aucun intérêt ni frais supplémentaire" not in contract_review_text:
+                        raise AssertionError("Solar contract review must show its existing debt, schedule policy and terms")
+                    await page.screenshot(path=str(OUTPUT / f"solar-contract-confirmation-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.path === '/v1/solar/contracts' && entry.method === 'POST').length") != 0:
+                        raise AssertionError("Solar contract must not be created before explicit confirmation")
+                    await contract_review.get_by_role("button", name="Annuler").click()
+                    if await page.get_by_label("Référence des conditions approuvées").input_value() != "DEMO-SOLAR-TERMS":
+                        raise AssertionError("Canceling solar contract review must preserve the entered terms reference")
+                    await page.get_by_role("button", name="Vérifier le contrat").click()
+                    await page.get_by_role("alertdialog", name="Vérifier le contrat solaire").get_by_role("button", name="Créer le contrat et l’échéancier").click()
+                    await page.wait_for_function("window.__centralWriteLog.filter(entry => entry.path === '/v1/solar/contracts' && entry.method === 'POST').length === 1")
                     await page.get_by_role("heading", name="Échéancier consulté").wait_for()
                     await page.get_by_role("heading", name="Contrats et échéanciers solaires").evaluate(
                         "element => element.scrollIntoView({ block: 'start' })"
