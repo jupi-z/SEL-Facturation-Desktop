@@ -176,8 +176,10 @@ def mock_invoke_script() -> str:
         }}
         if (command !== 'central_request') throw new Error('Unexpected visual smoke command: ' + command);
         const path = args.path || '';
+        if (args.method !== 'GET') window.__centralWriteLog.push({{path,method:args.method,body:args.body}});
         let body = [];
-        if (path === '/v1/customers' && args.method === 'POST') {{ window.__centralWriteLog.push({{path,method:args.method,body:args.body}}); body = {{...args.body,customer_id:'demo-customer-created-ux3',status:'ACTIVE',revision:1}}; }}
+        if (path === '/v1/customers' && args.method === 'POST') {{ body = {{...args.body,customer_id:'demo-customer-created-ux3',status:'ACTIVE',revision:1}}; }}
+        else if (path.startsWith('/v1/customers/') && args.method === 'PATCH') body = {{...fixtures.customers[0],...args.body,revision:2}};
         else if (path.startsWith('/v1/customers?') || path === '/v1/customers') body = fixtures.customers;
         else if (path === '/v1/catalog/tariffs') body = fixtures.tariffs;
         else if (path === '/v1/billing/utility/preview') {{
@@ -480,9 +482,26 @@ async def capture_views() -> None:
                     await page.screenshot(path=str(OUTPUT / f"customer-record-{SHOT_SUFFIX}.png"))
                     await page.get_by_role("button", name="Modifier la fiche").click()
                     await page.get_by_label("Nom / raison sociale").wait_for()
+                    await page.get_by_label("Catégorie tarifaire").select_option("RESIDENTIAL")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / f"customer-edit-{SHOT_SUFFIX}.png"))
-                    await page.get_by_role("button", name="Annuler la modification").click()
+                    await page.get_by_label("Nom / raison sociale").fill("Client Alpha modifié")
+                    await page.get_by_role("button", name="Vérifier les modifications").click()
+                    edit_review = page.get_by_role("alertdialog", name="Vérifier les modifications")
+                    await edit_review.wait_for()
+                    if "Client Alpha modifié" not in await edit_review.inner_text():
+                        raise AssertionError("Customer edit review must summarize the submitted values")
+                    await page.screenshot(path=str(OUTPUT / f"customer-edit-confirmation-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.method === 'PATCH' && entry.path.includes('/v1/customers/')).length") != 0:
+                        raise AssertionError("Customer edits must not be sent before confirmation")
+                    await edit_review.get_by_role("button", name="Annuler").click()
+                    if await page.get_by_label("Nom / raison sociale").input_value() != "Client Alpha modifié":
+                        raise AssertionError("Canceling customer edit review must preserve the entered values")
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.method === 'PATCH' && entry.path.includes('/v1/customers/')).length") != 0:
+                        raise AssertionError("Canceling customer edit review must not send a write request")
+                    await page.get_by_role("button", name="Vérifier les modifications").click()
+                    await page.get_by_role("alertdialog", name="Vérifier les modifications").get_by_role("button", name="Enregistrer les modifications").click()
+                    await page.wait_for_function("window.__centralWriteLog.filter(entry => entry.method === 'PATCH' && entry.path.includes('/v1/customers/')).length === 1")
                     archive_button = page.get_by_role("button", name="Archiver", exact=True)
                     await archive_button.click()
                     confirmation = page.get_by_role("alertdialog", name="Archiver cet abonné ?")

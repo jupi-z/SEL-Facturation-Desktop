@@ -648,6 +648,11 @@ def test_customer_dossier_has_read_only_overview_and_explicit_edit_mode() -> Non
     assert 'className="dossier-metrics metrics compact-metrics"' in app
     assert 'label="Versements" value={rows(statement.payments).length}' in app
     assert 'f"customer-edit-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'title: "Vérifier les modifications"' in app
+    assert "customerEditBusy" in app
+    assert "Customer edits must not be sent before confirmation" in visual_review
+    assert "Canceling customer edit review must preserve the entered values" in visual_review
+    assert "Canceling customer edit review must not send a write request" in visual_review
 
 
 def test_customer_directory_surfaces_truthful_central_metrics_before_the_table() -> None:

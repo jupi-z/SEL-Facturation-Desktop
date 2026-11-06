@@ -215,6 +215,7 @@ export default function App() {
   const [selectedCustomer, setSelectedCustomer] = useState("");
   const [selectedCustomerData, setSelectedCustomerData] = useState<Row | null>(null);
   const [customerEditOpen, setCustomerEditOpen] = useState(false);
+  const [customerEditBusy, setCustomerEditBusy] = useState(false);
   const [customerCreateBusy, setCustomerCreateBusy] = useState(false);
   const [statement, setStatement] = useState<Row | null>(null);
   const [preview, setPreview] = useState<Row | null>(null);
@@ -590,7 +591,7 @@ export default function App() {
 
   async function updateCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedCustomerData) return;
+    if (!selectedCustomerData || customerEditBusy) return;
     const form = new FormData(event.currentTarget);
     const payload = {
       legal_name: String(form.get("legal_name") ?? "").trim(),
@@ -598,7 +599,15 @@ export default function App() {
       address: String(form.get("address") ?? "").trim() || null,
       phone: String(form.get("phone") ?? "").trim() || null,
     };
+    const categoryLabel = payload.customer_category === "RESIDENTIAL" ? "Résidentiel" : payload.customer_category === "COMMERCIAL" ? "Commercial" : payload.customer_category;
+    setCustomerEditBusy(true);
     try {
+      const accepted = await requestConfirmation({
+        title: "Vérifier les modifications",
+        description: `Abonné : ${text(selectedCustomerData.customer_code)}. Nouveau nom : ${payload.legal_name}. Catégorie tarifaire : ${categoryLabel}. Adresse : ${payload.address || "non renseignée"}. Téléphone : ${payload.phone || "non renseigné"}.`,
+        confirmLabel: "Enregistrer les modifications",
+      });
+      if (!accepted) return;
       const updated = await centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", payload, Number(selectedCustomerData.revision));
       setSelectedCustomerData(updated);
       setDraftDirty(false);
@@ -606,6 +615,7 @@ export default function App() {
       setNotice({ message: "Dossier abonné modifié sur le serveur central." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { setCustomerEditBusy(false); }
   }
 
   async function toggleCustomerArchive() {
@@ -777,12 +787,12 @@ export default function App() {
         }}>Retour au répertoire</Button><Button onClick={() => navigateTo("readings", selectedCustomer)}>Relevés</Button><Button onClick={() => navigateTo("payments", selectedCustomer)}>Encaisser</Button><Button primary onClick={() => navigateTo("invoices", selectedCustomer)}>Nouvelle facture</Button><Button onClick={() => { if (customerEditOpen) setDraftDirty(false); setCustomerEditOpen((open) => !open); }}>{customerEditOpen ? "Annuler la modification" : "Modifier la fiche"}</Button><Button onClick={() => void toggleCustomerArchive()}>{text(selectedCustomerData?.status).toUpperCase() === "ARCHIVED" ? "Réactiver" : "Archiver"}</Button></div>} />
         <Panel title={`Fiche abonné · ${text(selectedCustomerData?.customer_code)}`}>
           {selectedCustomerData ? customerEditOpen ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
-            <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required /></label>
-            <label>Catégorie tarifaire<select name="customer_category" defaultValue={text(selectedCustomerData.customer_category, "")} required><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
+            <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required disabled={customerEditBusy} /></label>
+            <label>Catégorie tarifaire<select name="customer_category" defaultValue={text(selectedCustomerData.customer_category, "")} required disabled={customerEditBusy}><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
             <label>Révision du dossier<input value={text(selectedCustomerData.revision)} readOnly /></label>
-            <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} /></label>
-            <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} /></label>
-            <div className="form-actions span-two"><Button type="button" onClick={() => { setCustomerEditOpen(false); setDraftDirty(false); }}>Annuler</Button><Button primary type="submit">Enregistrer les modifications</Button></div>
+            <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} disabled={customerEditBusy} /></label>
+            <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} disabled={customerEditBusy} /></label>
+            <div className="form-actions span-two"><Button type="button" disabled={customerEditBusy} onClick={() => { setCustomerEditOpen(false); setDraftDirty(false); }}>Annuler</Button><Button primary type="submit" disabled={customerEditBusy}>{customerEditBusy ? "Vérification…" : "Vérifier les modifications"}</Button></div>
           </form> : <dl className="customer-details"><div><dt>Nom / raison sociale</dt><dd>{text(selectedCustomerData.legal_name)}</dd></div><div><dt>Code abonné</dt><dd>{text(selectedCustomerData.customer_code)}</dd></div><div><dt>Catégorie tarifaire</dt><dd>{text(selectedCustomerData.customer_category, "À compléter")}</dd></div><div><dt>Adresse</dt><dd>{text(selectedCustomerData.address)}</dd></div><div><dt>Téléphone</dt><dd>{text(selectedCustomerData.phone)}</dd></div><div><dt>Révision du dossier</dt><dd>{text(selectedCustomerData.revision)}</dd></div></dl> : <div className="empty-state">Chargement du dossier abonné…</div>}
         </Panel>
         <ServiceAccountsManager customerId={selectedCustomer} canManageMeters={["ADMIN", "SUPERVISOR", "BILLING_AGENT"].includes(text(session?.role).toUpperCase())} onConfirmReplacement={confirmMeterReplacement} />
