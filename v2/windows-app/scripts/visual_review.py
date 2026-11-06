@@ -413,7 +413,7 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "receivables-statement-1440x900.png"))
                 if slug == "invoices":
-                    await page.get_by_label("Abonné").select_option("demo-customer-0001")
+                    await page.locator('select[name="customer_id"]').select_option("demo-customer-0001")
                     await page.get_by_label("Période de facturation").fill("2026-10")
                     await page.get_by_label("Électricité consommée (kWh)").fill("100")
                     await page.get_by_label("Eau consommée (m³)").fill("0")
