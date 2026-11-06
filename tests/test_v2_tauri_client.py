@@ -43,7 +43,7 @@ def test_v2_windows_client_uses_only_the_authenticated_central_api() -> None:
     assert 'invoke<CentralResponse<T>>("central_request"' in adapter
     assert "Authorization" not in adapter
     assert 'DEFAULT_CENTRAL_API_URL: &str = "https://sel.shuleops.com"' in native
-    assert ".bearer_auth(token)" in native
+    assert ".bearer_auth(admin_request.token)" in native
     assert "session.access_token" in native
     assert "local_request" not in native
     assert '"/local/v1/customers"' in native
@@ -56,16 +56,20 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
     for label in (
         "Vue d’ensemble",
         "Abonnés",
-        "Relevés",
+        "Facturation",
         "Factures",
-        "Encaissements",
-        "Kits solaires",
+        "Journal de caisse",
+        "Paiements",
+        "Catalogue des kits solaires",
         "Créances",
-        "Serveur",
+        "État du serveur",
         "Administration",
         "Prévisualiser la facture",
     ):
         assert label in app
+
+    assert 'label: "Solaire"' in app
+    assert 'id: "readings", label: "Relevés"' in app
 
     assert 'name="tax_id"' not in app
     assert 'customerCreateOpen && <Panel title="Nouvel abonné"' in app
@@ -109,7 +113,7 @@ def test_v2_windows_shell_preserves_figma_desktop_geometry_and_tokens() -> None:
     assert ".sidebar { position: sticky" in css
     assert "flex: 0 0 250px" in css
     assert ".topbar { display: flex; flex: 0 0 76px" in css
-    assert "height: 93px" in css
+    assert "height: 101.409px" in css
     assert "width: 20px; height: 20px; color: #98b9e0" in css
 
 
@@ -123,14 +127,15 @@ def test_sidebar_uses_distinct_icons_for_each_destination() -> None:
     assert "stroke=\"currentColor\"" in icon
 
 
-def test_dashboard_uses_recent_central_operations_without_demo_financial_data() -> None:
+def test_dashboard_prioritizes_central_workflows_without_demo_financial_data() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
-    assert 'title="Dossiers / activité récente"' in app
-    assert 'headers={["Référence", "Abonné", "Opération", "Montant", "État"]}' in app
-    assert "...invoices.map" in app
-    assert "...payments.map" in app
-    assert "...sales.map" in app
+    assert 'title="Que souhaitez-vous faire ?"' in app
+    assert 'title="Vos repères"' in app
+    assert "Émettre une facture" in app
+    assert "Encaisser un règlement" in app
+    assert "Saisir un relevé" in app
+    assert "Vendre un kit solaire" in app
     assert "value={customers.length}" in app
     assert "value={invoices.length}" in app
     assert 'onClick={() => navigateTo("invoices")}>Nouvelle facture' in app
@@ -234,11 +239,11 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
 def test_navigation_clears_transient_notices_from_the_previous_screen() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
-    assert "function navigateTo(nextView: View)" in app
-    navigation = app.split("function navigateTo(nextView: View)", 1)[1].split("\n  }", 1)[0]
+    assert "function navigateTo(nextView: View, customerId?: string)" in app
+    navigation = app.split("function navigateTo(nextView: View, customerId?: string)", 1)[1].split("\n  function navigateBack", 1)[0]
     assert "setNotice(null)" in navigation
     assert "setView(nextView)" in navigation
-    assert "onClick={() => navigateTo(item.id)}" in app
+    assert "onClick={() => navigateTo(item.target)}" in app
     assert 'onClick={() => navigateTo("invoices")}>Nouvelle facture' in app
 
 
@@ -310,7 +315,7 @@ def test_admin_reference_writes_use_native_idempotency_and_require_explicit_appr
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
     assert 'tokio = { version = "1", features = ["sync"] }' in manifest
-    assert 'header("Idempotency-Key", idempotency_key)' in native
+    assert 'header("Idempotency-Key", admin_request.idempotency_key)' in native
     assert "effective_to: values.effective_to || null" in app
     assert 'approval_ref: approvalRef' in app
     assert 'supersedes_tariff_id' in app
