@@ -311,6 +311,7 @@ fn validate_central_client_request(path_and_query: &str, method: &str) -> Result
         ("GET" | "POST", ["", "v1", "customers", _, "service-accounts"]) if id(3) => true,
         ("GET" | "PATCH", ["", "v1", "service-accounts", _]) if id(3) => true,
         ("GET" | "POST", ["", "v1", "service-accounts", _, "meters"]) if id(3) => true,
+        ("POST", ["", "v1", "meters", _, "replace"]) if id(3) => true,
         ("GET" | "POST", ["", "v1", "meters", _, "readings"]) if id(3) => true,
         ("POST", ["", "v1", "meter-readings", _, "corrections"]) if id(3) => true,
         ("GET", ["", "v1", "invoices", _]) if id(3) => true,
@@ -793,6 +794,7 @@ mod tests {
                 "GET",
             ),
             ("/v1/solar/quotes", "POST"),
+            ("/v1/meters/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/replace", "POST"),
             ("/v1/catalog/products", "GET"),
             ("/v1/admin/catalog/tariffs", "GET"),
         ] {

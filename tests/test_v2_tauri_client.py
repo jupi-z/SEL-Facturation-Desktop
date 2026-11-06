@@ -102,6 +102,9 @@ def test_meter_reading_screen_uses_central_routes_and_displays_rust_measurements
     assert '("readings", "Facturation", "Relevés")' in visual_review
     assert '"DEMO-KWH-001"' in visual_review
     assert 'title={isWaterMeter ? "Relevé d’eau au m³" : "Relevés de compteurs"}' in app
+    assert '/v1/meters/${encodeURIComponent(meterId)}/replace' in app
+    assert "onConfirmReplacement" in app
+    assert "meter-replacement-confirmation-1440x900.png" in visual_review
 
 
 def test_v2_windows_client_has_local_brand_assets_and_no_remote_runtime_assets() -> None:

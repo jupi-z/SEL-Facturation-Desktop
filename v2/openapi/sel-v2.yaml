@@ -665,6 +665,23 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/meters/{id}/replace:
+    post:
+      operationId: replaceMeter
+      description: Replaces an active physical meter atomically. The old meter is deactivated, never deleted, so its reading history and invoice links remain intact. The replacement keeps the service-defined unit. ADMIN, SUPERVISOR, or BILLING_AGENT only.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceMeter' }
+      responses:
+        '201': { description: Previous meter retired and replacement created atomically, content: { application/json: { schema: { $ref: '#/components/schemas/MeterReplacement' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/meter-readings/{id}/corrections:
     post:
       operationId: correctMeterReading
@@ -1055,6 +1072,20 @@ components:
       properties:
         serial: { type: string, minLength: 1, maxLength: 128 }
         unit: { type: string, enum: [KWH, M3] }
+    ReplaceMeter:
+      type: object
+      additionalProperties: false
+      required: [serial, reason]
+      properties:
+        serial: { type: string, minLength: 1, maxLength: 128 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    MeterReplacement:
+      type: object
+      additionalProperties: false
+      required: [retired_meter, replacement_meter]
+      properties:
+        retired_meter: { $ref: '#/components/schemas/Meter' }
+        replacement_meter: { $ref: '#/components/schemas/Meter' }
     MeterReading:
       type: object
       required: [id, meter_id, period, previous, current, measured_quantity, source]

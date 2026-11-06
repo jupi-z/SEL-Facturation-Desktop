@@ -102,6 +102,8 @@ button { cursor: pointer; }
 .service-account-head > div { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--navy); font-size: 12px; }
 .service-meter-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .service-meter-list li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 1px solid var(--line); background: #fff; color: var(--muted); font-size: 11px; }
+.service-meter-list li > span { display: flex; align-items: center; gap: 10px; }
+.service-meter-list .button { min-height: 32px; padding: 6px 10px; }
 .service-meter-list strong { color: var(--navy); }
 .service-account-form, .service-meter-form { margin-top: 14px; padding-top: 16px; border-top: 1px solid var(--line); }
 .service-empty-state { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }

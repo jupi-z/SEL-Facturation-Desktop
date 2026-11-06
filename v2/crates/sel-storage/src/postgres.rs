@@ -11,12 +11,12 @@ use sel_contracts::{
     ActivateSolarContractRequest, CorrectMeterReading, CreateCustomer, CreateMeter,
     CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
     CreditNoteRequest, CreditNoteSyncPayload, Customer, InvoiceIdentitySnapshot,
-    InvoiceVoidSyncPayload, Meter, MeterReading, PaymentAllocationSyncPayload,
-    PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest,
-    ServiceAccount, ServiceAccountUpdateSyncPayload, SolarContractSyncPayload, SolarQuoteResponse,
-    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer,
-    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
-    UtilityMeterReadingRefs,
+    InvoiceVoidSyncPayload, Meter, MeterReading, MeterReplacement, PaymentAllocationSyncPayload,
+    PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest, ReplaceMeter,
+    ReversePaymentRequest, ServiceAccount, ServiceAccountUpdateSyncPayload,
+    SolarContractSyncPayload, SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload,
+    SyncEnvelope, SyncEventResult, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
+    UtilityBillingResponse, UtilityInvoiceSyncPayload, UtilityMeterReadingRefs,
 };
 use sel_domain::billing;
 use serde_json::json;
@@ -439,6 +439,8 @@ pub enum MeterWriteError {
     ServiceAccountRevisionConflict,
     #[error("meter was not found in this organization")]
     MeterNotFound,
+    #[error("only an active meter can be replaced")]
+    MeterNotActive,
     #[error("service code, connection status, or meter unit is invalid")]
     InvalidConfiguration,
     #[error("meter serial, period, or reading source is invalid")]
@@ -7648,6 +7650,122 @@ impl CentralStore {
             serial: serial.to_owned(),
             unit: input.unit.clone(),
             active: true,
+        })
+    }
+
+    pub async fn replace_meter(
+        &self,
+        meter_id: Uuid,
+        input: &ReplaceMeter,
+        actor_id: Option<Uuid>,
+    ) -> Result<MeterReplacement, MeterWriteError> {
+        let serial = input.serial.trim();
+        let reason = input.reason.trim();
+        if serial.is_empty()
+            || serial.chars().count() > 128
+            || reason.is_empty()
+            || reason.chars().count() > 500
+        {
+            return Err(MeterWriteError::InvalidInput);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let existing = sqlx::query(
+            "SELECT m.service_account_id, m.serial, m.unit, m.active
+             FROM meters m JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE m.id = $1 AND c.organization_id = $2
+             FOR UPDATE OF m",
+        )
+        .bind(meter_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(MeterWriteError::MeterNotFound)?;
+        let service_account_id: Uuid = existing.try_get("service_account_id")?;
+        let old_serial: String = existing.try_get("serial")?;
+        let unit: String = existing.try_get("unit")?;
+        let active: bool = existing.try_get("active")?;
+        if !active {
+            return Err(MeterWriteError::MeterNotActive);
+        }
+
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM meters WHERE service_account_id = $1 AND serial = $2)",
+        )
+        .bind(service_account_id)
+        .bind(serial)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            return Err(MeterWriteError::InvalidInput);
+        }
+
+        let replacement_id = Uuid::new_v4();
+        let retired = Meter {
+            id: meter_id,
+            service_account_id,
+            serial: old_serial.clone(),
+            unit: unit.clone(),
+            active: false,
+        };
+        let replacement = Meter {
+            id: replacement_id,
+            service_account_id,
+            serial: serial.to_owned(),
+            unit,
+            active: true,
+        };
+
+        sqlx::query("UPDATE meters SET active = FALSE WHERE id = $1 AND active = TRUE")
+            .bind(meter_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO meters (id, service_account_id, serial, unit, active)
+             VALUES ($1, $2, $3, $4, TRUE)",
+        )
+        .bind(replacement_id)
+        .bind(service_account_id)
+        .bind(serial)
+        .bind(&replacement.unit)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            if error
+                .as_database_error()
+                .is_some_and(|database| database.is_unique_violation())
+            {
+                MeterWriteError::InvalidInput
+            } else {
+                MeterWriteError::Database(error)
+            }
+        })?;
+
+        sqlx::query(
+            "INSERT INTO central_changes (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'meters', $2, 2, $3), ($1, 'meters', $4, 1, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(meter_id)
+        .bind(json!(retired))
+        .bind(replacement_id)
+        .bind(json!(replacement))
+        .execute(&mut *tx)
+        .await?;
+        audit_meter_mutation(
+            &mut tx,
+            actor_id,
+            "METER_REPLACED",
+            meter_id,
+            json!({"old_serial": old_serial, "replacement_meter_id": replacement_id, "replacement_serial": serial, "reason": reason}),
+        )
+        .await?;
+        tx.commit().await?;
+
+        Ok(MeterReplacement {
+            retired_meter: retired,
+            replacement_meter: replacement,
         })
     }
 

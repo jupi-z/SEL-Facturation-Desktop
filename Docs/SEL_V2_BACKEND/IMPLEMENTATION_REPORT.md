@@ -1171,3 +1171,24 @@ Les confirmations navigateur natives ont été remplacées par une boîte de dia
 | Backend de production | NON TOUCHÉ | Aucune requête ni écriture de production effectuée ; ce lot ne modifie ni données ni configuration distante. |
 
 Ce lot améliore l'incrément UX3, mais ne ferme pas à lui seul la mission : la comparaison intégrale des parcours Figma, les lacunes API B1–B4, la CI sur le nouveau commit et la recette sur matériel SEL restent à valider.
+
+#### UX3 — remplacement atomique d’un compteur — 6 novembre 2026
+
+Le parcours dossier abonné permet maintenant de remplacer un compteur physique sans effacer son historique. L’agent saisit le nouveau numéro et un motif obligatoire, puis confirme l’opération. L’ancien compteur est désactivé; le nouvel appareil est créé sur le même compte de service et conserve la même unité. Les index et factures antérieurs restent associés à l’ancien identifiant. Détails de décision dans `Docs/SEL_V2_UX3_CODEX/ADR-001-remplacement-compteur.md`.
+
+| Vérification | Résultat | Preuve / limite |
+|---|---|---|
+| Transaction métier et audit | CODE | Même transaction PostgreSQL : verrou de l’ancien compteur, désactivation, création du nouveau, deux événements `central_changes` et audit avec motif. |
+| API et contrôle de rôle | CODE + TEST | `POST /v1/meters/{id}/replace`; ADMIN, SUPERVISOR et BILLING_AGENT autorisés, CASHIER refusé. Tests unitaires de matrice dans `sel-api`. |
+| Historique des relevés | TEST D’INTÉGRATION AJOUTÉ | Le scénario HTTP/PostgreSQL vérifie que les deux relevés (original et correction) restent accessibles après remplacement, et qu’une répétition retourne HTTP 409. Il compile avec `cargo test -p sel-api --test postgres_meter_readings --no-run -j 1`; il n’a pas été exécuté localement, car `TEST_DATABASE_URL` n’est pas configuré. |
+| Format Rust | PASS LOCAL | `cargo fmt --all -- --check`. |
+| Tests API unitaires | PASS LOCAL | `cargo test -p sel-api --lib -j 1` : 12 réussis. |
+| Clippy API + stockage | PASS LOCAL | `cargo clippy -p sel-api -p sel-storage --all-targets -j 1 -- -D warnings`. |
+| Contrat OpenAPI | PASS LOCAL | `cargo test -p sel-contracts --test openapi_contract -j 1` : 1 réussi; document YAML accepté et aucune route de stockage PDF. |
+| Build React/TypeScript | PASS LOCAL | `npm run build`; TypeScript et Vite réussis. Vite conserve l’avertissement non bloquant sur les bundles PDF/polices volumineux. |
+| Tests statiques du client | PASS LOCAL | `python -m pytest tests/test_v2_tauri_client.py -q` : 54 réussis. |
+| Recette visuelle desktop synthétique | PASS LOCAL | `python v2/windows-app/scripts/visual_review.py` : code de sortie 0, 33 captures dans `artifacts/ux3-meter-replacement-validation-pass/`. Le parcours remplace l’appareil puis saisit un premier relevé sur le nouveau compteur. Fixtures fictives et pont Tauri simulé; ce n’est ni une installation native ni une recette SEL. |
+| Test PostgreSQL réel local | NOT_TESTED | Pas de `TEST_DATABASE_URL`; aucune base de production utilisée. L’exécution PostgreSQL doit être confirmée par la CI dédiée. |
+| Backend de production | NON TOUCHÉ | Aucun appel ou changement de données/configuration en production. |
+
+**État UX3 après ce lot :** B1 est implémenté côté API/UI et possède un test PostgreSQL compilable, mais reste en attente de preuve d’exécution PostgreSQL par CI. B2 (rectification/annulation d’une vente solaire), B3 (avenant/résiliation d’un contrat) et B4 (modification/abandon d’un brouillon de référentiel) restent ouverts : leurs règles financières ou de versionnement doivent être spécifiées avant d’exposer une action active. La PR UX3 n’est pas fusionnée; aucune publication ni mise en production n’a eu lieu.

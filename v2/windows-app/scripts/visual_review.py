@@ -172,7 +172,16 @@ def mock_invoke_script() -> str:
         else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) {{ const customerId = path.split('/')[3]; body = customerId === 'demo-customer-0001' ? {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}} : {{invoices:[],receivables:[]}}; }}
         else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts')) {{ const customerId = path.split('/')[3]; body = fixtures.serviceAccounts.filter((account) => account.customer_id === customerId); }}
         else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[3]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
-        else if (path.startsWith('/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[3]; body = meterId === 'demo-meter-water-0001' ? {{meter_id:meterId,period:'2026-11',previous:'5',current:'10',measured_quantity:'5',source:'MANUAL'}} : {{meter_id:meterId,period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}}; }}
+        else if (path.startsWith('/v1/meters/') && path.endsWith('/replace')) {{
+          const meterId = path.split('/')[3];
+          const oldMeter = fixtures.meters.find((meter) => meter.id === meterId);
+          if (!oldMeter || !oldMeter.active) return {{status:409,body:{{code:'METER_NOT_ACTIVE'}}}};
+          oldMeter.active = false;
+          const replacement = {{id:'demo-meter-replacement-0001',service_account_id:oldMeter.service_account_id,serial:args.body.serial,unit:oldMeter.unit,active:true}};
+          fixtures.meters.push(replacement);
+          body = {{retired_meter:oldMeter,replacement_meter:replacement}};
+        }}
+        else if (path.startsWith('/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[3]; const previous = Number(args.body?.previous ?? 0); const current = Number(args.body?.current ?? 0); body = {{meter_id:meterId,period:args.body?.period ?? '2026-11',previous:String(previous),current:String(current),measured_quantity:String(current - previous),source:'MANUAL'}}; }}
         else if (path.startsWith('/v1/meters/') && path.endsWith('/readings')) {{ const meterId = path.split('/')[3]; body = fixtures.readings.filter((reading) => reading.meter_id === meterId); }}
         else if (path.startsWith('/v1/customers/')) body = fixtures.customers[0];
         else if (path.startsWith('/v1/invoices/') && path.endsWith('/document-data')) {{
@@ -358,10 +367,11 @@ async def capture_views() -> None:
                     selects = page.locator(".reading-filters select")
                     await selects.nth(0).select_option("demo-customer-0001")
                     await selects.nth(1).select_option("demo-service-account-0001")
-                    await page.locator('.reading-filters select option[value="demo-meter-0001"]').wait_for(state="attached")
-                    await selects.nth(2).select_option("demo-meter-0001")
+                    await page.locator('.reading-filters select option[value="demo-meter-replacement-0001"]').wait_for(state="attached")
+                    await selects.nth(2).select_option("demo-meter-replacement-0001")
                     await page.locator('.reading-entry input[name="period"]').fill("2026-11")
-                    await page.locator('.reading-entry input[name="current"]').fill("1200")
+                    await page.locator('.reading-entry input[name="previous"]').fill("0")
+                    await page.locator('.reading-entry input[name="current"]').fill("100")
                     await page.get_by_role("button", name="Prévisualiser les index").click()
                     await page.locator(".reading-quantity").get_by_text("100 kWh", exact=True).wait_for()
                     await page.locator(".reading-filters select").nth(1).select_option("demo-service-account-water-0001")
@@ -432,6 +442,16 @@ async def capture_views() -> None:
                     await confirmation.wait_for()
                     await confirmation.get_by_role("button", name="Annuler").click()
                     await confirmation.wait_for(state="detached")
+                    await page.get_by_role("button", name="Remplacer", exact=True).first.click()
+                    await page.get_by_label("Nouveau numéro de compteur").fill("DEMO-KWH-REPLACEMENT")
+                    await page.get_by_label("Motif du remplacement").fill("Essai UX synthétique")
+                    await page.get_by_role("button", name="Remplacer le compteur").click()
+                    replacement_confirmation = page.get_by_role("alertdialog", name="Remplacer ce compteur ?")
+                    await replacement_confirmation.wait_for()
+                    await page.screenshot(path=str(OUTPUT / "meter-replacement-confirmation-1440x900.png"))
+                    await replacement_confirmation.get_by_role("button", name="Confirmer le remplacement").click()
+                    await page.get_by_text("Compteur DEMO-KWH-001 remplacé.", exact=False).wait_for()
+                    await page.get_by_text("DEMO-KWH-REPLACEMENT", exact=True).wait_for()
                     await page.get_by_role("button", name="Retour au répertoire").click()
                     await page.locator("tbody tr").nth(1).get_by_role("button", name="Ouvrir le dossier →").click()
                     await page.get_by_role("heading", name="Services et compteurs").wait_for()
