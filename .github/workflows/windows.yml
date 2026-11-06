@@ -6,7 +6,7 @@ on:
     paths: ['*.py', 'safeupdate_*.py', 'tools/**', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', 'Docs/SEL_SAFEUPDATE_V1/**', '.github/workflows/windows.yml']
   pull_request:
     branches: [main]
-    paths: ['*.py', 'safeupdate_*.py', 'tools/**', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', 'Docs/SEL_SAFEUPDATE_V1/**', 'Docs/SEL_RELEASE_GATE_V1/**', 'CODEX_RELEASE_GATE_START_HERE.md', '.github/workflows/windows.yml']
+    paths: ['*.py', 'safeupdate_*.py', 'tools/**', 'requirements*.txt', 'templates/**', 'static/**', 'packaging/**', 'tests/**', 'v2/**', 'Docs/SEL_SAFEUPDATE_V1/**', 'Docs/SEL_RELEASE_GATE_V1/**', 'CODEX_RELEASE_GATE_START_HERE.md', '.github/workflows/windows.yml']
 
 permissions:
   contents: read
