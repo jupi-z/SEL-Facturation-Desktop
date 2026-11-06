@@ -18,7 +18,10 @@ use sel_contracts::{
     SyncEnvelope, SyncEventResult, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
     UtilityBillingResponse, UtilityInvoiceSyncPayload, UtilityMeterReadingRefs,
 };
-use sel_domain::billing;
+use sel_domain::{
+    billing,
+    document_reference::{issued_document_reference, issued_invoice_reference},
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
@@ -260,6 +263,7 @@ pub struct TariffSnapshot {
     pub electricity_tax_rate: Option<Decimal>,
     pub water_unit_price: Option<Decimal>,
     pub water_tax_rate: Option<Decimal>,
+    pub revision: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -1623,6 +1627,32 @@ impl CentralStore {
         }
         let effective_date = NaiveDate::parse_from_str(&format!("{period}-01"), "%Y-%m-%d")
             .map_err(|error| sqlx::Error::Protocol(format!("invalid billing period: {error}")))?;
+        // The server is authoritative for tariff selection. Older/newer clients may
+        // omit the display-only revision; in that case resolve the single approved
+        // electricity revision for the customer's category and billing period.
+        let revision = if revision.trim().is_empty() {
+            let revisions = sqlx::query_scalar::<_, String>(
+                "SELECT DISTINCT approval_ref FROM tariff_versions
+                 WHERE service_code = 'ELECTRICITY' AND unit = 'KWH' AND currency = $1
+                   AND status = 'APPROVED' AND customer_category = $2
+                   AND effective_from <= $3 AND (effective_to IS NULL OR effective_to >= $3)
+                 ORDER BY approval_ref",
+            )
+            .bind(currency)
+            .bind(&customer_category)
+            .bind(effective_date)
+            .fetch_all(&self.pool)
+            .await?;
+            if revisions.len() > 1 {
+                return Err(sqlx::Error::Protocol(
+                    "multiple approved tariff revisions apply to this customer category and period"
+                        .into(),
+                ));
+            }
+            revisions.into_iter().next().unwrap_or_default()
+        } else {
+            revision.trim().to_owned()
+        };
         let electricity = sqlx::query(
             "SELECT unit_price FROM tariff_versions
              WHERE service_code = 'ELECTRICITY' AND unit = 'KWH' AND currency = $1
@@ -1631,7 +1661,7 @@ impl CentralStore {
              ORDER BY effective_from DESC",
         )
         .bind(currency)
-        .bind(revision)
+        .bind(&revision)
         .bind(&customer_category)
         .bind(effective_date)
         .fetch_all(&self.pool)
@@ -1664,7 +1694,7 @@ impl CentralStore {
              ORDER BY effective_from DESC",
         )
         .bind(currency)
-        .bind(revision)
+        .bind(&revision)
         .bind(&customer_category)
         .bind(effective_date)
         .fetch_all(&self.pool)
@@ -1705,6 +1735,7 @@ impl CentralStore {
                 .first()
                 .map(|row| row.try_get("rate"))
                 .transpose()?,
+            revision: (!revision.is_empty()).then_some(revision),
         })
     }
 
@@ -2742,6 +2773,66 @@ impl CentralStore {
             .collect()
     }
 
+    pub async fn load_communication_charge(
+        &self,
+        currency: &str,
+        on_date: NaiveDate,
+    ) -> Result<Option<Decimal>, sqlx::Error> {
+        let amount = sqlx::query_scalar::<_, String>(
+            "SELECT payload->>'amount' FROM catalog_reference_versions
+             WHERE reference_type = 'COMMUNICATION_CHARGE'
+               AND natural_key = upper($1) AND status = 'APPROVED'
+               AND effective_from <= $2 AND (effective_to IS NULL OR effective_to >= $2)
+             ORDER BY effective_from DESC, id DESC LIMIT 1",
+        )
+        .bind(currency.trim())
+        .bind(on_date)
+        .fetch_optional(&self.pool)
+        .await?;
+        amount
+            .map(|value| {
+                value.parse::<Decimal>().map_err(|_| {
+                    sqlx::Error::Decode(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid communication charge amount",
+                    )))
+                })
+            })
+            .transpose()
+    }
+
+    pub async fn catalog_communication_charges(
+        &self,
+        on_date: NaiveDate,
+    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, payload, natural_key, effective_from, effective_to, approval_ref
+             FROM catalog_reference_versions
+             WHERE reference_type = 'COMMUNICATION_CHARGE' AND status = 'APPROVED'
+               AND effective_from <= $1 AND (effective_to IS NULL OR effective_to >= $1)
+             ORDER BY natural_key, effective_from DESC, id",
+        )
+        .bind(on_date)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let payload: serde_json::Value = row.try_get("payload")?;
+                let effective_from: NaiveDate = row.try_get("effective_from")?;
+                let effective_to: Option<NaiveDate> = row.try_get("effective_to")?;
+                Ok(json!({
+                    "id": row.try_get::<Uuid, _>("id")?,
+                    "label": payload["label"],
+                    "amount": payload["amount"],
+                    "currency": payload["currency"],
+                    "effective_from": effective_from.to_string(),
+                    "effective_to": effective_to.map(|date| date.to_string()),
+                    "approval_ref": row.try_get::<Option<String>, _>("approval_ref")?
+                }))
+            })
+            .collect()
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn create_reference_draft(
         &self,
@@ -2754,8 +2845,10 @@ impl CentralStore {
         idempotency_key: &str,
         request_digest: &str,
     ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
-        if !matches!(reference_type, "TAX_PROFILE" | "FX_RATE")
-            || natural_key.trim().is_empty()
+        if !matches!(
+            reference_type,
+            "TAX_PROFILE" | "FX_RATE" | "COMMUNICATION_CHARGE"
+        ) || natural_key.trim().is_empty()
             || idempotency_key.trim().is_empty()
             || request_digest.trim().is_empty()
             || effective_to.is_some_and(|date| date < effective_from)
@@ -2830,10 +2923,10 @@ impl CentralStore {
         .bind(actor_id)
         .execute(&mut *tx)
         .await?;
-        let event_type = if reference_type == "TAX_PROFILE" {
-            "TAX_PROFILE_VERSION_DRAFTED"
-        } else {
-            "FX_RATE_VERSION_DRAFTED"
+        let event_type = match reference_type {
+            "TAX_PROFILE" => "TAX_PROFILE_VERSION_DRAFTED",
+            "FX_RATE" => "FX_RATE_VERSION_DRAFTED",
+            _ => "COMMUNICATION_CHARGE_VERSION_DRAFTED",
         };
         sqlx::query(
             "INSERT INTO audit_events
@@ -2969,6 +3062,45 @@ impl CentralStore {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub async fn create_communication_charge_draft(
+        &self,
+        amount: Decimal,
+        currency: &str,
+        effective_from: NaiveDate,
+        effective_to: Option<NaiveDate>,
+        actor_id: Uuid,
+        idempotency_key: &str,
+        request_digest: &str,
+    ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
+        let currency = currency.trim().to_ascii_uppercase();
+        if currency.len() != 3
+            || !currency.bytes().all(|byte| byte.is_ascii_uppercase())
+            || amount <= Decimal::ZERO
+            || amount.normalize().scale() > 6
+        {
+            return Err(ReferenceCatalogWriteError::InvalidFields);
+        }
+        let natural_key = currency.clone();
+        let payload = json!({
+            "label": "Ligne de communication",
+            "amount": amount.normalize().to_string(),
+            "currency": currency,
+            "taxable": true
+        });
+        self.create_reference_draft(
+            "COMMUNICATION_CHARGE",
+            &natural_key,
+            payload,
+            effective_from,
+            effective_to,
+            actor_id,
+            idempotency_key,
+            request_digest,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub async fn approve_reference_draft(
         &self,
         reference_id: Uuid,
@@ -2980,8 +3112,10 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
         let approval_ref = approval_ref.trim();
-        if !matches!(expected_type, "TAX_PROFILE" | "FX_RATE")
-            || approval_ref.is_empty()
+        if !matches!(
+            expected_type,
+            "TAX_PROFILE" | "FX_RATE" | "COMMUNICATION_CHARGE"
+        ) || approval_ref.is_empty()
             || approval_ref.len() > 160
             || idempotency_key.trim().is_empty()
             || request_digest.trim().is_empty()
@@ -3098,7 +3232,7 @@ impl CentralStore {
                     .bind(prior_end)
                     .execute(&mut *tx)
                     .await?;
-            } else {
+            } else if reference_type == "FX_RATE" {
                 sqlx::query("UPDATE fx_rate_versions SET effective_to = $2 WHERE id = $1")
                     .bind(previous_id)
                     .bind(prior_end)
@@ -3137,7 +3271,7 @@ impl CentralStore {
             .bind(actor_id)
             .execute(&mut *tx)
             .await?;
-        } else {
+        } else if reference_type == "FX_RATE" {
             sqlx::query(
                 "INSERT INTO fx_rate_versions
                  (id, from_currency, to_currency, value, effective_from, effective_to,
@@ -3156,10 +3290,10 @@ impl CentralStore {
             .execute(&mut *tx)
             .await?;
         }
-        let event_type = if reference_type == "TAX_PROFILE" {
-            "TAX_PROFILE_VERSION_APPROVED"
-        } else {
-            "FX_RATE_VERSION_APPROVED"
+        let event_type = match reference_type.as_str() {
+            "TAX_PROFILE" => "TAX_PROFILE_VERSION_APPROVED",
+            "FX_RATE" => "FX_RATE_VERSION_APPROVED",
+            _ => "COMMUNICATION_CHARGE_VERSION_APPROVED",
         };
         sqlx::query(
             "INSERT INTO audit_events
@@ -3211,8 +3345,10 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
         let change_ref = change_ref.trim();
-        if !matches!(expected_type, "TAX_PROFILE" | "FX_RATE")
-            || change_ref.is_empty()
+        if !matches!(
+            expected_type,
+            "TAX_PROFILE" | "FX_RATE" | "COMMUNICATION_CHARGE"
+        ) || change_ref.is_empty()
             || change_ref.len() > 160
             || idempotency_key.trim().is_empty()
             || request_digest.trim().is_empty()
@@ -3269,7 +3405,7 @@ impl CentralStore {
                     .bind(reference_id)
                     .execute(&mut *tx)
                     .await?;
-            } else {
+            } else if reference_type == "FX_RATE" {
                 sqlx::query(
                     "UPDATE fx_rate_versions SET status = 'REVOKED', approved = FALSE WHERE id = $1",
                 )
@@ -3277,10 +3413,10 @@ impl CentralStore {
                 .execute(&mut *tx)
                 .await?;
             }
-            let event_type = if reference_type == "TAX_PROFILE" {
-                "TAX_PROFILE_VERSION_REVOKED"
-            } else {
-                "FX_RATE_VERSION_REVOKED"
+            let event_type = match reference_type.as_str() {
+                "TAX_PROFILE" => "TAX_PROFILE_VERSION_REVOKED",
+                "FX_RATE" => "FX_RATE_VERSION_REVOKED",
+                _ => "COMMUNICATION_CHARGE_VERSION_REVOKED",
             };
             sqlx::query(
                 "INSERT INTO audit_events
@@ -3449,18 +3585,25 @@ impl CentralStore {
                 load_invoice_identity_snapshot(tx, self.organization_id, input.customer_id).await?
             }
         };
+        let issued_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+            .fetch_one(&mut *tx)
+            .await?;
+        let mut issued_response = response.clone();
+        issued_response.invoice_number = Some(issued_invoice_reference(issued_at));
         let document_snapshot = serde_json::to_value(&identity_snapshot)?;
-        let snapshot = serde_json::to_value(response)?;
+        let snapshot = serde_json::to_value(&issued_response)?;
         let invoice_insert = sqlx::query(
             "INSERT INTO invoices
-             (id, customer_id, period, issued_at, currency, total, template_version, immutable_snapshot, status, version, document_snapshot)
-             VALUES ($1, $2, $3, now(), $4, $5, $6, $7, 'CENTRAL_ACCEPTED', 1, $8)",
+             (id, customer_id, period, invoice_number, issued_at, currency, total, template_version, immutable_snapshot, status, version, document_snapshot)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'CENTRAL_ACCEPTED', 1, $10)",
         )
         .bind(response.invoice_id)
         .bind(input.customer_id)
         .bind(&input.billing_period)
-        .bind(&response.currency)
-        .bind(response.total)
+        .bind(&issued_response.invoice_number)
+        .bind(issued_at)
+        .bind(&issued_response.currency)
+        .bind(issued_response.total)
         .bind("v2-a4-2")
         .bind(snapshot.clone())
         .bind(document_snapshot.clone())
@@ -3475,14 +3618,14 @@ impl CentralStore {
             }
             Err(error) => return Err(error.into()),
         }
-        for line in &response.lines {
+        for line in &issued_response.lines {
             sqlx::query(
                 "INSERT INTO invoice_lines
                  (id, invoice_id, service_code, quantity, unit, unit_price, subtotal, tax_snapshot, total)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(Uuid::new_v4())
-            .bind(response.invoice_id)
+            .bind(issued_response.invoice_id)
             .bind(&line.service_code)
             .bind(line.quantity)
             .bind(&line.unit)
@@ -3498,7 +3641,7 @@ impl CentralStore {
                 "INSERT INTO invoice_meter_readings (invoice_id, meter_reading_id, service_code)
                  VALUES ($1, $2, 'ELECTRICITY'), ($1, $3, 'WATER')",
             )
-            .bind(response.invoice_id)
+            .bind(issued_response.invoice_id)
             .bind(refs.electricity_reading_id)
             .bind(refs.water_reading_id)
             .execute(&mut *tx)
@@ -3520,10 +3663,10 @@ impl CentralStore {
              VALUES ($1, 'INVOICE', $2, $3, $4, $5, 'OPEN')",
         )
         .bind(receivable_id)
-        .bind(response.invoice_id)
+        .bind(issued_response.invoice_id)
         .bind(input.customer_id)
-        .bind(&response.currency)
-        .bind(response.total)
+        .bind(&issued_response.currency)
+        .bind(issued_response.total)
         .execute(&mut *tx)
         .await?;
         sqlx::query(
@@ -3539,7 +3682,7 @@ impl CentralStore {
         .bind(snapshot)
         .execute(&mut *tx)
         .await?;
-        Ok(UtilityIssueOutcome::Created(response.clone()))
+        Ok(UtilityIssueOutcome::Created(issued_response))
     }
 
     pub async fn get_invoice_response(
@@ -3547,7 +3690,7 @@ impl CentralStore {
         id: Uuid,
     ) -> Result<Option<UtilityBillingResponse>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT immutable_snapshot, period FROM invoices WHERE id = $1 AND customer_id IN
+            "SELECT immutable_snapshot, period, invoice_number, status FROM invoices WHERE id = $1 AND customer_id IN
              (SELECT id FROM customers WHERE organization_id = $2)",
         )
         .bind(id)
@@ -3564,6 +3707,8 @@ impl CentralStore {
             if response.billing_period.is_empty() {
                 response.billing_period = row.try_get("period")?;
             }
+            response.invoice_number = row.try_get("invoice_number")?;
+            response.status = row.try_get("status")?;
             Ok(response)
         })
         .transpose()
@@ -3669,7 +3814,7 @@ impl CentralStore {
         limit: i64,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT p.id, p.customer_id, p.amount_received, p.currency,
+            "SELECT p.id, p.document_reference, p.customer_id, p.amount_received, p.currency,
                     p.method, p.paid_at, p.status
              FROM payments p
              JOIN customers c ON c.id = p.customer_id
@@ -3689,8 +3834,11 @@ impl CentralStore {
             .map(|row| {
                 let amount: Decimal = row.try_get("amount_received")?;
                 let paid_at: DateTime<Utc> = row.try_get("paid_at")?;
+                let payment_id: Uuid = row.try_get("id")?;
+                let document_reference: Option<String> = row.try_get("document_reference")?;
                 Ok(json!({
-                    "payment_id": row.try_get::<Uuid, _>("id")?,
+                    "payment_id": payment_id,
+                    "payment_number": document_reference.unwrap_or_else(|| payment_id.to_string()),
                     "customer_id": row.try_get::<Uuid, _>("customer_id")?,
                     "amount_received": format!("{:.2}", amount.round_dp(2)),
                     "currency": row.try_get::<String, _>("currency")?,
@@ -3707,7 +3855,7 @@ impl CentralStore {
         payment_id: Uuid,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let payment = sqlx::query(
-            "SELECT p.id, p.customer_id, p.amount_received, p.currency, p.method,
+            "SELECT p.id, p.document_reference, p.issued_at, p.customer_id, p.amount_received, p.currency, p.method,
                     p.paid_at, p.status, c.customer_code, c.legal_name, o.legal_name AS organization_name,
                     c.contact_fields::text AS contact_fields_json
              FROM payments p
@@ -3775,10 +3923,12 @@ impl CentralStore {
         let customer_id: Uuid = payment.try_get("customer_id")?;
         let amount: Decimal = payment.try_get("amount_received")?;
         let paid_at: DateTime<Utc> = payment.try_get("paid_at")?;
+        let issued_at: Option<DateTime<Utc>> = payment.try_get("issued_at")?;
+        let document_reference: Option<String> = payment.try_get("document_reference")?;
         Ok(Some(json!({
             "document_schema_version": 1,
             "document_type": "PAYMENT_RECEIPT",
-            "document_reference": format!("SEL-PAY-{}", payment_id.simple().to_string().to_uppercase()),
+            "document_reference": document_reference.unwrap_or_else(|| format!("SEL-PAY-{}", payment_id.simple().to_string().to_uppercase())),
             "qr_internal_reference": format!("SEL:PAYMENT:{payment_id}"),
             "organization_name": payment.try_get::<String, _>("organization_name")?,
             "payment": {
@@ -3788,6 +3938,7 @@ impl CentralStore {
                 "currency": payment.try_get::<String, _>("currency")?,
                 "method": payment.try_get::<String, _>("method")?,
                 "paid_at": paid_at.to_rfc3339(),
+                "issued_at": issued_at.map(|value| value.to_rfc3339()),
                 "status": payment.try_get::<String, _>("status")?
             },
             "customer": {
@@ -4327,10 +4478,14 @@ impl CentralStore {
                 }
             }
         }
+        let issued_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+            .fetch_one(&mut *tx)
+            .await?;
+        let document_reference = issued_document_reference(issued_at, payment_id);
         sqlx::query(
             "INSERT INTO payments
-             (id, customer_id, amount_received, currency, method, paid_at, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 'CENTRAL_ACCEPTED')",
+             (id, customer_id, amount_received, currency, method, paid_at, issued_at, status, document_reference)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'CENTRAL_ACCEPTED', $8)",
         )
         .bind(payment_id)
         .bind(input.customer_id)
@@ -4338,6 +4493,8 @@ impl CentralStore {
         .bind(&input.currency)
         .bind(&input.method)
         .bind(input.occurred_at)
+        .bind(issued_at)
+        .bind(&document_reference)
         .execute(&mut *tx)
         .await?;
         for ((receivable_id, schedule_id), allocated_amount) in persisted_allocations {
@@ -4357,6 +4514,7 @@ impl CentralStore {
         }
         let body = json!({
             "payment_id": payment_id,
+            "payment_number": document_reference,
             "status": "CENTRAL_ACCEPTED",
             "amount": input.received_amount,
             "currency": input.currency
@@ -5219,7 +5377,7 @@ impl CentralStore {
         limit: u32,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT s.id, s.customer_id, s.contract_id, s.currency, s.sold_at,
+            "SELECT s.id, s.document_reference, s.customer_id, s.contract_id, s.currency, s.sold_at,
                     s.sale_type, s.status, r.id AS receivable_id, r.principal_total,
                     ip.id AS installment_plan_id,
                     (SELECT p.sku FROM sale_lines sl JOIN products p ON p.id = sl.product_id
@@ -5241,8 +5399,11 @@ impl CentralStore {
             .map(|row| {
                 let sold_at: DateTime<Utc> = row.try_get("sold_at")?;
                 let principal: Option<Decimal> = row.try_get("principal_total")?;
+                let sale_id: Uuid = row.try_get("id")?;
+                let document_reference: Option<String> = row.try_get("document_reference")?;
                 Ok(json!({
-                    "sale_id": row.try_get::<Uuid, _>("id")?,
+                    "sale_id": sale_id,
+                    "sale_number": document_reference.unwrap_or_else(|| sale_id.to_string()),
                     "customer_id": row.try_get::<Uuid, _>("customer_id")?,
                     "contract_id": row.try_get::<Option<Uuid>, _>("contract_id")?,
                     "installment_plan_id": row.try_get::<Option<Uuid>, _>("installment_plan_id")?,
@@ -5265,7 +5426,7 @@ impl CentralStore {
         sale_id: Uuid,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let sale = sqlx::query(
-            "SELECT s.id, s.customer_id, s.contract_id, s.currency, s.sold_at, s.status,
+            "SELECT s.id, s.document_reference, s.customer_id, s.contract_id, s.currency, s.sold_at, s.status,
                     r.id AS receivable_id, r.principal_total,
                     c.customer_code, c.legal_name, c.contact_fields,
                     o.legal_name AS organization_name
@@ -5357,10 +5518,11 @@ impl CentralStore {
         let status: String = sale.try_get("status")?;
         let contacts: serde_json::Value = sale.try_get("contact_fields")?;
         let principal: Option<Decimal> = sale.try_get("principal_total")?;
+        let document_reference: Option<String> = sale.try_get("document_reference")?;
         Ok(Some(json!({
             "document_schema_version": 1,
             "document_type": "SOLAR_SALE_CONFIRMATION",
-            "document_reference": format!("SEL-SOLAR-{}", sale_id.simple().to_string().to_uppercase()),
+            "document_reference": document_reference.unwrap_or_else(|| format!("SEL-SOLAR-{}", sale_id.simple().to_string().to_uppercase())),
             "qr_internal_reference": format!("SEL:SOLAR-SALE:{sale_id}"),
             "organization_name": sale.try_get::<String, _>("organization_name")?,
             "sale": {
@@ -5442,6 +5604,10 @@ impl CentralStore {
         if input.principal.round_dp(2) != product_price.round_dp(2) {
             return Err(SolarSaleWriteError::PriceMismatch);
         }
+        let sold_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+            .fetch_one(&mut *tx)
+            .await?;
+        let document_reference = issued_document_reference(sold_at, sale_id);
         let response = SolarSaleResponse {
             sale_id,
             receivable_id,
@@ -5454,12 +5620,14 @@ impl CentralStore {
         let snapshot = serde_json::to_value(&response)?;
         sqlx::query(
             "INSERT INTO sales
-             (id, customer_id, currency, sold_at, sale_type, status)
-             VALUES ($1, $2, $3, now(), 'SOLAR_KIT', 'CENTRAL_ACCEPTED')",
+             (id, customer_id, currency, sold_at, sale_type, status, document_reference)
+             VALUES ($1, $2, $3, $4, 'SOLAR_KIT', 'CENTRAL_ACCEPTED', $5)",
         )
         .bind(sale_id)
         .bind(input.customer_id)
         .bind(&input.currency)
+        .bind(sold_at)
+        .bind(&document_reference)
         .execute(&mut *tx)
         .await?;
         let product_id: Uuid = sqlx::query(
@@ -6032,6 +6200,22 @@ impl CentralStore {
                     electricity_tax_rate,
                     water_tariff: tariffs.water_unit_price,
                     water_tax_rate: tariffs.water_tax_rate,
+                    communication_charge: match self
+                        .load_communication_charge(&input.currency, Utc::now().date_naive())
+                        .await?
+                    {
+                        Some(amount) => amount,
+                        None => {
+                            return self
+                                .persist_sync_rejection(
+                                    event,
+                                    "COMMUNICATION_CHARGE_UNAVAILABLE",
+                                    "approve_a_communication_charge_for_the_invoice_currency",
+                                )
+                                .await;
+                        }
+                    },
+                    communication_tax_rate: electricity_tax_rate,
                     currency: input.currency.clone(),
                 }) {
                     Ok(calculated) => calculated,

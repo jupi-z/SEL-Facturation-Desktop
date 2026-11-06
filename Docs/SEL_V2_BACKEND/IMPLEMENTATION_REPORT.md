@@ -1215,3 +1215,69 @@ Enfin, la création d’un brouillon de catalogue conserve les champs si le serv
 | Production | NON TOUCHÉ | Aucune requête, écriture, migration ou configuration de backend de production n’a été effectuée. |
 
 **État après cette tranche :** les parcours paiement et création de brouillon ont des confirmations et une gestion d’échec plus sûres. L’enrichissement de la situation client est rétrocompatible (champs JSON additifs) et ne change ni soldes ni écritures. Il reste à exécuter PostgreSQL en CI sur le nouveau SHA, relancer la CI Windows, compléter les scénarios d’administration/facturation et traiter les lacunes métier/API encore réellement requises. La PR reste non fusionnée et aucune version n’est publiée.
+
+### Revalidation UX3 après intégration de main — 6 novembre 2026
+
+La branche UX3 a intégré `main@0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6` après résolution contrôlée des conflits dans l’interface, le script de recette et ce rapport. Le rendu du login a aussi été corrigé : le panneau clair emploie maintenant le logo sombre lisible. La prévisualisation conserve les trois lignes financières actuelles (électricité, eau et ligne de communication) et montre explicitement 0 m³; le scénario de paiement présente la répartition et exige une confirmation avant son unique POST.
+
+| Contrôle sur la branche intégrée | Résultat |
+|---|---|
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 57 tests |
+| `npm run build` dans `v2/windows-app` | PASS — TypeScript et Vite; avertissement de taille des chunks PDF/fonts (>500 kB) non bloquant |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 12 tests |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test; aucun endpoint PDF serveur |
+| `python v2/windows-app/scripts/visual_review.py` | PASS — code 0, 34 captures synthétiques couvrant login, navigation, dossiers, facture, paiements, solaire, administration et PDF local |
+| Revue visuelle ciblée | PASS — logo login lisible; aperçu facture et confirmation paiement affichent les montants retournés par le serveur et les états attendus |
+| `git diff --cached --check` et marqueurs de conflit | PASS — aucun espace erroné ni marqueur restant |
+| `cargo test --manifest-path v2/Cargo.toml --workspace` | FAIL technique de l’environnement — édition de liens Windows `LNK1207` sur PDB incompatible lors de `postgres_catalog_api`; ce n’est pas un échec d’assertion, mais la suite workspace n’est donc pas validée localement |
+| Intégrations PostgreSQL sur cette machine | NOT_RUN — aucune `TEST_DATABASE_URL` dédiée disponible; ne pas confondre les tests API simulés/compilés avec un test PostgreSQL exécuté |
+| CI GitHub | NOT_YET_VALIDATED sur le nouveau SHA; le seul check observé avant le push était vert sur l’ancien head `8d3e64b` |
+| Production | NON TOUCHÉE — aucune connexion, migration, écriture ou configuration de production n’a été effectuée |
+
+Les captures synthétiques retenues sont `Docs/SEL_V2_UX3_CODEX/evidence/login-1440x900.png` et `invoice-preview-1440x900.png`; la preuve de confirmation de paiement est `payment-review-1440x900.png`. Les 34 captures de travail restent dans `artifacts/` et ne sont pas ajoutées au dépôt.
+
+**État UX3 :** plusieurs parcours existants et leurs confirmations ont été validés visuellement et par tests; la mission complète n’est pas encore close. Le remplacement de compteur est disponible par endpoint testé et son dialogue est présent. Les corrections/annulations des ventes solaires, avenants/résiliations des contrats actifs et modification/abandon des brouillons de référentiels restent bloqués tant que leurs contrats métier/API transactionnels ne sont pas définis et validés. Aucun bouton ne doit prétendre réaliser ces mutations. La recette réelle Tauri/Windows et la suite PostgreSQL doivent encore être confirmées par CI ou par un environnement représentatif.
+### Ligne de communication configurable sur les factures eau + électricité — 6 novembre 2026
+
+À la demande de SEL, le moteur ajoute une ligne obligatoire « Ligne de communication » aux factures combinées périodiques Eau + Électricité. La valeur initiale fournie est de 10 USD par facture. Cette charge d'entreprise reste une ligne distincte de la TVA, est comprise dans sa base taxable, et la TVA de 16 % est calculée une seule fois sur le sous-total complet : électricité + eau + ligne de communication. La ligne eau à 0 m³ demeure présente et à montant nul.
+
+Le montant n'est pas fixé dans le code : il est stocké comme version de catalogue centralisée, avec devise, périodes d'effet, état d'approbation et référence d'approbation. L'administrateur peut préparer puis approuver une nouvelle version, en indiquant la version qu'elle remplace; les factures déjà émises conservent leurs snapshots financiers. Le snapshot de catalogue inclut la configuration approuvée et SQLite la met en cache pour l'usage local autorisé. Sans configuration approuvée valable pour la devise et la période, le moteur refuse l'émission plutôt que d'inventer un tarif.
+
+| Vérification | Résultat |
+|---|---|
+| Calcul métier et arrondi TVA | PASS — `cargo test -p sel-domain --test billing_red` : 4 tests; notamment 100 kWh × 0,095 USD + 10 USD = 19,50 USD de base, TVA 3,12 USD et total 22,62 USD; le test d'eau positive couvre aussi une TVA calculée sur le total des lignes. |
+| Configuration catalogue centrale | PASS — test PostgreSQL réel des routes de consultation, création de brouillon, approbation et remplacement d'une version; la valeur est stockée sans perte de précision (`12.50` normalisé en `12.5`). |
+| Cache local hors connexion | PASS — `catalog_snapshot` vérifie l'authenticité SHA-256, l'application atomique/idempotente et la sélection de la version approuvée par devise et date. Aucun forfait local codé en dur. |
+| Facturation locale | PASS — tests de prévisualisation, émission, relevés de compteurs, paiements partiels, avoirs et soldes mis à jour. |
+| PostgreSQL central et redémarrage | PASS — `utility_issue_is_atomic_idempotent_and_survives_restart` sur une base PostgreSQL de test fraîche. |
+| Convergence multi-postes | PASS — `two_sqlite_devices_converge_through_real_postgres_and_http`, deux fichiers SQLite indépendants et PostgreSQL réel; identifiants, lignes et soldes convergent après paiement partiel. |
+| Suite Rust | PASS — `cargo test --workspace`; aucun échec. Les cas PostgreSQL `#[ignore]` ne font pas partie de cette commande et sont comptés uniquement lorsqu'ils ont été lancés explicitement avec `TEST_DATABASE_URL`. |
+| Clippy | PASS — `cargo clippy --workspace --all-targets -- -D warnings`. |
+| Client Windows | PASS — `npm run build` (TypeScript + Vite); avertissement de taille des bundles PDF conservé. |
+| Production et livraison | NOT_DONE — aucune migration ni écriture en base de production, aucun déploiement, aucune release ni nouvel installateur dans cette intervention. |
+
+**Périmètre métier :** la charge est appliquée aux factures périodiques combinées Eau + Électricité. Les factures de vente solaire et les reçus ont un modèle financier/documentaire distinct et n'ont pas été altérés par cette mise à jour; aucune nouvelle charge ou TVA solaire n'est inventée. Si SEL entend également facturer cette ligne sur une vente solaire ponctuelle, cette règle doit être implémentée dans le moteur de vente et ses échéanciers avant ces ventes.
+
+**État Git :** modifications locales non commitées sur la branche de travail. Les éléments non suivis préexistants dans `artifacts/`, `node_modules/` et les dossiers Tauri de génération/build ont été laissés intacts. Aucune branche ni donnée réelle n'a été supprimée ou modifiée.
+
+### Vérification et correction de la facturation centrale — 6 novembre 2026
+
+L’audit de production effectué en lecture seule confirme que les 4 tarifs Eau/Électricité (résidentiel/commercial) et les profils de TVA de 16 % sont approuvés et applicables pour octobre 2026. Les tarifs ne manquent donc pas dans PostgreSQL. Le point de fragilité était le champ `tariff_revision` envoyé par le client : il était exigé puis comparé textuellement, ce qui rejetait une valeur vide même si le serveur disposait d’un unique tarif approuvé correspondant à la catégorie, la devise et la période.
+
+Le serveur résout maintenant cette référence quand le client omet le champ ou envoie une chaîne vide. Il échoue toujours de manière explicite si plusieurs références approuvées se chevauchent; aucun tarif n’est deviné. La ligne de communication configurée à 10 USD est insérée par migration SQLx PostgreSQL `0021`, avec le repère d’approbation communiqué par le propriétaire. Elle devient une ligne financière obligatoire des factures périodiques combinées Eau + Électricité, est incluse dans l’assiette de TVA à 16 %, et peut être remplacée par une nouvelle version datée via Administration. Les factures historiques restent inchangées.
+
+| Vérification de cette exécution | Résultat |
+|---|---|
+| `cargo fmt --all -- --check` | PASS après formatage |
+| `cargo test --workspace` | PASS — tous les tests exécutables localement; tests PostgreSQL explicitement ignorés faute de `TEST_DATABASE_URL` local |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| `npm run build` dans `v2/windows-app` | PASS — TypeScript + Vite; avertissement de bundles PDF volumineux |
+| Version du client Windows | 0.4.4 — incrémentée afin que l’installateur permette la mise à jour des postes en 0.4.3 |
+| Facture à 100 kWh, 0 m³, ligne communication 10 USD | PASS — test domaine existant : sous-total 19,50 USD, TVA 3,12 USD, total 22,62 USD |
+| Résolution automatique de `tariff_revision` vide | CODE + test PostgreSQL ajouté; test de stockage PostgreSQL non exécuté localement, Docker local indisponible |
+| État serveur avant déploiement | Lecture seule : API et PostgreSQL sains, 20 migrations appliquées, `0021` non appliquée, aucune ligne de communication en base |
+| Sauvegarde de production avant migration | À créer avant déploiement; un dump antérieur existe mais ne constitue pas la sauvegarde préalable à cette opération |
+| Déploiement backend / migration production | NOT_DONE à cette étape |
+| CI PostgreSQL, paquet serveur et installation Windows pour ce nouveau commit | NOT_RUN à cette étape |
+
+Les modifications de cette intervention sont dans le worktree et nécessitent encore un commit candidat, la CI GitHub PostgreSQL/Windows et une sauvegarde fraîche avant déploiement. Aucun tarif, facture, paiement ou compte réel n’a été modifié pendant l’audit.

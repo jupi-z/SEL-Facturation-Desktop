@@ -160,6 +160,28 @@ async fn invoice_void_is_audited_and_idempotent() {
     assert_eq!(retry.status(), StatusCode::OK);
     assert_eq!(json_body(retry).await, first_void);
 
+    let void_document = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/invoices/{}/document-data",
+                    invoice["invoice_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer fixture")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(void_document.status(), StatusCode::OK);
+    let void_document = json_body(void_document).await;
+    assert_eq!(void_document["invoice"]["status"], "VOID");
+    assert_eq!(
+        void_document["document_reference"],
+        invoice["invoice_number"]
+    );
+
     let void_history = app
         .clone()
         .oneshot(

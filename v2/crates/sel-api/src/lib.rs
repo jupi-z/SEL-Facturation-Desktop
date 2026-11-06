@@ -166,6 +166,14 @@ pub struct CreateFxRateDraftRequest {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct CreateCommunicationChargeDraftRequest {
+    pub amount: Decimal,
+    pub currency: String,
+    pub effective_from: chrono::NaiveDate,
+    pub effective_to: Option<chrono::NaiveDate>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct ApproveReferenceDraftRequest {
     pub approval_ref: String,
     #[serde(default)]
@@ -207,6 +215,7 @@ pub struct TariffBook {
     pub electricity_tax_rate: Option<Decimal>,
     pub water_unit_price: Option<Decimal>,
     pub water_tax_rate: Option<Decimal>,
+    pub communication_charge: Option<Decimal>,
     pub revision: Option<String>,
 }
 
@@ -356,11 +365,23 @@ pub fn router(state: AppState) -> Router {
             "/v1/admin/catalog/fx-rates/:id/revoke",
             post(revoke_fx_rate),
         )
+        .route(
+            "/v1/admin/catalog/communication-charge",
+            get(admin_communication_charges).post(create_communication_charge_draft),
+        )
+        .route(
+            "/v1/admin/catalog/communication-charge/:id/approve",
+            post(approve_communication_charge),
+        )
         .route("/v1/meta/capabilities", get(capabilities))
         .route("/v1/catalog/products", get(catalog_products))
         .route("/v1/catalog/tariffs", get(catalog_tariffs))
         .route("/v1/catalog/tax-profiles", get(catalog_tax_profiles))
         .route("/v1/catalog/fx-rates", get(catalog_fx_rates))
+        .route(
+            "/v1/catalog/communication-charge",
+            get(catalog_communication_charge),
+        )
         .route("/v1/catalog/snapshot", get(catalog_snapshot))
         .route("/v1/customers", get(list_customers).post(create_customer))
         .route(
@@ -544,6 +565,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 | "/v1/admin/catalog/products"
                 | "/v1/admin/catalog/tax-profiles"
                 | "/v1/admin/catalog/fx-rates"
+                | "/v1/admin/catalog/communication-charge"
         ) {
             return is_admin;
         }
@@ -555,6 +577,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/catalog/tariffs"
                     | "/v1/catalog/tax-profiles"
                     | "/v1/catalog/fx-rates"
+                    | "/v1/catalog/communication-charge"
                     | "/v1/catalog/snapshot"
                     | "/v1/customers"
                     | "/v1/service-accounts/:id/meters"
@@ -617,6 +640,8 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
             || path == "/v1/admin/catalog/fx-rates"
             || path_matches(path, "/v1/admin/catalog/fx-rates/:id/approve")
             || path_matches(path, "/v1/admin/catalog/fx-rates/:id/revoke")
+            || path == "/v1/admin/catalog/communication-charge"
+            || path_matches(path, "/v1/admin/catalog/communication-charge/:id/approve")
         {
             return is_admin;
         }
@@ -706,9 +731,29 @@ async fn health_ready(State(state): State<AppState>) -> Json<serde_json::Value> 
         match (
             store.admin_catalog_tariffs().await,
             store.admin_reference_versions("TAX_PROFILE").await,
+            store.admin_reference_versions("COMMUNICATION_CHARGE").await,
         ) {
-            (Ok(tariffs), Ok(tax_profiles)) => {
-                utility_catalog_is_configured(&tariffs, &tax_profiles, Utc::now().date_naive())
+            (Ok(tariffs), Ok(tax_profiles), Ok(communication_charges)) => {
+                let today = Utc::now().date_naive();
+                let today_string = today.format("%Y-%m-%d").to_string();
+                utility_catalog_is_configured(&tariffs, &tax_profiles, today)
+                    && communication_charges
+                        .iter()
+                        .filter(|row| {
+                            row["payload"]["currency"] == "USD"
+                                && row["status"] == "APPROVED"
+                                && row["approval_ref"]
+                                    .as_str()
+                                    .is_some_and(|reference| !reference.trim().is_empty())
+                                && row["effective_from"]
+                                    .as_str()
+                                    .is_some_and(|from| from <= today_string.as_str())
+                                && row["effective_to"]
+                                    .as_str()
+                                    .is_none_or(|to| to >= today_string.as_str())
+                        })
+                        .count()
+                        == 1
             }
             _ => false,
         }
@@ -773,7 +818,7 @@ async fn capabilities() -> Json<serde_json::Value> {
     Json(json!({
         "protocol_version": 1,
         "document_schema_version": 1,
-        "services": ["ELECTRICITY", "WATER", "SOLAR_KIT"],
+        "services": ["ELECTRICITY", "WATER", "COMMUNICATION", "SOLAR_KIT"],
         "pdf_endpoint": false,
         "server_invoice_files": false
     }))
@@ -846,6 +891,62 @@ async fn admin_fx_rates(
         None => Vec::new(),
     };
     Ok(Json(serde_json::Value::Array(versions)))
+}
+
+async fn admin_communication_charges(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let versions = match &state.central {
+        Some(store) => store
+            .admin_reference_versions("COMMUNICATION_CHARGE")
+            .await
+            .map_err(storage_error)?,
+        None => Vec::new(),
+    };
+    Ok(Json(serde_json::Value::Array(versions)))
+}
+
+async fn create_communication_charge_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<CreateCommunicationChargeDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_principal(principal)?;
+    let key = require_idempotency(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "CATALOG_CENTRAL_REQUIRED",
+            "charge administration requires PostgreSQL",
+        )
+    })?;
+    let digest = digest_json(&input)?;
+    let outcome = store
+        .create_communication_charge_draft(
+            input.amount,
+            &input.currency,
+            input.effective_from,
+            input.effective_to,
+            principal.user_id,
+            key,
+            &digest,
+        )
+        .await
+        .map_err(reference_write_error)?;
+    reference_write_response(outcome)
+}
+
+async fn approve_communication_charge(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ApproveReferenceDraftRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    approve_reference(state, headers, id, principal, input, "COMMUNICATION_CHARGE").await
 }
 
 async fn create_tax_profile_draft(
@@ -1070,6 +1171,24 @@ async fn catalog_fx_rates(
     Ok(Json(serde_json::Value::Array(rates)))
 }
 
+async fn catalog_communication_charge(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    let versions = store
+        .catalog_communication_charges(Utc::now().date_naive())
+        .await
+        .map_err(storage_error)?;
+    Ok(Json(serde_json::Value::Array(versions)))
+}
+
 async fn catalog_snapshot(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1094,11 +1213,16 @@ async fn catalog_snapshot(
         .admin_reference_versions("FX_RATE")
         .await
         .map_err(storage_error)?;
+    let mut communication_charges = store
+        .admin_reference_versions("COMMUNICATION_CHARGE")
+        .await
+        .map_err(storage_error)?;
     for rows in [
         &mut products,
         &mut tariffs,
         &mut tax_profiles,
         &mut fx_rates,
+        &mut communication_charges,
     ] {
         rows.retain(|row| matches!(row["status"].as_str(), Some("APPROVED" | "REVOKED")));
     }
@@ -1108,6 +1232,7 @@ async fn catalog_snapshot(
         tariffs,
         tax_profiles,
         fx_rates,
+        communication_charges,
     };
     let sha256 = catalog_snapshot_sha256(&payload);
     Ok(Json(CatalogSnapshot { payload, sha256 }))
@@ -2705,17 +2830,32 @@ async fn calculate_utility(
             )
             .await
             .map_err(storage_error)?;
+        let resolved_revision = snapshot.revision.clone();
         TariffBook {
             electricity_unit_price: snapshot.electricity_unit_price,
             electricity_tax_rate: snapshot.electricity_tax_rate,
             water_unit_price: snapshot.water_unit_price,
             water_tax_rate: snapshot.water_tax_rate,
-            revision: Some(input.tariff_revision.clone()),
+            communication_charge: Some(
+                store
+                    .load_communication_charge(&input.currency, Utc::now().date_naive())
+                    .await
+                    .map_err(storage_error)?
+                    .ok_or_else(|| {
+                        ApiError::unprocessable(
+                            "COMMUNICATION_CHARGE_MISSING",
+                            "an approved communication charge is required for this currency",
+                        )
+                    })?,
+            ),
+            revision: resolved_revision,
         }
     } else {
         state.tariffs.read().await.clone()
     };
-    if tariffs.revision.as_deref() != Some(input.tariff_revision.as_str()) {
+    if !input.tariff_revision.trim().is_empty()
+        && tariffs.revision.as_deref() != Some(input.tariff_revision.trim())
+    {
         return Err(ApiError::unprocessable(
             "TARIFF_REVISION_INVALID",
             "the tariff revision is not approved or is unavailable",
@@ -2744,17 +2884,29 @@ async fn calculate_utility(
         electricity_unit_price: tariffs.electricity_unit_price.ok_or_else(|| {
             ApiError::unprocessable(
                 "ELECTRICITY_TARIFF_MISSING",
-                "electricity tariff is not configured",
+                format!("Aucun tarif d’électricité approuvé ne couvre la catégorie de l’abonné, la devise {} et la période {}. Vérifiez le catalogue SEL et ses dates d’effet.", input.currency, input.billing_period),
             )
         })?,
         electricity_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
             ApiError::unprocessable(
                 "ELECTRICITY_TAX_MISSING",
-                "electricity tax profile is not configured",
+                "Aucun profil de TVA approuvé n’est applicable à l’électricité pour cette période.",
             )
         })?,
         water_tariff: tariffs.water_unit_price,
         water_tax_rate: tariffs.water_tax_rate,
+        communication_charge: tariffs.communication_charge.ok_or_else(|| {
+            ApiError::unprocessable(
+                "COMMUNICATION_CHARGE_MISSING",
+                "Aucune ligne de communication approuvée n’est applicable à cette devise et à cette date.",
+            )
+        })?,
+        communication_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
+            ApiError::unprocessable(
+                "COMMUNICATION_TAX_MISSING",
+                "Le profil de TVA approuvé requis pour la ligne de communication est absent.",
+            )
+        })?,
         currency: input.currency.clone(),
     })
     .map_err(|error| ApiError::unprocessable("BILLING_RULE_INVALID", error.to_string()))?;
@@ -2846,7 +2998,10 @@ async fn get_document_data(
             .await
             .map_err(storage_error)?
             .ok_or_else(|| ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found"))?;
-        let reference = format!("SEL-V2-{id}");
+        let reference = invoice
+            .invoice_number
+            .clone()
+            .unwrap_or_else(|| format!("SEL-V2-{id}"));
         return Ok(Json(DocumentData {
             document_schema_version: 1,
             template_version: "v2-a4-2".into(),
@@ -2861,7 +3016,7 @@ async fn get_document_data(
                 .get_invoice_issued_at(id)
                 .await
                 .map_err(storage_error)?,
-            qr_internal_reference: reference,
+            qr_internal_reference: format!("SEL-V2-{id}"),
             origin: "CENTRAL_ACCEPTED".into(),
         }));
     }

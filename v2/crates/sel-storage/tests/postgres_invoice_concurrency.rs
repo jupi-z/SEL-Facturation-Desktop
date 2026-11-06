@@ -130,10 +130,30 @@ async fn concurrent_utility_invoices_same_customer_period_return_one_business_co
             .count(),
         1
     );
+    let issued = outcomes
+        .iter()
+        .find_map(|outcome| match outcome {
+            Ok(UtilityIssueOutcome::Created(response)) => Some(response),
+            _ => None,
+        })
+        .expect("one invoice must be issued");
+    let reference = issued.invoice_number.as_deref().expect("issued reference");
+    assert!(reference.starts_with("SEL-"));
+    assert_eq!(reference.len(), 19, "invoice reference is date/time only");
+    assert!(reference[4..12].bytes().all(|byte| byte.is_ascii_digit()));
+    assert_eq!(reference.as_bytes()[12], b'-');
+    assert!(reference[13..].bytes().all(|byte| byte.is_ascii_digit()));
+    let persisted = first
+        .get_invoice_response(issued.invoice_id)
+        .await
+        .expect("query invoice")
+        .expect("issued invoice exists");
+    assert_eq!(persisted.invoice_number.as_deref(), Some(reference));
     let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM invoices WHERE customer_id = $1 AND period = '2026-11'",
+        "SELECT count(*) FROM invoices WHERE customer_id = $1 AND period = '2026-11' AND invoice_number = $2",
     )
     .bind(customer.id)
+    .bind(reference)
     .fetch_one(&first.pool)
     .await
     .expect("count invoices");

@@ -1,4 +1,5 @@
 use sel_storage::migrate_sqlite;
+use sqlx::Row;
 
 #[tokio::test]
 async fn sqlite_migrations_are_repeatable_and_create_local_sync_tables() {
@@ -27,6 +28,23 @@ async fn sqlite_migrations_are_repeatable_and_create_local_sync_tables() {
         assert!(
             tables.iter().any(|name| name == required),
             "missing {required}"
+        );
+    }
+    for (table, column) in [
+        ("payments", "document_reference"),
+        ("payments", "issued_at"),
+        ("sales", "document_reference"),
+    ] {
+        let columns: Vec<String> = sqlx::query(&format!("PRAGMA table_info({table})"))
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("name").unwrap())
+            .collect();
+        assert!(
+            columns.iter().any(|name| name == column),
+            "missing {table}.{column}"
         );
     }
 }

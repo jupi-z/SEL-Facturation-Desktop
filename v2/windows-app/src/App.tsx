@@ -122,6 +122,7 @@ function domainLabel(value: unknown): string {
     OTHER: "Autre",
     ELECTRICITY: "Électricité",
     WATER: "Eau",
+    COMMUNICATION: "Ligne de communication",
     CONNECTED: "Raccordé",
     DISCONNECTED: "Non raccordé",
     UNKNOWN: "À vérifier",
@@ -131,6 +132,10 @@ function domainLabel(value: unknown): string {
 
 function rows<T extends Row>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
+}
+
+function record(value: unknown): Row {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
 }
 
 function customerLabel(customerId: unknown, customers: Row[]): string {
@@ -200,6 +205,7 @@ export default function App() {
   const [payments, setPayments] = useState<Row[]>([]);
   const [sales, setSales] = useState<Row[]>([]);
   const [solarProducts, setSolarProducts] = useState<Row[]>([]);
+  const [tariffCatalog, setTariffCatalog] = useState<Row[]>([]);
   const [solarQuote, setSolarQuote] = useState<Row | null>(null);
   const [solarSaleDraft, setSolarSaleDraft] = useState<Row | null>(null);
   const [solarSaleOpen, setSolarSaleOpen] = useState(false);
@@ -215,6 +221,9 @@ export default function App() {
   const [selectedInvoice, setSelectedInvoice] = useState<Row | null>(null);
   const [zeroConfirmed, setZeroConfirmed] = useState(false);
   const [invoiceFormKey, setInvoiceFormKey] = useState(0);
+  const [invoiceCustomerId, setInvoiceCustomerId] = useState("");
+  const [invoiceBillingPeriod, setInvoiceBillingPeriod] = useState("");
+  const [invoiceWaterQuantity, setInvoiceWaterQuantity] = useState("0");
   const [invoiceFilter, setInvoiceFilter] = useState("");
   const [customerFilter, setCustomerFilter] = useState("");
   const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
@@ -269,6 +278,7 @@ export default function App() {
       setServerReachable(false);
       setServerReady(false);
       setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]);
+      setTariffCatalog([]);
       setStatement(null); setSelectedCustomerData(null); setSelectedInvoice(null); setPreview(null);
       setNotice({ message: "Le serveur SEL est indisponible ou non configuré. Les données métier sont masquées jusqu’au rétablissement du service.", error: true });
     };
@@ -287,12 +297,13 @@ export default function App() {
     if (!session?.authenticated) return;
     setLoading(true);
     try {
-      const [customerResult, invoiceResult, paymentResult, salesResult, productsResult, statusResult] = await Promise.allSettled([
+      const [customerResult, invoiceResult, paymentResult, salesResult, productsResult, tariffsResult, statusResult] = await Promise.allSettled([
         loadAllCustomers(),
         centralRequest<unknown>("/v1/invoices?limit=100"),
         centralRequest<unknown>("/v1/payments?limit=100"),
         centralRequest<unknown>("/v1/solar/sales?limit=100"),
         centralRequest<unknown>("/v1/catalog/products"),
+        centralRequest<unknown>("/v1/catalog/tariffs"),
         centralStatus<Row>(),
       ]);
       setCustomers(customerResult.status === "fulfilled" ? rows(customerResult.value) : []);
@@ -300,6 +311,7 @@ export default function App() {
       setPayments(paymentResult.status === "fulfilled" ? rows(paymentResult.value) : []);
       setSales(salesResult.status === "fulfilled" ? rows(salesResult.value) : []);
       setSolarProducts(productsResult.status === "fulfilled" ? rows(productsResult.value) : []);
+      setTariffCatalog(tariffsResult.status === "fulfilled" ? rows(tariffsResult.value) : []);
       if (statusResult.status === "fulfilled") {
         setServerReachable(true);
         setServerStatus(statusResult.value);
@@ -310,7 +322,7 @@ export default function App() {
         setServerReady(false);
         window.dispatchEvent(new Event("sel-server-unavailable"));
       }
-      const failure = [customerResult, invoiceResult, paymentResult, salesResult, productsResult, statusResult].find((result) => result.status === "rejected");
+      const failure = [customerResult, invoiceResult, paymentResult, salesResult, productsResult, tariffsResult, statusResult].find((result) => result.status === "rejected");
       setNotice(failure?.status === "rejected"
         ? { message: humanError(failure.reason), error: true }
         : statusResult.status === "fulfilled" && statusResult.value.configured !== true
@@ -340,7 +352,7 @@ export default function App() {
   async function signOut() {
     try { await centralLogout(); }
     catch (reason) { setAuthMessage(humanError(reason)); }
-    finally { setSession({ authenticated: false }); setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]); }
+    finally { setSession({ authenticated: false }); setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]); setTariffCatalog([]); }
   }
 
   async function retryServer() {
@@ -380,6 +392,59 @@ export default function App() {
     return !query || [customer.customer_code, customer.legal_name, customer.address, customer.phone]
       .some((value) => text(value, "").toLocaleLowerCase("fr").includes(query));
   }), [customers, customerFilter]);
+  const invoiceCustomer = customers.find((customer) => text(customer.customer_id ?? customer.id, "") === invoiceCustomerId);
+  const invoiceCategory = text(invoiceCustomer?.customer_category, "").trim().toUpperCase();
+  const invoiceEffectiveDate = invoiceBillingPeriod ? `${invoiceBillingPeriod}-01` : "";
+  const applicableTariffs = useMemo(() => {
+    if (!invoiceCategory || !invoiceEffectiveDate) return { revisions: [] as string[], electricity: [] as Row[], water: [] as Row[] };
+    const matching = tariffCatalog.filter((row) => {
+      const from = text(row.effective_from, "");
+      const to = text(row.effective_to, "");
+      return text(row.customer_category, "").trim().toUpperCase() === invoiceCategory
+        && text(row.currency, "").trim().toUpperCase() === "USD"
+        && text(row.approval_ref, "").trim() !== ""
+        && from <= invoiceEffectiveDate
+        && (!to || to >= invoiceEffectiveDate);
+    });
+    const electricity = matching.filter((row) => text(row.service_code, "").toUpperCase() === "ELECTRICITY" && text(row.unit, "").toUpperCase() === "KWH");
+    const water = matching.filter((row) => text(row.service_code, "").toUpperCase() === "WATER" && text(row.unit, "").toUpperCase() === "M3");
+    const waterRequired = Number(invoiceWaterQuantity) > 0;
+    const revisions = [...new Set(electricity
+      .map((row) => text(row.approval_ref, "").trim())
+      .filter((revision) => !waterRequired || water.some((row) => text(row.approval_ref, "").trim() === revision)))];
+    return { revisions, electricity, water };
+  }, [tariffCatalog, invoiceCategory, invoiceEffectiveDate, invoiceWaterQuantity]);
+  const waterTariffRequired = Number(invoiceWaterQuantity) > 0;
+  const invoiceTariffRevision = applicableTariffs.electricity.length === 1
+    && (!waterTariffRequired || applicableTariffs.water.length === 1)
+    && applicableTariffs.revisions.length === 1
+    ? applicableTariffs.revisions[0]
+    : "";
+  const recentActivity = useMemo(() => {
+    const customerNames = new Map(customers.map((customer) => [
+      text(customer.customer_id ?? customer.id, ""),
+      text(customer.legal_name, text(customer.customer_code)),
+    ]));
+    const activity = [
+      ...invoices.map((row) => ({
+        row, kind: "Eau + électricité", reference: text(row.invoice_number ?? row.invoice_id),
+        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
+        amount: text(row.total), date: text(row.issued_at ?? row.created_at),
+      })),
+      ...payments.map((row) => ({
+        row, kind: "Encaissement", reference: text(row.payment_number ?? row.payment_id),
+        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
+        amount: text(row.amount_received ?? row.received_amount), date: text(row.paid_at ?? row.occurred_at),
+      })),
+      ...sales.map((row) => ({
+        row, kind: "Kit solaire", reference: text(row.sale_number ?? row.sale_id),
+        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
+        amount: text(row.principal), date: text(row.sold_at ?? row.created_at),
+      })),
+    ];
+    return activity.sort((left, right) => Date.parse(right.date) - Date.parse(left.date)).slice(0, 8);
+  }, [customers, invoices, payments, sales]);
+
   async function submit(form: HTMLFormElement, path: string, payload: Row, success: string): Promise<boolean> {
     try {
       await centralRequest(path, "POST", payload);
@@ -420,9 +485,22 @@ export default function App() {
       water: { quantity: water, unit: "M3" },
       water_zero_confirmed: zeroConfirmed,
       currency: "USD",
-      tariff_revision: form.get("tariff_revision"),
+      tariff_revision: invoiceTariffRevision,
       due_date: form.get("due_date") || null,
     };
+    if (!invoiceTariffRevision) {
+      const reason = !invoiceCategory
+        ? "La catégorie tarifaire de cet abonné doit être renseignée avant la facturation."
+        : applicableTariffs.electricity.length === 0
+          ? `Aucun tarif d’électricité approuvé en USD/kWh ne couvre ${invoiceBillingPeriod} pour la catégorie ${invoiceCategory}. Un administrateur doit vérifier le catalogue et ses dates d’effet.`
+          : Number(water) > 0 && applicableTariffs.water.length === 0
+            ? `Aucun tarif d’eau approuvé en USD/m³ ne couvre ${invoiceBillingPeriod} pour la catégorie ${invoiceCategory}.`
+            : applicableTariffs.revisions.length === 0
+              ? `Les tarifs d’électricité et d’eau applicables à ${invoiceBillingPeriod} n’ont pas la même référence d’approbation SEL.`
+              : "Plusieurs tarifs d’électricité se chevauchent pour cette catégorie et cette période. Un administrateur doit corriger le catalogue.";
+      setNotice({ message: reason, error: true });
+      return;
+    }
     try {
       const result = await centralRequest<Row>("/v1/billing/utility/preview", "POST", payload);
       setInvoiceDraft(payload);
@@ -437,6 +515,7 @@ export default function App() {
       setDraftDirty(false);
       setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
       setInvoiceFormKey((key) => key + 1);
+      setInvoiceCustomerId(""); setInvoiceBillingPeriod(""); setInvoiceWaterQuantity("0");
       setNotice({ message: "Facture enregistrée par le serveur SEL." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
@@ -637,16 +716,17 @@ export default function App() {
   const previewLines = rows<Row>(preview?.lines);
   const previewElectricity = previewLines.find((line) => text(line.service_code).toUpperCase() === "ELECTRICITY");
   const previewWater = previewLines.find((line) => text(line.service_code).toUpperCase() === "WATER");
+  const previewCommunication = previewLines.find((line) => text(line.service_code).toUpperCase() === "COMMUNICATION");
 
-  if (authChecking) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><div className="auth-card" role="status"><p className="eyebrow">VÉRIFICATION SÉCURISÉE</p><h2>Connexion au serveur SEL</h2><p className="muted">Vérification de la session et de la disponibilité du service central…</p></div></div></section>;
+  if (authChecking) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><div className="auth-card" role="status"><p className="eyebrow">VÉRIFICATION SÉCURISÉE</p><h2>Connexion au serveur SEL</h2><p className="muted">Vérification de la session et de la disponibilité du service central…</p></div></div></section>;
 
-  if (!session?.authenticated) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><form className="auth-card" onSubmit={(event) => void signIn(event)}><p className="eyebrow">ACCÈS SÉCURISÉ</p><h2>Connexion à SEL Facturation</h2><p className="muted">Connectez-vous avec votre compte SEL pour accéder à l’application.</p>{authMessage && <div className="notice error" role="alert">{authMessage}</div>}<label>Identifiant SEL<input name="identity_ref" autoComplete="username" required autoFocus /></label><label>Mot de passe<input name="password" type="password" autoComplete="current-password" required /></label><Button primary type="submit" disabled={authBusy || serverReachable === false}>{authBusy ? "Connexion…" : "Se connecter"}</Button>{serverReachable === false && <Button type="button" onClick={() => void retryServer()}>Réessayer la connexion</Button>}<p className="auth-help">Une connexion Internet est requise pour ouvrir et utiliser SEL Facturation.</p></form></div></section>;
+  if (!session?.authenticated) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><form className="auth-card" onSubmit={(event) => void signIn(event)}><p className="eyebrow">ACCÈS SÉCURISÉ</p><h2>Connexion à SEL Facturation</h2><p className="muted">Connectez-vous avec votre compte SEL pour accéder à l’application.</p>{authMessage && <div className="notice error" role="alert">{authMessage}</div>}<label>Identifiant SEL<input name="identity_ref" autoComplete="username" required autoFocus /></label><label>Mot de passe<input name="password" type="password" autoComplete="current-password" required /></label><Button primary type="submit" disabled={authBusy || serverReachable === false}>{authBusy ? "Connexion…" : "Se connecter"}</Button>{serverReachable === false && <Button type="button" onClick={() => void retryServer()}>Réessayer la connexion</Button>}<p className="auth-help">Une connexion Internet est requise pour ouvrir et utiliser SEL Facturation.</p></form></div></section>;
 
-  if (serverReachable === false) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Les opérations sont traitées et conservées par le serveur central SEL.</p></div><small>Connexion au serveur requise</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">SERVICE CENTRAL</p><h2>Connexion au serveur interrompue</h2><p className="muted">Pour protéger l’exactitude des factures et des paiements, l’application est verrouillée jusqu’au rétablissement du service en ligne.</p>{notice?.message && <div className="notice error" role="alert">{notice.message}</div>}<div className="page-actions"><Button primary onClick={() => void retryServer()}>Réessayer</Button><Button onClick={() => void signOut()}>Se déconnecter</Button></div></div></div></section>;
+  if (serverReachable === false) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Les opérations sont traitées et conservées par le serveur central SEL.</p></div><small>Connexion au serveur requise</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">SERVICE CENTRAL</p><h2>Connexion au serveur interrompue</h2><p className="muted">Pour protéger l’exactitude des factures et des paiements, l’application est verrouillée jusqu’au rétablissement du service en ligne.</p>{notice?.message && <div className="notice error" role="alert">{notice.message}</div>}<div className="page-actions"><Button primary onClick={() => void retryServer()}>Réessayer</Button><Button onClick={() => void signOut()}>Se déconnecter</Button></div></div></div></section>;
 
-  if (session.require_password_change) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Votre compte SEL,<br />sécurisé dès le départ.</h1><p>Modifiez votre mot de passe temporaire pour continuer.</p></div><small>Application connectée au serveur central</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">PREMIÈRE CONNEXION</p><h2>Changer le mot de passe</h2><PasswordChangeForm onComplete={() => { setSession({ authenticated: false }); setAuthMessage("Mot de passe modifié. Connectez-vous avec votre nouveau mot de passe."); }} /></div></div></section>;
+  if (session.require_password_change) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Votre compte SEL,<br />sécurisé dès le départ.</h1><p>Modifiez votre mot de passe temporaire pour continuer.</p></div><small>Application connectée au serveur central</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">PREMIÈRE CONNEXION</p><h2>Changer le mot de passe</h2><PasswordChangeForm onComplete={() => { setSession({ authenticated: false }); setAuthMessage("Mot de passe modifié. Connectez-vous avec votre nouveau mot de passe."); }} /></div></div></section>;
 
-  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
+  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -694,6 +774,9 @@ export default function App() {
             <ul className="home-guidance"><li>Une action principale par étape.</li><li>Vous pouvez revenir sans publier un brouillon.</li><li>Les écritures validées se corrigent avec traçabilité.</li><li>Le serveur est requis pour toute opération métier.</li><li>Les données affichées viennent de l’API SEL.</li></ul>
           </Panel>
         </div>
+        <Panel title="Dossiers / activité récente" action={<Button onClick={() => navigateTo("server")}>État du serveur →</Button>}>
+          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune activité récente retournée par le serveur." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, formatMoney(amount, row.currency), <Status value={row.status} />])} />
+        </Panel>
       </>}
 
       {view === "customers" && (selectedCustomer ? <>
@@ -747,11 +830,11 @@ export default function App() {
           <div className="invoice-workspace">
             <Panel title="Paramètres de facturation">
               <form data-preserve-draft id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
-                <label>Abonné<select name="customer_id" required defaultValue={selectedCustomer}><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-                <label>Période de facturation<input name="billing_period" type="month" required /></label>
+                <label>Abonné<select name="customer_id" required value={invoiceCustomerId} onChange={(event) => setInvoiceCustomerId(event.target.value)}><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
+                <label>Période de facturation<input name="billing_period" type="month" required value={invoiceBillingPeriod} onChange={(event) => setInvoiceBillingPeriod(event.target.value)} /></label>
                 <label>Électricité consommée (kWh)<input name="electricity_quantity" type="number" min="0" step="0.01" defaultValue="0" required /></label>
-                <label>Eau consommée (m³)<input name="water_quantity" type="number" min="0" step="0.01" defaultValue="0" required onChange={(event) => { if (Number(event.target.value) !== 0) setZeroConfirmed(false); }} /></label>
-                <label>Révision tarifaire approuvée<input name="tariff_revision" required /></label>
+                <label>Eau consommée (m³)<input name="water_quantity" type="number" min="0" step="0.01" value={invoiceWaterQuantity} required onChange={(event) => { setInvoiceWaterQuantity(event.target.value); if (Number(event.target.value) !== 0) setZeroConfirmed(false); }} /></label>
+                <label>Barème approuvé applicable<input value={invoiceTariffRevision} readOnly placeholder={!invoiceCustomerId || !invoiceBillingPeriod ? "Sélectionnez l’abonné et la période" : "Aucun barème applicable"} /><small className="help">{!invoiceCustomerId || !invoiceBillingPeriod ? "Le système recherche le barème approuvé selon l’abonné et la période." : !invoiceCategory ? "La catégorie tarifaire de cet abonné doit être renseignée." : applicableTariffs.electricity.length === 0 ? `Aucun tarif électricité approuvé ne couvre ${invoiceBillingPeriod} pour ${invoiceCategory} en USD/kWh.` : applicableTariffs.electricity.length > 1 ? "Plusieurs tarifs d’électricité se chevauchent. Un administrateur doit corriger le catalogue." : waterTariffRequired && applicableTariffs.water.length === 0 ? `Tarif d’eau approuvé manquant pour ${invoiceBillingPeriod} · ${invoiceCategory} · USD/m³.` : waterTariffRequired && applicableTariffs.water.length > 1 ? "Plusieurs tarifs d’eau se chevauchent. Un administrateur doit corriger le catalogue." : applicableTariffs.revisions.length > 1 ? "Plusieurs références de barème sont applicables. Un administrateur doit corriger le catalogue." : applicableTariffs.revisions.length === 0 ? "Les tarifs d’électricité et d’eau doivent partager la référence d’approbation SEL." : "Référence chargée automatiquement depuis le catalogue central."}</small></label>
                 <label>Date limite de paiement<input name="due_date" type="date" /></label>
                 <label className="check-row invoice-zero-confirm"><input type="checkbox" checked={zeroConfirmed} onChange={(event) => setZeroConfirmed(event.target.checked)} /> Je confirme que le relevé d’eau est exactement de 0 m³.</label>
               </form>
@@ -763,7 +846,7 @@ export default function App() {
               <div className="invoice-summary-empty"><strong>À calculer</strong><span>Le montant s’affichera après vérification par le moteur Rust.</span></div>
               <span className="status-badge">En attente du calcul</span>
               <p className="help invoice-summary-help">Les calculs et l’autorisation restent gérés par le moteur Rust.</p>
-              <Button primary type="submit" form="utility-invoice-form">Prévisualiser la facture</Button>
+              <Button primary type="submit" form="utility-invoice-form" disabled={!invoiceTariffRevision}>Prévisualiser la facture</Button>
             </aside>
           </div>
           <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
@@ -783,6 +866,7 @@ export default function App() {
           <div className="invoice-preview-metrics metrics">
             <Metric label="Électricité" value={previewElectricity ? formatQuantity(previewElectricity.quantity, previewElectricity.unit) : "—"} note={previewElectricity ? `${formatMoney(previewElectricity.subtotal, preview.currency)} hors taxe` : "Ligne indisponible"} />
             <Metric label="Eau" value={previewWater ? formatQuantity(previewWater.quantity, previewWater.unit) : "—"} note={previewWater ? formatMoney(previewWater.total, preview.currency) : "Ligne indisponible"} />
+            <Metric label="Ligne de communication" value={previewCommunication ? formatMoney(previewCommunication.subtotal, preview.currency) : "—"} note="Forfait SEL hors TVA" />
             <Metric label="Taxes" value={formatMoney(preview.tax, preview.currency)} note="Calcul retourné par Rust" />
             <Metric label="Montant total" value={formatMoney(preview.total, preview.currency)} note="À confirmer avant émission" />
           </div>
@@ -984,7 +1068,7 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   const lines = rows<Row>(data.lines);
   return <Panel title={title} action={action}>{onConfirm && <p className="help">Vérifiez les deux services, les taxes et le total. Cette prévisualisation ne crée pas de facture.</p>}
       <Table headers={["Service", "Quantité", "Prix unitaire", "Sous-total", "Taxe", "Total"]} empty="Le moteur n’a retourné aucune ligne." data={lines.map((line) => [domainLabel(line.service_code), formatQuantity(line.quantity, line.unit), formatMoney(line.unit_price, data.currency), formatMoney(line.subtotal, data.currency), formatMoney(line.tax, data.currency), formatMoney(line.total, data.currency)])} />
-      <div className="totals"><span>Sous-total <strong>{formatMoney(data.subtotal, data.currency)}</strong></span><span>Taxes <strong>{formatMoney(data.tax, data.currency)}</strong></span><span>Total <strong>{formatMoney(data.total, data.currency)}</strong></span></div>
+      <div className="totals"><span>Sous-total <strong>{formatMoney(data.subtotal, data.currency)}</strong></span><span>TVA <strong>{formatMoney(data.tax, data.currency)}</strong></span><span>Total <strong>{formatMoney(data.total, data.currency)}</strong></span></div>
     {onConfirm && <div className="form-actions"><Button primary onClick={onConfirm}>Émettre cette facture</Button></div>}
   </Panel>;
 }
@@ -1518,16 +1602,19 @@ function CustomerStatement({ customerName, customerCode, statement }: { customer
   </Panel>;
 }
 
-type AdminCatalog = "tariffs" | "products" | "tax-profiles" | "fx-rates";
-type AdminCatalogField = { name: string; label: string; type?: string; required?: boolean; step?: string };
+type AdminCatalog = "tariffs" | "products" | "tax-profiles" | "fx-rates" | "communication-charge";
+type AdminCatalogField = { name: string; label: string; type?: string; required?: boolean; step?: string; options?: { value: string; label: string }[] };
 
 const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: AdminCatalogField[]; columns: string[] }> = {
   tariffs: { title: "Tarifs", fields: [
-    { name: "service_code", label: "Service" }, { name: "customer_category", label: "Catégorie" },
-    { name: "unit", label: "Unité" }, { name: "unit_price", label: "Prix unitaire", type: "number", step: "any" },
-    { name: "currency", label: "Devise" }, { name: "effective_from", label: "Début d’effet", type: "date" },
+    { name: "service_code", label: "Service", options: [{ value: "ELECTRICITY", label: "Électricité" }, { value: "WATER", label: "Eau" }] },
+    { name: "customer_category", label: "Code de catégorie (ex. RESIDENTIAL)" },
+    { name: "unit", label: "Unité", options: [{ value: "KWH", label: "kWh" }, { value: "M3", label: "m³" }] },
+    { name: "unit_price", label: "Prix unitaire", type: "number", step: "any" },
+    { name: "currency", label: "Devise", options: [{ value: "USD", label: "USD" }, { value: "CDF", label: "CDF" }] },
+    { name: "effective_from", label: "Début d’effet", type: "date" },
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
-  ], columns: ["service_code", "customer_category", "unit_price", "currency", "effective_from", "status"] },
+  ], columns: ["service_code", "customer_category", "unit_price", "currency", "effective_from", "status", "approval_ref"] },
   products: { title: "Catalogue solaire", fields: [
     { name: "sku", label: "Référence produit" }, { name: "label", label: "Désignation" },
     { name: "price_reference", label: "Prix de référence", type: "number", step: "any" },
@@ -1545,6 +1632,11 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
     { name: "value", label: "Taux", type: "number", step: "any" }, { name: "source", label: "Référence approuvée par SEL" },
     { name: "effective_from", label: "Début d’effet", type: "date" }, { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["from_currency", "to_currency", "value", "effective_from", "status"] },
+  "communication-charge": { title: "Ligne de communication", fields: [
+    { name: "amount", label: "Montant hors TVA", type: "number", step: "0.01" },
+    { name: "currency", label: "Devise" }, { name: "effective_from", label: "Début d’effet", type: "date" },
+    { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
+  ], columns: ["id", "label", "amount", "currency", "effective_from", "status"] },
 };
 
 function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }: {
@@ -1555,6 +1647,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }:
 }) {
   const definition = adminCatalogDefinitions[kind];
   const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
+  const [revokingId, setRevokingId] = useState("");
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1563,23 +1656,30 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }:
   }
   return <Panel title={definition.title}>
     <form className="form-grid admin-catalog-form" onSubmit={create}>
-      {definition.fields.map((field) => <label key={field.name}>{field.label}<input name={field.name} type={field.type ?? "text"} step={field.step} required={field.required !== false} /></label>)}
+      {definition.fields.map((field) => <label key={field.name}>{field.label}{field.options
+        ? <select name={field.name} defaultValue="" required={field.required !== false}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+        : <input name={field.name} type={field.type ?? "text"} step={field.step} required={field.required !== false} />}</label>)}
       <div className="form-actions span-two"><Button primary type="submit" disabled={busy}>Créer un brouillon</Button></div>
-      <p className="help span-two">Le brouillon n’est pas applicable aux factures. Il faut une référence d’approbation saisie par SEL pour l’activer.</p>
+      <p className="help span-two">{kind === "communication-charge" ? "Cette charge SEL apparaît sur chaque facture eau + électricité. Elle entre dans l’assiette de la TVA, affichée séparément. L’activation exige une approbation SEL." : "Le brouillon n’est pas applicable aux factures. Seul un administrateur l’active après validation SEL et référence de décision."}</p>
     </form>
-    <Table headers={[...definition.columns.map((field) => field.replace(/_/g, " ")), "Approbation"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
+    <Table headers={[...definition.columns.map((field) => field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " ")), "Actions"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
       const id = text(item.id ?? item[idField], "");
       const status = text(item.status).toUpperCase();
       const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={(event) => {
         event.preventDefault();
         const values = new FormData(event.currentTarget);
         onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
-      }}><input aria-label="Référence d’approbation SEL" name="approval_ref" placeholder="Référence SEL" required /><input aria-label="Version remplacée (facultatif)" name="supersedes_id" placeholder="UUID remplacé (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? <form className="admin-approve-form" onSubmit={(event) => {
+      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Référence de décision SEL" required /><input aria-label="Tarif remplacé (facultatif)" name="supersedes_id" placeholder="Tarif remplacé (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={(event) => {
         event.preventDefault();
         const changeRef = String(new FormData(event.currentTarget).get("change_ref") ?? "").trim();
         onRevoke(kind, item, changeRef);
-      }}><input aria-label="Référence de révocation SEL" name="change_ref" placeholder="Référence SEL" required /><Button type="submit" disabled={busy || !id}>Révoquer</Button></form> : <Status value={status || "État inconnu"} />;
-      return [...definition.columns.map((field) => field === "status" ? <Status value={item[field]} /> : text(item[field])), approval];
+        setRevokingId("");
+      }}><input aria-label="Motif ou référence de révocation" name="change_ref" placeholder="Motif de révocation SEL" required /><Button type="button" onClick={() => setRevokingId("")}>Annuler</Button><Button type="submit" disabled={busy || !id}>Confirmer la révocation</Button></form> : <div className="admin-approve-form"><Status value="Approuvé" /><Button type="button" disabled={busy || !id} onClick={() => setRevokingId(id)}>Révoquer…</Button></div> : <Status value={status || "État inconnu"} />;
+      return [...definition.columns.map((field) => {
+        const payload = record(item.payload);
+        const displayed = field === "label" ? payload.label : field === "amount" ? payload.amount : field === "currency" ? payload.currency : item[field];
+        return field === "status" ? <Status value={item[field]} /> : text(displayed);
+      }), kind === "communication-charge" && status === "APPROVED" ? <span className="help">Version protégée — remplacez-la par un nouveau brouillon approuvé.</span> : approval];
     })} />
   </Panel>;
 }
@@ -1590,6 +1690,7 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
   const [products, setProducts] = useState<Row[]>([]);
   const [taxProfiles, setTaxProfiles] = useState<Row[]>([]);
   const [fxRates, setFxRates] = useState<Row[]>([]);
+  const [communicationCharges, setCommunicationCharges] = useState<Row[]>([]);
   const [auditEvents, setAuditEvents] = useState<Row[]>([]);
   const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
   const [passwordTarget, setPasswordTarget] = useState("");
@@ -1601,7 +1702,7 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
 
   function clearAdminSession() {
     authenticated.current = false;
-    setUsers([]); setTariffs([]); setProducts([]); setTaxProfiles([]); setFxRates([]); setAuditEvents([]);
+    setUsers([]); setTariffs([]); setProducts([]); setTaxProfiles([]); setFxRates([]); setCommunicationCharges([]); setAuditEvents([]);
   }
 
   const loadData = useCallback(async () => {
@@ -1609,11 +1710,11 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
     const paths = [
       "/v1/admin/users",
       "/v1/admin/catalog/tariffs", "/v1/admin/catalog/products",
-      "/v1/admin/catalog/tax-profiles", "/v1/admin/catalog/fx-rates", "/v1/admin/audit-events",
+      "/v1/admin/catalog/tax-profiles", "/v1/admin/catalog/fx-rates", "/v1/admin/catalog/communication-charge", "/v1/admin/audit-events",
     ];
     const results = await Promise.allSettled(paths.map((path) => centralAdminRequest<unknown>(path)));
     if (!authenticated.current) return;
-    const setters = [setUsers, setTariffs, setProducts, setTaxProfiles, setFxRates, setAuditEvents] as const;
+    const setters = [setUsers, setTariffs, setProducts, setTaxProfiles, setFxRates, setCommunicationCharges, setAuditEvents] as const;
     results.forEach((result, index) => { if (result.status === "fulfilled") setters[index](rows<Row>(result.value)); });
     const failed = results.filter((result) => result.status === "rejected");
     if (failed.length) {
@@ -1624,7 +1725,7 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
         return;
       }
     }
-    setMessage(failed.length ? `${6 - failed.length} rubrique(s) chargée(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "Données d’administration actualisées depuis le serveur central.");
+    setMessage(failed.length ? `${7 - failed.length} rubrique(s) chargée(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "Données d’administration actualisées depuis le serveur central.");
     setError(failed.length > 0);
     setLoading(false);
   }, []);
@@ -1746,6 +1847,7 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
       <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
       <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
       <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
+      <AdminCatalogPanel kind="communication-charge" items={communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
     </div>
     <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>
   </>;

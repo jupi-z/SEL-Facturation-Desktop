@@ -33,6 +33,13 @@ fn snapshot(product_status: &str) -> CatalogSnapshot {
             "effective_to": null, "approval_ref": "SEL-FX-1", "approved_by": null,
             "status": "APPROVED"
         })],
+        communication_charges: vec![json!({
+            "id": "11000000-0000-4000-8000-000000000004",
+            "reference_type": "COMMUNICATION_CHARGE", "natural_key": "USD",
+            "payload": {"label":"Ligne de communication", "amount":"10", "currency":"USD"},
+            "effective_from": "2026-01-01", "effective_to": null,
+            "approval_ref": "SEL-COMMUNICATION-1", "status": "APPROVED"
+        })],
     };
     let sha256 = catalog_snapshot_sha256(&payload);
     CatalogSnapshot { payload, sha256 }
@@ -60,6 +67,13 @@ async fn catalog_snapshot_is_authenticated_atomic_and_idempotent() {
     .await
     .expect("read the approved water tariff");
     assert_eq!(water_unit_price, "0.30");
+    assert_eq!(
+        store
+            .load_communication_charge("USD", chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap())
+            .await
+            .unwrap(),
+        Some("10".parse().unwrap())
+    );
     store
         .apply_catalog_snapshot(&approved)
         .await

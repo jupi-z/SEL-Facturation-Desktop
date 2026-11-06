@@ -865,6 +865,30 @@ async fn calculate_utility_response(
         })?,
         water_tariff: tariffs.water_unit_price,
         water_tax_rate: tariffs.water_tax_rate,
+        communication_charge: store
+            .load_communication_charge(
+                &input.currency,
+                chrono::NaiveDate::parse_from_str(
+                    &format!("{}-01", input.billing_period),
+                    "%Y-%m-%d",
+                )
+                .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?,
+            )
+            .await
+            .map_err(internal_error)?
+            .ok_or_else(|| {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "approved communication charge is unavailable for this currency and period"
+                        .into(),
+                )
+            })?,
+        communication_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "approved communication tax profile is unavailable".into(),
+            )
+        })?,
         currency: input.currency.clone(),
     })
     .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;

@@ -692,6 +692,8 @@ pub struct CatalogSnapshotPayload {
     pub tariffs: Vec<serde_json::Value>,
     pub tax_profiles: Vec<serde_json::Value>,
     pub fx_rates: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub communication_charges: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

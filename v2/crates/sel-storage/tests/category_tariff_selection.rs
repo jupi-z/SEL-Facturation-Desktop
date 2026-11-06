@@ -169,6 +169,10 @@ async fn postgres_tariffs_are_selected_for_the_customer_category() {
         .load_tariffs(&approval_ref, "USD", "2026-10", "COMMERCIAL")
         .await
         .expect("load commercial tariffs");
+    let automatic = store
+        .load_tariffs("", "USD", "2026-10", "COMMERCIAL")
+        .await
+        .expect("resolve the unique approved tariff revision automatically");
 
     assert_eq!(
         residential
@@ -180,6 +184,15 @@ async fn postgres_tariffs_are_selected_for_the_customer_category() {
     );
     assert_eq!(
         commercial
+            .electricity_unit_price
+            .unwrap()
+            .normalize()
+            .to_string(),
+        "0.12"
+    );
+    assert_eq!(automatic.revision.as_deref(), Some(approval_ref.as_str()));
+    assert_eq!(
+        automatic
             .electricity_unit_price
             .unwrap()
             .normalize()
