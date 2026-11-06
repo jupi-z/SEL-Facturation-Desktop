@@ -655,6 +655,18 @@ def test_customer_dossier_has_read_only_overview_and_explicit_edit_mode() -> Non
     assert "Canceling customer edit review must not send a write request" in visual_review
 
 
+def test_service_and_meter_changes_are_reviewed_before_central_writes() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'title: "Vérifier le rattachement du service"' in app
+    assert 'title: "Vérifier le numéro du compteur"' in app
+    assert 'title: "Vérifier le raccordement"' in app
+    assert "Aucun compteur ne sera créé." in app
+    assert "Service attachment must not be sent before confirmation" in visual_review
+    assert "Canceling service attachment review must preserve the chosen service" in visual_review
+
+
 def test_customer_directory_surfaces_truthful_central_metrics_before_the_table() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     directory = app.split('title="Répertoire des abonnés"', 1)[1].split(

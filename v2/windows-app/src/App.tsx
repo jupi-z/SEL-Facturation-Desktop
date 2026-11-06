@@ -795,7 +795,7 @@ export default function App() {
             <div className="form-actions span-two"><Button type="button" disabled={customerEditBusy} onClick={() => { setCustomerEditOpen(false); setDraftDirty(false); }}>Annuler</Button><Button primary type="submit" disabled={customerEditBusy}>{customerEditBusy ? "Vérification…" : "Vérifier les modifications"}</Button></div>
           </form> : <dl className="customer-details"><div><dt>Nom / raison sociale</dt><dd>{text(selectedCustomerData.legal_name)}</dd></div><div><dt>Code abonné</dt><dd>{text(selectedCustomerData.customer_code)}</dd></div><div><dt>Catégorie tarifaire</dt><dd>{text(selectedCustomerData.customer_category, "À compléter")}</dd></div><div><dt>Adresse</dt><dd>{text(selectedCustomerData.address)}</dd></div><div><dt>Téléphone</dt><dd>{text(selectedCustomerData.phone)}</dd></div><div><dt>Révision du dossier</dt><dd>{text(selectedCustomerData.revision)}</dd></div></dl> : <div className="empty-state">Chargement du dossier abonné…</div>}
         </Panel>
-        <ServiceAccountsManager customerId={selectedCustomer} canManageMeters={["ADMIN", "SUPERVISOR", "BILLING_AGENT"].includes(text(session?.role).toUpperCase())} onConfirmReplacement={confirmMeterReplacement} />
+        <ServiceAccountsManager customerId={selectedCustomer} canManageMeters={["ADMIN", "SUPERVISOR", "BILLING_AGENT"].includes(text(session?.role).toUpperCase())} onConfirmReplacement={confirmMeterReplacement} confirmAction={requestConfirmation} />
         <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} customerCode={text(selectedCustomerData?.customer_code)} statement={statement} />
       </> : <>
       <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => { if (customerCreateOpen) setDraftDirty(false); setCustomerCreateOpen((open) => !open); }}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
@@ -1230,7 +1230,7 @@ function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { custom
   </>}</div></Panel></div>;
 }
 
-function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacement }: { customerId: string; canManageMeters: boolean; onConfirmReplacement: (oldSerial: string, newSerial: string, reason: string) => Promise<boolean> }) {
+function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacement, confirmAction }: { customerId: string; canManageMeters: boolean; onConfirmReplacement: (oldSerial: string, newSerial: string, reason: string) => Promise<boolean>; confirmAction: (request: ConfirmationRequest) => Promise<boolean> }) {
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [metersByAccount, setMetersByAccount] = useState<Record<string, Row[]>>({});
   const [accountFormOpen, setAccountFormOpen] = useState(false);
@@ -1273,6 +1273,12 @@ function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacem
     };
     setSaving(true); setMessage(""); setMessageError(false);
     try {
+      const accepted = await confirmAction({
+        title: "Vérifier le rattachement du service",
+        description: `${domainLabel(serviceCode)} pour l’abonné ${customerId}. État : ${domainLabel(payload.connection_status)}. Contrat : ${payload.contract_ref || "non renseigné"}. Date d’activation : ${payload.activated_at || "non renseignée"}. Aucun compteur ne sera créé.`,
+        confirmLabel: "Rattacher le service",
+      });
+      if (!accepted) return;
       await centralRequest(`/v1/customers/${encodeURIComponent(customerId)}/service-accounts`, "POST", payload);
       announceDraftSaved();
       setAccountFormOpen(false);
@@ -1288,10 +1294,17 @@ function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacem
     if (!account) return;
     const form = new FormData(event.currentTarget);
     const unit = text(account.service_code).toUpperCase() === "WATER" ? "M3" : "KWH";
+    const serial = String(form.get("serial") ?? "").trim();
     setSaving(true); setMessage(""); setMessageError(false);
     try {
+      const accepted = await confirmAction({
+        title: "Vérifier le numéro du compteur",
+        description: `Compteur ${serial}, service ${domainLabel(account.service_code)}, unité ${unit === "M3" ? "m³" : "kWh"}, abonné ${customerId}.`,
+        confirmLabel: "Enregistrer le compteur",
+      });
+      if (!accepted) return;
       await centralRequest(`/v1/service-accounts/${encodeURIComponent(meterFormAccount)}/meters`, "POST", {
-        serial: String(form.get("serial") ?? "").trim(), unit,
+        serial, unit,
       });
       announceDraftSaved();
       setMeterFormAccount("");
@@ -1332,6 +1345,12 @@ function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacem
     };
     setSaving(true); setMessage(""); setMessageError(false);
     try {
+      const accepted = await confirmAction({
+        title: "Vérifier le raccordement",
+        description: `Service ${domainLabel(account.service_code)} de l’abonné ${customerId}. État : ${domainLabel(payload.connection_status)}. Contrat : ${payload.contract_ref || "non renseigné"}. Date d’activation : ${payload.activated_at || "non renseignée"}.`,
+        confirmLabel: "Enregistrer le raccordement",
+      });
+      if (!accepted) return;
       await centralRequest(`/v1/service-accounts/${encodeURIComponent(accountId)}`, "PATCH", payload, Number(account.revision));
       announceDraftSaved();
       setEditingServiceAccount("");
@@ -1357,32 +1376,32 @@ function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacem
         {contractRef && <p className="help">Contrat : {contractRef}</p>}
         {accountMeters.length ? <ul className="service-meter-list">{accountMeters.map((meter) => <li key={text(meter.id)}><strong>{text(meter.serial)}</strong><span>{formatUnit(meter.unit)}{meter.active === false ? " · Inactif" : " · Actif"}{canManageMeters && meter.active !== false && <Button type="button" onClick={() => setReplacingMeterId((current) => current === text(meter.id) ? "" : text(meter.id))} disabled={saving}>{replacingMeterId === text(meter.id) ? "Annuler" : "Remplacer"}</Button>}</span></li>)}</ul> : <p className="help">Aucun compteur enregistré. Le service reste utilisable pour la facturation manuelle.</p>}
         {editingServiceAccount === accountId && <form data-preserve-draft className="form-grid service-account-form" onSubmit={(event) => void updateServiceAccount(event, account)}>
-          <label>État du raccordement<select name="connection_status" defaultValue={text(account.connection_status, "UNKNOWN")}><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
-          <label>Référence du contrat<input name="contract_ref" maxLength={128} defaultValue={text(account.contract_ref, "")} /></label>
-          <label>Date d’activation<input name="activated_at" type="date" defaultValue={text(account.activated_at, "").slice(0, 10)} /></label>
+          <label>État du raccordement<select name="connection_status" defaultValue={text(account.connection_status, "UNKNOWN")} disabled={saving}><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
+          <label>Référence du contrat<input name="contract_ref" maxLength={128} defaultValue={text(account.contract_ref, "")} disabled={saving} /></label>
+          <label>Date d’activation<input name="activated_at" type="date" defaultValue={text(account.activated_at, "").slice(0, 10)} disabled={saving} /></label>
           <p className="help span-two">Modification protégée par révision du serveur. Une écriture concurrente est refusée ; les champs saisis restent à l’écran.</p>
           <div className="form-actions span-two"><Button type="button" onClick={() => { announceDraftSaved(); setEditingServiceAccount(""); }}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer la modification"}</Button></div>
         </form>}
         {meterFormAccount === accountId && <form data-preserve-draft className="form-grid service-meter-form" onSubmit={(event) => void createMeter(event)}>
-          <label>Numéro réel du compteur<input name="serial" maxLength={128} required placeholder="À saisir uniquement si le compteur existe" /></label>
+          <label>Numéro réel du compteur<input name="serial" maxLength={128} required placeholder="À saisir uniquement si le compteur existe" disabled={saving} /></label>
           <label>Unité<input value={unit === "M3" ? "m³" : "kWh"} readOnly /></label>
           <p className="help span-two">Ce champ est obligatoire uniquement pour enregistrer un compteur réel. Aucun numéro fictif ne sera créé.</p>
           <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer le compteur"}</Button></div>
         </form>}
         {replacingMeterId && accountMeters.find((meter) => text(meter.id) === replacingMeterId && meter.active !== false)?.service_account_id === accountId && <form data-preserve-draft className="form-grid service-meter-form" onSubmit={(event) => void replaceMeter(event, accountMeters.find((meter) => text(meter.id) === replacingMeterId)!)}>
           <p className="help span-two">Le remplacement est enregistré en une transaction serveur. L’ancien compteur devient inactif ; ses index, corrections et factures restent consultables.</p>
-          <label>Nouveau numéro de compteur<input name="serial" maxLength={128} required placeholder="Numéro réel inscrit sur le compteur" /></label>
+          <label>Nouveau numéro de compteur<input name="serial" maxLength={128} required placeholder="Numéro réel inscrit sur le compteur" disabled={saving} /></label>
           <label>Unité<input value={unit === "M3" ? "m³" : "kWh"} readOnly /></label>
-          <label className="span-two">Motif du remplacement<textarea name="reason" maxLength={500} minLength={1} required placeholder="Panne, remplacement physique…" /></label>
+          <label className="span-two">Motif du remplacement<textarea name="reason" maxLength={500} minLength={1} required placeholder="Panne, remplacement physique…" disabled={saving} /></label>
           <div className="form-actions span-two"><Button type="button" onClick={() => setReplacingMeterId("")}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Remplacement…" : "Remplacer le compteur"}</Button></div>
         </form>}
       </article>;
     })}</div> : <div className="empty-state">Aucun service n’est encore rattaché. Vous pouvez ajouter l’eau et l’électricité sans créer de compteur.</div>}
     {accountFormOpen && availableServices.length > 0 && <form data-preserve-draft className="form-grid service-account-form" onSubmit={(event) => void createServiceAccount(event)}>
-      <label>Service<select name="service_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{availableServices.map((code) => <option key={code} value={code}>{domainLabel(code)}</option>)}</select></label>
-      <label>État du raccordement<select name="connection_status" defaultValue="UNKNOWN"><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
-      <label>Référence du contrat <span className="muted">(facultatif)</span><input name="contract_ref" maxLength={128} /></label>
-      <label>Date d’activation <span className="muted">(facultative)</span><input name="activated_at" type="date" /></label>
+      <label>Service<select name="service_code" required defaultValue="" disabled={saving}><option value="" disabled>Sélectionner…</option>{availableServices.map((code) => <option key={code} value={code}>{domainLabel(code)}</option>)}</select></label>
+      <label>État du raccordement<select name="connection_status" defaultValue="UNKNOWN" disabled={saving}><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
+      <label>Référence du contrat <span className="muted">(facultatif)</span><input name="contract_ref" maxLength={128} disabled={saving} /></label>
+      <label>Date d’activation <span className="muted">(facultative)</span><input name="activated_at" type="date" disabled={saving} /></label>
       <p className="help span-two">Aucun numéro de compteur n’est demandé à cette étape. L’état « Inconnu » évite d’affirmer un raccordement non vérifié.</p>
       <div className="form-actions span-two"><Button type="button" onClick={() => { announceDraftSaved(); setAccountFormOpen(false); }}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Rattacher le service"}</Button></div>
     </form>}

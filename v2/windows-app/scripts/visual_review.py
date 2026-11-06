@@ -536,6 +536,22 @@ async def capture_views() -> None:
                     )
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / f"service-account-without-meter-{SHOT_SUFFIX}.png"))
+                    await page.get_by_label("Service").select_option("WATER")
+                    await page.get_by_label("État du raccordement").select_option("CONNECTED")
+                    await page.get_by_role("button", name="Rattacher le service").click()
+                    service_review = page.get_by_role("alertdialog", name="Vérifier le rattachement du service")
+                    await service_review.wait_for()
+                    if "Eau" not in await service_review.inner_text() or "Aucun compteur ne sera créé" not in await service_review.inner_text():
+                        raise AssertionError("Service attachment review must clearly show service and no meter creation")
+                    await page.screenshot(path=str(OUTPUT / f"service-account-confirmation-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.method === 'POST' && entry.path.endsWith('/service-accounts')).length") != 0:
+                        raise AssertionError("Service attachment must not be sent before confirmation")
+                    await service_review.get_by_role("button", name="Annuler").click()
+                    if await page.get_by_label("Service").input_value() != "WATER":
+                        raise AssertionError("Canceling service attachment review must preserve the chosen service")
+                    await page.get_by_role("button", name="Rattacher le service").click()
+                    await page.get_by_role("alertdialog", name="Vérifier le rattachement du service").get_by_role("button", name="Rattacher le service").click()
+                    await page.wait_for_function("window.__centralWriteLog.filter(entry => entry.method === 'POST' && entry.path.endsWith('/service-accounts')).length === 1")
                 if slug == "receivables":
                     await page.get_by_label("Abonné").select_option("demo-customer-0001")
                     await page.get_by_text("demo-receivable-0001").wait_for()
