@@ -258,6 +258,7 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
 @media (max-width: 1280px) {
   .content { padding-right: 28px; padding-left: 28px; }
   .topbar { margin-right: -28px; margin-left: -28px; padding-right: 28px; padding-left: 28px; }
+  .workspace-tabs { margin-right: -28px; margin-left: -28px; padding-right: 28px; padding-left: 28px; }
   .sidebar { flex-basis: 230px; width: 230px; }
   .metric { padding-right: 14px; padding-left: 14px; }
   .columns, .customer-layout { grid-template-columns: 1fr; }

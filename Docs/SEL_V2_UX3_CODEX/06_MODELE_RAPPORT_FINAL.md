@@ -1,100 +1,94 @@
-# 06 — Rapport final Codex (gabarit obligatoire)
+# Rapport d’exécution UX3 — état au 6 novembre 2026
 
-> Ne remplacer les champs que par des **preuves réelles**. Aucun pourcentage de complétion estimé. Les états permis : `DONE`, `PARTIAL`, `NOT_STARTED`, `BLOCKED_API`, `BLOCKED_EXTERNAL`, `FAIL`.
+> Rapport d’étape, non rapport de clôture. Les statuts reflètent les preuves exécutées; la recette complète et la validation Figma de toutes les frames ne sont pas terminées.
 
-## 1. Références d'exécution
+## 1. Références d’exécution
 
-- Dépôt :
-- Branche de code :
-- Base commit SHA + date :
-- HEAD commit SHA :
-- PR technique URL et numéro :
-- PR concurrentes prises en compte :
-- Figma page 16 (frames lus / non lus) :
-- Figma page 17 (règles lues / non lues) :
-- Environnement : OS / CPU / Node / Rust / Tauri / PostgreSQL de test :
-- Date de contrôle :
+- Dépôt : `jupi-z/SEL-Facturation-Desktop`
+- Branche : `monarque/sel-v2-ux3-implementation-20261106`
+- Base intégrée : `main@0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6`
+- Commit UX3 précédent poussé : `14823d0cc40b82f20f293dd1f01ad9c3b9ce65b6`; alignement H00 et correction responsive 1280×720 prêts localement pour le prochain commit.
+- PR #60 : https://github.com/jupi-z/SEL-Facturation-Desktop/pull/60 — ouverte, non fusionnée, base `main`.
+- Figma page 16 : métadonnées vérifiées pour 76 écrans principaux et 9 overlays (85 frames au total); contextes haute fidélité consultés pour H00, C01, F02, F05 et O06. Les 71 autres écrans n’ont pas encore été comparés visuellement un à un.
+- Figma page 17 : les trois frames de documentation recensées; contexte haute fidélité lu pour `191:76` (écarts API et décisions). Les exigences sont croisées au dossier UX3 du dépôt.
+- Environnement local : Windows 11 Professionnel, Python 3.12.10, Node 24.21.0, Rust 1.99.1, Cargo 1.99.1. Le test natif Tauri local a compilé sous MSVC.
+- PostgreSQL local : aucun `TEST_DATABASE_URL`; les tests transactionnels sont exécutés par le workflow GitHub avec son PostgreSQL isolé.
 
 ## 2. Invariants protégés
 
-| Invariant | Test / preuve | État |
+| Invariant | Preuve | État |
 |---|---|---|
-| Facture combinée eau + électricité, eau 0 m³ visible | | |
-| Calculs financiers et états par Rust / Decimal | | |
-| PDF A4 généré localement, non stocké serveur | | |
-| Snapshot, numéros et écritures financières historiques intacts | | |
-| RBAC + whitelist Tauri + sessions respectés | | |
-| Aucune opération réelle hors connexion annoncée | | |
-| Aucune suppression destructive comptable | | |
-| SafeUpdate et migrations non dégradés | | |
+| Facture combinée, ligne eau visible à 0 m³ | tests Rust de facturation et parcours visuel synthétique | DONE |
+| Calculs financiers et soldes issus du serveur Rust | aperçu et reçus UI utilisent les valeurs API; tests API Rust/CI | DONE pour les parcours exercés |
+| PDF généré localement, sans route de stockage serveur | test OpenAPI `openapi_document_is_valid_yaml_and_declares_no_pdf_route`; revue du rendu PDF local | DONE |
+| Snapshots, références et écritures historiques non altérés | changements append-only des fonctions financières; aucune migration UX de données | DONE pour ce lot |
+| Sessions, RBAC et whitelist Tauri conservés | 12 tests `sel-api`, 5 tests natifs Tauri; CI backend verte | DONE pour les routes testées |
+| Pas d’opération métier hors connexion dans ce client | architecture connectée et indication serveur dans l’application | DONE |
+| Pas de suppression physique financière | UI présente annulation/contrepassation/avoir audités | DONE pour les actions exposées |
+| Migrations/SafeUpdate non exécutés sur données réelles | aucun accès production ni commande de migration | DONE — production intacte |
 
-## 3. Parcours implémentés (renseigner chaque famille)
+## 3. Parcours implémentés
 
-| Domaine / Figma | API réellement appelée | UI créée/optimisée | Tests | Statut |
-|---|---|---|---|---|
-| H00, navigation 6 domaines, S00 diagnostics | | | | |
-| C01–C06, C30–C31 abonnés CRUD | | | | |
-| O01–O03, C07–C10, C32 services et compteurs | | | | |
-| O04–O05, C11–C12, C33 relevés | | | | |
-| F05–F07, C13–C14 facture/annulation | | | | |
-| F01–F04, C15–C17, C34 paiements/contrepassations | | | | |
-| F08, C18–C19, C35 créances/avoirs | | | | |
-| O06–O10, C20–C22, C28 solaire | | | | |
-| A01–A09, C23–C25, C29 admin/catalogue | | | | |
-| E01–E11, C26–C27 erreur/états | | | | |
-
-## 4. Lacunes API
-
-| Code | Route ou contrat absent | Figma concerné | Proposition | Tests à créer | État |
-|---|---|---|---|---|---|
-| B1 | Correction/remplacement compteur | C10 | | | |
-| B2 | Rectification/annulation vente solaire | C22 | | | |
-| B3 | Avenant/résiliation contrat actif | C28 | | | |
-| B4 | Édition/abandon serveur de DRAFT, si nécessaire | C25/C29 | | | |
-
-Pour chaque lacune : indiquer clairement si seul un écran d'information est livré, ou si une nouvelle API a été conçue, implémentée et vérifiée. Ne jamais déclarer un endpoint fictif prêt.
-
-## 5. Exécution et preuves de tests
-
-| ID / commande | Environnement | SHA | Résultat réel | Lien log/artefact |
-|---|---|---|---|---|
-| `npm ci` | | | | |
-| `npm run build` | | | | |
-| `cargo fmt --all -- --check` | | | | |
-| `cargo clippy --workspace --all-targets -- -D warnings` | | | | |
-| `cargo test --workspace` | | | | |
-| Tests API PostgreSQL | | | | |
-| Tests frontend navigation/CRUD | | | | |
-| Test Tauri et packaging Windows | | | | |
-| Comparaison Figma 1440×900 / 1280×720 | | | | |
-| Génération/impression PDF A4 | | | | |
-| Recette sur poste SEL (si disponible) | | | | |
-
-## 6. Revue de diff et gestion de risques
-
-- Fichiers source modifiés :
-- Migrations ajoutées et justification :
-- API modifiées et compatibilité :
-- Contrats OpenAPI mis à jour :
-- Tests de sécurité ajoutés :
-- Effets sur V1 et anciennes branches :
-- Rollback possible :
-- Actions indisponibles explicitement désactivées :
-- Risques bloquants :
-- Corrections non réalisées et raisons :
-
-## 7. Verdict indépendant
-
-| Domaine | GO / NO-GO / NOT_TESTED | Preuve | Reste à faire |
+| Domaine / frames | Implémentation et API | Preuves | État |
 |---|---|---|---|
-| UX / navigation | | | |
-| CRUD / correction | | | |
-| Backend / API | | | |
-| Montants / données / PDF | | | |
-| Build Windows | | | |
-| Installation / matériel cible | | | |
-| Déploiement production | **NO-GO sans accord distinct** | | |
+| H00 et navigation six domaines | Accueil, raccourcis, session centrale, contexte/retour; tableau de bord rapproché de la frame H00 | captures 1440×900; recette browser 34 captures; le correctif enlève le tableau hors-maquette au bas de l’accueil | PARTIAL — H00 traité, toutes les frames non comparées |
+| C01–C06, C30–C31 abonnés | création, recherche, dossier, modification, archivage/réactivation et confirmation | tests UI et parcours browser synthétiques | PARTIAL — conflit 409 réel à valider de bout en bout |
+| O01–O03, C07–C10, C32 services/compteurs | services avec ou sans compteur; lecture, ajout et remplacement non destructif via API Rust | visual review; tests Tauri; test HTTP/PostgreSQL de remplacement présent et inclus dans CI backend | PARTIAL — détails Figma à contrôler sur chaque écran |
+| O04–O05, C11–C12, C33 relevés | saisie, aperçu, historique et correction append-only | visual review; tests API backend en CI | PARTIAL |
+| F05–F07, C13–C14 facture | aperçu sans écriture, confirmation d’émission, historique, document-data local, annulation avec motif | tests domaine/API et captures facture/PDF; build React local | PARTIAL — comparaison aux frames F06/F07 et recette imprimante à faire |
+| F01–F04, C15–C17, C34 paiements | sélection client/créances, récapitulatif avant POST, verrou anti-double clic, allocation, reçu, contrepassation | 57 tests Python; capture payment review; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette |
+| F08, C18–C19, C35 créances | consultation, références source, avoir via API | réponse JSON additive, test PostgreSQL en CI, écran visuel | PARTIAL |
+| O06–O10, C20–C22, C28 solaire | catalogue, devis/vente, document, contrat/échéancier | visual review, tests API/backend en CI | PARTIAL — annulation vente et avenant/résiliation contrat non exposés |
+| A01–A09, C23–C25, C29 administration | utilisateurs/roles, catalogues versionnés, approbation/révocation, audit | tests API/contrats; création brouillon conserve la saisie après 422 | PARTIAL — revue Figma de tous les formulaires et dernier admin à compléter |
+| E01–E11, C26–C27 états | états auth/erreurs, confirmation intégrée, validation et reprise | tests UI et script browser | PARTIAL — recette exhaustive 401/403/409/422/503 encore requise |
 
-**Décision de fusion :** demander validation explicite avant fusion.  
-**Décision de distribution :** demander validation distincte avant toute release ou déploiement.  
-**Conclusion courte :** travaux prouvés / limitations / priorités restantes / liens vers commits, PR et tests.
+## 4. Lacunes API et décisions
+
+| Code | État actuel | Décision sûre | Statut |
+|---|---|---|---|
+| B1 compteur | `POST /v1/meters/{id}/replace` est implémentée et protégée; ancien compteur conservé, nouveau créé transactionnellement | aucune suppression physique | DONE techniquement; tests CI à garder verts |
+| B2 vente solaire | pas d’API de rectification/annulation reliant vente, créance, paiements et audit | ne pas inventer d’écriture comptable; définir contrat métier Rust puis tester avant d’activer une action UI | BLOCKED_API |
+| B3 contrat actif | pas d’avenant/résiliation avec politique de traitement des sommes reçues | exiger une décision métier sur principal, paiements et échéances; aucun recalcul côté client | BLOCKED_API |
+| B4 brouillons admin | création, approbation et révocation existent; modification/abandon explicite d’un brouillon serveur non garanti | utiliser une nouvelle version rectificative; ne pas détourner DELETE | PARTIAL / BLOCKED_API si édition ou abandon serveur requis |
+
+## 5. Tests et preuves observés
+
+| Commande / scénario | Résultat réel au commit `14823d0` |
+|---|---|
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 57 tests après assertions de viewport dynamique |
+| `npm run build` (`v2/windows-app`) | PASS après ajustement CSS; avertissement non bloquant pour les chunks PDF/fonts volumineux |
+| `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` | PASS |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 12 tests |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test |
+| `cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib` | PASS — 5 tests whitelist/session Tauri |
+| `cargo test --manifest-path v2/Cargo.toml --workspace` local | FAIL d’environnement de build, LNK1207/PDB incompatible à l’édition de liens de `postgres_catalog_api`; aucune assertion rapportée en échec |
+| Workflow GitHub SEL V2 Backend sur `14823d0` | PASS — fmt, clippy, workspace tests et tests PostgreSQL isolés; https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42280158974 |
+| Workflow GitHub Tauri Windows sur `14823d0` | EN COURS au dernier contrôle; build et recette de capture PASS, NSIS/MSI puis test installation/upgrade en cours; https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42281073092 |
+| `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS — 34 captures synthétiques; aucun test sur serveur SEL réel |
+| Recette visuelle 1280×720 | premier run FAIL (débordement horizontal 14 px des onglets); correctif CSS appliqué, second run PASS — code 0 sur les écrans exercés |
+| PostgreSQL local / HTTP contre base réelle | NOT_RUN localement; CI PostgreSQL dédiée PASS au commit cité |
+| Impression sur imprimante SEL et installation poste cible | NOT_RUN — aucun poste/imprimante cible utilisé dans cette étape |
+| Données réelles / backend production | NON TOUCHÉ — aucune connexion, migration, écriture ou configuration de production |
+
+## 6. Diff et risques
+
+- Changements UX3 : `v2/windows-app/src/App.tsx`, `App.css`, `api.ts`, `src-tauri/src/lib.rs`, tests Python, script Playwright, OpenAPI/API Rust pour les lacunes nécessaires et preuves visuelles.
+- Migrations : la branche intègre les migrations de `main` déjà publiées dans le code; aucune migration exécutée sur un environnement réel.
+- Le dernier changement visuel supprime le tableau d’activité supplémentaire du dashboard, pour respecter la frame H00 et éviter un panneau coupé en bas de fenêtre. Les historiques restent dans leurs écrans.
+- Risques résiduels : comparaison exhaustive des 76 écrans non effectuée; recettes 1280×720 et 125/150 % non toutes couvertes; workflow de packaging Windows en cours; opérations B2/B3/B4 sans contrat métier suffisant.
+- Retour arrière : revert des commits UX3 ciblés sur la branche; aucune réécriture de données n’est introduite.
+- Actions non prises en charge : ne pas afficher/activer annulation d’une vente solaire ni avenant/résiliation du contrat tant que les APIs ne sont pas définies et prouvées.
+
+## 7. Verdict d’étape
+
+| Domaine | État | À faire |
+|---|---|---|
+| UX / navigation | PARTIAL | comparer les écrans restants aux frames; vérifier retours, clavier et erreurs |
+| CRUD / corrections | PARTIAL | parcours API réel de bout en bout; contrats B2/B3; décisions B4 |
+| Backend / API | PASS pour les routes touchées au commit CI | garder CI backend verte sur le nouveau HEAD |
+| Finance / documents | PARTIAL | recette structurée des paiements/créances, génération et impression physique |
+| Build Windows | PARTIAL | terminer CI Tauri MSI/NSIS et confirmer installation/upgrade isolé |
+| Poste matériel SEL | NOT_TESTED | installer et exécuter sur poste représentatif; ne pas assimiler Playwright à un test matériel |
+| Production | NO-GO / NON TOUCHÉE | hors périmètre de cette PR; aucune bascule production demandée ou faite |
+
+**Décision :** PR #60 reste ouverte et non fusionnée. Aucun installateur, release ou déploiement n’est publié par ce lot. La mission UX3 n’est pas terminée tant que les comparaisons de frames et les validations restantes ne sont pas clôturées.

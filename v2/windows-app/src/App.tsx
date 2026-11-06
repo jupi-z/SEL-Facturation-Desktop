@@ -420,31 +420,6 @@ export default function App() {
     && applicableTariffs.revisions.length === 1
     ? applicableTariffs.revisions[0]
     : "";
-  const recentActivity = useMemo(() => {
-    const customerNames = new Map(customers.map((customer) => [
-      text(customer.customer_id ?? customer.id, ""),
-      text(customer.legal_name, text(customer.customer_code)),
-    ]));
-    const activity = [
-      ...invoices.map((row) => ({
-        row, kind: "Eau + électricité", reference: text(row.invoice_number ?? row.invoice_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.total), date: text(row.issued_at ?? row.created_at),
-      })),
-      ...payments.map((row) => ({
-        row, kind: "Encaissement", reference: text(row.payment_number ?? row.payment_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.amount_received ?? row.received_amount), date: text(row.paid_at ?? row.occurred_at),
-      })),
-      ...sales.map((row) => ({
-        row, kind: "Kit solaire", reference: text(row.sale_number ?? row.sale_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.principal), date: text(row.sold_at ?? row.created_at),
-      })),
-    ];
-    return activity.sort((left, right) => Date.parse(right.date) - Date.parse(left.date)).slice(0, 8);
-  }, [customers, invoices, payments, sales]);
-
   async function submit(form: HTMLFormElement, path: string, payload: Row, success: string): Promise<boolean> {
     try {
       await centralRequest(path, "POST", payload);
@@ -774,9 +749,6 @@ export default function App() {
             <ul className="home-guidance"><li>Une action principale par étape.</li><li>Vous pouvez revenir sans publier un brouillon.</li><li>Les écritures validées se corrigent avec traçabilité.</li><li>Le serveur est requis pour toute opération métier.</li><li>Les données affichées viennent de l’API SEL.</li></ul>
           </Panel>
         </div>
-        <Panel title="Dossiers / activité récente" action={<Button onClick={() => navigateTo("server")}>État du serveur →</Button>}>
-          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune activité récente retournée par le serveur." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, formatMoney(amount, row.currency), <Status value={row.status} />])} />
-        </Panel>
       </>}
 
       {view === "customers" && (selectedCustomer ? <>

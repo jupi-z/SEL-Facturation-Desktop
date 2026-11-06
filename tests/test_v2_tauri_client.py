@@ -84,7 +84,7 @@ def test_ux3_confirmations_are_in_app_accessible_and_visually_exercised() -> Non
     assert 'role="alertdialog" aria-modal="true"' in app
     assert 'event.key === "Escape"' in app
     assert "confirmationPreviousFocus" in app
-    assert '"customer-archive-confirmation-1440x900.png"' in visual_review
+    assert 'f"customer-archive-confirmation-{SHOT_SUFFIX}.png"' in visual_review
     assert 'document.activeElement?.textContent?.trim()' in visual_review
 
 
@@ -104,7 +104,7 @@ def test_meter_reading_screen_uses_central_routes_and_displays_rust_measurements
     assert 'title={isWaterMeter ? "Relevé d’eau au m³" : "Relevés de compteurs"}' in app
     assert '/v1/meters/${encodeURIComponent(meterId)}/replace' in app
     assert "onConfirmReplacement" in app
-    assert "meter-replacement-confirmation-1440x900.png" in visual_review
+    assert 'f"meter-replacement-confirmation-{SHOT_SUFFIX}.png"' in visual_review
 
 
 def test_v2_windows_client_has_local_brand_assets_and_no_remote_runtime_assets() -> None:
@@ -147,6 +147,7 @@ def test_dashboard_prioritizes_central_workflows_without_demo_financial_data() -
 
     assert 'title="Que souhaitez-vous faire ?"' in app
     assert 'title="Vos repères"' in app
+    assert 'title="Dossiers / activité récente"' not in app
     assert "Émettre une facture" in app
     assert "Encaisser un règlement" in app
     assert "Saisir un relevé" in app
@@ -180,7 +181,7 @@ def test_cash_journal_uses_a_wide_table_and_lubumbashi_datetime_format() -> None
     assert 'timeZone: "Africa/Lubumbashi"' in app
     assert 'formatDateTime(row.paid_at ?? row.occurred_at)' in app
     assert ".payment-table { table-layout: fixed; }" in css
-    assert "viewport={\"width\": 1440, \"height\": 900}" in visual_review
+    assert 'viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}' in visual_review
     assert 'locale="fr-CD"' in visual_review
 
 
@@ -216,7 +217,7 @@ def test_invoice_workspace_matches_figma_two_column_preview_flow() -> None:
     assert 'form="utility-invoice-form"' in app
     assert "formatMoney(preview.total, preview.currency)" in app
     assert ".invoice-workspace { display: grid; grid-template-columns:" in css
-    assert "invoice-preview-1440x900.png" in visual_review
+    assert 'f"invoice-preview-{SHOT_SUFFIX}.png"' in visual_review
     assert "path === '/v1/billing/utility/preview'" in visual_review
 
 
@@ -247,8 +248,8 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
     assert 'headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]}' in app
     assert "solarSaleOpen &&" in app
     assert ".solar-metrics { grid-template-columns: repeat(4, minmax(0, 1fr));" in css
-    assert "solar-1440x900.png" in visual_review
-    assert "solar-new-sale-1440x900.png" in visual_review
+    assert 'f"{slug}-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"solar-new-sale-{SHOT_SUFFIX}.png"' in visual_review
 
 
 def test_navigation_clears_transient_notices_from_the_previous_screen() -> None:
@@ -360,7 +361,7 @@ def test_phase_seven_audit_and_sync_issue_contracts_are_documented() -> None:
 def test_visual_review_covers_mandatory_central_login_and_authenticated_state() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
-    assert "login-1440x900.png" in visual_review
+    assert 'f"login-{SHOT_SUFFIX}.png"' in visual_review
     assert 'get_by_role("heading", name="Connexion à SEL Facturation")' in visual_review
     assert 'get_by_role("button", name="Se connecter")' in visual_review
     assert "__ADMIN_DEMO_SESSION__" in visual_review
@@ -437,7 +438,7 @@ def test_payment_form_can_allocate_one_receipt_to_multiple_real_receivables() ->
     assert "installmentPlanByReceivable" in payment_form
     assert "Toutes les créances d’un même règlement doivent utiliser la même devise." in payment_form
     review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
-    assert "payments-solar-1440x900.png" in review
+    assert 'f"payments-solar-{SHOT_SUFFIX}.png"' in review
     assert "page.locator('.allocation-card select').first.locator('option[value=\"demo-receivable-0001\"]')" in review
     assert "page.locator('.allocation-card select').nth(2).select_option" in review
 
@@ -555,14 +556,14 @@ def test_meter_reading_period_uses_a_prior_index_and_errors_are_not_success_gree
 def test_visual_review_captures_solar_payment_allocation() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
-    assert '"payments-solar-1440x900.png"' in visual_review
+    assert 'f"payments-solar-{SHOT_SUFFIX}.png"' in visual_review
     assert '.payment-workspace form select[name="customer_id"]' in visual_review
     assert 'wait_for(state="attached")' in visual_review
     assert 'select_option("demo-receivable-solar-0001")' in visual_review
     assert 'select_option("demo-solar-schedule-0001")' in visual_review
     assert '"id": "demo-solar-schedule-0001"' in visual_review
     assert "element.scrollIntoView({ block: 'start' })" in visual_review
-    assert '"solar-contracts-1440x900.png"' in visual_review
+    assert 'f"solar-contracts-{SHOT_SUFFIX}.png"' in visual_review
 
 
 def test_visual_review_captures_rust_validated_meter_preview() -> None:
@@ -581,8 +582,8 @@ def test_visual_review_covers_water_meter_and_positive_water_invoice() -> None:
     assert '"service_code": "WATER"' in visual_review
     assert '"unit": "M3"' in visual_review
     assert '"demo-meter-water-0001"' in visual_review
-    assert '"water-reading-preview-1440x900.png"' in visual_review
-    assert '"invoice-preview-water-positive-1440x900.png"' in visual_review
+    assert 'f"water-reading-preview-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"invoice-preview-water-positive-{SHOT_SUFFIX}.png"' in visual_review
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     assert 'className="help invoice-preview-status"' in app
     assert "Le calcul et les taxes viennent du moteur Rust." in app
@@ -602,7 +603,7 @@ def test_customer_creation_form_is_revealed_from_the_directory_action() -> None:
     assert 'customerCreateOpen && <Panel title="Nouvel abonné"' in app
     assert 'setCustomerCreateOpen((open) => !open)' in app
     assert '"+ Ajouter un abonné"' in app
-    assert '"customer-new-1440x900.png"' in visual_review
+    assert 'f"customer-new-{SHOT_SUFFIX}.png"' in visual_review
 
 
 def test_customer_dossier_has_read_only_overview_and_explicit_edit_mode() -> None:
@@ -615,7 +616,7 @@ def test_customer_dossier_has_read_only_overview_and_explicit_edit_mode() -> Non
     assert '"Annuler la modification"' in dossier
     assert 'className="dossier-metrics metrics compact-metrics"' in app
     assert 'label="Versements" value={rows(statement.payments).length}' in app
-    assert '"customer-edit-1440x900.png"' in visual_review
+    assert 'f"customer-edit-{SHOT_SUFFIX}.png"' in visual_review
 
 
 def test_customer_directory_surfaces_truthful_central_metrics_before_the_table() -> None:
@@ -638,8 +639,8 @@ def test_visual_review_captures_customer_record_and_receivable_statement() -> No
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
-    assert '"customer-record-1440x900.png"' in visual_review
-    assert '"receivables-statement-1440x900.png"' in visual_review
+    assert 'f"customer-record-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"receivables-statement-{SHOT_SUFFIX}.png"' in visual_review
     assert 'get_by_role("button", name="Ouvrir le dossier →")' in visual_review
     assert 'get_by_label("Abonné").select_option("demo-customer-0001")' in visual_review
     assert 'aria-label="Retour au répertoire"' in app
@@ -655,7 +656,7 @@ def test_solar_contract_visual_evidence_uses_a_desktop_viewport() -> None:
     )[0]
 
     assert "element.scrollIntoView({ block: 'start' })" in solar_capture
-    assert 'path=str(OUTPUT / "solar-contracts-1440x900.png")' in solar_capture
+    assert 'path=str(OUTPUT / f"solar-contracts-{SHOT_SUFFIX}.png")' in solar_capture
     assert "full_page=True" not in solar_capture
 
 
@@ -729,11 +730,11 @@ def test_figma_visual_review_uses_only_marked_synthetic_fixtures() -> None:
 
     assert '"SEL-DÉMO-0001"' in visual_review
     assert '"Client Alpha"' in visual_review
-    assert "viewport={\"width\": 1440, \"height\": 900}" in visual_review
+    assert 'viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}' in visual_review
     assert "document.documentElement.scrollWidth" in visual_review
     assert "SEL-V2-Figma-Desktop-Review-${{ github.run_number }}" in workflow
     assert 'DEMO-SOLAR-TERMS' in visual_review
     assert '"solarPlan": SOLAR_PLAN' in visual_review
     assert "body = fixtures.solarPlan" in visual_review
-    assert '"solar-contracts-1440x900.png"' in visual_review
-    assert 'page.screenshot(path=str(OUTPUT / f"{slug}-1440x900.png"))' in visual_review
+    assert 'f"solar-contracts-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'page.screenshot(path=str(OUTPUT / f"{slug}-{SHOT_SUFFIX}.png"))' in visual_review
