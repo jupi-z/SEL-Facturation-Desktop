@@ -159,7 +159,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     assert_eq!(invoice_document["document_reference"], invoice_reference);
     assert_eq!(
         invoice_document["qr_internal_reference"],
-        format!("SEL:INVOICE:{}", invoice["invoice_id"].as_str().unwrap())
+        format!("SEL-V2-{}", invoice["invoice_id"].as_str().unwrap())
     );
 
     let history = app

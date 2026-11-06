@@ -2964,7 +2964,6 @@ async fn get_document_data(
             .await
             .map_err(storage_error)?
             .ok_or_else(|| ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found"))?;
-        let is_historical_reference = invoice.invoice_number.is_none();
         let reference = invoice
             .invoice_number
             .clone()
@@ -2983,11 +2982,7 @@ async fn get_document_data(
                 .get_invoice_issued_at(id)
                 .await
                 .map_err(storage_error)?,
-            qr_internal_reference: if is_historical_reference {
-                format!("SEL-V2-{id}")
-            } else {
-                format!("SEL:INVOICE:{id}")
-            },
+            qr_internal_reference: format!("SEL-V2-{id}"),
             origin: "CENTRAL_ACCEPTED".into(),
         }));
     }
