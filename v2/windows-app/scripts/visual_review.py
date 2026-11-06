@@ -23,6 +23,7 @@ CUSTOMERS = [{
     "id": "demo-customer-0001",
     "customer_code": "SEL-DÉMO-0001",
     "legal_name": "Client Alpha",
+    "customer_category": "DEMO",
     "address": "Quartier Manika, Kolwezi",
     "phone": "+243 000 000 000",
     "status": "ACTIVE",
@@ -31,6 +32,7 @@ CUSTOMERS = [{
     "id": "demo-customer-0002",
     "customer_code": "SEL-DÉMO-0002",
     "legal_name": "Client Beta",
+    "customer_category": "DEMO",
     "address": "Quartier Joli Site, Kolwezi",
     "phone": "+243 000 000 001",
     "status": "ACTIVE",
@@ -42,7 +44,7 @@ INVOICES = [{
     "customer_id": "demo-customer-0001",
     "customer_name": "Client Alpha",
     "billing_period": "2026-10",
-    "total": "11.02",
+    "total": "22.62",
     "currency": "USD",
     "status": "CENTRAL_ACCEPTED",
 }]
@@ -136,6 +138,10 @@ def mock_invoke_script() -> str:
         "payments": PAYMENTS,
         "sales": SALES,
         "products": PRODUCTS,
+        "tariffs": [
+            {"service_code": "ELECTRICITY", "customer_category": "DEMO", "unit": "KWH", "unit_price": "0.095", "currency": "USD", "effective_from": "2026-01-01", "approval_ref": "DEMO-APPROVED-REVISION", "status": "APPROVED"},
+            {"service_code": "WATER", "customer_category": "DEMO", "unit": "M3", "unit_price": "0.30", "currency": "USD", "effective_from": "2026-01-01", "approval_ref": "DEMO-APPROVED-REVISION", "status": "APPROVED"},
+        ],
         "solarPlan": SOLAR_PLAN,
         "serviceAccounts": SERVICE_ACCOUNTS,
         "meters": METERS,
@@ -163,13 +169,14 @@ def mock_invoke_script() -> str:
         const path = args.path || '';
         let body = [];
         if (path === '/v1/customers') body = fixtures.customers;
+        else if (path === '/v1/catalog/tariffs') body = fixtures.tariffs;
         else if (path === '/v1/billing/utility/preview') {{
           const waterQuantity = Number(args.body?.water?.quantity ?? 0);
           body = waterQuantity > 0
-            ? {{currency:'USD',subtotal:'11.00',tax:'1.76',total:'12.76',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}}]}}
-            : {{currency:'USD',subtotal:'9.50',tax:'1.52',total:'11.02',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}}]}};
+            ? {{currency:'USD',subtotal:'21.00',tax:'3.36',total:'24.36',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'5.00',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}},{{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}]}}
+            : {{currency:'USD',subtotal:'19.50',tax:'3.12',total:'22.62',lines:[{{service_code:'ELECTRICITY',quantity:'100.00',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0.00',unit:'M3',unit_price:'0.00',subtotal:'0.00',tax:'0.00',total:'0.00'}},{{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}]}};
         }}
-        else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) {{ const customerId = path.split('/')[3]; body = customerId === 'demo-customer-0001' ? {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'8.02',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}} : {{invoices:[],receivables:[]}}; }}
+        else if (path.startsWith('/v1/customers/') && path.endsWith('/statement')) {{ const customerId = path.split('/')[3]; body = customerId === 'demo-customer-0001' ? {{invoices:fixtures.invoices,receivables:[{{id:'demo-receivable-0001',balance:'19.62',currency:'USD',status:'OPEN',source_type:'UTILITY_INVOICE'}},{{id:'demo-receivable-solar-0001',balance:'120.00',currency:'USD',status:'OPEN',source_type:'SOLAR_SALE'}}]}} : {{invoices:[],receivables:[]}}; }}
         else if (path.startsWith('/v1/customers/') && path.endsWith('/service-accounts')) {{ const customerId = path.split('/')[3]; body = fixtures.serviceAccounts.filter((account) => account.customer_id === customerId); }}
         else if (path.startsWith('/v1/service-accounts/') && path.endsWith('/meters')) {{ const serviceAccountId = path.split('/')[3]; body = fixtures.meters.filter((meter) => meter.service_account_id === serviceAccountId); }}
         else if (path.startsWith('/v1/meters/') && path.endsWith('/readings/preview')) {{ const meterId = path.split('/')[3]; body = meterId === 'demo-meter-water-0001' ? {{meter_id:meterId,period:'2026-11',previous:'5',current:'10',measured_quantity:'5',source:'MANUAL'}} : {{meter_id:meterId,period:'2026-11',previous:'1100',current:'1200',measured_quantity:'100',source:'MANUAL'}}; }}
@@ -181,11 +188,12 @@ def mock_invoke_script() -> str:
             {{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},
             positiveWater
               ? {{service_code:'WATER',quantity:'5',unit:'M3',unit_price:'0.30',subtotal:'1.50',tax:'0.24',total:'1.74'}}
-              : {{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}}
+              : {{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}},
+            {{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}
           ];
-          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',origin:'CENTRAL',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'Société d’Énergie du Lualaba',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'11.00':'9.50',tax:positiveWater?'1.76':'1.52',total:positiveWater?'12.76':'11.02',lines:invoiceLines}}}};
+          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',origin:'CENTRAL',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'Société d’Énergie du Lualaba',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'21.00':'19.50',tax:positiveWater?'3.36':'3.12',total:positiveWater?'24.36':'22.62',lines:invoiceLines}}}};
         }}
-        else if (path.startsWith('/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}}],subtotal:'9.50',tax:'1.52'}};
+        else if (path.startsWith('/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}},{{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}],subtotal:'19.50',tax:'3.12'}};
         else if (path.startsWith('/v1/invoices')) body = fixtures.invoices;
         else if (path.startsWith('/v1/payments/') && path.endsWith('/document-data')) body = {{document_schema_version:1,document_reference:'SEL-PAY-DEMO-0001',qr_internal_reference:'SEL:PAYMENT:demo-payment-0001',payment:{{payment_id:'demo-payment-0001',amount_received:'3.00',currency:'USD',method:'CASH',paid_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},allocations:[{{receivable_id:'demo-receivable-0001',amount:'3.00',currency:'USD'}}],reversals:[],origin:'CENTRAL'}};
         else if (path.startsWith('/v1/payments')) body = fixtures.payments;
@@ -430,7 +438,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Prévisualiser la facture").click()
                     await page.get_by_role("heading", name="Prévisualisation de facture").wait_for()
                     await page.locator(".invoice-preview-metrics").get_by_text("5 m³", exact=True).wait_for()
-                    await page.locator(".invoice-preview-metrics").get_by_text("12,76 USD", exact=True).wait_for()
+                    await page.locator(".invoice-preview-metrics").get_by_text("24,36 USD", exact=True).wait_for()
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "invoice-preview-water-positive-1440x900.png"))
@@ -444,7 +452,7 @@ async def capture_views() -> None:
                         raise AssertionError(f"Invoice PDF preview did not open: {notice}") from error
                     await page.screenshot(path=str(OUTPUT / "invoice-pdf-diagnostic.png"))
                     zero_water_pdf = await assert_pdf_rendered(page, "Invoice with 0 m³ of water")
-                    await assert_generated_pdf_contract(page, "Invoice with 0 m³ of water", 1, ("Électricité", "Eau", "0 m³", "11,02 USD"))
+                    await assert_generated_pdf_contract(page, "Invoice with 0 m³ of water", 1, ("Électricité", "Eau", "0 m³", "Ligne de communication", "22,62 USD"))
                     await assert_print_layout(page, "Invoice with 0 m³ of water", 1)
                     await page.screenshot(path=str(OUTPUT / "invoice-pdf-preview-1440x900.png"))
                     await page.locator(".document-pdf-stage").evaluate("element => element.scrollTop = element.scrollHeight")
@@ -455,7 +463,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Document PDF").first.click()
                     await page.get_by_role("dialog", name="Facture eau + électricité").wait_for()
                     positive_water_pdf = await assert_pdf_rendered(page, "Invoice with 5 m³ of water")
-                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "12,76 USD"))
+                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "Ligne de communication", "24,36 USD"))
                     await assert_print_layout(page, "Invoice with 5 m³ of water", 1)
                     if positive_water_pdf == zero_water_pdf:
                         raise AssertionError("0 m³ and 5 m³ invoice PDFs rendered identically")
