@@ -86,6 +86,9 @@ def test_ux3_confirmations_are_in_app_accessible_and_visually_exercised() -> Non
     assert "confirmationPreviousFocus" in app
     assert 'f"customer-archive-confirmation-{SHOT_SUFFIX}.png"' in visual_review
     assert 'document.activeElement?.textContent?.trim()' in visual_review
+    assert 'Shift+Tab from the first dialog action must wrap to the last action' in visual_review
+    assert 'Tab from the last dialog action must wrap to the first action' in visual_review
+    assert 'Escape must cancel the archive without sending a write' in visual_review
 
 
 def test_meter_reading_screen_uses_central_routes_and_displays_rust_measurements() -> None:

@@ -550,15 +550,27 @@ async def capture_views() -> None:
                     confirmation = page.get_by_role("alertdialog", name="Archiver cet abonné ?")
                     await confirmation.wait_for()
                     await page.screenshot(path=str(OUTPUT / f"customer-archive-confirmation-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("document.activeElement?.textContent?.trim()") != "Annuler":
+                        raise AssertionError("Opening a confirmation must move keyboard focus into the dialog")
+                    await page.keyboard.press("Shift+Tab")
+                    if await page.evaluate("document.activeElement?.textContent?.trim()") != "Archiver l’abonné":
+                        raise AssertionError("Shift+Tab from the first dialog action must wrap to the last action")
+                    await page.keyboard.press("Tab")
+                    if await page.evaluate("document.activeElement?.textContent?.trim()") != "Annuler":
+                        raise AssertionError("Tab from the last dialog action must wrap to the first action")
                     await page.keyboard.press("Escape")
                     await confirmation.wait_for(state="detached")
                     if await page.evaluate("document.activeElement?.textContent?.trim()") != "Archiver":
                         raise AssertionError("Customer archive confirmation did not restore focus to its trigger")
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.method === 'PATCH' && entry.path === '/v1/customers/demo-customer-0001' && entry.body?.status === 'ARCHIVED').length") != 0:
+                        raise AssertionError("Escape must cancel the archive without sending a write")
                     await archive_button.click()
                     confirmation = page.get_by_role("alertdialog", name="Archiver cet abonné ?")
                     await confirmation.wait_for()
                     await confirmation.get_by_role("button", name="Annuler").click()
                     await confirmation.wait_for(state="detached")
+                    if await page.evaluate("window.__centralWriteLog.filter(entry => entry.method === 'PATCH' && entry.path === '/v1/customers/demo-customer-0001' && entry.body?.status === 'ARCHIVED').length") != 0:
+                        raise AssertionError("Canceling the archive dialog must not send a write")
                     await page.get_by_role("button", name="Remplacer", exact=True).first.click()
                     await page.get_by_label("Nouveau numéro de compteur").fill("DEMO-KWH-REPLACEMENT")
                     await page.get_by_label("Motif du remplacement").fill("Essai UX synthétique")

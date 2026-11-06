@@ -10,6 +10,7 @@
 - A02 présente la création d’un utilisateur dans un écran distinct. Une identité déjà utilisée déclenche un conflit API `USER_IDENTITY_EXISTS`, traduit en français, sans exposer le détail brut ni la route centrale.
 - A03 regroupe rôle, état et réinitialisation du mot de passe. Le compte de la session courante ne peut pas changer son propre rôle ni désactiver son propre compte. Ces contrôles sont désactivés dans le DOM et visuellement distincts des actions disponibles.
 - Le refus d’auto-modification continue d’être couvert par le test unitaire de traduction de l’erreur centrale; la recette navigateur vérifie désormais le verrouillage préventif et teste à la place un conflit de doublon réaliste.
+- Les confirmations métier sont vérifiées au clavier : focus initial dans la boîte, Tabulation/Shift+Tab bouclés dans la boîte, Échap ferme sans écrire et rend le focus au déclencheur.
 - Les erreurs de navigation préservent le brouillon et demandent une confirmation avant abandon. Les captures visuelles montrent la page entière.
 
 ### Preuves locales
@@ -20,14 +21,22 @@
 | `npm run build` (`v2/windows-app`) | PASS — build React/TypeScript; avertissement non bloquant sur les gros chunks PDF/fonts |
 | `python v2/windows-app/scripts/visual_review.py`, fenêtre 1440×900 | PASS — parcours synthétiques complets, conflits doublon, verrouillage des droits propres et apparence calculée des boutons désactivés |
 | Même recette, fenêtre 1280×720 | PASS — mêmes parcours; aucune surlargeur horizontale détectée |
+| Confirmation clavier, 1440×900 et 1280×720 | PASS — focus initial, Tab/Shift+Tab, Échap, aucune requête d’archivage et focus restauré |
 | PostgreSQL réel SEL, production, imprimante et poste utilisateur | NOT_RUN — aucun accès ni test réel dans ce lot |
 
-Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440x900.png`, `admin-duplicate-user-conflict-2026-11-07-1440x900.png`, `admin-self-access-locked-2026-11-07-1440x900.png`, et leurs versions 1280×720. Les anciennes captures nommées `admin-self-role-conflict-*` documentent un scénario de test antérieur et ne représentent plus le parcours actuel.
+Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440x900.png`, `admin-duplicate-user-conflict-2026-11-07-1440x900.png`, `admin-self-access-locked-2026-11-07-1440x900.png`, `customer-archive-keyboard-focus-2026-11-07-1440x900.png`, et leurs versions 1280×720. Les anciennes captures nommées `admin-self-role-conflict-*` documentent un scénario de test antérieur et ne représentent plus le parcours actuel.
+
+### État CI au SHA poussé `37d1305b93829e1f50e9d950b1f0c214e115f2af`
+
+- PASS : backend — [42305246886](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42305246886).
+- PASS : paquet serveur — [42305246853](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42305246853).
+- PASS : régression V1 — [42305246834](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42305246834).
+- EN COURS au dernier contrôle : client Tauri Windows, dont compilation des installeurs et test isolé d’installation/mise à niveau — [42305246842](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42305246842).
 
 ### État de livraison
 
 - Ces changements restent sur la branche UX3 et la PR #60, sans fusion dans `main`, publication ni déploiement.
-- La vérification de CI sera rattachée au SHA exact après publication de cet incrément; aucune CI postérieure à ce changement n’est présumée verte.
+- Les statuts CI ci-dessus ne couvrent que le SHA indiqué; le workflow Windows reste le contrôle bloquant en cours.
 - Le découpage A01–A03 améliore cette zone seulement. L’ensemble UX3 reste PARTIAL et la comparaison des 85 frames, les recettes des autres parcours et les limites API métier restent à traiter.
 
 ## 1. Références d’exécution
@@ -67,7 +76,7 @@ Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440
 | F01–F04, C15–C17, C34 paiements | sélection client/créances, récapitulatif avant POST, verrou anti-double clic, allocation, reçu, contrepassation | 57 tests Python; capture payment review; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette |
 | F08, C18–C19, C35 créances | consultation, références source, avoir via API | réponse JSON additive, test PostgreSQL en CI, écran visuel | PARTIAL |
 | O06–O10, C20–C22, C28 solaire | catalogue/ventes et contrats/échéanciers ont des onglets séparés; transitions avec brouillon protégées; suivi expose les métriques renvoyées par le serveur et son CTA mène à l’encaissement prérempli avec client/créance/prochaine échéance; contrat revu avant POST | Playwright synthétique à 1440×900 et 1280×720 : refus de navigation conserve le brouillon, validation l’abandonne; un seul POST contrat après acceptation; la transition O10 sélectionne l’abonné, la créance et l’échéance sans créer de paiement; captures `evidence/solar-contract-workspace-1440x900.png`, `evidence/solar-payment-prefill-1280x720.png` | PARTIAL — annulation vente et avenant/résiliation contrat non exposés; autres détails O06–O10 à comparer |
-| A01–A09, C23–C25, C29 administration | utilisateurs/rôles, catalogues versionnés, approbation/révocation, audit; création d’utilisateur avec confirmation (secret masqué), confirmation des changements de rôle/statut et des approbations/révocations de référentiels; création de brouillon tarifaire et réinitialisation du mot de passe revues avant POST; erreurs 403/409/422 compréhensibles en français sans URL API | recette Playwright synthétique : aucune requête avant confirmation, annulation qui conserve le brouillon, secret masqué dans le récapitulatif, une requête après confirmation, refus 409 d’auto-modification expliqué en français; captures `evidence/admin-catalog-draft-confirmation-1440x900.png`, `evidence/admin-catalog-draft-confirmation-1280x720.png`, `evidence/admin-self-role-conflict-1440x900.png`, `evidence/admin-self-role-conflict-1280x720.png` | PARTIAL — revue de toutes les frames d’administration et recette des erreurs réelles contre PostgreSQL restent à faire |
+| A01–A09, C23–C25, C29 administration | répertoire, création et sécurité séparés; rôles/statuts verrouillés pour le compte courant; création, changement de rôle/statut, réinitialisation et mutations de référentiels relus avant écriture; erreurs 403/409/422 localisées sans URL API | recette Playwright synthétique : conflit identité doublon, droits propres désactivés, apparence disabled, dialogue clavier avec focus trap/Échap/restauration; preuves datées `admin-user-directory-*`, `admin-duplicate-user-conflict-*`, `admin-self-access-locked-*`, `customer-archive-keyboard-focus-*`, approbation et brouillon | PARTIAL — revue de toutes les frames d’administration et recette des erreurs réelles contre PostgreSQL restent à faire |
 | E01–E11, C26–C27 états | états auth/erreurs, confirmation intégrée, validation et reprise | tests UI et script browser | PARTIAL — recette exhaustive 401/403/409/422/503 encore requise |
 
 ## 4. Lacunes API et décisions
@@ -91,7 +100,7 @@ Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440
 | `cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib` | PASS — 5 tests whitelist/session Tauri |
 | `cargo test --manifest-path v2/Cargo.toml --workspace` local | FAIL d’environnement de build, LNK1207/PDB incompatible à l’édition de liens de `postgres_catalog_api`; aucune assertion rapportée en échec |
 | Workflows GitHub sur `d74166d` | PASS — backend, serveur package, régression V1, build MSI/NSIS et installation/upgrade isolé avec profil préservé. Cette preuve ne couvre pas les modifications d’administration ultérieures. https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573787 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573819 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573823 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573796 |
-| Workflows GitHub sur `8b20ed6` | Backend, paquet serveur et régression V1 : PASS; Tauri Windows : EN COURS au dernier contrôle. Ce run précède le HEAD `4cb8793`; vérifier le nouveau run après push. |
+| Workflows GitHub au SHA `37d1305b93829e1f50e9d950b1f0c214e115f2af` | PASS — backend, paquet serveur, régression V1, client Tauri Windows avec test d’installation/mise à niveau isolé. Ce run couvre le commit poussé; les tests clavier ajoutés après ce SHA devront repasser la CI à leur prochain push. |
 | `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS au code UI `4cb8793` — parcours synthétiques, refus de modification du rôle propre expliqué en français, brouillon de tarif et écrans solaires; aucun test sur serveur SEL réel |
 | `python v2/windows-app/scripts/visual_review.py` à 1280×720 | PASS au code UI `4cb8793` — mêmes parcours aux dimensions réduites; captures du refus 409 et de la confirmation de brouillon |
 | PostgreSQL local / HTTP contre base réelle | NOT_RUN localement; CI PostgreSQL dédiée PASS au commit cité |
@@ -103,7 +112,7 @@ Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440
 - Changements UX3 : `v2/windows-app/src/App.tsx`, `App.css`, `api.ts`, `src-tauri/src/lib.rs`, tests Python, script Playwright, OpenAPI/API Rust pour les lacunes nécessaires et preuves visuelles. Les créations et modifications d’abonné, rattachements et mutations compteur, contrats solaires, créations d’utilisateur, changements de rôle/statut, approbations et révocations demandent une revue explicite; les secrets restent masqués et les saisies sont conservées si une revue est annulée. L’API crée tout nouvel abonné à l’état `ACTIVE`; l’UI le signale et ne propose pas un choix d’état absent du contrat.
 - Migrations : la branche intègre les migrations de `main` déjà publiées dans le code; aucune migration exécutée sur un environnement réel.
 - Le dernier changement visuel supprime le tableau d’activité supplémentaire du dashboard, pour respecter la frame H00 et éviter un panneau coupé en bas de fenêtre. Les historiques restent dans leurs écrans.
-- Risques résiduels : comparaison exhaustive des 76 écrans non effectuée; recettes 1280×720 et 125/150 % non toutes couvertes; CI Tauri/MSI/NSIS à terminer sur le HEAD courant; opérations B2/B3/B4 sans contrat métier suffisant.
+- Risques résiduels : comparaison exhaustive des 76 écrans non effectuée; mise à l’échelle Windows 125/150 % et recette sur le poste SEL restent à valider; les opérations B2/B3/B4 n'ont pas de contrat métier suffisant.
 - Retour arrière : revert des commits UX3 ciblés sur la branche; aucune réécriture de données n’est introduite.
 - Actions non prises en charge : ne pas afficher/activer annulation d’une vente solaire ni avenant/résiliation du contrat tant que les APIs ne sont pas définies et prouvées.
 
@@ -115,7 +124,7 @@ Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440
 | CRUD / corrections | PARTIAL | parcours API réel de bout en bout; contrats B2/B3; décisions B4 |
 | Backend / API | PASS pour les routes touchées au commit CI | garder CI backend verte sur le nouveau HEAD |
 | Finance / documents | PARTIAL | recette structurée des paiements/créances, génération et impression physique |
-| Build Windows | PARTIAL | terminer CI Tauri MSI/NSIS et confirmer installation/upgrade isolé |
+| Build Windows | PARTIAL | CI MSI/NSIS et test d’installation/mise à niveau isolé PASS au SHA `37d1305`; test sur poste matériel SEL encore requis |
 | Poste matériel SEL | NOT_TESTED | installer et exécuter sur poste représentatif; ne pas assimiler Playwright à un test matériel |
 | Production | NO-GO / NON TOUCHÉE | hors périmètre de cette PR; aucune bascule production demandée ou faite |
 
