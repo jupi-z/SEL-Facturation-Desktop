@@ -338,6 +338,11 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
 .action-dialog > .muted { margin: 0 0 18px; line-height: 1.6; overflow-wrap: anywhere; }
 .action-dialog textarea { min-height: 96px; resize: vertical; }
 .action-dialog .form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.confirmation-backdrop { z-index: 1200; }
+.confirmation-dialog { border-top-color: var(--blue); }
+.confirmation-dialog:has(.button-warning) { border-top-color: #c23b43; }
+.confirmation-dialog .button-warning { border-color: #a52f38; color: #fff; background: #a52f38; }
+.confirmation-dialog .button-warning:hover { border-color: #84242c; background: #84242c; }
 
 @media (max-width: 760px) {
   .action-dialog-backdrop { padding: 12px; }

@@ -309,7 +309,6 @@ async def capture_views() -> None:
             page = await browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=1, locale="fr-CD")
             browser_errors: list[str] = []
             page.on("pageerror", lambda error: browser_errors.append(str(error)))
-            page.on("dialog", lambda dialog: asyncio.create_task(dialog.accept()))
             await page.add_init_script(mock_invoke_script())
             await page.add_init_script("""(() => {
               const original = Blob.prototype.arrayBuffer;
@@ -346,6 +345,13 @@ async def capture_views() -> None:
                 await page.get_by_role("navigation", name="Navigation principale").get_by_role(
                     "button", name=domain_label, exact=True
                 ).click()
+                pending_confirmation = page.get_by_role("alertdialog")
+                try:
+                    await pending_confirmation.wait_for(timeout=500)
+                except Exception:
+                    pass
+                if await pending_confirmation.count():
+                    await pending_confirmation.get_by_role("button", name="Abandonner et continuer").click()
                 if page_label:
                     await page.locator(".workspace-tabs").get_by_role("button", name=page_label, exact=True).click()
                 if slug == "readings":
@@ -412,6 +418,20 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / "customer-edit-1440x900.png"))
                     await page.get_by_role("button", name="Annuler la modification").click()
+                    archive_button = page.get_by_role("button", name="Archiver", exact=True)
+                    await archive_button.click()
+                    confirmation = page.get_by_role("alertdialog", name="Archiver cet abonné ?")
+                    await confirmation.wait_for()
+                    await page.screenshot(path=str(OUTPUT / "customer-archive-confirmation-1440x900.png"))
+                    await page.keyboard.press("Escape")
+                    await confirmation.wait_for(state="detached")
+                    if await page.evaluate("document.activeElement?.textContent?.trim()") != "Archiver":
+                        raise AssertionError("Customer archive confirmation did not restore focus to its trigger")
+                    await archive_button.click()
+                    confirmation = page.get_by_role("alertdialog", name="Archiver cet abonné ?")
+                    await confirmation.wait_for()
+                    await confirmation.get_by_role("button", name="Annuler").click()
+                    await confirmation.wait_for(state="detached")
                     await page.get_by_role("button", name="Retour au répertoire").click()
                     await page.locator("tbody tr").nth(1).get_by_role("button", name="Ouvrir le dossier →").click()
                     await page.get_by_role("heading", name="Services et compteurs").wait_for()

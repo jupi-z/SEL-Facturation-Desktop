@@ -1158,3 +1158,16 @@ L'échec Playwright de la CI Windows au commit `5a8c35f` a été reproduit et is
 | Installation native, impression et poste SEL | BLOCKED_EXTERNAL | La capture Playwright s'exécute dans Chromium avec le pont Tauri simulé et des fixtures synthétiques; elle ne remplace pas une installation Windows réelle, une imprimante ou la recette SEL. |
 
 **Résultat CI final du commit code `567d72f6c3aa131f38817f9362ff382fc10f63a6` :** workflow Backend [42140827913](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42140827913) PASS; workflow Windows [42140838864](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42140838864) PASS en 16 min 27 s, incluant l'installation/mise à niveau dans un profil isolé. Le workflow Windows a également téléversé le candidat binaire et les captures synthétiques comme artefacts d'action. Aucune release n'a été créée et aucun artefact n'a été distribué à SEL. La recette sur poste SEL/imprimante demeure `BLOCKED_EXTERNAL`; les limites API B1–B4 demeurent ouvertes. Ce rapport est un commit documentaire ultérieur au code testé et n'altère pas les sources du SHA validé.
+
+#### Revalidation UX3 — confirmations intégrées — 6 novembre 2026
+
+Les confirmations navigateur natives ont été remplacées par une boîte de dialogue intégrée au client pour l'archivage/réactivation d'un abonné et la perte de saisies non enregistrées. Le dialogue expose `role=alertdialog`, reçoit le focus sur « Annuler », piège la tabulation, se ferme avec Échap ou un clic extérieur et restitue le focus au contrôle déclencheur. Les actions destructrices logiques ont un traitement visuel distinct ; aucune suppression physique ni requête métier n'est lancée lors d'une annulation.
+
+| Vérification | Statut | Preuve |
+|---|---|---|
+| Build TypeScript/Vite | PASS | `npm run build` dans `v2/windows-app`, `tsc -b` et Vite réussis. Vite signale des bundles PDF supérieurs à 500 kB ; c'est une optimisation de chargement différable, sans échec de compilation. |
+| Contrats UI source | PASS | `python -m pytest tests/test_v2_tauri_client.py -q` : **54 passed**. Le test ajouté interdit le retour de `window.confirm` et vérifie les attributs/accessibilités attendus. |
+| Revue visuelle interactive | PASS — données synthétiques | `python v2/windows-app/scripts/visual_review.py` : code de sortie 0. Le parcours vérifie Escape, annulation explicite et restitution du focus. Captures dans `artifacts/ux3-confirmation-validation-rerun/`, dont `customer-archive-confirmation-1440x900.png`. |
+| Backend de production | NON TOUCHÉ | Aucune requête ni écriture de production effectuée ; ce lot ne modifie ni données ni configuration distante. |
+
+Ce lot améliore l'incrément UX3, mais ne ferme pas à lui seul la mission : la comparaison intégrale des parcours Figma, les lacunes API B1–B4, la CI sur le nouveau commit et la recette sur matériel SEL restent à valider.

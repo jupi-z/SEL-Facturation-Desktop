@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, centralRequest, centralRequestPage, centralStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
@@ -11,6 +11,7 @@ type Row = Record<string, unknown>;
 type Notice = { message: string; error?: boolean } | null;
 type PreviewDocument = { title: string; filename: string; blob: Blob };
 type FinancialAction = { kind: "void-invoice" | "reverse-payment" | "credit-receivable"; id: string; amount?: string; reference: string };
+type ConfirmationRequest = { title: string; description: string; confirmLabel: string; tone?: "neutral" | "warning" };
 
 function announceDraftSaved() { window.dispatchEvent(new Event("sel-draft-saved")); }
 
@@ -146,9 +147,9 @@ function humanError(error: unknown): string {
   return "L’opération n’a pas abouti. Vérifiez la connexion au service SEL et réessayez.";
 }
 
-function Button({ children, primary = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
-  return <button className={`button${primary ? " button-primary" : ""}`} {...props}>{children}</button>;
-}
+const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }>(function Button({ children, primary = false, className = "", ...props }, ref) {
+  return <button ref={ref} className={`button${primary ? " button-primary" : ""}${className ? ` ${className}` : ""}`} {...props}>{children}</button>;
+});
 
 function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return <section className="panel"><div className="panel-heading"><h2>{title}</h2>{action}</div>{children}</section>;
@@ -188,6 +189,10 @@ export default function App() {
   const [financialActionAmount, setFinancialActionAmount] = useState("");
   const [financialActionReason, setFinancialActionReason] = useState("");
   const [financialActionBusy, setFinancialActionBusy] = useState(false);
+  const [confirmationRequest, setConfirmationRequest] = useState<ConfirmationRequest | null>(null);
+  const confirmationResolver = useRef<((accepted: boolean) => void) | null>(null);
+  const confirmationCancelRef = useRef<HTMLButtonElement | null>(null);
+  const confirmationPreviousFocus = useRef<HTMLElement | null>(null);
   const [customers, setCustomers] = useState<Row[]>([]);
   const [invoices, setInvoices] = useState<Row[]>([]);
   const [payments, setPayments] = useState<Row[]>([]);
@@ -213,6 +218,30 @@ export default function App() {
   const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<PreviewDocument | null>(null);
   const [documentBusy, setDocumentBusy] = useState(false);
+
+  function requestConfirmation(request: ConfirmationRequest): Promise<boolean> {
+    if (confirmationResolver.current) return Promise.resolve(false);
+    confirmationPreviousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setConfirmationRequest(request);
+    return new Promise((resolve) => { confirmationResolver.current = resolve; });
+  }
+
+  function finishConfirmation(accepted: boolean) {
+    const resolve = confirmationResolver.current;
+    confirmationResolver.current = null;
+    setConfirmationRequest(null);
+    resolve?.(accepted);
+  }
+
+  useEffect(() => {
+    if (confirmationRequest) {
+      confirmationCancelRef.current?.focus();
+      return;
+    }
+    const previous = confirmationPreviousFocus.current;
+    confirmationPreviousFocus.current = null;
+    if (previous?.isConnected) previous.focus();
+  }, [confirmationRequest]);
 
   useEffect(() => {
     let active = true;
@@ -511,10 +540,15 @@ export default function App() {
     if (!selectedCustomer || !selectedCustomerData) return;
     const currentlyArchived = text(selectedCustomerData.status).toUpperCase() === "ARCHIVED";
     const nextStatus = currentlyArchived ? "ACTIVE" : "ARCHIVED";
-    const prompt = currentlyArchived
-      ? "Réactiver cet abonné ? Son historique et ses factures seront conservés."
-      : "Archiver cet abonné ? Il restera consultable et ses factures historiques seront conservées.";
-    if (!window.confirm(prompt)) return;
+    const accepted = await requestConfirmation({
+      title: currentlyArchived ? "Réactiver cet abonné ?" : "Archiver cet abonné ?",
+      description: currentlyArchived
+        ? "Son historique et ses factures seront conservés."
+        : "Il restera consultable et ses factures historiques seront conservées.",
+      confirmLabel: currentlyArchived ? "Réactiver l’abonné" : "Archiver l’abonné",
+      tone: "warning",
+    });
+    if (!accepted) return;
     try {
       const updated = await centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", { status: nextStatus }, Number(selectedCustomerData.revision));
       setSelectedCustomerData(updated);
@@ -571,9 +605,9 @@ export default function App() {
     setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null);
   }
 
-  function navigateTo(nextView: View, customerId?: string) {
+  async function navigateTo(nextView: View, customerId?: string) {
     if (nextView === view && !customerId) return;
-    if (draftDirty && !window.confirm("Une saisie n’est pas enregistrée. Voulez-vous l’abandonner et changer d’écran ?")) return;
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous changez d’écran.", confirmLabel: "Abandonner et continuer" })) return;
     if (draftDirty) discardPendingDraft();
     setViewHistory((history) => [...history, view]);
     setNotice(null);
@@ -581,9 +615,9 @@ export default function App() {
     setView(nextView);
   }
 
-  function navigateBack() {
+  async function navigateBack() {
     if (!viewHistory.length) return;
-    if (draftDirty && !window.confirm("Une saisie n’est pas enregistrée. Voulez-vous l’abandonner et revenir à l’écran précédent ?")) return;
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous revenez à l’écran précédent.", confirmLabel: "Abandonner et revenir" })) return;
     if (draftDirty) discardPendingDraft();
     setView(viewHistory[viewHistory.length - 1]);
     setViewHistory((history) => history.slice(0, -1));
@@ -654,8 +688,8 @@ export default function App() {
       </>}
 
       {view === "customers" && (selectedCustomer ? <>
-        <PageHeading eyebrow="CORE / CLIENTS" title="Dossier abonné" description={`${text(selectedCustomerData?.customer_code)} · ${text(selectedCustomerData?.legal_name)}`} action={<div className="page-actions"><Button aria-label="Retour au répertoire" onClick={() => {
-          if (draftDirty && !window.confirm("Les modifications de la fiche ne sont pas enregistrées. Voulez-vous les abandonner ?")) return;
+        <PageHeading eyebrow="CORE / CLIENTS" title="Dossier abonné" description={`${text(selectedCustomerData?.customer_code)} · ${text(selectedCustomerData?.legal_name)}`} action={<div className="page-actions"><Button aria-label="Retour au répertoire" onClick={async () => {
+          if (draftDirty && !await requestConfirmation({ title: "Abandonner les modifications ?", description: "Les changements non enregistrés dans la fiche seront perdus.", confirmLabel: "Abandonner et revenir" })) return;
           if (draftDirty) discardPendingDraft();
           setSelectedCustomer(""); setSelectedCustomerData(null); setStatement(null); setCustomerEditOpen(false);
         }}>Retour au répertoire</Button><Button onClick={() => navigateTo("readings", selectedCustomer)}>Relevés</Button><Button onClick={() => navigateTo("payments", selectedCustomer)}>Encaisser</Button><Button primary onClick={() => navigateTo("invoices", selectedCustomer)}>Nouvelle facture</Button><Button onClick={() => { if (customerEditOpen) setDraftDirty(false); setCustomerEditOpen((open) => !open); }}>{customerEditOpen ? "Annuler la modification" : "Modifier la fiche"}</Button><Button onClick={() => void toggleCustomerArchive()}>{text(selectedCustomerData?.status).toUpperCase() === "ARCHIVED" ? "Réactiver" : "Archiver"}</Button></div>} />
@@ -826,6 +860,24 @@ export default function App() {
             <label className="span-two">Motif obligatoire<textarea autoFocus name="reason" maxLength={500} value={financialActionReason} onChange={(event) => setFinancialActionReason(event.target.value)} required /></label>
             <div className="form-actions span-two"><Button type="button" disabled={financialActionBusy} onClick={() => setFinancialAction(null)}>Revenir sans corriger</Button><Button primary type="submit" disabled={financialActionBusy || !financialActionReason.trim() || (financialAction.kind !== "void-invoice" && !financialActionAmount)}>{financialActionBusy ? "Enregistrement…" : "Confirmer la correction"}</Button></div>
           </form>
+        </section>
+      </div>}
+      {confirmationRequest && <div className="action-dialog-backdrop confirmation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) finishConfirmation(false); }}>
+        <section className="action-dialog confirmation-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-description" onKeyDown={(event) => {
+          if (event.key === "Escape") { event.preventDefault(); finishConfirmation(false); return; }
+          if (event.key !== "Tab") return;
+          const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled])'));
+          const first = focusable[0]; const last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        }}>
+          <p className="eyebrow">{confirmationRequest.tone === "warning" ? "ACTION SUR LE DOSSIER" : "SAISIE EN COURS"}</p>
+          <h2 id="confirmation-title">{confirmationRequest.title}</h2>
+          <p id="confirmation-description" className="muted">{confirmationRequest.description}</p>
+          <div className="form-actions">
+            <Button ref={confirmationCancelRef} onClick={() => finishConfirmation(false)}>Annuler</Button>
+            <Button primary className={confirmationRequest.tone === "warning" ? "button-warning" : undefined} onClick={() => finishConfirmation(true)}>{confirmationRequest.confirmLabel}</Button>
+          </div>
         </section>
       </div>}
       <footer>Application développée et sécurisée par LTEX · <button className="footer-link" onClick={() => void openMonarqueSite().catch((error: unknown) => setNotice({ message: humanError(error), error: true }))}>MonarQue Group</button></footer>

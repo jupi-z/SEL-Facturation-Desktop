@@ -76,6 +76,18 @@ def test_v2_windows_client_exposes_the_figma_primary_workflows() -> None:
     assert '"+ Ajouter un abonné"' in app
 
 
+def test_ux3_confirmations_are_in_app_accessible_and_visually_exercised() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert "window.confirm" not in app
+    assert 'role="alertdialog" aria-modal="true"' in app
+    assert 'event.key === "Escape"' in app
+    assert "confirmationPreviousFocus" in app
+    assert '"customer-archive-confirmation-1440x900.png"' in visual_review
+    assert 'document.activeElement?.textContent?.trim()' in visual_review
+
+
 def test_meter_reading_screen_uses_central_routes_and_displays_rust_measurements() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
