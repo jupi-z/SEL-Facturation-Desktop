@@ -277,7 +277,7 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert "minLength={8}" in app
     assert "AdminCatalogPanel" in app
     assert "Créer un brouillon" in app
-    assert "Référence d’approbation SEL" in app
+    assert "Référence de la décision d’approbation SEL" in app
     assert "Journal d’audit récent" in app
     assert '"/local/v1/' not in app
     assert "Synchronisation" not in app

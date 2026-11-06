@@ -1144,6 +1144,7 @@ Le serveur résout maintenant cette référence quand le client omet le champ ou
 | `cargo test --workspace` | PASS — tous les tests exécutables localement; tests PostgreSQL explicitement ignorés faute de `TEST_DATABASE_URL` local |
 | `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
 | `npm run build` dans `v2/windows-app` | PASS — TypeScript + Vite; avertissement de bundles PDF volumineux |
+| Version du client Windows | 0.4.4 — incrémentée afin que l’installateur permette la mise à jour des postes en 0.4.3 |
 | Facture à 100 kWh, 0 m³, ligne communication 10 USD | PASS — test domaine existant : sous-total 19,50 USD, TVA 3,12 USD, total 22,62 USD |
 | Résolution automatique de `tariff_revision` vide | CODE + test PostgreSQL ajouté; test de stockage PostgreSQL non exécuté localement, Docker local indisponible |
 | État serveur avant déploiement | Lecture seule : API et PostgreSQL sains, 20 migrations appliquées, `0021` non appliquée, aucune ligne de communication en base |
