@@ -602,6 +602,7 @@ async def capture_views() -> None:
                     review_text = await user_review.inner_text()
                     if "agent-test-ux3" not in review_text or "Caissier" not in review_text or "synthetic-secret-123" in review_text:
                         raise AssertionError("User confirmation must show identity and role while keeping the password secret")
+                    await page.screenshot(path=str(OUTPUT / f"admin-user-confirmation-{SHOT_SUFFIX}.png"))
                     await user_review.get_by_role("button", name="Annuler").click()
                     if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users' && entry.method === 'POST').length") != 0:
                         raise AssertionError("Canceling user creation must not send a write request")
