@@ -33,9 +33,9 @@ button { cursor: pointer; }
 
 .app-shell { display: flex; min-height: 100vh; background: var(--canvas); }
 .sidebar { position: sticky; top: 0; display: flex; flex: 0 0 250px; flex-direction: column; width: 250px; height: 100vh; padding: 7px 13px 25px; overflow-y: auto; color: #f7faff; background: var(--navy); border-top: 7px solid var(--yellow); }
-.brand { display: flex; align-items: center; justify-content: center; width: 100%; height: 93px; margin: 4px 0 20px; padding: 0; border: 0; background: transparent; }
-.brand img { display: block; width: 188px; height: 96px; object-fit: contain; }
-.sidebar nav { display: grid; gap: 7px; }
+.brand { display: flex; align-items: center; justify-content: center; width: 184px; height: 101.409px; flex: 0 0 101.409px; margin: 13px auto 17px; padding: 0; border: 0; background: transparent; }
+.brand img { display: block; width: 184px; height: 101.409px; object-fit: contain; }
+.sidebar nav { display: grid; gap: 13px; }
 .nav-item { position: relative; display: flex; align-items: center; gap: 13px; width: 100%; min-height: 43px; padding: 0 13px; border: 0; border-radius: 4px; color: #c6d9f1; background: transparent; text-align: left; font-size: 13px; font-weight: 450; }
 .nav-item:hover { background: #0b396d; }
 .nav-item.active { color: #fff; background: #174779; font-weight: 690; }
@@ -44,9 +44,18 @@ button { cursor: pointer; }
 .nav-item.active .nav-icon { color: var(--yellow); }
 .sidebar-foot { margin: auto 12px 0; padding-top: 18px; border-top: 1px solid #31557d; color: #c6d9f1; }
 .sidebar-foot p { margin: 8px 0 0; font-size: 11px; line-height: 1.55; }
+.server-nav { display: flex; align-items: center; gap: 7px; min-height: 42px; margin: 49px 5px 0; padding: 8px 7px; border: 0; color: #c6d9f1; background: transparent; font-size: 10px; text-align: left; }
+.server-nav:hover, .server-nav.active { color: #fff; background: #164677; }
+.server-nav .status-dot { width: 6px; height: 6px; flex-basis: 6px; color: currentColor; }
 
 .content { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 100vh; padding: 0 42px 17px; }
 .topbar { display: flex; flex: 0 0 76px; align-items: center; justify-content: space-between; margin: 0 -42px; padding: 0 42px; border-bottom: 1px solid var(--line); background: #fff; }
+.topbar-context { display: flex; align-items: center; gap: 18px; }
+.back-button { min-height: 30px !important; padding: 6px 9px !important; color: var(--muted) !important; font-size: 10px !important; }
+.workspace-tabs { display: flex; align-items: center; gap: 5px; min-height: 49px; margin: 0 -42px; padding: 0 42px; border-bottom: 1px solid var(--line); background: #fff; }
+.workspace-tab { min-height: 36px; padding: 0 13px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font-size: 11px; font-weight: 650; }
+.workspace-tab:hover { color: var(--navy); background: #f0f5fb; }
+.workspace-tab.active { color: var(--navy); border-bottom-color: var(--navy); }
 .eyebrow { margin: 0; color: var(--blue); font-size: 10px; font-weight: 820; letter-spacing: .14em; line-height: 1.4; text-transform: uppercase; }
 .connection-status { display: inline-flex; align-items: center; gap: 8px; max-width: 360px; padding: 7px 11px; color: var(--green); background: #e6f5ee; border-radius: 3px; font-size: 11px; font-weight: 650; }
 .connection-status.pending { color: var(--amber); background: #fff2d2; }
@@ -63,6 +72,16 @@ button { cursor: pointer; }
 .tag { margin-top: 2px; padding: 7px 10px; color: var(--navy); background: var(--soft); border-radius: 4px; font-size: 11px; font-weight: 800; }
 
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 25px; background: #fff; border: 1px solid var(--line); border-radius: 4px; }
+.home-workspace { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); gap: 20px; }
+.home-workspace > .panel { min-height: 435px; margin: 0; padding: 19px; }
+.home-workspace > .panel > .muted { margin: 0 0 10px; }
+.quick-actions { display: grid; gap: 5px; }
+.quick-actions button { display: grid; gap: 3px; min-height: 45px; padding: 7px 12px; border: 0; color: var(--navy); background: #f0f5fb; text-align: left; }
+.quick-actions button:hover { background: #e5eef8; }
+.quick-actions strong { font-size: 12px; font-weight: 680; }
+.quick-actions strong span { color: var(--blue); }
+.quick-actions small { color: var(--muted); font-size: 10px; }
+.home-guidance { display: grid; gap: 15px; margin: 4px 0 0; padding-left: 16px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .solar-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .solar-metrics .metric { min-height: 88px; }
 .metric { min-width: 0; padding: 18px 20px 16px; border-right: 1px solid var(--line); }
@@ -311,7 +330,16 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
 .document-pdf-page { display: block; max-width: 100%; height: auto !important; background: #fff; box-shadow: 0 3px 16px rgb(0 0 0 / 28%); }
 .document-pdf-stage:has(.document-pdf-status[role="status"]) .document-pdf-status { min-height: 16px; }
 
+.action-dialog-backdrop { position: fixed; inset: 0; z-index: 1100; display: grid; place-items: center; padding: 24px; background: rgb(7 24 45 / 58%); }
+.action-dialog { width: min(560px, 96vw); max-height: min(90vh, 720px); overflow: auto; padding: 24px; border: 1px solid var(--line); border-top: 4px solid var(--yellow); border-radius: 6px; background: #fff; box-shadow: 0 24px 72px rgb(4 20 43 / 30%); }
+.action-dialog h2 { margin: 8px 0; color: var(--navy); font-size: 22px; }
+.action-dialog > .muted { margin: 0 0 18px; line-height: 1.6; overflow-wrap: anywhere; }
+.action-dialog textarea { min-height: 96px; resize: vertical; }
+.action-dialog .form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+
 @media (max-width: 760px) {
+  .action-dialog-backdrop { padding: 12px; }
+  .action-dialog { width: 100%; padding: 18px; }
   .document-preview-backdrop { padding: 0; }
   .document-preview-dialog { width: 100vw; height: 100dvh; border-radius: 0; }
   .document-preview-toolbar { align-items: flex-start; flex-direction: column; }

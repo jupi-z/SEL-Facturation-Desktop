@@ -9,6 +9,20 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .unwrap();
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices/{id}/document-data")));
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices")));
+    let void_invoice = paths
+        .get(serde_yaml::Value::from("/v1/invoices/{id}/void"))
+        .and_then(|path| path.get("post"))
+        .expect("audited invoice void route is documented");
+    assert_eq!(
+        void_invoice
+            .get("requestBody")
+            .and_then(|body| body.get("content"))
+            .and_then(|content| content.get("application/json"))
+            .and_then(|json| json.get("schema"))
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("#/components/schemas/VoidInvoiceRequest")
+    );
     let payment_list = paths
         .get(serde_yaml::Value::from("/v1/payments"))
         .and_then(|path| path.get("get"))

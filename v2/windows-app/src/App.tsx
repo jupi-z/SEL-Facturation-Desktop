@@ -1,26 +1,55 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, centralRequest, centralStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
+import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, centralRequest, centralRequestPage, centralStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
 import { buildClientPdf, renderClientPdfPreview } from "./documents";
 import "./App.css";
 
-type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "server" | "admin";
+export type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "server" | "admin";
+type Domain = "home" | "customers" | "billing" | "payments" | "solar" | "admin";
 type Row = Record<string, unknown>;
 type Notice = { message: string; error?: boolean } | null;
 type PreviewDocument = { title: string; filename: string; blob: Blob };
+type FinancialAction = { kind: "void-invoice" | "reverse-payment" | "credit-receivable"; id: string; amount?: string; reference: string };
 
-const navigation: { id: View; label: string; icon: string }[] = [
-  { id: "dashboard", label: "Vue d’ensemble", icon: "grid" },
-  { id: "customers", label: "Abonnés", icon: "people" },
-  { id: "readings", label: "Relevés", icon: "meter" },
-  { id: "invoices", label: "Factures", icon: "document" },
-  { id: "payments", label: "Encaissements", icon: "cash" },
-  { id: "solar", label: "Kits solaires", icon: "sun" },
-  { id: "receivables", label: "Créances", icon: "balance" },
-  { id: "server", label: "Serveur", icon: "server" },
-  { id: "admin", label: "Administration", icon: "settings" },
+function announceDraftSaved() { window.dispatchEvent(new Event("sel-draft-saved")); }
+
+async function loadAllCustomers(): Promise<Row[]> {
+  const customers: Row[] = [];
+  const cursors = new Set<string>();
+  let cursor = "";
+  while (true) {
+    const query = new URLSearchParams({ limit: "100" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await centralRequestPage<unknown>(`/v1/customers?${query.toString()}`);
+    customers.push(...rows<Row>(page.body));
+    const next = page.next_cursor?.trim() ?? "";
+    if (!next) return customers;
+    if (cursors.has(next) || next === cursor) throw new Error("Le serveur a renvoyé un curseur client répétitif. Actualisez ou contactez l’administrateur SEL.");
+    cursors.add(next);
+    cursor = next;
+  }
+}
+
+const navigation: { id: Domain; target: View; label: string; icon: string }[] = [
+  { id: "home", target: "dashboard", label: "Accueil", icon: "grid" },
+  { id: "customers", target: "customers", label: "Abonnés", icon: "people" },
+  { id: "billing", target: "invoices", label: "Facturation", icon: "document" },
+  { id: "payments", target: "payments", label: "Paiements", icon: "cash" },
+  { id: "solar", target: "solar", label: "Solaire", icon: "sun" },
+  { id: "admin", target: "admin", label: "Administration", icon: "settings" },
 ];
+
+const domainByView: Record<View, Domain> = {
+  dashboard: "home", customers: "customers", readings: "billing", invoices: "billing",
+  payments: "payments", receivables: "payments", solar: "solar", server: "admin", admin: "admin",
+};
+
+const domainViews: Partial<Record<Domain, { id: View; label: string }[]>> = {
+  billing: [{ id: "invoices", label: "Factures" }, { id: "readings", label: "Relevés" }],
+  payments: [{ id: "payments", label: "Journal de caisse" }, { id: "receivables", label: "Créances" }],
+  admin: [{ id: "admin", label: "Administration" }, { id: "server", label: "État du serveur" }],
+};
 
 const pageTitle: Record<View, { title: string; context: string }> = {
   dashboard: { title: "Vue d’ensemble", context: "SEL / OPÉRATIONS" },
@@ -153,6 +182,12 @@ export default function App() {
   const [serverReady, setServerReady] = useState<boolean | null>(null);
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [view, setView] = useState<View>("dashboard");
+  const [viewHistory, setViewHistory] = useState<View[]>([]);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [financialAction, setFinancialAction] = useState<FinancialAction | null>(null);
+  const [financialActionAmount, setFinancialActionAmount] = useState("");
+  const [financialActionReason, setFinancialActionReason] = useState("");
+  const [financialActionBusy, setFinancialActionBusy] = useState(false);
   const [customers, setCustomers] = useState<Row[]>([]);
   const [invoices, setInvoices] = useState<Row[]>([]);
   const [payments, setPayments] = useState<Row[]>([]);
@@ -211,12 +246,18 @@ export default function App() {
     return () => { active = false; window.removeEventListener("sel-session-expired", expired); window.removeEventListener("sel-server-unavailable", unavailable); };
   }, []);
 
+  useEffect(() => {
+    const saved = () => setDraftDirty(false);
+    window.addEventListener("sel-draft-saved", saved);
+    return () => window.removeEventListener("sel-draft-saved", saved);
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!session?.authenticated) return;
     setLoading(true);
     try {
       const [customerResult, invoiceResult, paymentResult, salesResult, productsResult, statusResult] = await Promise.allSettled([
-        centralRequest<unknown>("/v1/customers"),
+        loadAllCustomers(),
         centralRequest<unknown>("/v1/invoices?limit=100"),
         centralRequest<unknown>("/v1/payments?limit=100"),
         centralRequest<unknown>("/v1/solar/sales?limit=100"),
@@ -308,36 +349,12 @@ export default function App() {
     return !query || [customer.customer_code, customer.legal_name, customer.address, customer.phone]
       .some((value) => text(value, "").toLocaleLowerCase("fr").includes(query));
   }), [customers, customerFilter]);
-  const recentActivity = useMemo(() => {
-    const customerNames = new Map(customers.map((customer) => [
-      text(customer.customer_id ?? customer.id, ""),
-      text(customer.legal_name, text(customer.customer_code)),
-    ]));
-    const activity = [
-      ...invoices.map((row) => ({
-        row, kind: "Eau + électricité", reference: text(row.invoice_number ?? row.invoice_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.total), date: text(row.issued_at ?? row.created_at),
-      })),
-      ...payments.map((row) => ({
-        row, kind: "Encaissement", reference: text(row.payment_number ?? row.payment_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.amount_received ?? row.received_amount), date: text(row.paid_at ?? row.occurred_at),
-      })),
-      ...sales.map((row) => ({
-        row, kind: "Kit solaire", reference: text(row.sale_number ?? row.sale_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.principal), date: text(row.sold_at ?? row.created_at),
-      })),
-    ];
-    return activity.sort((left, right) => Date.parse(right.date) - Date.parse(left.date)).slice(0, 8);
-  }, [customers, invoices, payments, sales]);
-
   async function submit(event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string): Promise<boolean> {
     event.preventDefault();
     const form = event.currentTarget;
     try {
       await centralRequest(path, "POST", payload);
+      setDraftDirty(false);
       setNotice({ message: success });
       form.reset();
       await refresh();
@@ -350,6 +367,7 @@ export default function App() {
     const form = event.currentTarget;
     try {
       await centralRequest("/v1/customers", "POST", Object.fromEntries(new FormData(form)) as Row);
+      setDraftDirty(false);
       setNotice({ message: "Abonné enregistré sur le serveur SEL." });
       form.reset();
       setCustomerCreateOpen(false);
@@ -387,6 +405,7 @@ export default function App() {
     if (!invoiceDraft) return;
     try {
       await centralRequest("/v1/billing/utility/issue", "POST", invoiceDraft);
+      setDraftDirty(false);
       setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
       setInvoiceFormKey((key) => key + 1);
       setNotice({ message: "Facture enregistrée par le serveur SEL." });
@@ -401,6 +420,35 @@ export default function App() {
       const details = await centralRequest<Row>(`/v1/invoices/${encodeURIComponent(id)}`);
       setSelectedInvoice(details);
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  function beginFinancialAction(action: FinancialAction) {
+    setFinancialAction(action);
+    setFinancialActionAmount(action.amount ?? "");
+    setFinancialActionReason("");
+  }
+
+  async function commitFinancialAction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!financialAction || !financialActionReason.trim()) return;
+    const { kind, id } = financialAction;
+    const path = kind === "void-invoice"
+      ? `/v1/invoices/${encodeURIComponent(id)}/void`
+      : kind === "reverse-payment"
+        ? `/v1/payments/${encodeURIComponent(id)}/reverse`
+        : `/v1/receivables/${encodeURIComponent(id)}/credit`;
+    const payload = kind === "void-invoice"
+      ? { reason: financialActionReason.trim() }
+      : { amount: financialActionAmount, reason: financialActionReason.trim() };
+    setFinancialActionBusy(true);
+    try {
+      await centralRequest(path, "POST", payload);
+      setNotice({ message: kind === "void-invoice" ? "Annulation ajoutée à l’historique financier." : kind === "reverse-payment" ? "Contre-écriture ajoutée à l’historique financier." : "Avoir ajouté à l’historique de la créance." });
+      setFinancialAction(null);
+      setFinancialActionAmount(""); setFinancialActionReason("");
+      await refresh();
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { setFinancialActionBusy(false); }
   }
 
   async function openDocument(kind: "invoice" | "payment" | "solar", id: unknown) {
@@ -452,8 +500,25 @@ export default function App() {
     try {
       const updated = await centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", payload, Number(selectedCustomerData.revision));
       setSelectedCustomerData(updated);
+      setDraftDirty(false);
       setCustomerEditOpen(false);
       setNotice({ message: "Dossier abonné modifié sur le serveur central." });
+      await refresh();
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  async function toggleCustomerArchive() {
+    if (!selectedCustomer || !selectedCustomerData) return;
+    const currentlyArchived = text(selectedCustomerData.status).toUpperCase() === "ARCHIVED";
+    const nextStatus = currentlyArchived ? "ACTIVE" : "ARCHIVED";
+    const prompt = currentlyArchived
+      ? "Réactiver cet abonné ? Son historique et ses factures seront conservés."
+      : "Archiver cet abonné ? Il restera consultable et ses factures historiques seront conservées.";
+    if (!window.confirm(prompt)) return;
+    try {
+      const updated = await centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", { status: nextStatus }, Number(selectedCustomerData.revision));
+      setSelectedCustomerData(updated);
+      setNotice({ message: currentlyArchived ? "Abonné réactivé." : "Abonné archivé. Son historique reste consultable." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
@@ -490,6 +555,7 @@ export default function App() {
     if (!solarSaleDraft) return;
     try {
       await centralRequest("/v1/solar/sales", "POST", solarSaleDraft);
+      setDraftDirty(false);
       setSolarQuote(null);
       setSolarSaleDraft(null);
       setSolarSaleOpen(false);
@@ -498,13 +564,33 @@ export default function App() {
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
 
-  function navigateTo(nextView: View) {
+  function discardPendingDraft() {
+    setDraftDirty(false);
+    setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
+    setCustomerCreateOpen(false); setCustomerEditOpen(false);
+    setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null);
+  }
+
+  function navigateTo(nextView: View, customerId?: string) {
+    if (nextView === view && !customerId) return;
+    if (draftDirty && !window.confirm("Une saisie n’est pas enregistrée. Voulez-vous l’abandonner et changer d’écran ?")) return;
+    if (draftDirty) discardPendingDraft();
+    setViewHistory((history) => [...history, view]);
     setNotice(null);
+    if (customerId) setSelectedCustomer(customerId);
     setView(nextView);
   }
 
+  function navigateBack() {
+    if (!viewHistory.length) return;
+    if (draftDirty && !window.confirm("Une saisie n’est pas enregistrée. Voulez-vous l’abandonner et revenir à l’écran précédent ?")) return;
+    if (draftDirty) discardPendingDraft();
+    setView(viewHistory[viewHistory.length - 1]);
+    setViewHistory((history) => history.slice(0, -1));
+    setNotice(null);
+  }
+
   const activePage = pageTitle[view];
-  const link = (id: View, label: string) => <button className="text-button" onClick={() => navigateTo(id)}>{label}</button>;
   const previewLines = rows<Row>(preview?.lines);
   const previewElectricity = previewLines.find((line) => text(line.service_code).toUpperCase() === "ELECTRICITY");
   const previewWater = previewLines.find((line) => text(line.service_code).toUpperCase() === "WATER");
@@ -521,74 +607,95 @@ export default function App() {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <button className="brand" aria-label="Accueil SEL" onClick={() => navigateTo("dashboard")}><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /></button>
+      <button className="brand" aria-label="Accueil SEL" onClick={() => navigateTo("dashboard")}><img src="/assets/sel-logo-ux3.svg" alt="S.E.L. SASU" /></button>
       <nav aria-label="Navigation principale">
-        {navigation.map((item) => <button key={item.id} className={`nav-item${view === item.id ? " active" : ""}`} aria-current={view === item.id ? "page" : undefined} onClick={() => navigateTo(item.id)}>
+        {navigation.map((item) => <button key={item.id} className={`nav-item${domainByView[view] === item.id ? " active" : ""}`} aria-current={domainByView[view] === item.id ? "page" : undefined} onClick={() => navigateTo(item.target)}>
           <NavIcon name={item.icon} /><span>{item.label}</span>
         </button>)}
       </nav>
+      <button className={`server-nav${view === "server" ? " active" : ""}`} aria-current={view === "server" ? "page" : undefined} onClick={() => navigateTo("server")}><span className="status-dot" aria-hidden="true" />État du serveur · diagnostic</button>
       <div className="sidebar-foot"><span className="eyebrow">SERVICE CENTRAL</span><p>Connexion requise pour toute opération</p></div>
     </aside>
 
-    <main className="content">
-      <header className="topbar"><p className="eyebrow">{activePage.context}</p>
+    <main className="content" onChange={(event) => { if ((event.target as HTMLElement).closest("form[data-preserve-draft]")) setDraftDirty(true); }}>
+      <header className="topbar"><div className="topbar-context">{viewHistory.length > 0 && <Button className="back-button" onClick={navigateBack} aria-label="Revenir à l’écran précédent">← Retour</Button>}<p className="eyebrow">{activePage.context}</p></div>
         <div className="connection-status"><span className="status-dot" aria-hidden="true" />{serverStatus?.status === "CENTRAL_CONNECTED" ? "Serveur SEL · connecté" : "Serveur SEL · état inconnu"}<Button onClick={() => void signOut()}>Se déconnecter</Button></div>
       </header>
+      {domainViews[domainByView[view]] && <nav className="workspace-tabs" aria-label={`Pages ${navigation.find((item) => item.id === domainByView[view])?.label ?? ""}`}>
+        {domainViews[domainByView[view]]?.map((item) => <button key={item.id} className={`workspace-tab${view === item.id ? " active" : ""}`} aria-current={view === item.id ? "page" : undefined} onClick={() => navigateTo(item.id)}>{item.label}</button>)}
+      </nav>}
       {notice && <div className={`notice${notice.error ? " error" : ""}`} role={notice.error ? "alert" : "status"}>{notice.message}<button aria-label="Fermer le message" onClick={() => setNotice(null)}>×</button></div>}
       {loading && <div className="loading-line" role="status">Chargement des données centrales…</div>}
 
       {view === "dashboard" && <>
-        <div className="page-heading"><div><p className="eyebrow">ACTIVITÉ SEL</p><h1>Vue d’ensemble</h1><p className="muted">Dossiers et opérations consultés directement sur le serveur central.</p></div><Button primary onClick={() => navigateTo("invoices")}>Nouvelle facture</Button></div>
+        <div className="page-heading"><div><p className="eyebrow">SEL / ACCUEIL / OPÉRATIONS</p><h1>Bienvenue dans SEL Facturation</h1><p className="muted">Accédez directement aux opérations, sans parcourir plusieurs tableaux.</p></div><Button primary onClick={() => navigateTo("invoices")}>Nouvelle facture</Button></div>
         <div className="metrics">
           <Metric label="Abonnés" value={customers.length} note="Dossiers chargés du serveur SEL" />
           <Metric label="Factures" value={invoices.length} note="Documents enregistrés au serveur" />
           <Metric label="Encaissements" value={payments.length} note="Règlements renvoyés par le serveur" />
-          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Source unique : serveur SEL" />
+          <Metric label="Serveur" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Connecté" : "—"} note="Valeur du serveur SEL" />
         </div>
-        <Panel title="Dossiers / activité récente" action={link("server", "État du serveur →")}>
-          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune activité récente retournée par le serveur." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, formatMoney(amount, row.currency), <Status value={row.status} />])} />
-        </Panel>
+        <div className="home-workspace">
+          <Panel title="Que souhaitez-vous faire ?">
+            <p className="muted">Sélectionnez une action pour retrouver directement le bon parcours.</p>
+            <div className="quick-actions">
+              <button onClick={() => navigateTo("customers")}><strong>Gérer les abonnés <span aria-hidden="true">›</span></strong><small>Fiches, services et compteurs</small></button>
+              <button onClick={() => navigateTo("invoices")}><strong>Émettre une facture <span aria-hidden="true">›</span></strong><small>Eau et électricité sur le même document</small></button>
+              <button onClick={() => navigateTo("payments")}><strong>Encaisser un règlement <span aria-hidden="true">›</span></strong><small>Paiement, affectation et reçu</small></button>
+              <button onClick={() => navigateTo("readings")}><strong>Saisir un relevé <span aria-hidden="true">›</span></strong><small>Index, contrôle et correction</small></button>
+              <button onClick={() => navigateTo("solar")}><strong>Vendre un kit solaire <span aria-hidden="true">›</span></strong><small>Catalogue, vente et échéancier</small></button>
+              {session.role === "ADMIN" && <button onClick={() => navigateTo("admin")}><strong>Paramétrer SEL <span aria-hidden="true">›</span></strong><small>Utilisateurs et référentiels approuvés</small></button>}
+            </div>
+          </Panel>
+          <Panel title="Vos repères">
+            <ul className="home-guidance"><li>Une action principale par étape.</li><li>Vous pouvez revenir sans publier un brouillon.</li><li>Les écritures validées se corrigent avec traçabilité.</li><li>Le serveur est requis pour toute opération métier.</li><li>Les données affichées viennent de l’API SEL.</li></ul>
+          </Panel>
+        </div>
       </>}
 
       {view === "customers" && (selectedCustomer ? <>
-        <PageHeading eyebrow="CORE / CLIENTS" title="Dossier abonné" description={`${text(selectedCustomerData?.customer_code)} · ${text(selectedCustomerData?.legal_name)}`} action={<div className="page-actions"><Button aria-label="Retour au répertoire" onClick={() => { setSelectedCustomer(""); setSelectedCustomerData(null); setStatement(null); setCustomerEditOpen(false); }}>Retour au répertoire</Button><Button primary onClick={() => setCustomerEditOpen((open) => !open)}>{customerEditOpen ? "Annuler la modification" : "Modifier la fiche"}</Button></div>} />
+        <PageHeading eyebrow="CORE / CLIENTS" title="Dossier abonné" description={`${text(selectedCustomerData?.customer_code)} · ${text(selectedCustomerData?.legal_name)}`} action={<div className="page-actions"><Button aria-label="Retour au répertoire" onClick={() => {
+          if (draftDirty && !window.confirm("Les modifications de la fiche ne sont pas enregistrées. Voulez-vous les abandonner ?")) return;
+          if (draftDirty) discardPendingDraft();
+          setSelectedCustomer(""); setSelectedCustomerData(null); setStatement(null); setCustomerEditOpen(false);
+        }}>Retour au répertoire</Button><Button onClick={() => navigateTo("readings", selectedCustomer)}>Relevés</Button><Button onClick={() => navigateTo("payments", selectedCustomer)}>Encaisser</Button><Button primary onClick={() => navigateTo("invoices", selectedCustomer)}>Nouvelle facture</Button><Button onClick={() => { if (customerEditOpen) setDraftDirty(false); setCustomerEditOpen((open) => !open); }}>{customerEditOpen ? "Annuler la modification" : "Modifier la fiche"}</Button><Button onClick={() => void toggleCustomerArchive()}>{text(selectedCustomerData?.status).toUpperCase() === "ARCHIVED" ? "Réactiver" : "Archiver"}</Button></div>} />
         <Panel title={`Fiche abonné · ${text(selectedCustomerData?.customer_code)}`}>
-          {selectedCustomerData ? customerEditOpen ? <form className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
+          {selectedCustomerData ? customerEditOpen ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
             <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required /></label>
             <label>Catégorie tarifaire<select name="customer_category" defaultValue={text(selectedCustomerData.customer_category, "")} required><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
             <label>Révision du dossier<input value={text(selectedCustomerData.revision)} readOnly /></label>
             <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} /></label>
             <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} /></label>
-            <div className="form-actions span-two"><Button type="button" onClick={() => setCustomerEditOpen(false)}>Annuler</Button><Button primary type="submit">Enregistrer les modifications</Button></div>
+            <div className="form-actions span-two"><Button type="button" onClick={() => { setCustomerEditOpen(false); setDraftDirty(false); }}>Annuler</Button><Button primary type="submit">Enregistrer les modifications</Button></div>
           </form> : <dl className="customer-details"><div><dt>Nom / raison sociale</dt><dd>{text(selectedCustomerData.legal_name)}</dd></div><div><dt>Code abonné</dt><dd>{text(selectedCustomerData.customer_code)}</dd></div><div><dt>Catégorie tarifaire</dt><dd>{text(selectedCustomerData.customer_category, "À compléter")}</dd></div><div><dt>Adresse</dt><dd>{text(selectedCustomerData.address)}</dd></div><div><dt>Téléphone</dt><dd>{text(selectedCustomerData.phone)}</dd></div><div><dt>Révision du dossier</dt><dd>{text(selectedCustomerData.revision)}</dd></div></dl> : <div className="empty-state">Chargement du dossier abonné…</div>}
         </Panel>
         <ServiceAccountsManager customerId={selectedCustomer} />
         <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} customerCode={text(selectedCustomerData?.customer_code)} statement={statement} />
       </> : <>
-        <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => setCustomerCreateOpen((open) => !open)}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
+      <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => { if (customerCreateOpen) setDraftDirty(false); setCustomerCreateOpen((open) => !open); }}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
         <div className="metrics customer-metrics">
           <Metric label="Abonnés enregistrés" value={customers.length} note="Dossiers gérés par le serveur SEL" />
           <Metric label="Factures" value={invoices.length} note="Documents enregistrés au serveur" />
           <Metric label="Versements" value={payments.length} note="Règlements enregistrés au serveur" />
           <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Source unique : serveur SEL" />
         </div>
-        {customerCreateOpen && <Panel title="Nouvel abonné"><form className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
+        {customerCreateOpen && <Panel title="Nouvel abonné"><form data-preserve-draft className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
             <label>Code abonné<input name="customer_code" required /></label><label>Nom / raison sociale<input name="legal_name" required /></label>
             <label>Catégorie tarifaire<select name="customer_category" required defaultValue=""><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
             <label>Adresse<input name="address" /></label><label>Téléphone<input name="phone" /></label>
             <p className="help span-two">Les informations pourront être complétées dans le dossier de l’abonné.</p>
             <div className="form-actions span-two"><Button primary type="submit">Enregistrer l’abonné</Button></div>
           </form></Panel>}
-        <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné retourné par le serveur." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); setCustomerEditOpen(false); }}>Ouvrir le dossier →</button>])} /></Panel>
+        <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "État", "Action"]} empty="Aucun abonné retourné par le serveur." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <Status value={row.status} />, <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); setCustomerEditOpen(false); }}>Ouvrir le dossier →</button>])} /></Panel>
       </>)}
 
-      {view === "readings" && <MeterReadingsView customers={customers} onOpenInvoices={() => navigateTo("invoices")} onOpenCustomer={(customerId) => {
+      {view === "readings" && <MeterReadingsView customers={customers} initialCustomerId={selectedCustomer} canCorrect={["ADMIN", "SUPERVISOR"].includes(text(session?.role).toUpperCase())} onOpenInvoices={() => navigateTo("invoices", selectedCustomer)} onOpenCustomer={(customerId) => {
         const customer = customers.find((item) => text(item.customer_id ?? item.id) === customerId);
         if (!customer) return;
         setSelectedCustomer(customerId);
         setSelectedCustomerData(customer);
         setCustomerEditOpen(false);
-        navigateTo("customers");
+        navigateTo("customers", customerId);
       }} />}
 
       {view === "invoices" && <>
@@ -596,8 +703,8 @@ export default function App() {
           <div className="page-heading"><div><p className="eyebrow">CORE / FACTURATION</p><h1>Factures eau + électricité</h1><p className="muted">Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust.</p></div><span className="tag">USD</span></div>
           <div className="invoice-workspace">
             <Panel title="Paramètres de facturation">
-              <form id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
-                <label>Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
+              <form data-preserve-draft id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
+                <label>Abonné<select name="customer_id" required defaultValue={selectedCustomer}><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
                 <label>Période de facturation<input name="billing_period" type="month" required /></label>
                 <label>Électricité consommée (kWh)<input name="electricity_quantity" type="number" min="0" step="0.01" defaultValue="0" required /></label>
                 <label>Eau consommée (m³)<input name="water_quantity" type="number" min="0" step="0.01" defaultValue="0" required onChange={(event) => { if (Number(event.target.value) !== 0) setZeroConfirmed(false); }} /></label>
@@ -617,7 +724,11 @@ export default function App() {
             </aside>
           </div>
           <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
-            <Table headers={["Référence", "Abonné", "Période", "État", "Actions"]} empty="Aucune facture retournée par le serveur." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", row.invoice_id ?? row.id)}>Document PDF</Button></div>])} />
+            <Table headers={["Référence", "Abonné", "Période", "État", "Actions"]} empty="Aucune facture retournée par le serveur." data={filteredInvoices.map((row) => {
+              const invoiceId = text(row.invoice_id ?? row.id, "");
+              const invoiceStatus = text(row.status).toUpperCase();
+              return [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", invoiceId)}>Document PDF</Button>{["ADMIN", "SUPERVISOR"].includes(text(session?.role).toUpperCase()) && invoiceId && !["VOID", "CANCELLED"].includes(invoiceStatus) && <Button onClick={() => beginFinancialAction({ kind: "void-invoice", id: invoiceId, reference: text(row.invoice_number ?? invoiceId) })}>Annuler avec motif</Button>}</div>];
+            })} />
           </Panel>
           {selectedInvoice && <>
             <p className="muted">Période {text(selectedInvoice.billing_period)} · Échéance {text(selectedInvoice.due_date)} · <Status value={selectedInvoice.status} /></p>
@@ -639,13 +750,18 @@ export default function App() {
 
       {view === "payments" && <>
         <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
-        <PaymentForm customers={customers} sales={sales} onSubmit={submit} />
-        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État", "Document"]} empty="Aucun encaissement retourné par le serveur." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), domainLabel(row.method), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("payment", row.payment_id ?? row.id)}>Reçu PDF</Button>])} /></Panel>
+        <PaymentForm customers={customers} sales={sales} initialCustomerId={selectedCustomer} onSubmit={submit} />
+        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État", "Document / corrections"]} empty="Aucun encaissement retourné par le serveur." data={payments.map((row) => {
+          const paymentId = text(row.payment_id ?? row.id, "");
+          const paymentAmount = text(row.amount_received ?? row.received_amount, "");
+          const canReverse = ["ADMIN", "CASHIER", "SUPERVISOR"].includes(text(session?.role).toUpperCase()) && paymentId && text(row.status).toUpperCase() === "CENTRAL_ACCEPTED";
+          return [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(paymentAmount, row.currency), domainLabel(row.method), <Status value={row.status} />, <div className="page-actions"><Button disabled={documentBusy} onClick={() => void openDocument("payment", paymentId)}>Reçu PDF</Button>{canReverse && <Button onClick={() => beginFinancialAction({ kind: "reverse-payment", id: paymentId, amount: paymentAmount, reference: text(row.payment_number ?? paymentId) })}>Contre-passer</Button>}</div>];
+        })} /></Panel>
       </>}
 
       {view === "solar" && <>
         <PageHeading eyebrow="COMMERCE / FINANCE" title="Catalogue des kits solaires" description="Consultez les produits approuvés et les ventes enregistrées par le serveur." action={<Button primary onClick={() => setSolarSaleOpen(true)}>Créer une vente</Button>} />
-        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); }}>Fermer</Button>}><form className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
+        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); setDraftDirty(false); }}>Fermer</Button>}><form data-preserve-draft className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
           <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
           <label>Produit approuvé<select name="product_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
           <label>Devise du catalogue<select name="currency" defaultValue={text(solarProducts[0]?.currency, "USD")} required>{[...new Set(solarProducts.map((product) => text(product.currency, "")))].filter(Boolean).map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label>
@@ -670,7 +786,10 @@ export default function App() {
       {view === "receivables" && <>
         <PageHeading eyebrow="FINANCE / SOLDES" title="Suivi des créances" description="Soldes et obligations renvoyés par le serveur, sans recalcul dans l’interface." />
         <Panel title="Situation d’un abonné"><label className="customer-picker">Abonné<select value={selectedCustomer} onChange={(event) => setSelectedCustomer(event.target.value)}><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-          {statement ? <Table headers={["Référence", "Nature", "Solde", "Situation"]} empty="Aucune créance associée." data={rows<Row>(statement.receivables).map((row) => [<strong>{text(row.receivable_id ?? row.id)}</strong>, domainLabel(row.source_type), formatMoney(row.balance, row.currency), <Status value={row.status} />])} /> : <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
+          {statement ? <Table headers={["Référence", "Nature", "Solde", "Situation", "Actions"]} empty="Aucune créance associée." data={rows<Row>(statement.receivables).map((row) => {
+            const receivableId = text(row.receivable_id ?? row.id, "");
+            return [<strong>{receivableId}</strong>, domainLabel(row.source_type), formatMoney(row.balance, row.currency), <Status value={row.status} />, receivableId && Number(row.balance) > 0 ? <Button onClick={() => beginFinancialAction({ kind: "credit-receivable", id: receivableId, reference: receivableId })}>Créer un avoir</Button> : "—"];
+          })} /> : <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
         </Panel>
       </>}
 
@@ -688,6 +807,25 @@ export default function App() {
         <section className="document-preview-dialog" role="dialog" aria-modal="true" aria-label={documentPreview.title}>
           <header className="document-preview-toolbar"><div><p className="eyebrow">DOCUMENT · A4</p><h2>{documentPreview.title}</h2><p className="muted">Aperçu préparé à partir des données renvoyées par le serveur SEL.</p></div><div className="page-actions"><Button onClick={() => window.print()}>Imprimer</Button><Button primary onClick={() => void saveDocument()}>Enregistrer le PDF</Button><Button aria-label="Fermer l’aperçu" onClick={closeDocumentPreview}>Fermer</Button></div></header>
       <ClientPdfPreview blob={documentPreview.blob} />
+        </section>
+      </div>}
+    {financialAction && <div className="action-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !financialActionBusy) setFinancialAction(null); }}>
+        <section className="action-dialog" role="dialog" aria-modal="true" aria-labelledby="financial-action-title" aria-describedby="financial-action-description" onKeyDown={(event) => {
+          if (event.key === "Escape" && !financialActionBusy) { event.preventDefault(); setFinancialAction(null); return; }
+          if (event.key !== "Tab") return;
+          const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('input:not([disabled]), textarea:not([disabled]), button:not([disabled])'));
+          const first = focusable[0]; const last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        }}>
+          <p className="eyebrow">CORRECTION FINANCIÈRE AUDITÉE</p>
+          <h2 id="financial-action-title">{financialAction.kind === "void-invoice" ? "Annuler une facture" : financialAction.kind === "reverse-payment" ? "Contre-passer un règlement" : "Créer un avoir"}</h2>
+          <p id="financial-action-description" className="muted">Référence : {financialAction.reference}. L’opération sera enregistrée par le serveur avec son motif ; l’écriture d’origine est conservée.</p>
+          <form className="form-grid" onSubmit={(event) => void commitFinancialAction(event)}>
+            {financialAction.kind !== "void-invoice" && <label>Montant à corriger<input name="amount" type="number" min="0.01" step="0.01" max={financialAction.amount || undefined} value={financialActionAmount} onChange={(event) => setFinancialActionAmount(event.target.value)} required /></label>}
+            <label className="span-two">Motif obligatoire<textarea autoFocus name="reason" maxLength={500} value={financialActionReason} onChange={(event) => setFinancialActionReason(event.target.value)} required /></label>
+            <div className="form-actions span-two"><Button type="button" disabled={financialActionBusy} onClick={() => setFinancialAction(null)}>Revenir sans corriger</Button><Button primary type="submit" disabled={financialActionBusy || !financialActionReason.trim() || (financialAction.kind !== "void-invoice" && !financialActionAmount)}>{financialActionBusy ? "Enregistrement…" : "Confirmer la correction"}</Button></div>
+          </form>
         </section>
       </div>}
       <footer>Application développée et sécurisée par LTEX · <button className="footer-link" onClick={() => void openMonarqueSite().catch((error: unknown) => setNotice({ message: humanError(error), error: true }))}>MonarQue Group</button></footer>
@@ -790,8 +928,8 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: Row[]; onSubmit: (event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) => Promise<boolean> }) {
-  const [customerId, setCustomerId] = useState("");
+function PaymentForm({ customers, sales, initialCustomerId, onSubmit }: { customers: Row[]; sales: Row[]; initialCustomerId: string; onSubmit: (event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) => Promise<boolean> }) {
+  const [customerId, setCustomerId] = useState(initialCustomerId);
   const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: "", amount: "", scheduleId: "" }]);
   const [receivables, setReceivables] = useState<Row[]>([]);
   const [receivablesLoading, setReceivablesLoading] = useState(false);
@@ -799,6 +937,8 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
   const [planSchedules, setPlanSchedules] = useState<Record<string, { schedule: Row[]; currency: string; loading: boolean; error: string }>>({});
   const [receivedAmount, setReceivedAmount] = useState("");
   const [occurredAt, setOccurredAt] = useState(dateTimeInputValue);
+
+  useEffect(() => { setCustomerId(initialCustomerId); }, [initialCustomerId]);
 
   useEffect(() => {
     if (!customerId) { setReceivables([]); setReceivablesLoading(false); setReceivablesError(""); return; }
@@ -861,7 +1001,7 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
       : allocation));
   }
 
-  return <div className="payment-workspace"><Panel title="Informations du règlement"><form id="central-payment-form" className="form-grid" onSubmit={async (event) => {
+  return <div className="payment-workspace"><Panel title="Informations du règlement"><form data-preserve-draft id="central-payment-form" className="form-grid" onSubmit={async (event) => {
     const form = new FormData(event.currentTarget);
     const saved = await onSubmit(event, "/v1/payments", {
       customer_id: form.get("customer_id"), received_amount: form.get("received_amount"), currency, method: form.get("method"), occurred_at: new Date(String(form.get("occurred_at"))).toISOString(),
@@ -902,6 +1042,7 @@ function ServiceAccountsManager({ customerId }: { customerId: string }) {
   const [metersByAccount, setMetersByAccount] = useState<Record<string, Row[]>>({});
   const [accountFormOpen, setAccountFormOpen] = useState(false);
   const [meterFormAccount, setMeterFormAccount] = useState("");
+  const [editingServiceAccount, setEditingServiceAccount] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -939,6 +1080,7 @@ function ServiceAccountsManager({ customerId }: { customerId: string }) {
     setSaving(true); setMessage(""); setMessageError(false);
     try {
       await centralRequest(`/v1/customers/${encodeURIComponent(customerId)}/service-accounts`, "POST", payload);
+      announceDraftSaved();
       setAccountFormOpen(false);
       setMessage(`${domainLabel(serviceCode)} rattaché à l’abonné. Aucun compteur n’a été créé.`);
       await loadAccounts();
@@ -957,11 +1099,35 @@ function ServiceAccountsManager({ customerId }: { customerId: string }) {
       await centralRequest(`/v1/service-accounts/${encodeURIComponent(meterFormAccount)}/meters`, "POST", {
         serial: String(form.get("serial") ?? "").trim(), unit,
       });
+      announceDraftSaved();
       setMeterFormAccount("");
       setMessage("Compteur enregistré. Les relevés pourront être saisis pour ce service.");
       await loadAccounts();
     } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
+  }
+
+  async function updateServiceAccount(event: FormEvent<HTMLFormElement>, account: Row) {
+    event.preventDefault();
+    const accountId = text(account.id, "");
+    if (!accountId) return;
+    const form = new FormData(event.currentTarget);
+    const payload = {
+      contract_ref: String(form.get("contract_ref") ?? "").trim() || null,
+      connection_status: String(form.get("connection_status") ?? "UNKNOWN"),
+      activated_at: String(form.get("activated_at") ?? "") || null,
+    };
+    setSaving(true); setMessage(""); setMessageError(false);
+    try {
+      await centralRequest(`/v1/service-accounts/${encodeURIComponent(accountId)}`, "PATCH", payload, Number(account.revision));
+      announceDraftSaved();
+      setEditingServiceAccount("");
+      setMessage("Raccordement mis à jour sur le serveur SEL.");
+      await loadAccounts();
+    } catch (error) {
+      setMessage(`${humanError(error)}${String(error).includes("409") ? " Votre saisie est conservée. Comparez-la avec la dernière version du dossier avant de réessayer." : ""}`);
+      setMessageError(true);
+    } finally { setSaving(false); }
   }
 
   const availableServices = ["ELECTRICITY", "WATER"].filter((code) => !accounts.some((account) => text(account.service_code).toUpperCase() === code));
@@ -974,10 +1140,17 @@ function ServiceAccountsManager({ customerId }: { customerId: string }) {
       const unit = text(account.service_code).toUpperCase() === "WATER" ? "M3" : "KWH";
       const contractRef = text(account.contract_ref, "").trim();
       return <article className="service-account-card" key={accountId}>
-        <div className="service-account-head"><div><strong>{domainLabel(account.service_code)}</strong><span className="muted">{domainLabel(account.connection_status)}</span></div><Button onClick={() => setMeterFormAccount((current) => current === accountId ? "" : accountId)} disabled={saving}>{meterFormAccount === accountId ? "Annuler" : "Ajouter un compteur"}</Button></div>
+        <div className="service-account-head"><div><strong>{domainLabel(account.service_code)}</strong><span className="muted">{domainLabel(account.connection_status)}</span></div><div className="page-actions"><Button onClick={() => { announceDraftSaved(); setEditingServiceAccount((current) => current === accountId ? "" : accountId); }} disabled={saving}>{editingServiceAccount === accountId ? "Fermer la modification" : "Modifier le raccordement"}</Button><Button onClick={() => { if (meterFormAccount === accountId) announceDraftSaved(); setMeterFormAccount((current) => current === accountId ? "" : accountId); }} disabled={saving}>{meterFormAccount === accountId ? "Annuler" : "Ajouter un compteur"}</Button></div></div>
         {contractRef && <p className="help">Contrat : {contractRef}</p>}
         {accountMeters.length ? <ul className="service-meter-list">{accountMeters.map((meter) => <li key={text(meter.id)}><strong>{text(meter.serial)}</strong><span>{formatUnit(meter.unit)}{meter.active === false ? " · Inactif" : " · Actif"}</span></li>)}</ul> : <p className="help">Aucun compteur enregistré. Le service reste utilisable pour la facturation manuelle.</p>}
-        {meterFormAccount === accountId && <form className="form-grid service-meter-form" onSubmit={(event) => void createMeter(event)}>
+        {editingServiceAccount === accountId && <form data-preserve-draft className="form-grid service-account-form" onSubmit={(event) => void updateServiceAccount(event, account)}>
+          <label>État du raccordement<select name="connection_status" defaultValue={text(account.connection_status, "UNKNOWN")}><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
+          <label>Référence du contrat<input name="contract_ref" maxLength={128} defaultValue={text(account.contract_ref, "")} /></label>
+          <label>Date d’activation<input name="activated_at" type="date" defaultValue={text(account.activated_at, "").slice(0, 10)} /></label>
+          <p className="help span-two">Modification protégée par révision du serveur. Une écriture concurrente est refusée ; les champs saisis restent à l’écran.</p>
+          <div className="form-actions span-two"><Button type="button" onClick={() => { announceDraftSaved(); setEditingServiceAccount(""); }}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer la modification"}</Button></div>
+        </form>}
+        {meterFormAccount === accountId && <form data-preserve-draft className="form-grid service-meter-form" onSubmit={(event) => void createMeter(event)}>
           <label>Numéro réel du compteur<input name="serial" maxLength={128} required placeholder="À saisir uniquement si le compteur existe" /></label>
           <label>Unité<input value={unit === "M3" ? "m³" : "kWh"} readOnly /></label>
           <p className="help span-two">Ce champ est obligatoire uniquement pour enregistrer un compteur réel. Aucun numéro fictif ne sera créé.</p>
@@ -985,21 +1158,21 @@ function ServiceAccountsManager({ customerId }: { customerId: string }) {
         </form>}
       </article>;
     })}</div> : <div className="empty-state">Aucun service n’est encore rattaché. Vous pouvez ajouter l’eau et l’électricité sans créer de compteur.</div>}
-    {accountFormOpen && availableServices.length > 0 && <form className="form-grid service-account-form" onSubmit={(event) => void createServiceAccount(event)}>
+    {accountFormOpen && availableServices.length > 0 && <form data-preserve-draft className="form-grid service-account-form" onSubmit={(event) => void createServiceAccount(event)}>
       <label>Service<select name="service_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{availableServices.map((code) => <option key={code} value={code}>{domainLabel(code)}</option>)}</select></label>
       <label>État du raccordement<select name="connection_status" defaultValue="UNKNOWN"><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
       <label>Référence du contrat <span className="muted">(facultatif)</span><input name="contract_ref" maxLength={128} /></label>
       <label>Date d’activation <span className="muted">(facultative)</span><input name="activated_at" type="date" /></label>
       <p className="help span-two">Aucun numéro de compteur n’est demandé à cette étape. L’état « Inconnu » évite d’affirmer un raccordement non vérifié.</p>
-      <div className="form-actions span-two"><Button type="button" onClick={() => setAccountFormOpen(false)}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Rattacher le service"}</Button></div>
+      <div className="form-actions span-two"><Button type="button" onClick={() => { announceDraftSaved(); setAccountFormOpen(false); }}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Rattacher le service"}</Button></div>
     </form>}
     {accountFormOpen && !availableServices.length && <p className="help">L’eau et l’électricité sont déjà rattachées à cet abonné.</p>}
     {message && <p role={messageError ? "alert" : "status"} className={`reading-message${messageError ? " error" : ""}`}>{message}</p>}
   </Panel>;
 }
 
-function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { customers: Row[]; onOpenInvoices: () => void; onOpenCustomer: (customerId: string) => void }) {
-  const [customerId, setCustomerId] = useState("");
+function MeterReadingsView({ customers, initialCustomerId, canCorrect, onOpenInvoices, onOpenCustomer }: { customers: Row[]; initialCustomerId: string; canCorrect: boolean; onOpenInvoices: () => void; onOpenCustomer: (customerId: string) => void }) {
+  const [customerId, setCustomerId] = useState(initialCustomerId);
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [accountId, setAccountId] = useState("");
   const [meters, setMeters] = useState<Row[]>([]);
@@ -1013,6 +1186,8 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<Row | null>(null);
   const [previewInput, setPreviewInput] = useState<Row | null>(null);
+
+  useEffect(() => { setCustomerId(initialCustomerId); }, [initialCustomerId]);
 
   useEffect(() => {
     if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); return; }
@@ -1068,6 +1243,7 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
       setReadingPeriod("");
       setPreview(null); setPreviewInput(null);
       setMessage("Relevé enregistré par le serveur SEL."); setMessageError(false);
+      announceDraftSaved();
     } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
   }
@@ -1085,6 +1261,7 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
       const nextReadings = rows(result);
       setReadings(nextReadings); setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : ""); setCorrectingReading(null);
       setMessage("Correction ajoutée à l’historique. Le relevé initial est conservé."); setMessageError(false);
+      announceDraftSaved();
     } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
   }
@@ -1103,7 +1280,7 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
           <label>Service<select value={accountId} onChange={(event) => { setAccountId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{domainLabel(account.service_code)} · {domainLabel(account.connection_status)}</option>)}</select></label>
           <label className="span-two">Compteur<select value={meterId} onChange={(event) => { setMeterId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {formatUnit(meter.unit)}</option>)}</select></label>
         </div>
-        {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void previewReading(event)} onChange={() => { setPreview(null); setPreviewInput(null); }}>
+        {meterId && <form data-preserve-draft className="form-grid reading-entry" onSubmit={(event) => void previewReading(event)} onChange={() => { setPreview(null); setPreviewInput(null); }}>
           <label>Période<input name="period" type="month" value={readingPeriod} onChange={(event) => { const selectedPeriod = event.target.value; setReadingPeriod(selectedPeriod); const preceding = readings.filter((reading) => text(reading.period) < selectedPeriod); setPreviousIndex(preceding.length ? text(preceding[preceding.length - 1].current) : ""); }} required /></label>
           <label>Index précédent<input name="previous" type="number" min="0" step="0.001" value={previousIndex} onChange={(event) => setPreviousIndex(event.target.value)} required /></label>
           <label>Nouvel index<input name="current" type="number" min="0" step="0.001" required /></label>
@@ -1130,12 +1307,12 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
         </div>
       </Panel>
     </div>
-    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), formatQuantity(reading.previous, selectedMeter?.unit), formatQuantity(reading.current, selectedMeter?.unit), formatQuantity(reading.measured_quantity, selectedMeter?.unit), text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
-    {correctingReading && <Panel title={`Correction du relevé · ${text(correctingReading.period)}`}><form className="form-grid" onSubmit={(event) => void correctReading(event)}>
+    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), formatQuantity(reading.previous, selectedMeter?.unit), formatQuantity(reading.current, selectedMeter?.unit), formatQuantity(reading.measured_quantity, selectedMeter?.unit), text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", canCorrect && reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
+    {correctingReading && <Panel title={`Correction du relevé · ${text(correctingReading.period)}`}><form data-preserve-draft className="form-grid" onSubmit={(event) => void correctReading(event)}>
       <label>Nouvel index corrigé<input name="current" type="number" min="0" step="0.001" defaultValue={text(correctingReading.current, "")} required /></label>
       <label className="span-two">Motif de correction<input name="reason" maxLength={500} required /></label>
       <p className="help span-two">La correction crée une nouvelle entrée d’audit et ne supprime pas le relevé initial.</p>
-      <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer la correction"}</Button><Button type="button" onClick={() => setCorrectingReading(null)}>Annuler</Button></div>
+      <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer la correction"}</Button><Button type="button" onClick={() => { announceDraftSaved(); setCorrectingReading(null); }}>Annuler</Button></div>
     </form></Panel>}
   </>;
 }
@@ -1170,6 +1347,7 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
       const planId = text(result.installment_plan_id, "");
       if (planId) setPlan(await centralRequest<Row>(`/v1/installment-plans/${encodeURIComponent(planId)}`));
       setMessage("Contrat et échéancier enregistrés par le serveur SEL.");
+      announceDraftSaved();
       setSaleId(""); setSchedule([{ due_date: "", amount: "" }]);
       await onCreated();
     } catch (error) { setMessage(humanError(error)); }
@@ -1179,7 +1357,7 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
   const planRows = rows<Row>(plan?.schedule);
   return <>
     <Panel title="Contrats et échéanciers solaires">
-      {availableSales.length ? <form className="form-grid" onSubmit={(event) => void saveContract(event)}>
+      {availableSales.length ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void saveContract(event)}>
         <label className="span-two">Vente à financer<select value={saleId} onChange={(event) => setSaleId(event.target.value)} required><option value="">Sélectionner une vente…</option>{availableSales.map((sale) => <option key={text(sale.sale_id)} value={text(sale.sale_id)}>{customerLabel(sale.customer_id, customers)} · {text(sale.sale_id)} · {formatMoney(sale.principal, sale.currency)}</option>)}</select></label>
         {schedule.map((entry, index) => <div className="schedule-entry span-two" key={index}>
           <label>Échéance {index + 1} · Date<input type="date" required value={entry.due_date} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, due_date: event.target.value } : item))} /></label>
@@ -1339,11 +1517,11 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
 
   async function toggleUser(user: Row) {
     const id = text(user.id ?? user.user_id, "");
-    const status = text(user.status).toUpperCase() === "ACTIVE" ? "DISABLED" : "ACTIVE";
+    const status = text(user.status).toUpperCase() === "ACTIVE" ? "REVOKED" : "ACTIVE";
     if (!id) return;
     try {
       await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { status });
-      setMessage(status === "ACTIVE" ? "Compte réactivé." : "Compte désactivé. Les sessions associées sont révoquées côté serveur.");
+      setMessage(status === "ACTIVE" ? "Compte réactivé." : "Compte révoqué. Les sessions associées sont révoquées côté serveur.");
       setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
   }

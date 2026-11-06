@@ -734,6 +734,11 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/UuidPath' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoidInvoiceRequest' }
       responses:
         '200': { description: Invoice void recorded }
         '403': { $ref: '#/components/responses/Problem' }
@@ -1490,6 +1495,11 @@ components:
       properties:
         amount: { type: string, description: Positive Decimal amount in the receivable currency }
         reason: { type: string, minLength: 1 }
+    VoidInvoiceRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
     CreateSolarSaleRequest:
       type: object
       required: [customer_id, product_code, principal, currency, terms_revision]

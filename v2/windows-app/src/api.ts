@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type HttpMethod = "GET" | "POST" | "PATCH";
-export type CentralResponse<T> = { status: number; body: T };
+export type CentralResponse<T> = { status: number; body: T; next_cursor?: string | null };
 
 async function writeIdempotencyKey(method: HttpMethod, path: string, body: unknown): Promise<string | null> {
   if (method === "GET") return null;
@@ -61,12 +61,12 @@ function centralHttpError(status: number, body: unknown, path: string, authority
   return new Error(detail || `${authority} a répondu HTTP ${status} pour ${path}.`);
 }
 
-export async function centralRequest<T>(
+export async function centralRequestPage<T>(
   path: string,
   method: HttpMethod = "GET",
   body?: unknown,
   ifMatch?: number,
-): Promise<T> {
+): Promise<CentralResponse<T>> {
   let response: CentralResponse<T>;
   const idempotencyKey = await writeIdempotencyKey(method, path, body);
   try {
@@ -85,7 +85,16 @@ export async function centralRequest<T>(
     throw centralHttpError(response.status, response.body, path, "Le serveur SEL");
   }
   await clearIdempotencyKey(method, path, body);
-  return response.body;
+  return response;
+}
+
+export async function centralRequest<T>(
+  path: string,
+  method: HttpMethod = "GET",
+  body?: unknown,
+  ifMatch?: number,
+): Promise<T> {
+  return (await centralRequestPage<T>(path, method, body, ifMatch)).body;
 }
 
 export function centralStatus<T>(): Promise<T> {

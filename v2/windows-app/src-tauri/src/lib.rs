@@ -185,6 +185,7 @@ struct CentralSessionTokens {
 struct CentralResponse {
     status: u16,
     body: Value,
+    next_cursor: Option<String>,
 }
 
 fn resolve_central_url(
@@ -282,9 +283,7 @@ fn validate_central_client_request(path_and_query: &str, method: &str) -> Result
         .chars()
         .any(|c| matches!(c, '#' | '%' | '\\' | '\r' | '\n'))
         || path.split('/').any(|part| matches!(part, "." | ".."))
-        || !query
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_-.=&".contains(&b))
+        || !valid_central_query(query)
     {
         return Err("Cette route centrale n’est pas autorisée depuis le client.".into());
     }
@@ -330,6 +329,40 @@ fn validate_central_client_request(path_and_query: &str, method: &str) -> Result
         Ok(())
     } else {
         Err("Cette route ou méthode centrale n’est pas autorisée depuis le client.".into())
+    }
+}
+
+fn valid_central_query(query: &str) -> bool {
+    let bytes = query.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte.is_ascii_alphanumeric() || b"_-.=&+".contains(&byte) {
+            index += 1;
+            continue;
+        }
+        if byte != b'%' || index + 2 >= bytes.len() {
+            return false;
+        }
+        let (Some(high), Some(low)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+        else {
+            return false;
+        };
+        let decoded = (high << 4) | low;
+        if decoded < 0x20 || matches!(decoded, b'#' | b'/' | b'\\') {
+            return false;
+        }
+        index += 3;
+    }
+    true
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -396,12 +429,21 @@ fn central_error(status: u16, body: &Value) -> String {
 
 async fn central_json_response(response: reqwest::Response) -> Result<CentralResponse, String> {
     let status = response.status().as_u16();
+    let next_cursor = response
+        .headers()
+        .get("x-next-cursor")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let body = if status == 204 {
         Value::Null
     } else {
         response.json::<Value>().await.unwrap_or(Value::Null)
     };
-    Ok(CentralResponse { status, body })
+    Ok(CentralResponse {
+        status,
+        body,
+        next_cursor,
+    })
 }
 
 #[tauri::command]
@@ -500,29 +542,33 @@ async fn central_session_status(state: State<'_, DesktopState>) -> Result<Value,
     })
 }
 
+struct CentralAdminRequest<'a> {
+    path: &'a str,
+    method: &'a str,
+    token: &'a str,
+    body: Option<Value>,
+    if_match: Option<i64>,
+    idempotency_key: &'a str,
+}
+
 async fn send_central_admin(
     client: &reqwest::Client,
     base: &str,
-    path: &str,
-    method: &str,
-    token: &str,
-    body: Option<Value>,
-    if_match: Option<i64>,
-    idempotency_key: &str,
+    admin_request: CentralAdminRequest<'_>,
 ) -> Result<reqwest::Response, String> {
-    let idempotent_write = matches!(method, "POST" | "PATCH");
-    let method = reqwest::Method::from_bytes(method.as_bytes())
+    let idempotent_write = matches!(admin_request.method, "POST" | "PATCH");
+    let method = reqwest::Method::from_bytes(admin_request.method.as_bytes())
         .map_err(|_| "Méthode HTTP invalide.".to_owned())?;
     let mut request = client
-        .request(method, format!("{base}{path}"))
-        .bearer_auth(token);
+        .request(method, format!("{base}{}", admin_request.path))
+        .bearer_auth(admin_request.token);
     if idempotent_write {
-        request = request.header("Idempotency-Key", idempotency_key);
+        request = request.header("Idempotency-Key", admin_request.idempotency_key);
     }
-    if let Some(revision) = if_match {
+    if let Some(revision) = admin_request.if_match {
         request = request.header("If-Match", revision.to_string());
     }
-    if let Some(value) = body {
+    if let Some(value) = admin_request.body {
         request = request.json(&value);
     }
     request
@@ -553,8 +599,7 @@ async fn central_admin_request(
         .as_ref()
         .cloned()
         .ok_or("Connectez-vous avec votre compte SEL pour accéder à l’administration.")?;
-    if session.role != "ADMIN"
-        && (path.starts_with("/v1/admin/") || path.starts_with("/v1/users/"))
+    if session.role != "ADMIN" && (path.starts_with("/v1/admin/") || path.starts_with("/v1/users/"))
     {
         return Err("Cette fonction est réservée au rôle administrateur SEL.".into());
     }
@@ -562,12 +607,14 @@ async fn central_admin_request(
     let response = send_central_admin(
         &state.central_client,
         base,
-        &path,
-        &method,
-        &session.access_token,
-        body.clone(),
-        if_match,
-        &idempotency_key,
+        CentralAdminRequest {
+            path: &path,
+            method: &method,
+            token: &session.access_token,
+            body: body.clone(),
+            if_match,
+            idempotency_key: &idempotency_key,
+        },
     )
     .await?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -611,12 +658,14 @@ async fn central_admin_request(
         let retry = send_central_admin(
             &state.central_client,
             base,
-            &path,
-            &method,
-            &next_token,
-            body,
-            if_match,
-            &idempotency_key,
+            CentralAdminRequest {
+                path: &path,
+                method: &method,
+                token: &next_token,
+                body,
+                if_match,
+                idempotency_key: &idempotency_key,
+            },
         )
         .await?;
         let result = central_json_response(retry).await?;
@@ -722,13 +771,14 @@ pub fn run() {
 mod tests {
     use super::{
         resolve_central_url, validate_central_admin_request, validate_central_client_request,
-        DEFAULT_CENTRAL_API_URL,
+        CentralResponse, DEFAULT_CENTRAL_API_URL,
     };
 
     #[test]
     fn central_business_bridge_allows_only_explicit_online_routes() {
         for (path, method) in [
             ("/v1/customers?limit=100", "GET"),
+            ("/v1/customers?limit=100&q=Jean%20M%C3%A9ric", "GET"),
             ("/v1/customers", "POST"),
             ("/v1/billing/utility/preview", "POST"),
             ("/v1/billing/utility/issue", "POST"),
@@ -757,6 +807,8 @@ mod tests {
             ("https://evil.example/v1/customers", "GET"),
             ("/v1/customers/../../payments", "GET"),
             ("/v1/customers?x=%2F", "GET"),
+            ("/v1/customers?q=Jean%0AMarie", "GET"),
+            ("/v1/customers?q=%GG", "GET"),
             ("/v1/sync/trigger", "POST"),
             ("/v1/sync/status", "GET"),
             ("/v1/sync/pull", "GET"),
@@ -829,6 +881,18 @@ mod tests {
             "https://sel.example"
         );
         assert!(resolve_central_url(Some("http://sel.example"), None).is_err());
+    }
+
+    #[test]
+    fn desktop_response_preserves_customer_pagination_cursor() {
+        let response = CentralResponse {
+            status: 200,
+            body: serde_json::json!([]),
+            next_cursor: Some("SEL-C-00100".into()),
+        };
+        let serialized = serde_json::to_value(response).unwrap();
+        assert_eq!(serialized["next_cursor"], "SEL-C-00100");
+        assert_eq!(serialized["body"], serde_json::json!([]));
     }
 
     #[test]
