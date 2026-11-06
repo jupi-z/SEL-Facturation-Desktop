@@ -1614,8 +1614,8 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
 function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }: {
   kind: AdminCatalog; items: Row[]; busy: boolean;
   onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>;
-  onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => void;
-  onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => void;
+  onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => Promise<boolean>;
+  onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => Promise<boolean>;
 }) {
   const definition = adminCatalogDefinitions[kind];
   const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
@@ -1637,15 +1637,15 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }:
     <Table headers={[...definition.columns.map((field) => field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " ")), "Actions"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
       const id = text(item.id ?? item[idField], "");
       const status = text(item.status).toUpperCase();
-      const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={(event) => {
+      const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
         const values = new FormData(event.currentTarget);
-        onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
-      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Référence de décision SEL" required /><input aria-label="Tarif remplacé (facultatif)" name="supersedes_id" placeholder="Tarif remplacé (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={(event) => {
+        await onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
+      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Référence de décision SEL" required /><input aria-label="Tarif remplacé (facultatif)" name="supersedes_id" placeholder="Tarif remplacé (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
-        const changeRef = String(new FormData(event.currentTarget).get("change_ref") ?? "").trim();
-        onRevoke(kind, item, changeRef);
-        setRevokingId("");
+        const form = event.currentTarget;
+        const changeRef = String(new FormData(form).get("change_ref") ?? "").trim();
+        if (await onRevoke(kind, item, changeRef)) setRevokingId("");
       }}><input aria-label="Motif ou référence de révocation" name="change_ref" placeholder="Motif de révocation SEL" required /><Button type="button" onClick={() => setRevokingId("")}>Annuler</Button><Button type="submit" disabled={busy || !id}>Confirmer la révocation</Button></form> : <div className="admin-approve-form"><Status value="Approuvé" /><Button type="button" disabled={busy || !id} onClick={() => setRevokingId(id)}>Révoquer…</Button></div> : <Status value={status || "État inconnu"} />;
       return [...definition.columns.map((field) => {
         const payload = record(item.payload);
@@ -1807,27 +1807,45 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
     finally { setCatalogBusy(false); }
   }
 
-  async function approveCatalogDraft(kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) {
+  async function approveCatalogDraft(kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string): Promise<boolean> {
     const id = text(item.id ?? item[kind === "tariffs" ? "tariff_id" : "product_id"], "");
-    if (!id || !approvalRef) return;
+    if (!id || !approvalRef) return false;
     setCatalogBusy(true);
     try {
+      const label = text(item.label ?? record(item.payload).label ?? item.service_code ?? item.sku ?? id);
+      const accepted = await confirmAction({
+        title: "Vérifier l’approbation du référentiel",
+        description: `${adminCatalogDefinitions[kind].title} : ${label}. Référence d’approbation SEL : ${approvalRef}. Une version approuvée peut être utilisée par les opérations à venir.`,
+        confirmLabel: "Approuver cette version",
+        tone: "warning",
+      });
+      if (!accepted) return false;
       const supersedesKey = kind === "tariffs" ? "supersedes_tariff_id" : kind === "products" ? "supersedes_product_id" : "supersedes_id";
       const body = { approval_ref: approvalRef, [supersedesKey]: supersedesId || null };
       await centralAdminRequest(`/v1/admin/catalog/${kind}/${encodeURIComponent(id)}/approve`, "POST", body);
       setMessage("Référentiel approuvé par le serveur central avec la référence fournie."); setError(false); await loadData();
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+      return true;
+    } catch (reason) { setMessage(humanError(reason)); setError(true); return false; }
     finally { setCatalogBusy(false); }
   }
 
-  async function revokeCatalogItem(kind: AdminCatalog, item: Row, changeRef: string) {
+  async function revokeCatalogItem(kind: AdminCatalog, item: Row, changeRef: string): Promise<boolean> {
     const id = text(item.id ?? item[kind === "tariffs" ? "tariff_id" : "product_id"], "");
-    if (!id || !changeRef) return;
+    if (!id || !changeRef) return false;
     setCatalogBusy(true);
     try {
+      const label = text(item.label ?? record(item.payload).label ?? item.service_code ?? item.sku ?? id);
+      const accepted = await confirmAction({
+        title: "Vérifier la révocation du référentiel",
+        description: `${adminCatalogDefinitions[kind].title} : ${label}. Motif : ${changeRef}. La révocation sera historisée par le serveur SEL.`,
+        confirmLabel: "Révoquer cette version",
+        tone: "warning",
+      });
+      if (!accepted) return false;
       await centralAdminRequest(`/v1/admin/catalog/${kind}/${encodeURIComponent(id)}/revoke`, "POST", { change_ref: changeRef });
       setMessage("Révocation enregistrée par le serveur central avec la référence fournie."); setError(false); await loadData();
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+      return true;
+    } catch (reason) { setMessage(humanError(reason)); setError(true); return false; }
     finally { setCatalogBusy(false); }
   }
 

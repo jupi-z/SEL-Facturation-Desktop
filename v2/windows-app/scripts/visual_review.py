@@ -166,6 +166,7 @@ def mock_invoke_script() -> str:
           let adminBody = [];
           if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
           else if (adminPath === '/v1/admin/audit-events') adminBody = [{{id:'demo-audit-0001',event_type:'USER_CREATED',actor_identity:'admin-demo',subject_id:'demo-agent-0001',occurred_at:'2026-11-04T08:10:00Z',redacted_metadata:{{role:'BILLING_AGENT'}}}}];
+          else if (adminPath === '/v1/admin/catalog/tariffs') adminBody = [{{tariff_id:'demo-tariff-draft',service_code:'WATER',customer_category:'DEMO',unit_price:'0.30',currency:'USD',effective_from:'2026-01-01',status:'DRAFT'}},{{tariff_id:'demo-tariff-approved',service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',effective_from:'2026-01-01',approval_ref:'DEMO-APPROVED',status:'APPROVED'}}];
           else if (adminPath.endsWith('/tariffs')) adminBody = [{{service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',status:'APPROVED'}}];
           else if (adminPath.endsWith('/products')) adminBody = fixtures.products.map(product => ({{...product,status:'APPROVED'}}));
           else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{service_code:'DEMO',jurisdiction:'DEMO',base:'NET',rate:'0.16',status:'APPROVED'}}];
@@ -622,6 +623,36 @@ async def capture_views() -> None:
                     await page.get_by_role("alertdialog", name="Désactiver ce compte ?").wait_for()
                     await page.get_by_role("alertdialog", name="Désactiver ce compte ?").get_by_role("button", name="Désactiver le compte").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.status === 'REVOKED').length === 1")
+                    tariff_panel = page.locator(".admin-catalog-grid .panel").first
+                    draft_tariff = tariff_panel.get_by_role("row").filter(has_text="Brouillon").first
+                    await draft_tariff.get_by_label("Référence de la décision d’approbation SEL").fill("DEMO-APPROVAL-UX3")
+                    await draft_tariff.get_by_role("button", name="Approuver").click()
+                    approval_review = page.get_by_role("alertdialog", name="Vérifier l’approbation du référentiel")
+                    await approval_review.wait_for()
+                    await page.screenshot(path=str(OUTPUT / f"admin-catalog-approval-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs/demo-tariff-draft/approve').length") != 0:
+                        raise AssertionError("Catalog approval must wait for explicit confirmation")
+                    await approval_review.get_by_role("button", name="Annuler").click()
+                    if await draft_tariff.get_by_label("Référence de la décision d’approbation SEL").input_value() != "DEMO-APPROVAL-UX3":
+                        raise AssertionError("Canceling approval review must preserve its entered reference")
+                    await draft_tariff.get_by_role("button", name="Approuver").click()
+                    await page.get_by_role("alertdialog", name="Vérifier l’approbation du référentiel").get_by_role("button", name="Approuver cette version").click()
+                    await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs/demo-tariff-draft/approve').length === 1")
+                    approved_tariff = tariff_panel.get_by_role("row").filter(has_text="Approuvé").last
+                    await approved_tariff.get_by_role("button", name="Révoquer…").click()
+                    await approved_tariff.get_by_label("Motif ou référence de révocation").fill("DEMO-REVOKE-UX3")
+                    await approved_tariff.get_by_role("button", name="Confirmer la révocation").click()
+                    revocation_review = page.get_by_role("alertdialog", name="Vérifier la révocation du référentiel")
+                    await revocation_review.wait_for()
+                    await page.screenshot(path=str(OUTPUT / f"admin-catalog-revocation-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs/demo-tariff-approved/revoke').length") != 0:
+                        raise AssertionError("Catalog revocation must wait for explicit confirmation")
+                    await revocation_review.get_by_role("button", name="Annuler").click()
+                    if await approved_tariff.get_by_label("Motif ou référence de révocation").input_value() != "DEMO-REVOKE-UX3":
+                        raise AssertionError("Canceling revocation review must preserve its reason")
+                    await approved_tariff.get_by_role("button", name="Confirmer la révocation").click()
+                    await page.get_by_role("alertdialog", name="Vérifier la révocation du référentiel").get_by_role("button", name="Révoquer cette version").click()
+                    await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs/demo-tariff-approved/revoke').length === 1")
                     tariff_form = page.locator("form.admin-catalog-form").first
                     await tariff_form.locator('select[name="service_code"]').select_option("ELECTRICITY")
                     await tariff_form.locator('input[name="customer_category"]').fill("DEMO")

@@ -329,11 +329,17 @@ def test_admin_user_mutations_require_a_review_and_keep_password_out_of_dialog()
     assert 'name="password_confirm"' in app
     assert "Les deux mots de passe ne correspondent pas." in app
     assert "userMutationBusy" in app
+    assert 'title: "Vérifier l’approbation du référentiel"' in app
+    assert 'title: "Vérifier la révocation du référentiel"' in app
     assert "window.__adminWriteLog" in visual_review
     assert "Canceling user creation must not send a write request" in visual_review
     assert "window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users' && entry.method === 'POST').length === 1" in visual_review
     assert "Role updates must wait for explicit confirmation" in visual_review
     assert "Mismatched initial passwords must not send a write request" in visual_review
+    assert "Catalog approval must wait for explicit confirmation" in visual_review
+    assert "Catalog revocation must wait for explicit confirmation" in visual_review
+    assert 'f"admin-catalog-approval-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"admin-catalog-revocation-{SHOT_SUFFIX}.png"' in visual_review
 
 
 def test_native_central_admin_bridge_is_allowlisted_and_never_uses_sync_token_as_user_session() -> None:
