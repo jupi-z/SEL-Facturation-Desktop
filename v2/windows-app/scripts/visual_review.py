@@ -165,6 +165,7 @@ def mock_invoke_script() -> str:
         if (command === 'central_admin_request') {{
           const adminPath = args.path || '';
           if (args.method !== 'GET') window.__adminWriteLog.push({{path: adminPath, method: args.method, body: args.body}});
+          if (window.__rejectAdminConflict && adminPath === '/v1/admin/users/demo-admin-0001' && args.method === 'PATCH' && args.body?.role === 'SUPERVISOR') return {{status:409,body:{{code:'SELF_MODIFICATION_DENIED',detail:'an administrator cannot change their own role or status'}}}};
           if (window.__rejectCatalogDraft && adminPath.endsWith('/tariffs') && args.method === 'POST') return {{status:422,body:{{code:'DEMO_VALIDATION_ERROR',message:'Validation refusal simulated'}}}};
           let adminBody = [];
           if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
@@ -752,6 +753,19 @@ async def capture_views() -> None:
                         raise AssertionError("Role updates must wait for explicit confirmation")
                     await page.get_by_role("alertdialog", name="Vérifier le changement de rôle").get_by_role("button", name="Enregistrer le rôle").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.role === 'SUPERVISOR').length === 1")
+                    await page.evaluate("window.__rejectAdminConflict = true")
+                    admin_role = page.get_by_label("Rôle de admin-demo")
+                    await admin_role.select_option("SUPERVISOR")
+                    admin_row = page.get_by_role("row").filter(has_text="admin-demo")
+                    await admin_row.get_by_role("button", name="Enregistrer", exact=True).click()
+                    await page.get_by_role("alertdialog", name="Vérifier le changement de rôle").get_by_role("button", name="Enregistrer le rôle").click()
+                    conflict_notice = page.get_by_role("alert")
+                    await conflict_notice.get_by_text("Un administrateur ne peut pas modifier son propre rôle ou statut.").wait_for()
+                    conflict_text = await conflict_notice.inner_text()
+                    if "an administrator cannot change their own role" in conflict_text or "/v1/admin/users" in conflict_text:
+                        raise AssertionError("A self-modification conflict must be explained in French without exposing the API path")
+                    await page.screenshot(path=str(OUTPUT / f"admin-self-role-conflict-{SHOT_SUFFIX}.png"))
+                    await page.evaluate("window.__rejectAdminConflict = false")
                     agent_row = page.get_by_role("row").filter(has_text="agent-demo")
                     await agent_row.get_by_role("button", name="Désactiver").click()
                     await page.get_by_role("alertdialog", name="Désactiver ce compte ?").wait_for()
@@ -822,7 +836,10 @@ async def capture_views() -> None:
                     await tariff_form.get_by_role("button", name="Créer un brouillon").click()
                     draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Tarifs")
                     await draft_review.get_by_role("button", name="Créer le brouillon").click()
-                    await page.get_by_role("alert").filter(has_text="Validation refusal simulated").wait_for()
+                    rejected_draft_notice = page.get_by_role("alert")
+                    await rejected_draft_notice.get_by_text("Certaines données ne sont pas acceptées par les règles SEL.").wait_for()
+                    if "Validation refusal simulated" in await rejected_draft_notice.inner_text():
+                        raise AssertionError("Raw server validation details must not leak into the localized UI")
                     if await tariff_form.locator('select[name="service_code"]').input_value() != "ELECTRICITY":
                         raise AssertionError("Catalog draft input must be retained when the server rejects creation")
                     await page.evaluate("window.__rejectCatalogDraft = false")

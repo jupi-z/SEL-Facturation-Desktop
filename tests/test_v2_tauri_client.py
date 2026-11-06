@@ -774,6 +774,19 @@ def test_tauri_error_messages_are_preserved_in_ui() -> None:
     assert '"L’opération n’a pas abouti. Vérifiez la connexion au service SEL et réessayez."' in app
 
 
+def test_central_http_conflicts_are_localized_without_exposing_routes() -> None:
+    api = (APP / "src" / "api.ts").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'LAST_ADMINISTRATOR: "Impossible de désactiver ou rétrograder le dernier administrateur actif."' in api
+    assert 'SELF_MODIFICATION_DENIED: "Un administrateur ne peut pas modifier son propre rôle ou statut."' in api
+    assert 'if (status === 403)' in api
+    assert 'if (status === 409)' in api
+    assert 'window.__rejectAdminConflict' in visual_review
+    assert 'admin-self-role-conflict-' in visual_review
+    assert '"/v1/admin/users" in conflict_text' in visual_review
+
+
 def test_central_admin_can_bootstrap_before_device_enrollment() -> None:
     bridge = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
     api = (APP / "src" / "api.ts").read_text(encoding="utf-8")
