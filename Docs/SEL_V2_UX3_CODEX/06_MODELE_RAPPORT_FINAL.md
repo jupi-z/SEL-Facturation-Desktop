@@ -40,6 +40,24 @@ F07 est implémenté et validé dans l’application de test; cette preuve ne va
 
 F06 est implémenté et validé sur l’application synthétique. L’émission réelle, l’autorisation utilisateur contre PostgreSQL de production et la validation sur poste SEL ne sont pas couvertes par ce scénario.
 
+### F05 — Émission de facture combinée
+
+- Comparaison directe au frame Figma `178:1704` : le formulaire est présenté sous « Émettre une facture combinée », avec l’accès à l’historique et un panneau « Actions suivantes ».
+- Le formulaire métier déjà relié au moteur Rust est conservé. L’action de prévisualisation reste bloquée tant que le catalogue ne fournit pas le barème applicable; les tarifs, taxes et montants ne sont pas calculés dans l’interface.
+- Aucun KPI fictif n’a été ajouté à l’écran de saisie : les métriques placeholders de la maquette ne représentent pas des données utiles pour préparer une nouvelle facture.
+- Captures synthétiques : `evidence/invoice-issue-f05-2026-11-07-1440x900.png` et `evidence/invoice-issue-f05-2026-11-07-1280x720.png`.
+
+| Contrôle F05 | Résultat |
+|---|---|
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/React compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 64 tests |
+| Recette navigateur 1440×900 et 1280×720 | PASS — ouverture F05 depuis F07, saisie, preview F06, conservation du brouillon, sortie avec confirmation, génération PDF locale et une seule requête d’émission dans le test synthétique |
+| `git diff --check` | PASS |
+| Nature de la recette | API et données simulées; aucune facture réelle émise |
+| CI couvrant F05 | À vérifier après publication du commit |
+
+F05 est implémenté et validé avec le scénario synthétique. Les tarifs de production, les permissions réelles, l’émission PostgreSQL, l’imprimante et le poste SEL doivent encore être vérifiés hors de ce test.
+
 ### Isolation des données financières entre abonnés
 
 - Reproduction Playwright : après ouverture du dossier A, passage par Relevés, sélection du dossier B et ouverture immédiate pendant que l’API de B est volontairement suspendue, le relevé A restait visible dans le dossier B.

@@ -907,7 +907,7 @@ export default function App() {
           {selectedInvoice && <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />}
         </>}
         {invoiceWorkspace === "create" && <div hidden={Boolean(preview)}>
-          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / NOUVELLE FACTURE" title="Factures eau + électricité" description="Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust." action={<Button onClick={() => void returnToInvoiceHistory()}>Retour à l’historique</Button>} />
+          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / ÉMISSION" title="Émettre une facture combinée" description="Électricité et eau sur un seul document, même si l’eau vaut 0 m³." action={<Button onClick={() => void returnToInvoiceHistory()}>Historique des factures</Button>} />
           <div className="invoice-workspace">
             <Panel title="Paramètres de facturation">
               <form data-preserve-draft id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
@@ -920,14 +920,17 @@ export default function App() {
                 <label className="check-row invoice-zero-confirm"><input type="checkbox" checked={zeroConfirmed} onChange={(event) => setZeroConfirmed(event.target.checked)} /> Je confirme que le relevé d’eau est exactement de 0 m³.</label>
               </form>
             </Panel>
-            <aside className="panel invoice-summary" aria-label="Récapitulatif de la facture">
-              <p className="eyebrow">RÉCAPITULATIF</p>
-              <h2>Facture combinée</h2>
-              <p className="muted">Électricité + eau · deux lignes obligatoires</p>
+            <aside className="panel invoice-summary" aria-label="Actions suivantes">
+              <p className="eyebrow">ÉMISSION</p>
+              <h2>Actions suivantes</h2>
+              <p className="muted">Vérifiez l’abonné, la période et les relevés avant de calculer la facture.</p>
               <div className="invoice-summary-empty"><strong>À calculer</strong><span>Le montant s’affichera après vérification par le moteur Rust.</span></div>
-              <span className="status-badge">En attente du calcul</span>
-              <p className="help invoice-summary-help">Les calculs et l’autorisation restent gérés par le moteur Rust.</p>
-              <Button primary type="submit" form="utility-invoice-form" disabled={!invoiceTariffRevision}>Prévisualiser la facture</Button>
+              <span className="status-badge pending">Aucune facture émise</span>
+              <p className="help invoice-summary-help">Les tarifs, les taxes et les montants sont vérifiés par Rust avant l’émission.</p>
+              <div className="invoice-summary-actions">
+                <Button primary type="submit" form="utility-invoice-form" disabled={!invoiceTariffRevision}>Prévisualiser la facture</Button>
+                <Button onClick={() => void returnToInvoiceHistory()}>Historique des factures</Button>
+              </div>
             </aside>
           </div>
         </div>}

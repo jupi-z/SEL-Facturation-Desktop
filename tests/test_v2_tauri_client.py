@@ -295,6 +295,21 @@ def test_invoice_history_matches_figma_f07_and_keeps_creation_separate() -> None
     assert 'four server-derived metrics from Figma F07' in visual_review
 
 
+def test_invoice_issue_screen_matches_figma_f05_without_fake_metrics() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+    invoice_view = app.split('{view === "invoices"', 1)[1].split('{view === "payments"', 1)[0]
+
+    assert 'title="Émettre une facture combinée"' in invoice_view
+    assert 'description="Électricité et eau sur un seul document, même si l’eau vaut 0 m³."' in invoice_view
+    assert 'aria-label="Actions suivantes"' in invoice_view
+    assert 'Historique des factures' in invoice_view
+    assert 'className="invoice-summary-actions"' in invoice_view
+    assert '.invoice-summary-actions { display: grid;' in css
+    assert 'invoice-issue-f05-{SHOT_SUFFIX}.png' in visual_review
+
+
 def test_solar_sales_show_customer_names_instead_of_internal_ids() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
