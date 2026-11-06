@@ -336,6 +336,8 @@ def test_admin_user_mutations_require_a_review_and_keep_password_out_of_dialog()
     assert 'title: "Vérifier la création du compte"' in app
     assert 'title: disabling ? "Désactiver ce compte ?" : "Réactiver ce compte ?"' in app
     assert 'title: "Vérifier le changement de rôle"' in app
+    assert 'title: "Vérifier la réinitialisation du mot de passe"' in app
+    assert 'title: "Vérifier la réinitialisation du mot de passe"' in app
     assert "Le mot de passe reste masqué." in app
     assert 'name="password_confirm"' in app
     assert "Les deux mots de passe ne correspondent pas." in app
@@ -349,6 +351,10 @@ def test_admin_user_mutations_require_a_review_and_keep_password_out_of_dialog()
     assert "Mismatched initial passwords must not send a write request" in visual_review
     assert "Catalog approval must wait for explicit confirmation" in visual_review
     assert "Catalog revocation must wait for explicit confirmation" in visual_review
+    assert "Catalog drafts must not be submitted before explicit review" in visual_review
+    assert "Password reset must wait for explicit confirmation" in visual_review
+    assert "Catalog drafts must not be submitted before explicit review" in visual_review
+    assert "Password reset must wait for explicit confirmation" in visual_review
     assert 'f"admin-catalog-approval-{SHOT_SUFFIX}.png"' in visual_review
     assert 'f"admin-catalog-revocation-{SHOT_SUFFIX}.png"' in visual_review
 
@@ -459,8 +465,11 @@ def test_catalog_draft_form_resets_only_after_server_accepts_creation() -> None:
     panel = app.split("function AdminCatalogPanel(", 1)[1].split("\nfunction AdminConsole", 1)[0]
     create = panel.split("async function create(", 1)[1].split("\n  return <Panel", 1)[0]
 
-    assert "if (await onCreate(kind, values)) form.reset()" in create
+    assert "const accepted = await confirmAction({" in create
+    assert "if (accepted && await onCreate(kind, values)) { form.reset(); announceDraftSaved(); }" in create
     assert "onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>" in panel
+    assert "title: `Vérifier le brouillon · ${definition.title}`" in create
+    assert '<form data-preserve-draft className="form-grid admin-catalog-form"' in panel
     assert "return false" in app.split("async function createCatalogDraft(", 1)[1].split("\n  async function approveCatalogDraft", 1)[0]
 
 

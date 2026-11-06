@@ -1694,27 +1694,38 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
   ], columns: ["id", "label", "amount", "currency", "effective_from", "status"] },
 };
 
-function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }: {
+function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, confirmAction }: {
   kind: AdminCatalog; items: Row[]; busy: boolean;
   onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>;
   onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => Promise<boolean>;
   onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => Promise<boolean>;
+  confirmAction: (request: ConfirmationRequest) => Promise<boolean>;
 }) {
   const definition = adminCatalogDefinitions[kind];
   const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
   const [revokingId, setRevokingId] = useState("");
+  const [creating, setCreating] = useState(false);
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const values = Object.fromEntries([...new FormData(form).entries()].map(([key, value]) => [key, String(value).trim()]));
-    if (await onCreate(kind, values)) form.reset();
+    setCreating(true);
+    try {
+      const summary = definition.fields.map((field) => `${field.label} : ${values[field.name] || "—"}`).join(". ");
+      const accepted = await confirmAction({
+        title: `Vérifier le brouillon · ${definition.title}`,
+        description: `${summary}. Ce brouillon n’est pas applicable aux opérations avant son approbation SEL.`,
+        confirmLabel: "Créer le brouillon",
+      });
+      if (accepted && await onCreate(kind, values)) { form.reset(); announceDraftSaved(); }
+    } finally { setCreating(false); }
   }
   return <Panel title={definition.title}>
-    <form className="form-grid admin-catalog-form" onSubmit={create}>
+    <form data-preserve-draft className="form-grid admin-catalog-form" onSubmit={create}>
       {definition.fields.map((field) => <label key={field.name}>{field.label}{field.options
-        ? <select name={field.name} defaultValue="" required={field.required !== false}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-        : <input name={field.name} type={field.type ?? "text"} step={field.step} required={field.required !== false} />}</label>)}
-      <div className="form-actions span-two"><Button primary type="submit" disabled={busy}>Créer un brouillon</Button></div>
+        ? <select name={field.name} defaultValue="" required={field.required !== false} disabled={busy || creating}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+        : <input name={field.name} type={field.type ?? "text"} step={field.step} required={field.required !== false} disabled={busy || creating} />}</label>)}
+      <div className="form-actions span-two"><Button primary type="submit" disabled={busy || creating}>{creating ? "Vérification…" : "Créer un brouillon"}</Button></div>
       <p className="help span-two">{kind === "communication-charge" ? "Cette charge SEL apparaît sur chaque facture eau + électricité. Elle entre dans l’assiette de la TVA, affichée séparément. L’activation exige une approbation SEL." : "Le brouillon n’est pas applicable aux factures. Seul un administrateur l’active après validation SEL et référence de décision."}</p>
     </form>
     <Table headers={[...definition.columns.map((field) => field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " ")), "Actions"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
@@ -1821,7 +1832,7 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
         password,
         require_password_change: requirePasswordChange,
       });
-      form.reset(); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
+      form.reset(); announceDraftSaved(); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
     finally { setUserMutationBusy(false); }
   }
@@ -1873,10 +1884,20 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
     if (!passwordTarget) return;
     const form = event.currentTarget;
     const password = String(new FormData(form).get("password") ?? "");
+    const user = users.find((item) => text(item.id ?? item.user_id) === passwordTarget);
+    const identity = text(user?.identity_ref, "ce compte SEL");
+    if (!await confirmAction({
+      title: "Vérifier la réinitialisation du mot de passe",
+      description: `Compte : ${identity}. Le nouveau mot de passe reste masqué. Les sessions existantes de ce compte seront révoquées par le serveur.`,
+      confirmLabel: "Confirmer le changement",
+      tone: "warning",
+    })) return;
+    setUserMutationBusy(true);
     try {
       await centralAdminRequest(`/v1/users/${encodeURIComponent(passwordTarget)}/password`, "POST", { password });
-      form.reset(); setPasswordTarget(""); setMessage("Mot de passe mis à jour. Les sessions existantes sont révoquées côté serveur."); setError(false); await loadData();
-    } catch (reason) { form.reset(); setMessage(humanError(reason)); setError(true); }
+      form.reset(); announceDraftSaved(); setPasswordTarget(""); setMessage("Mot de passe mis à jour. Les sessions existantes sont révoquées côté serveur."); setError(false); await loadData();
+    } catch (reason) { form.reset(); announceDraftSaved(); setMessage(humanError(reason)); setError(true); }
+    finally { setUserMutationBusy(false); }
   }
 
   async function createCatalogDraft(kind: AdminCatalog, values: Record<string, string>): Promise<boolean> {
@@ -1943,7 +1964,7 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
       <dl className="customer-details admin-session"><div><dt>Utilisateur</dt><dd>{text(session.user_id)}</dd></div><div><dt>Rôle</dt><dd>{text(session.role)}</dd></div><div><dt>Organisation</dt><dd>{text(session.organization_id)}</dd></div></dl>
     </Panel>
     <Panel title="Utilisateurs et rôles">
-      <form className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
+      <form data-preserve-draft className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
         <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required disabled={userMutationBusy} /></label>
         <label>Rôle<select name="role" defaultValue="BILLING_AGENT" disabled={userMutationBusy}><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
         <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
@@ -1955,14 +1976,14 @@ function AdminConsole({ session, onSignedOut, confirmAction }: { session: Centra
         const id = text(user.id ?? user.user_id, "");
         return [text(user.identity_ref), <div className="admin-role-control"><select aria-label={`Rôle de ${text(user.identity_ref)}`} value={roleDrafts[id] ?? text(user.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [id]: event.target.value }))} disabled={userMutationBusy}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select><Button disabled={userMutationBusy || !roleDrafts[id] || roleDrafts[id] === text(user.role)} onClick={() => void updateUserRole(user)}>{userMutationBusy ? "Vérification…" : "Enregistrer"}</Button></div>, <Status value={user.status} />, <div className="admin-user-actions"><Button disabled={userMutationBusy} onClick={() => setPasswordTarget(id)}>Réinitialiser le mot de passe</Button><Button disabled={userMutationBusy} onClick={() => void toggleUser(user)}>{text(user.status).toUpperCase() === "ACTIVE" ? "Désactiver" : "Réactiver"}</Button></div>];
       })} />
-      {passwordTarget && <form className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Les sessions existantes de ce compte seront révoquées après validation côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required /></label><div className="page-actions"><Button type="button" onClick={() => setPasswordTarget("")}>Annuler</Button><Button primary type="submit">Confirmer le changement</Button></div></form>}
+      {passwordTarget && <form data-preserve-draft className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Les sessions existantes de ce compte seront révoquées après validation côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label><div className="page-actions"><Button type="button" disabled={userMutationBusy} onClick={() => { announceDraftSaved(); setPasswordTarget(""); }}>Annuler</Button><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Enregistrement…" : "Confirmer le changement"}</Button></div></form>}
     </Panel>
     <div className="admin-grid admin-catalog-grid">
-      <AdminCatalogPanel kind="tariffs" items={tariffs} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-      <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-      <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-      <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-      <AdminCatalogPanel kind="communication-charge" items={communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
+      <AdminCatalogPanel kind="tariffs" items={tariffs} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+      <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+      <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+      <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+      <AdminCatalogPanel kind="communication-charge" items={communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
     </div>
     <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>
   </>;

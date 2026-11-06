@@ -757,6 +757,21 @@ async def capture_views() -> None:
                     await page.get_by_role("alertdialog", name="Désactiver ce compte ?").wait_for()
                     await page.get_by_role("alertdialog", name="Désactiver ce compte ?").get_by_role("button", name="Désactiver le compte").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users/demo-agent-0001' && entry.body.status === 'REVOKED').length === 1")
+                    await agent_row.get_by_role("button", name="Réinitialiser le mot de passe").click()
+                    reset_form = page.locator("form.admin-password-reset")
+                    await reset_form.get_by_label("Nouveau mot de passe").fill("synthetic-password-456")
+                    await reset_form.get_by_role("button", name="Confirmer le changement").click()
+                    password_review = page.get_by_role("alertdialog", name="Vérifier la réinitialisation du mot de passe")
+                    await password_review.wait_for()
+                    password_path = "/v1/users/demo-agent-0001/password"
+                    if await page.evaluate(f"window.__adminWriteLog.filter(entry => entry.path === '{password_path}' && entry.method === 'POST').length") != 0:
+                        raise AssertionError("Password reset must wait for explicit confirmation")
+                    await password_review.get_by_role("button", name="Annuler").click()
+                    if await reset_form.get_by_label("Nouveau mot de passe").input_value() != "synthetic-password-456":
+                        raise AssertionError("Canceling password reset review must preserve the entered password")
+                    await reset_form.get_by_role("button", name="Confirmer le changement").click()
+                    await page.get_by_role("alertdialog", name="Vérifier la réinitialisation du mot de passe").get_by_role("button", name="Confirmer le changement").click()
+                    await page.wait_for_function(f"window.__adminWriteLog.filter(entry => entry.path === '{password_path}' && entry.method === 'POST').length === 1")
                     tariff_panel = page.locator(".admin-catalog-grid .panel").first
                     draft_tariff = tariff_panel.get_by_role("row").filter(has_text="Brouillon").first
                     await draft_tariff.get_by_label("Référence de la décision d’approbation SEL").fill("DEMO-APPROVAL-UX3")
@@ -796,6 +811,17 @@ async def capture_views() -> None:
                     await tariff_form.locator('input[name="effective_from"]').fill("2026-01-01")
                     await page.evaluate("window.__rejectCatalogDraft = true")
                     await tariff_form.get_by_role("button", name="Créer un brouillon").click()
+                    draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Tarifs")
+                    await draft_review.wait_for()
+                    await page.screenshot(path=str(OUTPUT / f"admin-catalog-draft-confirmation-{SHOT_SUFFIX}.png"))
+                    if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs' && entry.method === 'POST').length") != 0:
+                        raise AssertionError("Catalog drafts must not be submitted before explicit review")
+                    await draft_review.get_by_role("button", name="Annuler").click()
+                    if await tariff_form.locator('input[name="unit_price"]').input_value() != "0.095":
+                        raise AssertionError("Canceling catalog draft review must preserve the entered values")
+                    await tariff_form.get_by_role("button", name="Créer un brouillon").click()
+                    draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Tarifs")
+                    await draft_review.get_by_role("button", name="Créer le brouillon").click()
                     await page.get_by_role("alert").filter(has_text="Validation refusal simulated").wait_for()
                     if await tariff_form.locator('select[name="service_code"]').input_value() != "ELECTRICITY":
                         raise AssertionError("Catalog draft input must be retained when the server rejects creation")
@@ -804,6 +830,9 @@ async def capture_views() -> None:
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")
             await page.get_by_role("button", name="Paiements", exact=True).click()
+            pending_admin_draft = page.get_by_role("alertdialog", name="Abandonner la saisie ?")
+            if await pending_admin_draft.count():
+                await pending_admin_draft.get_by_role("button", name="Abandonner et continuer").click()
             await page.locator(".workspace-tabs").get_by_role("button", name="Journal de caisse", exact=True).click()
             await page.locator('.payment-workspace form select[name="customer_id"]').select_option("demo-customer-0001")
             await page.get_by_role("button", name="+ Ajouter une créance").click()
