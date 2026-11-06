@@ -7,9 +7,9 @@
 - Dépôt : `jupi-z/SEL-Facturation-Desktop`
 - Branche : `monarque/sel-v2-ux3-implementation-20261106`
 - Base intégrée : `main@0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6`
-- Commit UX3 précédent poussé : `14823d0cc40b82f20f293dd1f01ad9c3b9ce65b6`; alignement H00 et correction responsive 1280×720 prêts localement pour le prochain commit.
+- Derniers commits UX3 : `d74166df21a0b3f7a07ab917aef8a1a9bda615d7` (H00 / responsive), `d9ca03ad7296066483295e9c7536e1472b2bb2b8` (confirmations administration), `d6d20a3829d6a0f85a7cc43b9c7e2e6d15971e6f` (preuve de recette admin).
 - PR #60 : https://github.com/jupi-z/SEL-Facturation-Desktop/pull/60 — ouverte, non fusionnée, base `main`.
-- Figma page 16 : métadonnées vérifiées pour 76 écrans principaux et 9 overlays (85 frames au total); contextes haute fidélité consultés pour H00, C01, F02, F05 et O06. Les 71 autres écrans n’ont pas encore été comparés visuellement un à un.
+- Figma page 16 : noms et structure des 76 écrans principaux et 9 overlays (85 frames au total) inventoriés; contextes haute fidélité consultés pour H00, A02, C01, F02, F05 et O06. La comparaison visuelle complète de toutes les frames reste à faire.
 - Figma page 17 : les trois frames de documentation recensées; contexte haute fidélité lu pour `191:76` (écarts API et décisions). Les exigences sont croisées au dossier UX3 du dépôt.
 - Environnement local : Windows 11 Professionnel, Python 3.12.10, Node 24.21.0, Rust 1.99.1, Cargo 1.99.1. Le test natif Tauri local a compilé sous MSVC.
 - PostgreSQL local : aucun `TEST_DATABASE_URL`; les tests transactionnels sont exécutés par le workflow GitHub avec son PostgreSQL isolé.
@@ -39,7 +39,7 @@
 | F01–F04, C15–C17, C34 paiements | sélection client/créances, récapitulatif avant POST, verrou anti-double clic, allocation, reçu, contrepassation | 57 tests Python; capture payment review; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette |
 | F08, C18–C19, C35 créances | consultation, références source, avoir via API | réponse JSON additive, test PostgreSQL en CI, écran visuel | PARTIAL |
 | O06–O10, C20–C22, C28 solaire | catalogue, devis/vente, document, contrat/échéancier | visual review, tests API/backend en CI | PARTIAL — annulation vente et avenant/résiliation contrat non exposés |
-| A01–A09, C23–C25, C29 administration | utilisateurs/roles, catalogues versionnés, approbation/révocation, audit | tests API/contrats; création brouillon conserve la saisie après 422 | PARTIAL — revue Figma de tous les formulaires et dernier admin à compléter |
+| A01–A09, C23–C25, C29 administration | utilisateurs/roles, catalogues versionnés, approbation/révocation, audit; création d’utilisateur avec confirmation (secret masqué), confirmation des changements de rôle/statut et garde anti-double clic | recette Playwright synthétique : mot de passe divergent rejeté sans POST, annulation sans POST, confirmation avec un seul POST, changements rôle/statut après confirmation; capture `evidence/admin-user-confirmation-1440x900.png` | PARTIAL — revoir tous les formulaires Figma et compléter les règles de protection du dernier administrateur |
 | E01–E11, C26–C27 états | états auth/erreurs, confirmation intégrée, validation et reprise | tests UI et script browser | PARTIAL — recette exhaustive 401/403/409/422/503 encore requise |
 
 ## 4. Lacunes API et décisions
@@ -55,16 +55,15 @@
 
 | Commande / scénario | Résultat réel au commit `14823d0` |
 |---|---|
-| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 57 tests après assertions de viewport dynamique |
-| `npm run build` (`v2/windows-app`) | PASS après ajustement CSS; avertissement non bloquant pour les chunks PDF/fonts volumineux |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 58 tests au code `d6d20a3`, y compris confirmation et absence de POST lors d’une annulation |
+| `npm run build` (`v2/windows-app`) | PASS au code applicatif `d9ca03a`; avertissement non bloquant pour les chunks PDF/fonts volumineux |
 | `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` | PASS |
 | `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 12 tests |
 | `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test |
 | `cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib` | PASS — 5 tests whitelist/session Tauri |
 | `cargo test --manifest-path v2/Cargo.toml --workspace` local | FAIL d’environnement de build, LNK1207/PDB incompatible à l’édition de liens de `postgres_catalog_api`; aucune assertion rapportée en échec |
-| Workflow GitHub SEL V2 Backend sur `14823d0` | PASS — fmt, clippy, workspace tests et tests PostgreSQL isolés; https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42280158974 |
-| Workflow GitHub Tauri Windows sur `14823d0` | EN COURS au dernier contrôle; build et recette de capture PASS, NSIS/MSI puis test installation/upgrade en cours; https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42281073092 |
-| `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS — 34 captures synthétiques; aucun test sur serveur SEL réel |
+| Workflows GitHub sur `d74166d` | Backend, serveur package et régression V1 : PASS; Tauri Windows : EN COURS (capture/build React/tests natifs PASS, génération MSI/NSIS et vérification installation/upgrade en cours). Ces résultats ne couvrent pas les commits `d9ca03a` et `d6d20a3`; relancer sur le HEAD courant. https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573787 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573819 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573823 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573796 |
+| `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS au code `d6d20a3` — revue synthétique incluant le parcours admin; aucun test sur serveur SEL réel |
 | Recette visuelle 1280×720 | premier run FAIL (débordement horizontal 14 px des onglets); correctif CSS appliqué, second run PASS — code 0 sur les écrans exercés |
 | PostgreSQL local / HTTP contre base réelle | NOT_RUN localement; CI PostgreSQL dédiée PASS au commit cité |
 | Impression sur imprimante SEL et installation poste cible | NOT_RUN — aucun poste/imprimante cible utilisé dans cette étape |
@@ -72,10 +71,10 @@
 
 ## 6. Diff et risques
 
-- Changements UX3 : `v2/windows-app/src/App.tsx`, `App.css`, `api.ts`, `src-tauri/src/lib.rs`, tests Python, script Playwright, OpenAPI/API Rust pour les lacunes nécessaires et preuves visuelles.
+- Changements UX3 : `v2/windows-app/src/App.tsx`, `App.css`, `api.ts`, `src-tauri/src/lib.rs`, tests Python, script Playwright, OpenAPI/API Rust pour les lacunes nécessaires et preuves visuelles. L’administration demande maintenant une revue explicite des créations/changements de rôle/statut; le secret n’est pas inclus dans le dialogue. La vérification du mot de passe initial est côté client avant l’appel API.
 - Migrations : la branche intègre les migrations de `main` déjà publiées dans le code; aucune migration exécutée sur un environnement réel.
 - Le dernier changement visuel supprime le tableau d’activité supplémentaire du dashboard, pour respecter la frame H00 et éviter un panneau coupé en bas de fenêtre. Les historiques restent dans leurs écrans.
-- Risques résiduels : comparaison exhaustive des 76 écrans non effectuée; recettes 1280×720 et 125/150 % non toutes couvertes; workflow de packaging Windows en cours; opérations B2/B3/B4 sans contrat métier suffisant.
+- Risques résiduels : comparaison exhaustive des 76 écrans non effectuée; recettes 1280×720 et 125/150 % non toutes couvertes; workflows de packaging Windows à relancer sur le HEAD courant; opérations B2/B3/B4 sans contrat métier suffisant.
 - Retour arrière : revert des commits UX3 ciblés sur la branche; aucune réécriture de données n’est introduite.
 - Actions non prises en charge : ne pas afficher/activer annulation d’une vente solaire ni avenant/résiliation du contrat tant que les APIs ne sont pas définies et prouvées.
 
