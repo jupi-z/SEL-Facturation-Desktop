@@ -260,7 +260,13 @@ async def assert_generated_pdf_contract(page, label: str, expected_pages: int | 
     for token in required_text:
         if token.casefold() not in text.casefold():
             raise AssertionError(f"{label}: expected PDF text {token!r} was missing")
-    if "Référence interne SEL" not in text or "sans authentification fiscale" not in text:
+    if label.startswith("Invoice"):
+        for token in ("QR d’identification", "Identification interne de la facture"):
+            if token.casefold() not in text.casefold():
+                raise AssertionError(f"{label}: expected invoice QR label {token!r} was missing")
+        if "Confirmé par le serveur".casefold() in text.casefold():
+            raise AssertionError(f"{label}: invoice still exposes an internal synchronization state")
+    elif "Référence interne SEL" not in text or "sans authentification fiscale" not in text:
         raise AssertionError(f"{label}: the QR is not clearly identified as an internal reference")
     for page_index, pdf_page in enumerate(reader.pages, start=1):
         fonts = pdf_page.get("/Resources", {}).get("/Font", {})
@@ -452,7 +458,7 @@ async def capture_views() -> None:
                         raise AssertionError(f"Invoice PDF preview did not open: {notice}") from error
                     await page.screenshot(path=str(OUTPUT / "invoice-pdf-diagnostic.png"))
                     zero_water_pdf = await assert_pdf_rendered(page, "Invoice with 0 m³ of water")
-                    await assert_generated_pdf_contract(page, "Invoice with 0 m³ of water", 1, ("Électricité", "Eau", "0 m³", "Ligne de communication", "22,62 USD"))
+                    await assert_generated_pdf_contract(page, "Invoice with 0 m³ of water", 1, ("Électricité", "Eau", "0 m³", "Ligne de communication", "22,62 USD", "FACTURE ÉMISE", "Facture émise par la Société d’Énergie du Lualaba, SEL"))
                     await assert_print_layout(page, "Invoice with 0 m³ of water", 1)
                     await page.screenshot(path=str(OUTPUT / "invoice-pdf-preview-1440x900.png"))
                     await page.locator(".document-pdf-stage").evaluate("element => element.scrollTop = element.scrollHeight")
@@ -463,7 +469,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Document PDF").first.click()
                     await page.get_by_role("dialog", name="Facture eau + électricité").wait_for()
                     positive_water_pdf = await assert_pdf_rendered(page, "Invoice with 5 m³ of water")
-                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "Ligne de communication", "24,36 USD"))
+                    await assert_generated_pdf_contract(page, "Invoice with 5 m³ of water", 1, ("Électricité", "Eau", "5 m³", "Ligne de communication", "24,36 USD", "FACTURE ÉMISE", "Facture émise par la Société d’Énergie du Lualaba, SEL"))
                     await assert_print_layout(page, "Invoice with 5 m³ of water", 1)
                     if positive_water_pdf == zero_water_pdf:
                         raise AssertionError("0 m³ and 5 m³ invoice PDFs rendered identically")

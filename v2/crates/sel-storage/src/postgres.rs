@@ -3688,7 +3688,7 @@ impl CentralStore {
         id: Uuid,
     ) -> Result<Option<UtilityBillingResponse>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT immutable_snapshot, period, invoice_number FROM invoices WHERE id = $1 AND customer_id IN
+            "SELECT immutable_snapshot, period, invoice_number, status FROM invoices WHERE id = $1 AND customer_id IN
              (SELECT id FROM customers WHERE organization_id = $2)",
         )
         .bind(id)
@@ -3706,6 +3706,7 @@ impl CentralStore {
                 response.billing_period = row.try_get("period")?;
             }
             response.invoice_number = row.try_get("invoice_number")?;
+            response.status = row.try_get("status")?;
             Ok(response)
         })
         .transpose()
