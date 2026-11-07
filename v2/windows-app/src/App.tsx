@@ -191,6 +191,7 @@ export default function App() {
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [view, setView] = useState<View>("dashboard");
   const [solarWorkspace, setSolarWorkspace] = useState<"sales" | "contracts">("sales");
+  const [paymentWorkspace, setPaymentWorkspace] = useState<"journal" | "create">("journal");
   const [invoiceWorkspace, setInvoiceWorkspace] = useState<"history" | "create">("history");
   const [viewHistory, setViewHistory] = useState<View[]>([]);
   const [draftDirty, setDraftDirty] = useState(false);
@@ -723,6 +724,12 @@ export default function App() {
     setInvoiceWorkspace("history");
   }
 
+  async function returnToPaymentJournal() {
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner le règlement ?", description: "Ce règlement n’est pas encore enregistré. Les saisies seront effacées si vous revenez au journal.", confirmLabel: "Abandonner et continuer" })) return;
+    setDraftDirty(false);
+    setPaymentWorkspace("journal");
+  }
+
   async function navigateTo(nextView: View, customerId?: string) {
     if (nextView === view && !customerId) return false;
     if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous changez d’écran.", confirmLabel: "Abandonner et continuer" })) return false;
@@ -734,6 +741,7 @@ export default function App() {
       setInvoiceWorkspace(customerId ? "create" : "history");
       if (customerId) setInvoiceCustomerId(customerId);
     }
+    if (nextView === "payments") setPaymentWorkspace(customerId ? "create" : "journal");
     setView(nextView);
     return true;
   }
@@ -746,6 +754,16 @@ export default function App() {
     if (draftDirty) discardPendingDraft();
     if (customerId) setInvoiceCustomerId(customerId);
     setInvoiceWorkspace("create");
+  }
+
+  async function openPaymentEntry(customerId?: string) {
+    if (view !== "payments") {
+      const navigated = await navigateTo("payments", customerId);
+      if (!navigated) return;
+    } else if (draftDirty && !await requestConfirmation({ title: "Abandonner le règlement ?", description: "Les champs du règlement non enregistré seront perdus si vous commencez un autre encaissement.", confirmLabel: "Abandonner et continuer" })) return;
+    if (draftDirty) discardPendingDraft();
+    setSelectedCustomer(customerId ?? "");
+    setPaymentWorkspace("create");
   }
 
   async function navigateSolarWorkspace(next: "sales" | "contracts") {
@@ -820,7 +838,7 @@ export default function App() {
             <div className="quick-actions">
               <button onClick={() => navigateTo("customers")}><strong>Gérer les abonnés <span aria-hidden="true">›</span></strong><small>Fiches, services et compteurs</small></button>
               <button onClick={() => void openInvoiceCreation()}><strong>Émettre une facture <span aria-hidden="true">›</span></strong><small>Eau et électricité sur le même document</small></button>
-              <button onClick={() => navigateTo("payments")}><strong>Encaisser un règlement <span aria-hidden="true">›</span></strong><small>Paiement, affectation et reçu</small></button>
+              <button onClick={() => void openPaymentEntry()}><strong>Encaisser un règlement <span aria-hidden="true">›</span></strong><small>Paiement, affectation et reçu</small></button>
               <button onClick={() => navigateTo("readings")}><strong>Saisir un relevé <span aria-hidden="true">›</span></strong><small>Index, contrôle et correction</small></button>
               <button onClick={() => navigateTo("solar")}><strong>Vendre un kit solaire <span aria-hidden="true">›</span></strong><small>Catalogue, vente et échéancier</small></button>
               {session.role === "ADMIN" && <button onClick={() => navigateTo("admin")}><strong>Paramétrer SEL <span aria-hidden="true">›</span></strong><small>Utilisateurs et référentiels approuvés</small></button>}
@@ -959,14 +977,36 @@ export default function App() {
       </>}
 
       {view === "payments" && <>
-        <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
-        <PaymentForm customers={customers} sales={sales} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onSubmit={submit} />
-        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État", "Document / corrections"]} empty="Aucun encaissement retourné par le serveur." data={payments.map((row) => {
+        {paymentWorkspace === "journal" && <>
+          <PageHeading eyebrow="SEL / PAIEMENTS / ENCAISSEMENTS / JOURNAL" title="Journal de caisse" description="Historique des paiements retournés par le service central." action={<Button primary onClick={() => void openPaymentEntry()}>Enregistrer un paiement</Button>} />
+          <div className="metrics payment-journal-metrics">
+            <Metric label="Règlements" value={payments.length} note="Enregistrements du serveur SEL" />
+            <Metric label="Confirmés" value={payments.filter((row) => text(row.status).toUpperCase() === "CENTRAL_ACCEPTED").length} note="Validés par le service central" />
+            <Metric label="À examiner" value={payments.filter((row) => ["CONFLICT_REQUIRES_REVIEW", "REJECTED"].includes(text(row.status).toUpperCase())).length} note="Conflits ou refus retournés par le serveur" />
+            <Metric label="Reçus disponibles" value={payments.filter((row) => text(row.payment_id ?? row.id, "")).length} note="Données structurées consultables" />
+          </div>
+          <div className="payment-journal-layout">
+            <Panel title="Opérations de caisse"><p className="help payment-journal-caption">Les références, montants et statuts proviennent du serveur SEL.</p><Table className="payment-table" headers={["Référence", "Client", "Montant", "Mode", "État", "Document / corrections"]} empty={loading ? "Chargement des règlements du serveur…" : "Aucun règlement retourné par le serveur."} data={payments.map((row) => {
           const paymentId = text(row.payment_id ?? row.id, "");
           const paymentAmount = text(row.amount_received ?? row.received_amount, "");
           const canReverse = ["ADMIN", "CASHIER", "SUPERVISOR"].includes(text(session?.role).toUpperCase()) && paymentId && text(row.status).toUpperCase() === "CENTRAL_ACCEPTED";
-          return [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(paymentAmount, row.currency), domainLabel(row.method), <Status value={row.status} />, <div className="page-actions"><Button disabled={documentBusy} onClick={() => void openDocument("payment", paymentId)}>Reçu PDF</Button>{canReverse && <Button onClick={() => beginFinancialAction({ kind: "reverse-payment", id: paymentId, amount: paymentAmount, reference: text(row.payment_number ?? paymentId) })}>Contre-passer</Button>}</div>];
-        })} /></Panel>
+          return [<div className="payment-reference"><strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong><small>{formatDateTime(row.paid_at ?? row.occurred_at)}</small></div>, customerLabel(row.customer_id, customers), formatMoney(paymentAmount, row.currency), domainLabel(row.method), <Status value={row.status} />, <div className="page-actions"><Button disabled={documentBusy} onClick={() => void openDocument("payment", paymentId)}>Reçu PDF</Button>{canReverse && <Button onClick={() => beginFinancialAction({ kind: "reverse-payment", id: paymentId, amount: paymentAmount, reference: text(row.payment_number ?? paymentId) })}>Contre-passer</Button>}</div>];
+          })} /></Panel>
+            <Panel title="Actions suivantes">
+              <p className="help">Choisissez une étape ou ouvrez le reçu d’un règlement existant.</p>
+              <div className="payment-journal-actions">
+                <Button onClick={() => void openPaymentEntry()}>Enregistrer un règlement</Button>
+                <Button disabled={!payments.length} onClick={() => payments[0] && void openDocument("payment", payments[0].payment_id ?? payments[0].id)}>Détail d’un règlement</Button>
+                <Button onClick={() => void navigateTo("receivables")}>Suivi des créances</Button>
+              </div>
+              <p className="help">Le reçu PDF est créé sur ce poste à partir des données structurées centrales.</p>
+            </Panel>
+          </div>
+        </>}
+        {paymentWorkspace === "create" && <>
+          <PageHeading eyebrow="SEL / PAIEMENTS / ENCAISSEMENTS / NOUVEAU" title="Enregistrer un paiement" description="Affectez le règlement à une ou plusieurs créances du même abonné." action={<Button onClick={() => void returnToPaymentJournal()}>Journal des paiements</Button>} />
+          <PaymentForm customers={customers} sales={sales} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onSubmit={submit} />
+        </>}
       </>}
 
       {view === "solar" && <>

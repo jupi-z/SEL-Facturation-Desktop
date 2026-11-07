@@ -179,13 +179,30 @@ def test_cash_journal_uses_a_wide_table_and_lubumbashi_datetime_format() -> None
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
     assert 'className="payment-workspace"' in app
-    assert 'title="Encaissements enregistrés"' in app
+    assert 'title="Opérations de caisse"' in app
     assert 'className="payment-table"' in app
     assert 'timeZone: "Africa/Lubumbashi"' in app
     assert 'formatDateTime(row.paid_at ?? row.occurred_at)' in app
     assert ".payment-table { table-layout: fixed; }" in css
     assert 'viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}' in visual_review
     assert 'locale="fr-CD"' in visual_review
+
+
+def test_payment_journal_matches_figma_f01_and_separates_payment_entry() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'paymentWorkspace === "journal"' in app
+    assert 'paymentWorkspace === "create"' in app
+    assert 'title="Journal de caisse"' in app
+    assert 'title="Opérations de caisse"' in app
+    assert 'title="Actions suivantes"' in app
+    assert 'title="Enregistrer un paiement"' in app
+    assert 'Suivi des créances' in app
+    assert 'className="payment-journal-layout"' in app
+    assert '.payment-journal-layout { display: grid;' in css
+    assert 'payment-journal-f01-{SHOT_SUFFIX}.png' in visual_review
 
 
 def test_solar_sales_use_the_approved_central_catalog_and_rust_quote() -> None:

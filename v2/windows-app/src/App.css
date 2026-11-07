@@ -118,6 +118,12 @@ button { cursor: pointer; }
 .invoice-history-caption { margin: -2px 0 12px; }
 .invoice-next-actions { display: grid; gap: 8px; }
 .invoice-next-actions .button { width: 100%; min-height: 39px; text-align: left; }
+.payment-journal-metrics { margin-bottom: 14px; }
+.payment-journal-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(250px, .82fr); align-items: stretch; gap: 14px; }
+.payment-journal-layout > .panel { min-height: 300px; }
+.payment-journal-caption { margin: -2px 0 12px; }
+.payment-journal-actions { display: grid; gap: 8px; }
+.payment-journal-actions .button { width: 100%; min-height: 39px; text-align: left; }
 .invoice-verification-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(250px, .82fr); align-items: stretch; gap: 14px; }
 .invoice-verification-layout > .panel { min-height: 300px; }
 .invoice-editor { min-height: 390px; padding: 25px 27px; }
@@ -154,11 +160,14 @@ button { cursor: pointer; }
 .table-scroll { width: 100%; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .payment-table { table-layout: fixed; }
-.payment-table th:nth-child(1) { width: 25%; }
-.payment-table th:nth-child(2) { width: 23%; }
-.payment-table th:nth-child(3) { width: 17%; }
-.payment-table th:nth-child(4) { width: 17%; }
-.payment-table th:nth-child(5) { width: 18%; }
+.payment-table th:nth-child(1) { width: 17%; }
+.payment-table th:nth-child(2) { width: 19%; }
+.payment-table th:nth-child(3) { width: 16%; }
+.payment-table th:nth-child(4) { width: 12%; }
+.payment-table th:nth-child(5) { width: 13%; }
+.payment-table th:nth-child(6) { width: 23%; }
+.payment-reference { display: grid; gap: 4px; }
+.payment-reference small { color: var(--muted); font-size: 9px; white-space: nowrap; }
 .payment-table td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .payment-table td:nth-child(2), .payment-table td:nth-child(3), .payment-table td:nth-child(4) { white-space: nowrap; }
 .reading-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 16px; }
@@ -288,7 +297,7 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
   .sidebar { flex-basis: 230px; width: 230px; }
   .metric { padding-right: 14px; padding-left: 14px; }
   .columns, .customer-layout { grid-template-columns: 1fr; }
-  .invoice-workspace, .invoice-history-layout, .invoice-verification-layout, .reading-workspace, .payment-workspace { grid-template-columns: 1fr; }
+  .invoice-workspace, .invoice-history-layout, .invoice-verification-layout, .payment-journal-layout, .reading-workspace, .payment-workspace { grid-template-columns: 1fr; }
   .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

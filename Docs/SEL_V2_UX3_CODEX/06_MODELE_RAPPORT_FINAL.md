@@ -4,6 +4,25 @@
 
 ## Progression vérifiée — 7 novembre 2026
 
+### F01 — Journal de caisse et séparation de la saisie
+
+- Comparaison directe avec le frame Figma `178:1194` de la page `16 · SEL V2 — Prototype intégral & CRUD`.
+- Le journal des règlements et la création d’un paiement sont maintenant deux espaces distincts. Le journal présente les règlements, confirmations, conflits/refus et reçus disponibles à partir des seules réponses centrales, avec le tableau des opérations et les actions suivantes.
+- Les raccourcis vers la création ouvrent le formulaire existant sans déplacer les règles financières hors de Rust. Le reçu est ouvert depuis un règlement retourné par le serveur; aucun reçu n’est proposé pour un formulaire non enregistré.
+- Un scénario navigateur crée un paiement synthétique après revue et confirmation, retourne au journal puis vérifie l’aperçu du reçu. Aucune écriture n’a été envoyée à la production.
+- Captures : `evidence/payment-journal-f01-2026-11-07-1440x900.png` et `evidence/payment-journal-f01-2026-11-07-1280x720.png`.
+
+| Contrôle F01 | Résultat |
+|---|---|
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/React compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 65 tests |
+| Recette navigateur 1440×900 et 1280×720 | PASS — séparation journal/saisie, paiement simulé confirmé, affichage du reçu PDF, aucun débordement horizontal |
+| Captures inspectées visuellement | PASS — les deux résolutions examinées |
+| Nature de la recette | API et données synthétiques; aucun paiement réel enregistré |
+| CI GitHub de l’incrément | À vérifier après publication du commit |
+
+F01 est implémenté et validé dans l’application de test. Le flux contre PostgreSQL réel, la permission réelle, l’imprimante SEL et le poste cible restent à valider.
+
 ### F07 — Historique des factures
 
 - Comparaison directe avec le frame Figma `178:1951` de la page `16 · SEL V2 — Prototype intégral & CRUD`.
@@ -145,8 +164,8 @@ Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440
 | C01–C06, C30–C31 abonnés | création, recherche, dossier, modification, archivage/réactivation; création et édition relues avant écriture; état initial `ACTIVE` annoncé comme fixé par l’API | Playwright synthétique : annulation sans POST/PATCH, saisie conservée, confirmation avec un seul appel; captures `evidence/customer-create-confirmation-1440x900.png`, `evidence/customer-edit-confirmation-1280x720.png` | PARTIAL — état initial non configurable par le contrat API; conflit 409 réel à valider de bout en bout |
 | O01–O03, C07–C10, C32 services/compteurs | services avec ou sans compteur; rattachement, ajout et remplacement non destructif relus avant écriture; édition du raccordement relue avant PATCH | revue Playwright à 1440×900 et 1280×720; annulation sans requête et saisie préservée; captures `evidence/service-account-confirmation-1280x720.png`, `evidence/meter-create-confirmation-1280x720.png`, `evidence/service-account-edit-confirmation-1280x720.png`; test HTTP/PostgreSQL de remplacement inclus dans CI backend | PARTIAL — détails Figma à contrôler sur chaque écran |
 | O04–O05, C11–C12, C33 relevés | saisie, aperçu, historique et correction append-only | visual review; tests API backend en CI | PARTIAL |
-| F05–F07, C13–C14 facture | aperçu F06 et historique F07 rapprochés de Figma, confirmation explicite, conservation du brouillon, document-data local, annulation avec motif | 63 tests client; captures F06/F07 1440×900 et 1280×720; recette PDF et émission synthétiques | PARTIAL — comparaison F05, API réelle, imprimante cible et validation sur poste SEL restent à faire |
-| F01–F04, C15–C17, C34 paiements | sélection client/créances, récapitulatif avant POST, verrou anti-double clic, allocation, reçu, contrepassation | 57 tests Python; capture payment review; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette |
+| F05–F07, C13–C14 facture | émission, vérification et historique rapprochés des frames Figma; confirmation explicite, conservation du brouillon, document-data local, annulation avec motif | 65 tests client; captures F05/F06/F07 1440×900 et 1280×720; recette PDF et émission synthétiques | PARTIAL — API réelle, imprimante cible et validation sur poste SEL restent à faire |
+| F01–F04, C15–C17, C34 paiements | journal séparé de la saisie; sélection client/créances, récapitulatif avant POST, verrou anti-double clic, reçu, contrepassation | 65 tests Python; captures journal/revue/reçu; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette; F02–F04 restent à comparer |
 | F08, C18–C19, C35 créances | consultation, références source, avoir via API | réponse JSON additive, test PostgreSQL en CI, écran visuel | PARTIAL |
 | O06–O10, C20–C22, C28 solaire | catalogue/ventes et contrats/échéanciers ont des onglets séparés; transitions avec brouillon protégées; suivi expose les métriques renvoyées par le serveur et son CTA mène à l’encaissement prérempli avec client/créance/prochaine échéance; contrat revu avant POST | Playwright synthétique à 1440×900 et 1280×720 : refus de navigation conserve le brouillon, validation l’abandonne; un seul POST contrat après acceptation; la transition O10 sélectionne l’abonné, la créance et l’échéance sans créer de paiement; captures `evidence/solar-contract-workspace-1440x900.png`, `evidence/solar-payment-prefill-1280x720.png` | PARTIAL — annulation vente et avenant/résiliation contrat non exposés; autres détails O06–O10 à comparer |
 | A01–A09, C23–C25, C29 administration | répertoire, création et sécurité séparés; rôles/statuts verrouillés pour le compte courant; création, changement de rôle/statut, réinitialisation et mutations de référentiels relus avant écriture; erreurs 403/409/422 localisées sans URL API | recette Playwright synthétique : conflit identité doublon, droits propres désactivés, apparence disabled, dialogue clavier avec focus trap/Échap/restauration; preuves datées `admin-user-directory-*`, `admin-duplicate-user-conflict-*`, `admin-self-access-locked-*`, `customer-archive-keyboard-focus-*`, approbation et brouillon | PARTIAL — revue de toutes les frames d’administration et recette des erreurs réelles contre PostgreSQL restent à faire |

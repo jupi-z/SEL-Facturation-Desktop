@@ -242,7 +242,7 @@ def mock_invoke_script() -> str:
         }}
         else if (path.startsWith('/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}},{{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}],subtotal:'19.50',tax:'3.12'}};
         else if (path.startsWith('/v1/invoices')) body = fixtures.invoices;
-        else if (path === '/v1/payments' && args.method === 'POST') {{ window.__paymentPostCount += 1; body = {{...fixtures.payments[0],payment_id:'demo-payment-created-0001',amount_received:args.body?.received_amount}}; }}
+        else if (path === '/v1/payments' && args.method === 'POST') {{ window.__paymentPostCount += 1; body = {{...fixtures.payments[0],payment_id:`demo-payment-created-${{String(window.__paymentPostCount).padStart(4,'0')}}`,amount_received:args.body?.received_amount}}; fixtures.payments.unshift(body); }}
         else if (path.startsWith('/v1/payments/') && path.endsWith('/document-data')) body = {{document_schema_version:1,document_reference:'SEL-PAY-DEMO-0001',qr_internal_reference:'SEL:PAYMENT:demo-payment-0001',payment:{{payment_id:'demo-payment-0001',amount_received:'3.00',currency:'USD',method:'CASH',paid_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},allocations:[{{receivable_id:'demo-receivable-0001',amount:'3.00',currency:'USD'}}],reversals:[],origin:'CENTRAL'}};
         else if (path.startsWith('/v1/payments')) body = fixtures.payments;
         else if (path.startsWith('/v1/solar/sales/') && path.endsWith('/document-data')) {{
@@ -456,6 +456,12 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / f"water-reading-preview-{SHOT_SUFFIX}.png"))
                 if slug == "payments":
+                    await page.get_by_role("heading", name="Journal de caisse").wait_for()
+                    if await page.locator(".payment-journal-metrics .metric").count() != 4:
+                        raise AssertionError("Payment journal must show four factual metrics")
+                    await page.screenshot(path=str(OUTPUT / f"payment-journal-f01-{SHOT_SUFFIX}.png"))
+                    await page.get_by_role("button", name="Enregistrer un paiement", exact=True).first.click()
+                    await page.get_by_role("heading", name="Enregistrer un paiement").wait_for()
                     await page.locator('.payment-workspace form select[name="customer_id"]').select_option("demo-customer-0001")
                     await page.locator('.allocation-card select option[value="demo-receivable-0001"]').wait_for(state="attached")
                     await page.locator('.allocation-card select').first.select_option("demo-receivable-0001")
@@ -513,7 +519,7 @@ async def capture_views() -> None:
                     await page.wait_for_timeout(120)
                     await page.screenshot(path=str(OUTPUT / f"solar-contracts-{SHOT_SUFFIX}.png"))
                     await page.get_by_role("button", name="Enregistrer un versement").click()
-                    await page.get_by_role("heading", name="Journal de caisse").wait_for()
+                    await page.get_by_role("heading", name="Enregistrer un paiement").wait_for()
                     await page.wait_for_function("document.querySelector('#central-payment-form select[name=customer_id]')?.value === 'demo-customer-0001'")
                     if await page.locator(".allocation-card select").first.input_value() != "demo-receivable-solar-0001":
                         raise AssertionError("Solar plan payment shortcut must preselect its original receivable")
@@ -965,6 +971,8 @@ async def capture_views() -> None:
             if await pending_admin_draft.count():
                 await pending_admin_draft.get_by_role("button", name="Abandonner et continuer").click()
             await page.locator(".workspace-tabs").get_by_role("button", name="Journal de caisse", exact=True).click()
+            await page.get_by_role("button", name="Enregistrer un paiement", exact=True).first.click()
+            await page.get_by_role("heading", name="Enregistrer un paiement").wait_for()
             await page.locator('.payment-workspace form select[name="customer_id"]').select_option("demo-customer-0001")
             await page.get_by_role("button", name="+ Ajouter une créance").click()
             await page.locator('.allocation-card select').first.locator('option[value="demo-receivable-0001"]').wait_for(state="attached")
@@ -975,6 +983,13 @@ async def capture_views() -> None:
             await page.locator('.allocation-card input[type="number"]').nth(0).fill("1.00")
             await page.locator('.allocation-card input[type="number"]').nth(1).fill("2.00")
             await page.locator('input[name="received_amount"]').fill("3.00")
+            await page.get_by_role("button", name="Vérifier le règlement").click()
+            await page.get_by_role("heading", name="Confirmer le règlement").wait_for()
+            await page.get_by_role("button", name="Confirmer et enregistrer").click()
+            await page.wait_for_function("window.__paymentPostCount === 2")
+            await page.get_by_role("button", name="Journal des paiements", exact=True).click()
+            await page.get_by_role("heading", name="Journal de caisse").wait_for()
+            await page.get_by_role("button", name="Reçu PDF").first.wait_for()
             await page.get_by_role("button", name="Reçu PDF").first.click()
             try:
                 await page.get_by_role("dialog", name="Reçu de paiement").wait_for(timeout=5000)
