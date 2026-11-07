@@ -1109,6 +1109,134 @@ Le dossier abonné expose désormais la gestion des services Eau et Électricit�
 
 **Limite de livraison :** les scénarios PostgreSQL annotés `ignore` exigent un `TEST_DATABASE_URL`; ils ne sont pas comptés comme exécutés. La mise à jour du dépôt ou une CI réussie ne remplace pas la publication d'un nouvel installateur ni sa vérification sur le poste de Clarisse.
 
+### UX3 — intégration de la navigation et des parcours CRUD — 6 novembre 2026
+
+Branche technique : `monarque/sel-v2-ux3-implementation-20261106`, dérivée de la branche documentaire `monarque/sel-v2-ux3-codex-handoff-20261106`. Cet incrément n'est ni fusionné ni déployé. Le travail UX3 est empilé sur la branche de handoff afin de préserver la séparation des changements documentaires et de code.
+
+Référence Figma : [SEL V2 — Product Design · Windows & Facturation](https://www.figma.com/design/EuIpbci6IR7m6ggApo5WWm/SEL-V2-%E2%80%94-Product-Design-%C2%B7-Windows---Facturation). L'inventaire des pages 16–17 comprend 76 frames. La vérification visuelle directe a porté sur H00, C01, F05, F01, O06 et S00 ; elle ne constitue pas une validation visuelle exhaustive des 76 frames ni une recette sur le poste SEL.
+
+| Module / exigence | État | Fichiers / preuve / limite |
+|---|---|---|
+| Navigation par domaines et sous-sections | COMPLETED — code | `v2/windows-app/src/App.tsx`, `App.css` : Accueil, Abonnés, Facturation (Factures/Relevés), Paiements (Journal de caisse/Créances), Solaire et Administration (Administration/État du serveur). L'état de diagnostic reste accessible séparément. Barre latérale et en-tête sont rapprochés du shell H00 de Figma. |
+| Tableau de bord | COMPLETED — code compilé | Actions rapides et repères d'utilisation alignés au parcours H00 ; l'action d'administration n'est exposée qu'au rôle ADMIN. Le build ne remplace pas la vérification visuelle dans l'application Windows. |
+| Abonnés et navigation contextuelle | COMPLETED — code compilé | Parcours fiche vers relevés, paiement, facture et modification ; l'abonnement est transmis et présélectionné aux vues aval. Les pages de liste suivent `X-Next-Cursor`, avec détection de curseur répétitif. |
+| Conservation des saisies | COMPLETED — code compilé | Les formulaires métier marqués suivent les changements non enregistrés et demandent confirmation avant navigation. Après validation serveur, l'état de saisie est réinitialisé. |
+| Mutations comptables et garde-fous | COMPLETED — code compilé | Annulation facture avec motif, contre-écriture de paiement avec motif/montant, avoir sur créance ; confirmation et restrictions de rôle dans l'interface, l'autorisation effective restant celle du serveur Rust. Les changements sont append-only via les routes existantes. |
+| Cycle de vie abonné | COMPLETED — code compilé | Archivage/réactivation par PATCH avec `If-Match`; confirmation explicite, historique conservé et aucun effacement physique. |
+| Raccordement / compte de service | COMPLETED — code compilé | Modification de l'état du service, du contrat et de la date d'activation via PATCH avec révision `If-Match`; un conflit HTTP 409 garde la saisie et invite à recharger/comparer. |
+| Contrat OpenAPI d'annulation | COMPLETED — contrat testé | `POST /v1/invoices/{id}/void` précise maintenant le corps JSON `{reason}` dans `v2/openapi/sel-v2.yaml`; assertion de non-régression dans `v2/crates/sel-contracts/tests/openapi_contract.rs`. Aucun endpoint ni pouvoir métier nouveau n'est inventé. |
+| Encodage des recherches et pagination du pont Tauri | COMPLETED — code compilé | `src-tauri/src/lib.rs`, `src/api.ts` : le pont transmet `X-Next-Cursor`; accepte les recherches correctement encodées et rejette les chemins encodés, contrôles et échappements mal formés. Routes/méthodes restent sous liste blanche. |
+| Ressource de marque Figma | COMPLETED — asset local | `v2/windows-app/public/assets/sel-logo-ux3.svg`, export vectoriel provenant de la ressource Figma. Pas de ressource distante requise à l'exécution. |
+| B1 — correction/remplacement de compteur | BLOCKED_API | Figma C10 prévoit cette action, mais l'API ne fournit pas de route de remplacement/désactivation avec préservation de l'historique. Aucun bouton d'action fictif n'est ajouté. Décision métier et API Rust append-only restent nécessaires. |
+| B2 — rectification/annulation vente solaire | BLOCKED_API | Aucune route explicite de rectification/annulation coordonnant vente, créance, contrat et paiements. Aucun contournement par suppression ou modification cachée. |
+| B3 — avenant/résiliation contrat solaire | BLOCKED_API | L'API ne garantit pas la mutation d'un contrat actif ni le traitement des montants déjà payés. À définir côté contrat métier/Rust avant de proposer l'action. |
+| B4 — édition/abandon de brouillon central | BLOCKED_API | Les mutations de DRAFT central ne sont pas garanties par les contrats existants ; aucune action présentée comme fonctionnelle. |
+| Build React/TypeScript | PASS | `npm ci` puis `npm run build` dans `v2/windows-app` ; build Vite 8.3.5 réussi. Avertissement non bloquant de chunks PDF/polices dépassant 500 kB. |
+| Formatage Rust | PASS | `cargo fmt --all -- --check` dans `v2/windows-app/src-tauri`. |
+| Analyse statique Tauri | PASS | `cargo clippy --all-targets -- -D warnings` dans `v2/windows-app/src-tauri`, après regroupement des paramètres de `send_central_admin` dans une structure de requête. |
+| Contrat OpenAPI | PASS | `cargo test -p sel-contracts --test openapi_contract` dans `v2/` : 1 test réussi. |
+| Tests unitaires Tauri | PARTIAL | `cargo test --lib` a réussi 5 tests avant la dernière refactorisation interne de `send_central_admin`. Après celle-ci, le formatage et Clippy compilent le code final, mais une nouvelle exécution des tests n'a pu aboutir : compilation interrompue par `os error 112` (espace disque insuffisant). Ne pas compter ce résultat comme un PASS sur le dernier état. |
+| Tests de contrat UI / capture synthétique | PARTIAL | Après adaptation des anciennes assertions aux domaines UX3, `py -3.12 -m pytest -q tests/test_v2_tauri_client.py` : **52 passed** localement. Ce sont des tests de contrat source, pas un test E2E de clics/focus. Le premier workflow Windows a révélé les assertions obsolètes; une relance après correction est en attente. Le workflow contient aussi une capture synthétique Windows à la taille des frames Figma. |
+| Recette Windows/SEL, impression et données réelles | BLOCKED_EXTERNAL | Requiert installation et parcours sur un poste Windows représentatif ; aucune donnée réelle, API de production ou imprimante n'a été touchée dans cet incrément. |
+| CI distante et PR UX3 | PARTIAL — PR #60 ouverte | PR brouillon [#60](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/60), empilée sur la branche de handoff (PR #59), commit `91e55b89d1d775ae2b8f54bccf981bff2cb67582`. Workflow backend [42138234484](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42138234484) : PASS, fmt, Clippy, workspace et tests PostgreSQL. Premier workflow Windows [42138333306](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42138333306) : FAIL sur six anciennes assertions statiques après les changements UX3; aucun échec de compilation n'a été atteint. Assertions mises à jour sans supprimer les tests; relancer Windows sur le nouveau commit. |
+
+**État de livraison de cet incrément :** le build web, le contrat OpenAPI, le formatage et Clippy sont validés. Les tests unitaires Tauri avaient réussi avant le dernier petit refactoring, mais n'ont pas pu être relancés après celui-ci en raison de l'espace disque. Les vérifications UI E2E, les captures réelles de l'application, le test poste SEL et la CI de la nouvelle branche restent ouverts. Les lacunes B1–B4 sont des limites des contrats API, et ne sont pas dissimulées par l'interface. Verdict UX3 actuel : **PARTIAL / NO_GO pour considérer tous les parcours UX/CRUD terminés** jusqu'à validation Windows et traitement des quatre gaps API.
+
+#### Mise à jour de validation locale — 6 novembre 2026
+
+L'échec Playwright de la CI Windows au commit `5a8c35f` a été reproduit et isolé. Le script de capture utilisait le port Vite `1420` sans `--strictPort` : lorsqu'un ancien serveur occupait ce port, les captures naviguaient vers cette application périmée alors qu'un nouveau serveur avait démarré ailleurs. Après isolement du port, la recette a révélé trois hypothèses de test obsolètes : la route client paginée inclut une query string, les formulaires non enregistrés demandent une confirmation avant navigation, et le libellé « Administration » existe dans le menu comme dans l'onglet. Le script vise maintenant un port libre dédié, fournit le jeu de données pour la route paginée, accepte les confirmations dans son navigateur exclusivement synthétique et cible explicitement les menus/onglets.
+
+| Vérification actualisée | Résultat | Preuve / limite |
+|---|---|---|
+| Recette Playwright desktop synthétique | PASS local | `py -3.12 v2/windows-app/scripts/visual_review.py` : parcours complet réussi, 1440×900, 31 captures PNG incluant login, vues métier, CRUD client, rattachement sans compteur, PDF A4, reçus, solaire et administration. Données toutes fictives; ce n'est pas un lancement de l'exécutable Tauri. Captures locales dans `%TEMP%\sel-ux3-final-20261106-c`. |
+| Contrats source client | PASS local | `py -3.12 -m pytest -q tests/test_v2_tauri_client.py` : 53 passed, dont la régression de taille/alignement de la case d'administration. |
+| Build React/TypeScript | PASS local | `npm run build` dans `v2/windows-app`; avertissement non bloquant de taille des bundles PDF/polices (>500 kB). |
+| Syntaxe du script visuel | PASS local | `py -3.12 -m py_compile v2/windows-app/scripts/visual_review.py`. |
+| CI Backend sur commit `5a8c35f` | PASS distant | Workflow [42138810759](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42138810759) : success. |
+| CI Windows sur commit `567d72f` | PASS distant | Workflow [42140838864](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42140838864) : tests UI, 31 captures desktop, build React, tests natifs Tauri, build NSIS précédent, builds MSI/NSIS et vérification de mise à niveau/préservation du profil : tout est réussi. L'artefact est un candidat CI non signé, pas une release. |
+| Tests Rust unitaires Tauri après le refactoring | PASS Windows CI | Le test natif `cargo test --lib --target x86_64-pc-windows-msvc` a réussi dans le workflow Windows [42140838864](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42140838864). Le précédent manque d'espace local n'invalide pas cette exécution distante. |
+| Installation native, impression et poste SEL | BLOCKED_EXTERNAL | La capture Playwright s'exécute dans Chromium avec le pont Tauri simulé et des fixtures synthétiques; elle ne remplace pas une installation Windows réelle, une imprimante ou la recette SEL. |
+
+**Résultat CI final du commit code `567d72f6c3aa131f38817f9362ff382fc10f63a6` :** workflow Backend [42140827913](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42140827913) PASS; workflow Windows [42140838864](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42140838864) PASS en 16 min 27 s, incluant l'installation/mise à niveau dans un profil isolé. Le workflow Windows a également téléversé le candidat binaire et les captures synthétiques comme artefacts d'action. Aucune release n'a été créée et aucun artefact n'a été distribué à SEL. La recette sur poste SEL/imprimante demeure `BLOCKED_EXTERNAL`; les limites API B1–B4 demeurent ouvertes. Ce rapport est un commit documentaire ultérieur au code testé et n'altère pas les sources du SHA validé.
+
+#### Revalidation UX3 — confirmations intégrées — 6 novembre 2026
+
+Les confirmations navigateur natives ont été remplacées par une boîte de dialogue intégrée au client pour l'archivage/réactivation d'un abonné et la perte de saisies non enregistrées. Le dialogue expose `role=alertdialog`, reçoit le focus sur « Annuler », piège la tabulation, se ferme avec Échap ou un clic extérieur et restitue le focus au contrôle déclencheur. Les actions destructrices logiques ont un traitement visuel distinct ; aucune suppression physique ni requête métier n'est lancée lors d'une annulation.
+
+| Vérification | Statut | Preuve |
+|---|---|---|
+| Build TypeScript/Vite | PASS | `npm run build` dans `v2/windows-app`, `tsc -b` et Vite réussis. Vite signale des bundles PDF supérieurs à 500 kB ; c'est une optimisation de chargement différable, sans échec de compilation. |
+| Contrats UI source | PASS | `python -m pytest tests/test_v2_tauri_client.py -q` : **54 passed**. Le test ajouté interdit le retour de `window.confirm` et vérifie les attributs/accessibilités attendus. |
+| Revue visuelle interactive | PASS — données synthétiques | `python v2/windows-app/scripts/visual_review.py` : code de sortie 0. Le parcours vérifie Escape, annulation explicite et restitution du focus. Captures dans `artifacts/ux3-confirmation-validation-rerun/`, dont `customer-archive-confirmation-1440x900.png`. |
+| Backend de production | NON TOUCHÉ | Aucune requête ni écriture de production effectuée ; ce lot ne modifie ni données ni configuration distante. |
+
+Ce lot améliore l'incrément UX3, mais ne ferme pas à lui seul la mission : la comparaison intégrale des parcours Figma, les lacunes API B1–B4, la CI sur le nouveau commit et la recette sur matériel SEL restent à valider.
+
+#### UX3 — remplacement atomique d’un compteur — 6 novembre 2026
+
+Le parcours dossier abonné permet maintenant de remplacer un compteur physique sans effacer son historique. L’agent saisit le nouveau numéro et un motif obligatoire, puis confirme l’opération. L’ancien compteur est désactivé; le nouvel appareil est créé sur le même compte de service et conserve la même unité. Les index et factures antérieurs restent associés à l’ancien identifiant. Détails de décision dans `Docs/SEL_V2_UX3_CODEX/ADR-001-remplacement-compteur.md`.
+
+| Vérification | Résultat | Preuve / limite |
+|---|---|---|
+| Transaction métier et audit | CODE | Même transaction PostgreSQL : verrou de l’ancien compteur, désactivation, création du nouveau, deux événements `central_changes` et audit avec motif. |
+| API et contrôle de rôle | CODE + TEST | `POST /v1/meters/{id}/replace`; ADMIN, SUPERVISOR et BILLING_AGENT autorisés, CASHIER refusé. Tests unitaires de matrice dans `sel-api`. |
+| Historique des relevés | TEST D’INTÉGRATION AJOUTÉ | Le scénario HTTP/PostgreSQL vérifie que les deux relevés (original et correction) restent accessibles après remplacement, et qu’une répétition retourne HTTP 409. Il compile avec `cargo test -p sel-api --test postgres_meter_readings --no-run -j 1`; il n’a pas été exécuté localement, car `TEST_DATABASE_URL` n’est pas configuré. |
+| Format Rust | PASS LOCAL | `cargo fmt --all -- --check`. |
+| Tests API unitaires | PASS LOCAL | `cargo test -p sel-api --lib -j 1` : 12 réussis. |
+| Clippy API + stockage | PASS LOCAL | `cargo clippy -p sel-api -p sel-storage --all-targets -j 1 -- -D warnings`. |
+| Contrat OpenAPI | PASS LOCAL | `cargo test -p sel-contracts --test openapi_contract -j 1` : 1 réussi; document YAML accepté et aucune route de stockage PDF. |
+| Build React/TypeScript | PASS LOCAL | `npm run build`; TypeScript et Vite réussis. Vite conserve l’avertissement non bloquant sur les bundles PDF/polices volumineux. |
+| Tests statiques du client | PASS LOCAL | `python -m pytest tests/test_v2_tauri_client.py -q` : 54 réussis. |
+| Recette visuelle desktop synthétique | PASS LOCAL | `python v2/windows-app/scripts/visual_review.py` : code de sortie 0, 33 captures dans `artifacts/ux3-meter-replacement-validation-pass/`. Le parcours remplace l’appareil puis saisit un premier relevé sur le nouveau compteur. Fixtures fictives et pont Tauri simulé; ce n’est ni une installation native ni une recette SEL. |
+| Test PostgreSQL réel | PASS CI | Workflow backend [42225723764](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42225723764) sur `ef726a447855c0254c89613b79db7a336f847e9b` : workspace Rust et étape « PostgreSQL persistence and transaction tests » réussis, incluant le test ignoré `postgres_meter_readings` exécuté contre le service PostgreSQL éphémère CI. Aucun serveur de production utilisé. |
+| CI Windows | PASS CI | Workflow [42225800664](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42225800664) sur le même SHA : tests client, captures desktop, build React, tests natifs Tauri, création MSI/NSIS et essai de mise à niveau avec préservation du profil tous réussis. L’artefact reste un candidat de test non publié. |
+| Backend de production | NON TOUCHÉ | Aucun appel ou changement de données/configuration en production. |
+
+**État UX3 après ce lot :** B1 est implémenté et validé par les tests HTTP/PostgreSQL de CI, ainsi que par le build et la recette Windows synthétique. B2 (rectification/annulation d’une vente solaire), B3 (avenant/résiliation d’un contrat) et B4 (modification/abandon d’un brouillon de référentiel) restent ouverts : leurs règles financières ou de versionnement doivent être établies avant d’exposer une action active. La PR UX3 n’est pas fusionnée; aucune publication ni mise en production n’a eu lieu.
+
+#### UX3 — revue préalable des paiements et références de créances — 6 novembre 2026
+
+La saisie d’un paiement n’envoie plus directement `POST /v1/payments`. Le premier clic fige les valeurs saisies et présente, dans le panneau récapitulatif, le client, le montant, le mode, la date et les affectations. L’opérateur peut revenir modifier la saisie; seule l’action « Confirmer et enregistrer » envoie la commande. Un verrou synchrone côté composant empêche le double clic pendant l’envoi, tandis que la clé d’idempotence existante du transport reste active. Un refus conserve le formulaire rempli.
+
+L’audit a aussi relevé que la réponse `GET /v1/customers/{id}/statement` renvoyait les soldes des créances sans leur nature ni leur référence source. Le serveur central ajoute désormais `source_type` et `source_reference` (numéro de facture immuable pour une facture, identifiant de vente pour une vente solaire) au résumé. Le contrat OpenAPI, le chemin de repli en mémoire de l’API et le test d’intégration PostgreSQL ont été alignés. Le sélecteur et l’écran de confirmation affichent cette référence; aucun montant n’est recalculé en JavaScript.
+
+Enfin, la création d’un brouillon de catalogue conserve les champs si le serveur refuse le POST et ne les réinitialise qu’après un succès confirmé.
+
+| Vérification | Résultat | Preuve / limite |
+|---|---|---|
+| Contrats UI | PASS local | `python -m pytest tests/test_v2_tauri_client.py -q` : 57 réussis, dont confirmation distincte, POST unique, verrou anti-double clic, affichage des références et conservation du brouillon après erreur. |
+| Parcours navigateur desktop | PASS local, fixtures synthétiques | `python v2/windows-app/scripts/visual_review.py` : code 0; assertions qu’aucun POST paiement n’est envoyé avant confirmation, qu’un POST suit la confirmation et qu’un brouillon de tarif reste présent après HTTP 422. Capture versionnée `Docs/SEL_V2_UX3_CODEX/evidence/payment-review-1440x900.png`. Le serveur Rust est simulé dans ce test visuel. |
+| Rendu de la confirmation | PASS visuel 1440×900 | La synthèse et les deux actions restent visibles dans la colonne récapitulative; le formulaire demeure éditable jusqu’à confirmation. |
+| Build React/TypeScript | PASS local | `npm ci --ignore-scripts` : 58 paquets ajoutés, 0 vulnérabilité rapportée; `npm run build` : TypeScript + Vite réussis. Avertissement non bloquant sur les chunks PDF/polices de plus de 500 kB. |
+| Tests unitaires API Rust | PASS local | `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` : 12 réussis. |
+| Test d’intégration PostgreSQL modifié | COMPILE PASS / EXÉCUTION NON FAITE | `cargo test --manifest-path v2/Cargo.toml -p sel-api --test postgres_commercial --no-run` compile. L’exécution réelle est ignorée sans `TEST_DATABASE_URL`; aucune URL de production n’a été utilisée. À exécuter dans le service PostgreSQL éphémère de CI. |
+| Formats Rust | PASS local après `cargo fmt` | Le formatage a été appliqué aux sources Rust modifiées; relancer `cargo fmt --all -- --check` avant le commit final. |
+| Windows natif / installateur | NOT_RUN pour ce dernier diff | Le workflow Windows doit être relancé après push; la capture Chromium ne constitue pas une installation Tauri native. |
+| Production | NON TOUCHÉ | Aucune requête, écriture, migration ou configuration de backend de production n’a été effectuée. |
+
+**État après cette tranche :** les parcours paiement et création de brouillon ont des confirmations et une gestion d’échec plus sûres. L’enrichissement de la situation client est rétrocompatible (champs JSON additifs) et ne change ni soldes ni écritures. Il reste à exécuter PostgreSQL en CI sur le nouveau SHA, relancer la CI Windows, compléter les scénarios d’administration/facturation et traiter les lacunes métier/API encore réellement requises. La PR reste non fusionnée et aucune version n’est publiée.
+
+### Revalidation UX3 après intégration de main — 6 novembre 2026
+
+La branche UX3 a intégré `main@0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6` après résolution contrôlée des conflits dans l’interface, le script de recette et ce rapport. Le rendu du login a aussi été corrigé : le panneau clair emploie maintenant le logo sombre lisible. La prévisualisation conserve les trois lignes financières actuelles (électricité, eau et ligne de communication) et montre explicitement 0 m³; le scénario de paiement présente la répartition et exige une confirmation avant son unique POST.
+
+| Contrôle sur la branche intégrée | Résultat |
+|---|---|
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 57 tests |
+| `npm run build` dans `v2/windows-app` | PASS — TypeScript et Vite; avertissement de taille des chunks PDF/fonts (>500 kB) non bloquant |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 12 tests |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test; aucun endpoint PDF serveur |
+| `python v2/windows-app/scripts/visual_review.py` | PASS — code 0, 34 captures synthétiques couvrant login, navigation, dossiers, facture, paiements, solaire, administration et PDF local |
+| Revue visuelle ciblée | PASS — logo login lisible; aperçu facture et confirmation paiement affichent les montants retournés par le serveur et les états attendus |
+| `git diff --cached --check` et marqueurs de conflit | PASS — aucun espace erroné ni marqueur restant |
+| `cargo test --manifest-path v2/Cargo.toml --workspace` | FAIL technique de l’environnement — édition de liens Windows `LNK1207` sur PDB incompatible lors de `postgres_catalog_api`; ce n’est pas un échec d’assertion, mais la suite workspace n’est donc pas validée localement |
+| Intégrations PostgreSQL sur cette machine | NOT_RUN — aucune `TEST_DATABASE_URL` dédiée disponible; ne pas confondre les tests API simulés/compilés avec un test PostgreSQL exécuté |
+| CI GitHub | NOT_YET_VALIDATED sur le nouveau SHA; le seul check observé avant le push était vert sur l’ancien head `8d3e64b` |
+| Production | NON TOUCHÉE — aucune connexion, migration, écriture ou configuration de production n’a été effectuée |
+
+Les captures synthétiques retenues sont `Docs/SEL_V2_UX3_CODEX/evidence/login-1440x900.png` et `invoice-preview-1440x900.png`; la preuve de confirmation de paiement est `payment-review-1440x900.png`. Les 34 captures de travail restent dans `artifacts/` et ne sont pas ajoutées au dépôt.
+
+**État UX3 :** plusieurs parcours existants et leurs confirmations ont été validés visuellement et par tests; la mission complète n’est pas encore close. Le remplacement de compteur est disponible par endpoint testé et son dialogue est présent. Les corrections/annulations des ventes solaires, avenants/résiliations des contrats actifs et modification/abandon des brouillons de référentiels restent bloqués tant que leurs contrats métier/API transactionnels ne sont pas définis et validés. Aucun bouton ne doit prétendre réaliser ces mutations. La recette réelle Tauri/Windows et la suite PostgreSQL doivent encore être confirmées par CI ou par un environnement représentatif.
 ### Ligne de communication configurable sur les factures eau + électricité — 6 novembre 2026
 
 À la demande de SEL, le moteur ajoute une ligne obligatoire « Ligne de communication » aux factures combinées périodiques Eau + Électricité. La valeur initiale fournie est de 10 USD par facture. Cette charge d'entreprise reste une ligne distincte de la TVA, est comprise dans sa base taxable, et la TVA de 16 % est calculée une seule fois sur le sous-total complet : électricité + eau + ligne de communication. La ligne eau à 0 m³ demeure présente et à montant nul.

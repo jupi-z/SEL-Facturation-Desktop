@@ -155,6 +155,18 @@ pub struct CreateMeter {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ReplaceMeter {
+    pub serial: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MeterReplacement {
+    pub retired_meter: Meter,
+    pub replacement_meter: Meter,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MeterReading {
     pub id: Uuid,
     pub meter_id: Uuid,

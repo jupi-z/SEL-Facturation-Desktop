@@ -17,8 +17,8 @@ use sel_contracts::{
     CatalogSnapshot, CatalogSnapshotPayload, CorrectMeterReading, CreateCustomer, CreateMeter,
     CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
     CreditNoteRequest, Customer, DocumentData, InvoiceIdentitySnapshot, InvoiceLineResponse, Meter,
-    MeterReading, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
-    ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse, SyncPullResponse,
+    MeterReading, MeterReplacement, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
+    ReplaceMeter, ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse, SyncPullResponse,
     SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
     UtilityBillingResponse, VoidInvoiceRequest,
 };
@@ -230,6 +230,8 @@ pub struct InvoiceRecord {
 pub struct ReceivableRecord {
     pub id: Uuid,
     pub customer_id: Uuid,
+    pub source_type: String,
+    pub source_reference: String,
     pub currency: String,
     pub principal: Decimal,
 }
@@ -402,6 +404,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/meters/:id/readings",
             get(list_meter_readings).post(create_meter_reading),
         )
+        .route("/v1/meters/:id/replace", post(replace_meter))
         .route(
             "/v1/meter-readings/:id/corrections",
             post(correct_meter_reading),
@@ -655,6 +658,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 | "/v1/solar/contracts"
         ) || path_matches(path, "/v1/customers/:id/service-accounts")
             || path_matches(path, "/v1/service-accounts/:id/meters")
+            || path_matches(path, "/v1/meters/:id/replace")
             || path_matches(path, "/v1/meters/:id/readings")
             || path_matches(path, "/v1/solar/contracts/:id/activate")
         {
@@ -2566,6 +2570,31 @@ async fn list_meters(
         .map_err(meter_write_error)
 }
 
+async fn replace_meter(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meter_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ReplaceMeter>,
+) -> Result<(StatusCode, Json<MeterReplacement>), ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .replace_meter(
+            meter_id,
+            &input,
+            principal.map(|Extension(AuthenticatedPrincipal(principal))| principal.user_id),
+        )
+        .await
+        .map(|replacement| (StatusCode::CREATED, Json(replacement)))
+        .map_err(meter_write_error)
+}
+
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 struct MeterReadingQuery {
     period: Option<String>,
@@ -2723,6 +2752,11 @@ async fn issue_utility(
         ReceivableRecord {
             id: receivable_id,
             customer_id: resolved_input.customer_id,
+            source_type: "INVOICE".to_owned(),
+            source_reference: committed
+                .invoice_number
+                .clone()
+                .unwrap_or_else(|| invoice_id.to_string()),
             currency: resolved_input.currency.clone(),
             principal: committed.total,
         },
@@ -3495,7 +3529,7 @@ async fn get_statement(
     let payments = state.payments.read().await;
     let entries = receivables.into_iter().map(|receivable| {
         let paid: Decimal = payments.values().flat_map(|payment| payment.allocations.iter()).filter(|allocation| allocation.receivable_id == receivable.id).map(|allocation| allocation.amount).sum();
-        json!({"receivable_id":receivable.id,"currency":receivable.currency,"principal":receivable.principal,"paid":paid,"balance":receivable.principal-paid})
+        json!({"receivable_id":receivable.id,"source_type":receivable.source_type,"source_reference":receivable.source_reference,"currency":receivable.currency,"principal":receivable.principal,"paid":paid,"balance":receivable.principal-paid})
     }).collect::<Vec<_>>();
     Ok(Json(
         json!({"customer_id":customer_id,"receivables":entries}),
@@ -3676,6 +3710,8 @@ async fn create_solar_sale(
         ReceivableRecord {
             id: receivable_id,
             customer_id: input.customer_id,
+            source_type: "SALE".to_owned(),
+            source_reference: sale_id.to_string(),
             currency: input.currency,
             principal: input.principal,
         },
@@ -4128,6 +4164,9 @@ fn meter_write_error(error: sel_storage::postgres::MeterWriteError) -> ApiError 
             "service account was changed by another actor",
         ),
         MeterWriteError::MeterNotFound => ApiError::not_found("METER_NOT_FOUND", "meter not found"),
+        MeterWriteError::MeterNotActive => {
+            ApiError::conflict("METER_NOT_ACTIVE", "only an active meter can be replaced")
+        }
         MeterWriteError::DuplicateReading => ApiError::conflict(
             "METER_READING_EXISTS",
             "a reading already exists for this period",
@@ -4680,6 +4719,21 @@ mod tests {
             &Method::POST,
             &format!("/v1/service-accounts/{service_account_id}/meters"),
             "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/meters/{meter_id}/replace"),
+            "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/meters/{meter_id}/replace"),
+            "SUPERVISOR"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            &format!("/v1/meters/{meter_id}/replace"),
+            "CASHIER"
         ));
         assert!(role_allows_request(
             &Method::GET,

@@ -342,6 +342,15 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .unwrap();
     assert_eq!(statement.status(), StatusCode::OK);
     let statement = json_body(statement).await;
+    assert!(statement["receivables"]
+        .as_array()
+        .is_some_and(|receivables| {
+            receivables.iter().any(|entry| {
+                entry["receivable_id"] == invoice["receivable_id"]
+                    && entry["source_type"] == "INVOICE"
+                    && entry["source_reference"] == invoice["invoice_number"]
+            })
+        }));
     assert!(statement["invoices"].as_array().is_some_and(|invoices| {
         invoices
             .iter()

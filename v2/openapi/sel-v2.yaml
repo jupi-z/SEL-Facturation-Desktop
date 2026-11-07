@@ -665,6 +665,23 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/meters/{id}/replace:
+    post:
+      operationId: replaceMeter
+      description: Replaces an active physical meter atomically. The old meter is deactivated, never deleted, so its reading history and invoice links remain intact. The replacement keeps the service-defined unit. ADMIN, SUPERVISOR, or BILLING_AGENT only.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceMeter' }
+      responses:
+        '201': { description: Previous meter retired and replacement created atomically, content: { application/json: { schema: { $ref: '#/components/schemas/MeterReplacement' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/meter-readings/{id}/corrections:
     post:
       operationId: correctMeterReading
@@ -734,6 +751,11 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/UuidPath' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoidInvoiceRequest' }
       responses:
         '200': { description: Invoice void recorded }
         '403': { $ref: '#/components/responses/Problem' }
@@ -1050,6 +1072,20 @@ components:
       properties:
         serial: { type: string, minLength: 1, maxLength: 128 }
         unit: { type: string, enum: [KWH, M3] }
+    ReplaceMeter:
+      type: object
+      additionalProperties: false
+      required: [serial, reason]
+      properties:
+        serial: { type: string, minLength: 1, maxLength: 128 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    MeterReplacement:
+      type: object
+      additionalProperties: false
+      required: [retired_meter, replacement_meter]
+      properties:
+        retired_meter: { $ref: '#/components/schemas/Meter' }
+        replacement_meter: { $ref: '#/components/schemas/Meter' }
     MeterReading:
       type: object
       required: [id, meter_id, period, previous, current, measured_quantity, source]
@@ -1373,6 +1409,16 @@ components:
           items:
             type: object
             description: Current receivable summary from the local or central financial ledger.
+            required: [receivable_id, source_type, source_reference, currency, principal, paid, credited, balance]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              source_type: { type: string, enum: [INVOICE, SALE] }
+              source_reference: { type: string, description: Immutable invoice number or sale identifier }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+              principal: { type: string }
+              paid: { type: string }
+              credited: { type: string }
+              balance: { type: string }
         invoices:
           type: array
           items: { $ref: '#/components/schemas/UtilityBillingResponse' }
@@ -1490,6 +1536,11 @@ components:
       properties:
         amount: { type: string, description: Positive Decimal amount in the receivable currency }
         reason: { type: string, minLength: 1 }
+    VoidInvoiceRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
     CreateSolarSaleRequest:
       type: object
       required: [customer_id, product_code, principal, currency, terms_revision]

@@ -1,26 +1,56 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, centralRequest, centralStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
+import { centralAdminRequest, centralLogin, centralLogout, centralSessionStatus, centralRequest, centralRequestPage, centralStatus, openMonarqueSite, type CentralSessionInfo } from "./api";
 import { buildClientPdf, renderClientPdfPreview } from "./documents";
 import "./App.css";
 
-type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "server" | "admin";
+export type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "server" | "admin";
+type Domain = "home" | "customers" | "billing" | "payments" | "solar" | "admin";
 type Row = Record<string, unknown>;
 type Notice = { message: string; error?: boolean } | null;
 type PreviewDocument = { title: string; filename: string; blob: Blob };
+type FinancialAction = { kind: "void-invoice" | "reverse-payment" | "credit-receivable"; id: string; amount?: string; reference: string };
+type ConfirmationRequest = { title: string; description: string; confirmLabel: string; tone?: "neutral" | "warning" };
 
-const navigation: { id: View; label: string; icon: string }[] = [
-  { id: "dashboard", label: "Vue d’ensemble", icon: "grid" },
-  { id: "customers", label: "Abonnés", icon: "people" },
-  { id: "readings", label: "Relevés", icon: "meter" },
-  { id: "invoices", label: "Factures", icon: "document" },
-  { id: "payments", label: "Encaissements", icon: "cash" },
-  { id: "solar", label: "Kits solaires", icon: "sun" },
-  { id: "receivables", label: "Créances", icon: "balance" },
-  { id: "server", label: "Serveur", icon: "server" },
-  { id: "admin", label: "Administration", icon: "settings" },
+function announceDraftSaved() { window.dispatchEvent(new Event("sel-draft-saved")); }
+
+async function loadAllCustomers(): Promise<Row[]> {
+  const customers: Row[] = [];
+  const cursors = new Set<string>();
+  let cursor = "";
+  while (true) {
+    const query = new URLSearchParams({ limit: "100" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await centralRequestPage<unknown>(`/v1/customers?${query.toString()}`);
+    customers.push(...rows<Row>(page.body));
+    const next = page.next_cursor?.trim() ?? "";
+    if (!next) return customers;
+    if (cursors.has(next) || next === cursor) throw new Error("Le serveur a renvoyé un curseur client répétitif. Actualisez ou contactez l’administrateur SEL.");
+    cursors.add(next);
+    cursor = next;
+  }
+}
+
+const navigation: { id: Domain; target: View; label: string; icon: string }[] = [
+  { id: "home", target: "dashboard", label: "Accueil", icon: "grid" },
+  { id: "customers", target: "customers", label: "Abonnés", icon: "people" },
+  { id: "billing", target: "invoices", label: "Facturation", icon: "document" },
+  { id: "payments", target: "payments", label: "Paiements", icon: "cash" },
+  { id: "solar", target: "solar", label: "Solaire", icon: "sun" },
+  { id: "admin", target: "admin", label: "Administration", icon: "settings" },
 ];
+
+const domainByView: Record<View, Domain> = {
+  dashboard: "home", customers: "customers", readings: "billing", invoices: "billing",
+  payments: "payments", receivables: "payments", solar: "solar", server: "admin", admin: "admin",
+};
+
+const domainViews: Partial<Record<Domain, { id: View; label: string }[]>> = {
+  billing: [{ id: "invoices", label: "Factures" }, { id: "readings", label: "Relevés" }],
+  payments: [{ id: "payments", label: "Journal de caisse" }, { id: "receivables", label: "Créances" }],
+  admin: [{ id: "admin", label: "Administration" }, { id: "server", label: "État du serveur" }],
+};
 
 const pageTitle: Record<View, { title: string; context: string }> = {
   dashboard: { title: "Vue d’ensemble", context: "SEL / OPÉRATIONS" },
@@ -83,7 +113,9 @@ function domainLabel(value: unknown): string {
   const raw = text(value, "");
   const labels: Record<string, string> = {
     UTILITY_INVOICE: "Facture eau + électricité",
+    INVOICE: "Facture eau + électricité",
     SOLAR_SALE: "Vente de kit solaire",
+    SALE: "Vente de kit solaire",
     CASH: "Espèces",
     BANK: "Banque",
     MOBILE_MONEY: "Mobile Money",
@@ -122,9 +154,9 @@ function humanError(error: unknown): string {
   return "L’opération n’a pas abouti. Vérifiez la connexion au service SEL et réessayez.";
 }
 
-function Button({ children, primary = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
-  return <button className={`button${primary ? " button-primary" : ""}`} {...props}>{children}</button>;
-}
+const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }>(function Button({ children, primary = false, className = "", ...props }, ref) {
+  return <button ref={ref} className={`button${primary ? " button-primary" : ""}${className ? ` ${className}` : ""}`} {...props}>{children}</button>;
+});
 
 function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return <section className="panel"><div className="panel-heading"><h2>{title}</h2>{action}</div>{children}</section>;
@@ -158,6 +190,19 @@ export default function App() {
   const [serverReady, setServerReady] = useState<boolean | null>(null);
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [view, setView] = useState<View>("dashboard");
+  const [solarWorkspace, setSolarWorkspace] = useState<"sales" | "contracts">("sales");
+  const [paymentWorkspace, setPaymentWorkspace] = useState<"journal" | "create">("journal");
+  const [invoiceWorkspace, setInvoiceWorkspace] = useState<"history" | "create">("history");
+  const [viewHistory, setViewHistory] = useState<View[]>([]);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [financialAction, setFinancialAction] = useState<FinancialAction | null>(null);
+  const [financialActionAmount, setFinancialActionAmount] = useState("");
+  const [financialActionReason, setFinancialActionReason] = useState("");
+  const [financialActionBusy, setFinancialActionBusy] = useState(false);
+  const [confirmationRequest, setConfirmationRequest] = useState<ConfirmationRequest | null>(null);
+  const confirmationResolver = useRef<((accepted: boolean) => void) | null>(null);
+  const confirmationCancelRef = useRef<HTMLButtonElement | null>(null);
+  const confirmationPreviousFocus = useRef<HTMLElement | null>(null);
   const [customers, setCustomers] = useState<Row[]>([]);
   const [invoices, setInvoices] = useState<Row[]>([]);
   const [payments, setPayments] = useState<Row[]>([]);
@@ -171,11 +216,16 @@ export default function App() {
   const [notice, setNotice] = useState<Notice>(null);
   const [loading, setLoading] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState("");
+  const [paymentPrefill, setPaymentPrefill] = useState<{ receivableId: string; scheduleId: string } | null>(null);
   const [selectedCustomerData, setSelectedCustomerData] = useState<Row | null>(null);
   const [customerEditOpen, setCustomerEditOpen] = useState(false);
-  const [statement, setStatement] = useState<Row | null>(null);
+  const [customerEditBusy, setCustomerEditBusy] = useState(false);
+  const [customerCreateBusy, setCustomerCreateBusy] = useState(false);
+  const [statementState, setStatementState] = useState<{ customerId: string; data: Row | null; loading: boolean; error: string }>({ customerId: "", data: null, loading: false, error: "" });
   const [preview, setPreview] = useState<Row | null>(null);
   const [invoiceDraft, setInvoiceDraft] = useState<Row | null>(null);
+  const [invoiceIssueBusy, setInvoiceIssueBusy] = useState(false);
+  const invoiceIssueBusyRef = useRef(false);
   const [selectedInvoice, setSelectedInvoice] = useState<Row | null>(null);
   const [zeroConfirmed, setZeroConfirmed] = useState(false);
   const [invoiceFormKey, setInvoiceFormKey] = useState(0);
@@ -187,6 +237,30 @@ export default function App() {
   const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<PreviewDocument | null>(null);
   const [documentBusy, setDocumentBusy] = useState(false);
+
+  function requestConfirmation(request: ConfirmationRequest): Promise<boolean> {
+    if (confirmationResolver.current) return Promise.resolve(false);
+    confirmationPreviousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setConfirmationRequest(request);
+    return new Promise((resolve) => { confirmationResolver.current = resolve; });
+  }
+
+  function finishConfirmation(accepted: boolean) {
+    const resolve = confirmationResolver.current;
+    confirmationResolver.current = null;
+    setConfirmationRequest(null);
+    resolve?.(accepted);
+  }
+
+  useEffect(() => {
+    if (confirmationRequest) {
+      confirmationCancelRef.current?.focus();
+      return;
+    }
+    const previous = confirmationPreviousFocus.current;
+    confirmationPreviousFocus.current = null;
+    if (previous?.isConnected) previous.focus();
+  }, [confirmationRequest]);
 
   useEffect(() => {
     let active = true;
@@ -213,7 +287,7 @@ export default function App() {
       setServerReady(false);
       setCustomers([]); setInvoices([]); setPayments([]); setSales([]); setSolarProducts([]);
       setTariffCatalog([]);
-      setStatement(null); setSelectedCustomerData(null); setSelectedInvoice(null); setPreview(null);
+      setStatementState({ customerId: "", data: null, loading: false, error: "" }); setSelectedCustomerData(null); setSelectedInvoice(null); setPreview(null);
       setNotice({ message: "Le serveur SEL est indisponible ou non configuré. Les données métier sont masquées jusqu’au rétablissement du service.", error: true });
     };
     window.addEventListener("sel-session-expired", expired);
@@ -221,12 +295,18 @@ export default function App() {
     return () => { active = false; window.removeEventListener("sel-session-expired", expired); window.removeEventListener("sel-server-unavailable", unavailable); };
   }, []);
 
+  useEffect(() => {
+    const saved = () => setDraftDirty(false);
+    window.addEventListener("sel-draft-saved", saved);
+    return () => window.removeEventListener("sel-draft-saved", saved);
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!session?.authenticated) return;
     setLoading(true);
     try {
       const [customerResult, invoiceResult, paymentResult, salesResult, productsResult, tariffsResult, statusResult] = await Promise.allSettled([
-        centralRequest<unknown>("/v1/customers"),
+        loadAllCustomers(),
         centralRequest<unknown>("/v1/invoices?limit=100"),
         centralRequest<unknown>("/v1/payments?limit=100"),
         centralRequest<unknown>("/v1/solar/sales?limit=100"),
@@ -302,13 +382,21 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!selectedCustomer) { setStatement(null); return; }
+    if (!selectedCustomer) { setStatementState({ customerId: "", data: null, loading: false, error: "" }); return; }
     let active = true;
+    setStatementState({ customerId: selectedCustomer, data: null, loading: true, error: "" });
     centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}/statement`)
-      .then((data) => { if (active) setStatement(data); })
-      .catch((error: unknown) => { if (active) setNotice({ message: humanError(error), error: true }); });
+      .then((data) => { if (active) setStatementState({ customerId: selectedCustomer, data, loading: false, error: "" }); })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const message = humanError(error);
+        setStatementState({ customerId: selectedCustomer, data: null, loading: false, error: message });
+        setNotice({ message, error: true });
+      });
     return () => { active = false; };
   }, [selectedCustomer]);
+
+  const currentStatement = statementState.customerId === selectedCustomer ? statementState : null;
 
   const filteredInvoices = useMemo(() => invoices.filter((invoice) => {
     const query = invoiceFilter.trim().toLocaleLowerCase("fr");
@@ -348,36 +436,10 @@ export default function App() {
     && applicableTariffs.revisions.length === 1
     ? applicableTariffs.revisions[0]
     : "";
-  const recentActivity = useMemo(() => {
-    const customerNames = new Map(customers.map((customer) => [
-      text(customer.customer_id ?? customer.id, ""),
-      text(customer.legal_name, text(customer.customer_code)),
-    ]));
-    const activity = [
-      ...invoices.map((row) => ({
-        row, kind: "Eau + électricité", reference: text(row.invoice_number ?? row.invoice_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.total), date: text(row.issued_at ?? row.created_at),
-      })),
-      ...payments.map((row) => ({
-        row, kind: "Encaissement", reference: text(row.payment_number ?? row.payment_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.amount_received ?? row.received_amount), date: text(row.paid_at ?? row.occurred_at),
-      })),
-      ...sales.map((row) => ({
-        row, kind: "Kit solaire", reference: text(row.sale_number ?? row.sale_id),
-        customer: text(row.customer_name, customerNames.get(text(row.customer_id, "")) ?? text(row.customer_id)),
-        amount: text(row.principal), date: text(row.sold_at ?? row.created_at),
-      })),
-    ];
-    return activity.sort((left, right) => Date.parse(right.date) - Date.parse(left.date)).slice(0, 8);
-  }, [customers, invoices, payments, sales]);
-
-  async function submit(event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string): Promise<boolean> {
-    event.preventDefault();
-    const form = event.currentTarget;
+  async function submit(form: HTMLFormElement, path: string, payload: Row, success: string): Promise<boolean> {
     try {
       await centralRequest(path, "POST", payload);
+      setDraftDirty(false);
       setNotice({ message: success });
       form.reset();
       await refresh();
@@ -388,13 +450,31 @@ export default function App() {
   async function createCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
+    const values = new FormData(form);
+    const payload = {
+      customer_code: String(values.get("customer_code") ?? "").trim(),
+      legal_name: String(values.get("legal_name") ?? "").trim(),
+      customer_category: String(values.get("customer_category") ?? "").trim(),
+      address: String(values.get("address") ?? "").trim(),
+      phone: String(values.get("phone") ?? "").trim(),
+    };
+    const categoryLabel = payload.customer_category === "RESIDENTIAL" ? "Résidentiel" : payload.customer_category === "COMMERCIAL" ? "Commercial" : payload.customer_category;
+    setCustomerCreateBusy(true);
     try {
-      await centralRequest("/v1/customers", "POST", Object.fromEntries(new FormData(form)) as Row);
+      const accepted = await requestConfirmation({
+        title: "Vérifier le nouvel abonné",
+        description: `Code : ${payload.customer_code}. Nom : ${payload.legal_name}. Catégorie tarifaire : ${categoryLabel}. Adresse : ${payload.address || "non renseignée"}. Téléphone : ${payload.phone || "non renseigné"}. État initial : Actif, selon la règle du serveur SEL.`,
+        confirmLabel: "Créer l’abonné",
+      });
+      if (!accepted) return;
+      await centralRequest("/v1/customers", "POST", payload);
+      setDraftDirty(false);
       setNotice({ message: "Abonné enregistré sur le serveur SEL." });
       form.reset();
       setCustomerCreateOpen(false);
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { setCustomerCreateBusy(false); }
   }
 
   async function previewInvoice(event: FormEvent<HTMLFormElement>) {
@@ -437,15 +517,20 @@ export default function App() {
   }
 
   async function confirmInvoice() {
-    if (!invoiceDraft) return;
+    if (!invoiceDraft || invoiceIssueBusyRef.current) return;
+    invoiceIssueBusyRef.current = true;
+    setInvoiceIssueBusy(true);
     try {
       await centralRequest("/v1/billing/utility/issue", "POST", invoiceDraft);
+      setDraftDirty(false);
       setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
+      setInvoiceWorkspace("history");
       setInvoiceFormKey((key) => key + 1);
       setInvoiceCustomerId(""); setInvoiceBillingPeriod(""); setInvoiceWaterQuantity("0");
       setNotice({ message: "Facture enregistrée par le serveur SEL." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { invoiceIssueBusyRef.current = false; setInvoiceIssueBusy(false); }
   }
 
   async function openInvoice(invoice: Row) {
@@ -455,6 +540,35 @@ export default function App() {
       const details = await centralRequest<Row>(`/v1/invoices/${encodeURIComponent(id)}`);
       setSelectedInvoice(details);
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  function beginFinancialAction(action: FinancialAction) {
+    setFinancialAction(action);
+    setFinancialActionAmount(action.amount ?? "");
+    setFinancialActionReason("");
+  }
+
+  async function commitFinancialAction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!financialAction || !financialActionReason.trim()) return;
+    const { kind, id } = financialAction;
+    const path = kind === "void-invoice"
+      ? `/v1/invoices/${encodeURIComponent(id)}/void`
+      : kind === "reverse-payment"
+        ? `/v1/payments/${encodeURIComponent(id)}/reverse`
+        : `/v1/receivables/${encodeURIComponent(id)}/credit`;
+    const payload = kind === "void-invoice"
+      ? { reason: financialActionReason.trim() }
+      : { amount: financialActionAmount, reason: financialActionReason.trim() };
+    setFinancialActionBusy(true);
+    try {
+      await centralRequest(path, "POST", payload);
+      setNotice({ message: kind === "void-invoice" ? "Annulation ajoutée à l’historique financier." : kind === "reverse-payment" ? "Contre-écriture ajoutée à l’historique financier." : "Avoir ajouté à l’historique de la créance." });
+      setFinancialAction(null);
+      setFinancialActionAmount(""); setFinancialActionReason("");
+      await refresh();
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { setFinancialActionBusy(false); }
   }
 
   async function openDocument(kind: "invoice" | "payment" | "solar", id: unknown) {
@@ -495,7 +609,7 @@ export default function App() {
 
   async function updateCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedCustomerData) return;
+    if (!selectedCustomerData || customerEditBusy) return;
     const form = new FormData(event.currentTarget);
     const payload = {
       legal_name: String(form.get("legal_name") ?? "").trim(),
@@ -503,13 +617,53 @@ export default function App() {
       address: String(form.get("address") ?? "").trim() || null,
       phone: String(form.get("phone") ?? "").trim() || null,
     };
+    const categoryLabel = payload.customer_category === "RESIDENTIAL" ? "Résidentiel" : payload.customer_category === "COMMERCIAL" ? "Commercial" : payload.customer_category;
+    setCustomerEditBusy(true);
     try {
+      const accepted = await requestConfirmation({
+        title: "Vérifier les modifications",
+        description: `Abonné : ${text(selectedCustomerData.customer_code)}. Nouveau nom : ${payload.legal_name}. Catégorie tarifaire : ${categoryLabel}. Adresse : ${payload.address || "non renseignée"}. Téléphone : ${payload.phone || "non renseigné"}.`,
+        confirmLabel: "Enregistrer les modifications",
+      });
+      if (!accepted) return;
       const updated = await centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", payload, Number(selectedCustomerData.revision));
       setSelectedCustomerData(updated);
+      setDraftDirty(false);
       setCustomerEditOpen(false);
       setNotice({ message: "Dossier abonné modifié sur le serveur central." });
       await refresh();
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
+    finally { setCustomerEditBusy(false); }
+  }
+
+  async function toggleCustomerArchive() {
+    if (!selectedCustomer || !selectedCustomerData) return;
+    const currentlyArchived = text(selectedCustomerData.status).toUpperCase() === "ARCHIVED";
+    const nextStatus = currentlyArchived ? "ACTIVE" : "ARCHIVED";
+    const accepted = await requestConfirmation({
+      title: currentlyArchived ? "Réactiver cet abonné ?" : "Archiver cet abonné ?",
+      description: currentlyArchived
+        ? "Son historique et ses factures seront conservés."
+        : "Il restera consultable et ses factures historiques seront conservées.",
+      confirmLabel: currentlyArchived ? "Réactiver l’abonné" : "Archiver l’abonné",
+      tone: "warning",
+    });
+    if (!accepted) return;
+    try {
+      const updated = await centralRequest<Row>(`/v1/customers/${encodeURIComponent(selectedCustomer)}`, "PATCH", { status: nextStatus }, Number(selectedCustomerData.revision));
+      setSelectedCustomerData(updated);
+      setNotice({ message: currentlyArchived ? "Abonné réactivé." : "Abonné archivé. Son historique reste consultable." });
+      await refresh();
+    } catch (error) { setNotice({ message: humanError(error), error: true }); }
+  }
+
+  function confirmMeterReplacement(oldSerial: string, newSerial: string, reason: string) {
+    return requestConfirmation({
+      title: "Remplacer ce compteur ?",
+      description: `Le compteur ${oldSerial} sera désactivé, sans supprimer ses relevés ni les factures associées. Le nouveau compteur ${newSerial} sera créé pour le même service. Motif : ${reason}`,
+      confirmLabel: "Confirmer le remplacement",
+      tone: "warning",
+    });
   }
 
   async function refreshServerStatus() {
@@ -544,6 +698,7 @@ export default function App() {
     if (!solarSaleDraft) return;
     try {
       await centralRequest("/v1/solar/sales", "POST", solarSaleDraft);
+      setDraftDirty(false);
       setSolarQuote(null);
       setSolarSaleDraft(null);
       setSolarSaleOpen(false);
@@ -552,106 +707,228 @@ export default function App() {
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
 
-  function navigateTo(nextView: View) {
+  function discardPendingDraft() {
+    setDraftDirty(false);
+    setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
+    setCustomerCreateOpen(false); setCustomerEditOpen(false);
+    setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null);
+  }
+
+  async function returnToInvoiceHistory() {
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la facture ?", description: "Cette facture n’est pas encore émise. Ses saisies seront effacées si vous revenez à l’historique.", confirmLabel: "Abandonner et continuer" })) return;
+    setDraftDirty(false);
+    setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
+    setInvoiceFormKey((key) => key + 1);
+    setInvoiceCustomerId(""); setInvoiceBillingPeriod(""); setInvoiceWaterQuantity("0");
+    setSelectedInvoice(null);
+    setInvoiceWorkspace("history");
+  }
+
+  async function returnToPaymentJournal() {
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner le règlement ?", description: "Ce règlement n’est pas encore enregistré. Les saisies seront effacées si vous revenez au journal.", confirmLabel: "Abandonner et continuer" })) return;
+    setDraftDirty(false);
+    setPaymentWorkspace("journal");
+  }
+
+  async function navigateTo(nextView: View, customerId?: string) {
+    if (nextView === view && !customerId) return false;
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous changez d’écran.", confirmLabel: "Abandonner et continuer" })) return false;
+    if (draftDirty) discardPendingDraft();
+    setViewHistory((history) => [...history, view]);
     setNotice(null);
+    if (customerId) setSelectedCustomer(customerId);
+    if (nextView === "invoices") {
+      setInvoiceWorkspace(customerId ? "create" : "history");
+      if (customerId) setInvoiceCustomerId(customerId);
+    }
+    if (nextView === "payments") setPaymentWorkspace(customerId ? "create" : "journal");
     setView(nextView);
+    return true;
+  }
+
+  async function openInvoiceCreation(customerId?: string) {
+    if (view !== "invoices") {
+      const navigated = await navigateTo("invoices", customerId);
+      if (!navigated) return;
+    } else if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous démarrez une nouvelle facture.", confirmLabel: "Abandonner et continuer" })) return;
+    if (draftDirty) discardPendingDraft();
+    if (customerId) setInvoiceCustomerId(customerId);
+    setInvoiceWorkspace("create");
+  }
+
+  async function openPaymentEntry(customerId?: string) {
+    if (view !== "payments") {
+      const navigated = await navigateTo("payments", customerId);
+      if (!navigated) return;
+    } else if (draftDirty && !await requestConfirmation({ title: "Abandonner le règlement ?", description: "Les champs du règlement non enregistré seront perdus si vous commencez un autre encaissement.", confirmLabel: "Abandonner et continuer" })) return;
+    if (draftDirty) discardPendingDraft();
+    setSelectedCustomer(customerId ?? "");
+    setPaymentWorkspace("create");
+  }
+
+  async function navigateSolarWorkspace(next: "sales" | "contracts") {
+    if (next === solarWorkspace) return;
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie solaire ?", description: "Les champs du formulaire solaire non envoyés seront perdus si vous changez d’onglet.", confirmLabel: "Abandonner et continuer" })) return;
+    if (draftDirty) discardPendingDraft();
+    setSolarSaleOpen(false);
+    setSolarQuote(null);
+    setSolarSaleDraft(null);
+    setSolarWorkspace(next);
+  }
+
+  async function navigateBack() {
+    if (!viewHistory.length) return;
+    if (draftDirty && !await requestConfirmation({ title: "Abandonner la saisie ?", description: "Les changements non enregistrés seront perdus si vous revenez à l’écran précédent.", confirmLabel: "Abandonner et revenir" })) return;
+    if (draftDirty) discardPendingDraft();
+    setView(viewHistory[viewHistory.length - 1]);
+    setViewHistory((history) => history.slice(0, -1));
+    setNotice(null);
   }
 
   const activePage = pageTitle[view];
-  const link = (id: View, label: string) => <button className="text-button" onClick={() => navigateTo(id)}>{label}</button>;
   const previewLines = rows<Row>(preview?.lines);
-  const previewElectricity = previewLines.find((line) => text(line.service_code).toUpperCase() === "ELECTRICITY");
-  const previewWater = previewLines.find((line) => text(line.service_code).toUpperCase() === "WATER");
-  const previewCommunication = previewLines.find((line) => text(line.service_code).toUpperCase() === "COMMUNICATION");
 
-  if (authChecking) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><div className="auth-card" role="status"><p className="eyebrow">VÉRIFICATION SÉCURISÉE</p><h2>Connexion au serveur SEL</h2><p className="muted">Vérification de la session et de la disponibilité du service central…</p></div></div></section>;
+  if (authChecking) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><div className="auth-card" role="status"><p className="eyebrow">VÉRIFICATION SÉCURISÉE</p><h2>Connexion au serveur SEL</h2><p className="muted">Vérification de la session et de la disponibilité du service central…</p></div></div></section>;
 
-  if (!session?.authenticated) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><form className="auth-card" onSubmit={(event) => void signIn(event)}><p className="eyebrow">ACCÈS SÉCURISÉ</p><h2>Connexion à SEL Facturation</h2><p className="muted">Connectez-vous avec votre compte SEL pour accéder à l’application.</p>{authMessage && <div className="notice error" role="alert">{authMessage}</div>}<label>Identifiant SEL<input name="identity_ref" autoComplete="username" required autoFocus /></label><label>Mot de passe<input name="password" type="password" autoComplete="current-password" required /></label><Button primary type="submit" disabled={authBusy || serverReachable === false}>{authBusy ? "Connexion…" : "Se connecter"}</Button>{serverReachable === false && <Button type="button" onClick={() => void retryServer()}>Réessayer la connexion</Button>}<p className="auth-help">Une connexion Internet est requise pour ouvrir et utiliser SEL Facturation.</p></form></div></section>;
+  if (!session?.authenticated) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Une application connectée au service central pour gérer les abonnés, les factures et les paiements.</p></div><small>Données métier gérées par le serveur SEL</small></div><div className="auth-panel"><form className="auth-card" onSubmit={(event) => void signIn(event)}><p className="eyebrow">ACCÈS SÉCURISÉ</p><h2>Connexion à SEL Facturation</h2><p className="muted">Connectez-vous avec votre compte SEL pour accéder à l’application.</p>{authMessage && <div className="notice error" role="alert">{authMessage}</div>}<label>Identifiant SEL<input name="identity_ref" autoComplete="username" required autoFocus /></label><label>Mot de passe<input name="password" type="password" autoComplete="current-password" required /></label><Button primary type="submit" disabled={authBusy || serverReachable === false}>{authBusy ? "Connexion…" : "Se connecter"}</Button>{serverReachable === false && <Button type="button" onClick={() => void retryServer()}>Réessayer la connexion</Button>}<p className="auth-help">Une connexion Internet est requise pour ouvrir et utiliser SEL Facturation.</p></form></div></section>;
 
-  if (serverReachable === false) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Les opérations sont traitées et conservées par le serveur central SEL.</p></div><small>Connexion au serveur requise</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">SERVICE CENTRAL</p><h2>Connexion au serveur interrompue</h2><p className="muted">Pour protéger l’exactitude des factures et des paiements, l’application est verrouillée jusqu’au rétablissement du service en ligne.</p>{notice?.message && <div className="notice error" role="alert">{notice.message}</div>}<div className="page-actions"><Button primary onClick={() => void retryServer()}>Réessayer</Button><Button onClick={() => void signOut()}>Se déconnecter</Button></div></div></div></section>;
+  if (serverReachable === false) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Une facturation claire,<br />sur votre poste SEL.</h1><p>Les opérations sont traitées et conservées par le serveur central SEL.</p></div><small>Connexion au serveur requise</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">SERVICE CENTRAL</p><h2>Connexion au serveur interrompue</h2><p className="muted">Pour protéger l’exactitude des factures et des paiements, l’application est verrouillée jusqu’au rétablissement du service en ligne.</p>{notice?.message && <div className="notice error" role="alert">{notice.message}</div>}<div className="page-actions"><Button primary onClick={() => void retryServer()}>Réessayer</Button><Button onClick={() => void signOut()}>Se déconnecter</Button></div></div></div></section>;
 
-  if (session.require_password_change) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Votre compte SEL,<br />sécurisé dès le départ.</h1><p>Modifiez votre mot de passe temporaire pour continuer.</p></div><small>Application connectée au serveur central</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">PREMIÈRE CONNEXION</p><h2>Changer le mot de passe</h2><PasswordChangeForm onComplete={() => { setSession({ authenticated: false }); setAuthMessage("Mot de passe modifié. Connectez-vous avec votre nouveau mot de passe."); }} /></div></div></section>;
+  if (session.require_password_change) return <section className="auth-screen"><div className="auth-brand"><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">SOCIÉTÉ D’ÉNERGIE DU LUALABA</p><h1>Votre compte SEL,<br />sécurisé dès le départ.</h1><p>Modifiez votre mot de passe temporaire pour continuer.</p></div><small>Application connectée au serveur central</small></div><div className="auth-panel"><div className="auth-card"><p className="eyebrow">PREMIÈRE CONNEXION</p><h2>Changer le mot de passe</h2><PasswordChangeForm onComplete={() => { setSession({ authenticated: false }); setAuthMessage("Mot de passe modifié. Connectez-vous avec votre nouveau mot de passe."); }} /></div></div></section>;
 
-  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
+  if (serverReady === false) return <section className="central-setup-screen"><header><img src="/assets/sel-logo-light.svg" alt="S.E.L. SASU" /><div><p className="eyebrow">CONFIGURATION CENTRALE</p><h1>Initialisation des référentiels</h1><p>Le serveur est connecté. Les opérations de facturation restent bloquées jusqu’à l’approbation des paramètres SEL.</p></div><Button onClick={() => void signOut()}>Se déconnecter</Button></header>{session.role === "ADMIN" ? <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} draftDirty={draftDirty} /> : <Panel title="Configuration administrateur requise"><p>Le service central est joignable, mais aucun référentiel commercial approuvé n’est actif. Demandez à un administrateur SEL de terminer la configuration.</p><Button onClick={() => void signOut()}>Se déconnecter</Button></Panel>}</section>;
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <button className="brand" aria-label="Accueil SEL" onClick={() => navigateTo("dashboard")}><img src="/assets/sel-logo-dark.svg" alt="S.E.L. SASU" /></button>
+      <button className="brand" aria-label="Accueil SEL" onClick={() => navigateTo("dashboard")}><img src="/assets/sel-logo-ux3.svg" alt="S.E.L. SASU" /></button>
       <nav aria-label="Navigation principale">
-        {navigation.map((item) => <button key={item.id} className={`nav-item${view === item.id ? " active" : ""}`} aria-current={view === item.id ? "page" : undefined} onClick={() => navigateTo(item.id)}>
+        {navigation.map((item) => <button key={item.id} className={`nav-item${domainByView[view] === item.id ? " active" : ""}`} aria-current={domainByView[view] === item.id ? "page" : undefined} onClick={() => navigateTo(item.target)}>
           <NavIcon name={item.icon} /><span>{item.label}</span>
         </button>)}
       </nav>
+      <button className={`server-nav${view === "server" ? " active" : ""}`} aria-current={view === "server" ? "page" : undefined} onClick={() => navigateTo("server")}><span className="status-dot" aria-hidden="true" />État du serveur · diagnostic</button>
       <div className="sidebar-foot"><span className="eyebrow">SERVICE CENTRAL</span><p>Connexion requise pour toute opération</p></div>
     </aside>
 
-    <main className="content">
-      <header className="topbar"><p className="eyebrow">{activePage.context}</p>
+    <main className="content" onChange={(event) => { if ((event.target as HTMLElement).closest("form[data-preserve-draft]")) setDraftDirty(true); }}>
+      <header className="topbar"><div className="topbar-context">{viewHistory.length > 0 && <Button className="back-button" onClick={navigateBack} aria-label="Revenir à l’écran précédent">← Retour</Button>}<p className="eyebrow">{activePage.context}</p></div>
         <div className="connection-status"><span className="status-dot" aria-hidden="true" />{serverStatus?.status === "CENTRAL_CONNECTED" ? "Serveur SEL · connecté" : "Serveur SEL · état inconnu"}<Button onClick={() => void signOut()}>Se déconnecter</Button></div>
       </header>
+      {domainViews[domainByView[view]] && <nav className="workspace-tabs" aria-label={`Pages ${navigation.find((item) => item.id === domainByView[view])?.label ?? ""}`}>
+        {domainViews[domainByView[view]]?.map((item) => <button key={item.id} className={`workspace-tab${view === item.id ? " active" : ""}`} aria-current={view === item.id ? "page" : undefined} onClick={() => navigateTo(item.id)}>{item.label}</button>)}
+      </nav>}
+      {view === "solar" && <nav className="workspace-tabs" aria-label="Pages solaire">
+        <button className={`workspace-tab${solarWorkspace === "sales" ? " active" : ""}`} aria-current={solarWorkspace === "sales" ? "page" : undefined} onClick={() => void navigateSolarWorkspace("sales")}>Catalogue et ventes</button>
+        <button className={`workspace-tab${solarWorkspace === "contracts" ? " active" : ""}`} aria-current={solarWorkspace === "contracts" ? "page" : undefined} onClick={() => void navigateSolarWorkspace("contracts")}>Contrats et échéanciers</button>
+      </nav>}
       {notice && <div className={`notice${notice.error ? " error" : ""}`} role={notice.error ? "alert" : "status"}>{notice.message}<button aria-label="Fermer le message" onClick={() => setNotice(null)}>×</button></div>}
       {loading && <div className="loading-line" role="status">Chargement des données centrales…</div>}
 
       {view === "dashboard" && <>
-        <div className="page-heading"><div><p className="eyebrow">ACTIVITÉ SEL</p><h1>Vue d’ensemble</h1><p className="muted">Dossiers et opérations consultés directement sur le serveur central.</p></div><Button primary onClick={() => navigateTo("invoices")}>Nouvelle facture</Button></div>
+        <div className="page-heading"><div><p className="eyebrow">SEL / ACCUEIL / OPÉRATIONS</p><h1>Bienvenue dans SEL Facturation</h1><p className="muted">Accédez directement aux opérations, sans parcourir plusieurs tableaux.</p></div><Button primary onClick={() => void openInvoiceCreation()}>Nouvelle facture</Button></div>
         <div className="metrics">
           <Metric label="Abonnés" value={customers.length} note="Dossiers chargés du serveur SEL" />
           <Metric label="Factures" value={invoices.length} note="Documents enregistrés au serveur" />
           <Metric label="Encaissements" value={payments.length} note="Règlements renvoyés par le serveur" />
-          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Source unique : serveur SEL" />
+          <Metric label="Serveur" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Connecté" : "—"} note="Valeur du serveur SEL" />
         </div>
-        <Panel title="Dossiers / activité récente" action={link("server", "État du serveur →")}>
-          <Table headers={["Référence", "Abonné", "Opération", "Montant", "État"]} empty="Aucune activité récente retournée par le serveur." data={recentActivity.map(({ row, kind, reference, customer, amount }) => [<strong>{reference}</strong>, customer, kind, formatMoney(amount, row.currency), <Status value={row.status} />])} />
-        </Panel>
+        <div className="home-workspace">
+          <Panel title="Que souhaitez-vous faire ?">
+            <p className="muted">Sélectionnez une action pour retrouver directement le bon parcours.</p>
+            <div className="quick-actions">
+              <button onClick={() => navigateTo("customers")}><strong>Gérer les abonnés <span aria-hidden="true">›</span></strong><small>Fiches, services et compteurs</small></button>
+              <button onClick={() => void openInvoiceCreation()}><strong>Émettre une facture <span aria-hidden="true">›</span></strong><small>Eau et électricité sur le même document</small></button>
+              <button onClick={() => void openPaymentEntry()}><strong>Encaisser un règlement <span aria-hidden="true">›</span></strong><small>Paiement, affectation et reçu</small></button>
+              <button onClick={() => navigateTo("readings")}><strong>Saisir un relevé <span aria-hidden="true">›</span></strong><small>Index, contrôle et correction</small></button>
+              <button onClick={() => navigateTo("solar")}><strong>Vendre un kit solaire <span aria-hidden="true">›</span></strong><small>Catalogue, vente et échéancier</small></button>
+              {session.role === "ADMIN" && <button onClick={() => navigateTo("admin")}><strong>Paramétrer SEL <span aria-hidden="true">›</span></strong><small>Utilisateurs et référentiels approuvés</small></button>}
+            </div>
+          </Panel>
+          <Panel title="Vos repères">
+            <ul className="home-guidance"><li>Une action principale par étape.</li><li>Vous pouvez revenir sans publier un brouillon.</li><li>Les écritures validées se corrigent avec traçabilité.</li><li>Le serveur est requis pour toute opération métier.</li><li>Les données affichées viennent de l’API SEL.</li></ul>
+          </Panel>
+        </div>
       </>}
 
       {view === "customers" && (selectedCustomer ? <>
-        <PageHeading eyebrow="CORE / CLIENTS" title="Dossier abonné" description={`${text(selectedCustomerData?.customer_code)} · ${text(selectedCustomerData?.legal_name)}`} action={<div className="page-actions"><Button aria-label="Retour au répertoire" onClick={() => { setSelectedCustomer(""); setSelectedCustomerData(null); setStatement(null); setCustomerEditOpen(false); }}>Retour au répertoire</Button><Button primary onClick={() => setCustomerEditOpen((open) => !open)}>{customerEditOpen ? "Annuler la modification" : "Modifier la fiche"}</Button></div>} />
+        <PageHeading eyebrow="CORE / CLIENTS" title="Dossier abonné" description={`${text(selectedCustomerData?.customer_code)} · ${text(selectedCustomerData?.legal_name)}`} action={<div className="page-actions"><Button aria-label="Retour au répertoire" onClick={async () => {
+          if (draftDirty && !await requestConfirmation({ title: "Abandonner les modifications ?", description: "Les changements non enregistrés dans la fiche seront perdus.", confirmLabel: "Abandonner et revenir" })) return;
+          if (draftDirty) discardPendingDraft();
+          setSelectedCustomer(""); setSelectedCustomerData(null); setStatementState({ customerId: "", data: null, loading: false, error: "" }); setCustomerEditOpen(false);
+        }}>Retour au répertoire</Button><Button onClick={() => navigateTo("readings", selectedCustomer)}>Relevés</Button><Button onClick={() => navigateTo("payments", selectedCustomer)}>Encaisser</Button><Button primary onClick={() => navigateTo("invoices", selectedCustomer)}>Nouvelle facture</Button><Button onClick={() => { if (customerEditOpen) setDraftDirty(false); setCustomerEditOpen((open) => !open); }}>{customerEditOpen ? "Annuler la modification" : "Modifier la fiche"}</Button><Button onClick={() => void toggleCustomerArchive()}>{text(selectedCustomerData?.status).toUpperCase() === "ARCHIVED" ? "Réactiver" : "Archiver"}</Button></div>} />
         <Panel title={`Fiche abonné · ${text(selectedCustomerData?.customer_code)}`}>
-          {selectedCustomerData ? customerEditOpen ? <form className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
-            <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required /></label>
-            <label>Catégorie tarifaire<select name="customer_category" defaultValue={text(selectedCustomerData.customer_category, "")} required><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
+          {selectedCustomerData ? customerEditOpen ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void updateCustomer(event)}>
+            <label>Nom / raison sociale<input name="legal_name" defaultValue={text(selectedCustomerData.legal_name, "")} required disabled={customerEditBusy} /></label>
+            <label>Catégorie tarifaire<select name="customer_category" defaultValue={text(selectedCustomerData.customer_category, "")} required disabled={customerEditBusy}><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
             <label>Révision du dossier<input value={text(selectedCustomerData.revision)} readOnly /></label>
-            <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} /></label>
-            <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} /></label>
-            <div className="form-actions span-two"><Button type="button" onClick={() => setCustomerEditOpen(false)}>Annuler</Button><Button primary type="submit">Enregistrer les modifications</Button></div>
+            <label className="span-two">Adresse<input name="address" defaultValue={text(selectedCustomerData.address, "")} disabled={customerEditBusy} /></label>
+            <label>Téléphone<input name="phone" defaultValue={text(selectedCustomerData.phone, "")} disabled={customerEditBusy} /></label>
+            <div className="form-actions span-two"><Button type="button" disabled={customerEditBusy} onClick={() => { setCustomerEditOpen(false); setDraftDirty(false); }}>Annuler</Button><Button primary type="submit" disabled={customerEditBusy}>{customerEditBusy ? "Vérification…" : "Vérifier les modifications"}</Button></div>
           </form> : <dl className="customer-details"><div><dt>Nom / raison sociale</dt><dd>{text(selectedCustomerData.legal_name)}</dd></div><div><dt>Code abonné</dt><dd>{text(selectedCustomerData.customer_code)}</dd></div><div><dt>Catégorie tarifaire</dt><dd>{text(selectedCustomerData.customer_category, "À compléter")}</dd></div><div><dt>Adresse</dt><dd>{text(selectedCustomerData.address)}</dd></div><div><dt>Téléphone</dt><dd>{text(selectedCustomerData.phone)}</dd></div><div><dt>Révision du dossier</dt><dd>{text(selectedCustomerData.revision)}</dd></div></dl> : <div className="empty-state">Chargement du dossier abonné…</div>}
         </Panel>
-        <ServiceAccountsManager customerId={selectedCustomer} />
-        <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} customerCode={text(selectedCustomerData?.customer_code)} statement={statement} />
+        <ServiceAccountsManager customerId={selectedCustomer} canManageMeters={["ADMIN", "SUPERVISOR", "BILLING_AGENT"].includes(text(session?.role).toUpperCase())} onConfirmReplacement={confirmMeterReplacement} confirmAction={requestConfirmation} />
+        <CustomerStatement customerName={text(selectedCustomerData?.legal_name, selectedCustomer)} customerCode={text(selectedCustomerData?.customer_code)} statement={currentStatement?.data ?? null} loading={currentStatement?.loading ?? Boolean(selectedCustomer)} error={currentStatement?.error ?? ""} />
       </> : <>
-        <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => setCustomerCreateOpen((open) => !open)}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
+      <PageHeading eyebrow="CORE / CLIENTS" title="Répertoire des abonnés" description="Rechercher un dossier et consulter sa situation." action={<Button primary onClick={() => { if (customerCreateOpen) setDraftDirty(false); setCustomerCreateOpen((open) => !open); }}>{customerCreateOpen ? "Fermer le formulaire" : "+ Ajouter un abonné"}</Button>} />
         <div className="metrics customer-metrics">
           <Metric label="Abonnés enregistrés" value={customers.length} note="Dossiers gérés par le serveur SEL" />
           <Metric label="Factures" value={invoices.length} note="Documents enregistrés au serveur" />
           <Metric label="Versements" value={payments.length} note="Règlements enregistrés au serveur" />
           <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Source unique : serveur SEL" />
         </div>
-        {customerCreateOpen && <Panel title="Nouvel abonné"><form className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
-            <label>Code abonné<input name="customer_code" required /></label><label>Nom / raison sociale<input name="legal_name" required /></label>
-            <label>Catégorie tarifaire<select name="customer_category" required defaultValue=""><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
-            <label>Adresse<input name="address" /></label><label>Téléphone<input name="phone" /></label>
+        {customerCreateOpen && <Panel title="Créer un abonné"><form data-preserve-draft className="form-grid customer-create-form" onSubmit={(event) => void createCustomer(event)}>
+            <label>Code abonné<input name="customer_code" required disabled={customerCreateBusy} /></label><label>Nom / raison sociale<input name="legal_name" required disabled={customerCreateBusy} /></label>
+            <label>Catégorie tarifaire<select name="customer_category" required defaultValue="" disabled={customerCreateBusy}><option value="">Sélectionner…</option><option value="RESIDENTIAL">Résidentiel</option><option value="COMMERCIAL">Commercial</option></select></label>
+            <label>Adresse<input name="address" disabled={customerCreateBusy} /></label><label>Téléphone<input name="phone" disabled={customerCreateBusy} /></label>
             <p className="help span-two">Les informations pourront être complétées dans le dossier de l’abonné.</p>
-            <div className="form-actions span-two"><Button primary type="submit">Enregistrer l’abonné</Button></div>
+            <div className="form-actions span-two"><Button primary type="submit" disabled={customerCreateBusy}>{customerCreateBusy ? "Vérification…" : "Vérifier la création"}</Button></div>
           </form></Panel>}
-        <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "Action"]} empty="Aucun abonné retourné par le serveur." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); setCustomerEditOpen(false); }}>Ouvrir le dossier →</button>])} /></Panel>
+        <Panel title="Abonnés enregistrés" action={<input className="table-search" aria-label="Rechercher un abonné" placeholder="Code, nom ou téléphone" value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)} />}><Table headers={["Code", "Nom / raison sociale", "Adresse", "État", "Action"]} empty="Aucun abonné retourné par le serveur." data={filteredCustomers.map((row) => [<strong>{text(row.customer_code)}</strong>, text(row.legal_name), text(row.address), <Status value={row.status} />, <button className="text-button" onClick={() => { setSelectedCustomer(text(row.customer_id ?? row.id, "")); setSelectedCustomerData(row); setCustomerEditOpen(false); }}>Ouvrir le dossier →</button>])} /></Panel>
       </>)}
 
-      {view === "readings" && <MeterReadingsView customers={customers} onOpenInvoices={() => navigateTo("invoices")} onOpenCustomer={(customerId) => {
+      {view === "readings" && <MeterReadingsView customers={customers} initialCustomerId={selectedCustomer} canCorrect={["ADMIN", "SUPERVISOR"].includes(text(session?.role).toUpperCase())} onOpenInvoices={() => navigateTo("invoices", selectedCustomer)} onOpenCustomer={(customerId) => {
         const customer = customers.find((item) => text(item.customer_id ?? item.id) === customerId);
         if (!customer) return;
         setSelectedCustomer(customerId);
         setSelectedCustomerData(customer);
         setCustomerEditOpen(false);
-        navigateTo("customers");
+        navigateTo("customers", customerId);
       }} />}
 
       {view === "invoices" && <>
-        <div hidden={Boolean(preview)}>
-          <div className="page-heading"><div><p className="eyebrow">CORE / FACTURATION</p><h1>Factures eau + électricité</h1><p className="muted">Les deux services figurent au document, y compris l’eau à 0 m³. Le calcul est effectué par Rust.</p></div><span className="tag">USD</span></div>
+        {!preview && invoiceWorkspace === "history" && <>
+          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / HISTORIQUE" title="Historique des factures" description="Rechercher, ouvrir et remettre des factures aux clients." action={<Button primary onClick={() => void openInvoiceCreation()}>Nouvelle facture</Button>} />
+          <div className="metrics invoice-history-metrics">
+            <Metric label="Factures" value={invoices.length} note="Données du serveur SEL" />
+            <Metric label="Périodes" value={new Set(invoices.map((row) => text(row.period ?? row.billing_period, "")).filter(Boolean)).size} note="Périodes facturées" />
+            <Metric label="Documents" value={invoices.filter((row) => text(row.invoice_id ?? row.id, "")).length} note="Références disponibles au serveur" />
+            <Metric label="Statut" value={invoices.filter((row) => text(row.status).toUpperCase() === "CENTRAL_ACCEPTED").length} note="Confirmées par le serveur SEL" />
+          </div>
+          <div className="invoice-history-layout">
+            <Panel title="Factures enregistrées" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
+              <p className="help invoice-history-caption">Les informations et statuts affichés proviennent du serveur SEL.</p>
+              <Table headers={["Facture", "Abonné", "Période", "État", "Actions"]} empty={loading ? "Chargement des factures du serveur…" : "Aucune facture retournée par le serveur."} data={filteredInvoices.map((row) => {
+                const invoiceId = text(row.invoice_id ?? row.id, "");
+                const invoiceStatus = text(row.status).toUpperCase();
+                return [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", invoiceId)}>Document PDF</Button>{["ADMIN", "SUPERVISOR"].includes(text(session?.role).toUpperCase()) && invoiceId && !["VOID", "CANCELLED"].includes(invoiceStatus) && <Button onClick={() => beginFinancialAction({ kind: "void-invoice", id: invoiceId, reference: text(row.invoice_number ?? invoiceId) })}>Annuler avec motif</Button>}</div>];
+              })} />
+            </Panel>
+            <Panel title="Actions suivantes">
+              <p className="help">Choisissez une étape ou ouvrez une facture existante.</p>
+              <div className="invoice-next-actions">
+                <Button onClick={() => void openInvoiceCreation()}>Émettre une facture combinée</Button>
+                <Button disabled={!filteredInvoices.length} onClick={() => filteredInvoices[0] && void openInvoice(filteredInvoices[0])}>Détail d’une facture</Button>
+              </div>
+              <p className="help">La génération PDF est lancée depuis la ligne de facture et reste sur ce poste.</p>
+            </Panel>
+          </div>
+          {selectedInvoice && <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />}
+        </>}
+        {invoiceWorkspace === "create" && <div hidden={Boolean(preview)}>
+          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / ÉMISSION" title="Émettre une facture combinée" description="Électricité et eau sur un seul document, même si l’eau vaut 0 m³." action={<Button onClick={() => void returnToInvoiceHistory()}>Historique des factures</Button>} />
           <div className="invoice-workspace">
             <Panel title="Paramètres de facturation">
-              <form id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
+              <form data-preserve-draft id="utility-invoice-form" key={invoiceFormKey} className="form-grid invoice-form" onSubmit={previewInvoice} onChange={() => { setPreview(null); setInvoiceDraft(null); }}>
                 <label>Abonné<select name="customer_id" required value={invoiceCustomerId} onChange={(event) => setInvoiceCustomerId(event.target.value)}><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
                 <label>Période de facturation<input name="billing_period" type="month" required value={invoiceBillingPeriod} onChange={(event) => setInvoiceBillingPeriod(event.target.value)} /></label>
                 <label>Électricité consommée (kWh)<input name="electricity_quantity" type="number" min="0" step="0.01" defaultValue="0" required /></label>
@@ -661,47 +938,87 @@ export default function App() {
                 <label className="check-row invoice-zero-confirm"><input type="checkbox" checked={zeroConfirmed} onChange={(event) => setZeroConfirmed(event.target.checked)} /> Je confirme que le relevé d’eau est exactement de 0 m³.</label>
               </form>
             </Panel>
-            <aside className="panel invoice-summary" aria-label="Récapitulatif de la facture">
-              <p className="eyebrow">RÉCAPITULATIF</p>
-              <h2>Facture combinée</h2>
-              <p className="muted">Électricité + eau · deux lignes obligatoires</p>
+            <aside className="panel invoice-summary" aria-label="Actions suivantes">
+              <p className="eyebrow">ÉMISSION</p>
+              <h2>Actions suivantes</h2>
+              <p className="muted">Vérifiez l’abonné, la période et les relevés avant de calculer la facture.</p>
               <div className="invoice-summary-empty"><strong>À calculer</strong><span>Le montant s’affichera après vérification par le moteur Rust.</span></div>
-              <span className="status-badge">En attente du calcul</span>
-              <p className="help invoice-summary-help">Les calculs et l’autorisation restent gérés par le moteur Rust.</p>
-              <Button primary type="submit" form="utility-invoice-form" disabled={!invoiceTariffRevision}>Prévisualiser la facture</Button>
+              <span className="status-badge pending">Aucune facture émise</span>
+              <p className="help invoice-summary-help">Les tarifs, les taxes et les montants sont vérifiés par Rust avant l’émission.</p>
+              <div className="invoice-summary-actions">
+                <Button primary type="submit" form="utility-invoice-form" disabled={!invoiceTariffRevision}>Prévisualiser la facture</Button>
+                <Button onClick={() => void returnToInvoiceHistory()}>Historique des factures</Button>
+              </div>
             </aside>
           </div>
-          <Panel title="Historique des factures" action={<input className="table-search" aria-label="Rechercher une facture" placeholder="Référence, abonné ou période" value={invoiceFilter} onChange={(event) => setInvoiceFilter(event.target.value)} />}>
-            <Table headers={["Référence", "Abonné", "Période", "État", "Actions"]} empty="Aucune facture retournée par le serveur." data={filteredInvoices.map((row) => [<strong>{text(row.invoice_number ?? row.invoice_id)}</strong>, text(row.customer_name ?? row.customer_id), text(row.period ?? row.billing_period), <Status value={row.status} />, <div className="page-actions"><button className="text-button" onClick={() => void openInvoice(row)}>Détail</button><Button disabled={documentBusy} onClick={() => void openDocument("invoice", row.invoice_id ?? row.id)}>Document PDF</Button></div>])} />
-          </Panel>
-          {selectedInvoice && <>
-            <p className="muted">Période {text(selectedInvoice.billing_period)} · Échéance {text(selectedInvoice.due_date)} · <Status value={selectedInvoice.status} /></p>
-            <Preview data={selectedInvoice} title={`Détail de la facture · ${text(selectedInvoice.invoice_number ?? selectedInvoice.invoice_id)}`} action={<Button onClick={() => setSelectedInvoice(null)}>Fermer</Button>} />
-          </>}
-        </div>
+        </div>}
         {preview && <>
-          <PageHeading eyebrow="CORE / FACTURATION" title="Prévisualisation de facture" description="Vérifier les lignes, les taxes et les références avant d’émettre." action={<div className="page-actions"><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Modifier la saisie</Button><Button onClick={() => { setPreview(null); setInvoiceDraft(null); }}>Retour à l’historique des factures</Button><Button primary onClick={() => void confirmInvoice()}>Émettre la facture</Button></div>} />
+          <PageHeading eyebrow="SEL / FACTURATION / FACTURES / VÉRIFICATION" title="Vérifier une facture" description="Relisez les lignes, les taxes et le total avant l’émission définitive." action={<Button onClick={() => { setPreview(null); setInvoiceDraft(null); setInvoiceWorkspace("create"); }}>Corriger la saisie</Button>} />
           <div className="invoice-preview-metrics metrics">
-            <Metric label="Électricité" value={previewElectricity ? formatQuantity(previewElectricity.quantity, previewElectricity.unit) : "—"} note={previewElectricity ? `${formatMoney(previewElectricity.subtotal, preview.currency)} hors taxe` : "Ligne indisponible"} />
-            <Metric label="Eau" value={previewWater ? formatQuantity(previewWater.quantity, previewWater.unit) : "—"} note={previewWater ? formatMoney(previewWater.total, preview.currency) : "Ligne indisponible"} />
-            <Metric label="Ligne de communication" value={previewCommunication ? formatMoney(previewCommunication.subtotal, preview.currency) : "—"} note="Forfait SEL hors TVA" />
-            <Metric label="Taxes" value={formatMoney(preview.tax, preview.currency)} note="Calcul retourné par Rust" />
-            <Metric label="Montant total" value={formatMoney(preview.total, preview.currency)} note="À confirmer avant émission" />
+            <Metric label="Abonné" value={text(invoiceCustomer?.customer_code, "—")} note={text(invoiceCustomer?.legal_name, "Dossier sélectionné")} />
+            <Metric label="Période" value={invoiceBillingPeriod || "—"} note="Période de facturation" />
+            <Metric label="Lignes" value={previewLines.length} note="Prestations calculées par Rust" />
+            <Metric label="Total TTC" value={formatMoney(preview.total, preview.currency)} note="Montant calculé par le moteur Rust" />
           </div>
-          <Preview data={preview} title="Lignes de la facture" />
+          <div className="invoice-verification-layout">
+            <Preview data={preview} title="Aperçu de facture" />
+            <Panel title="Actions suivantes">
+              <p className="help">Aucune facture n’est encore émise. Vérifiez le document, puis confirmez son enregistrement central.</p>
+              <span className="status-badge pending">En attente de confirmation</span>
+              <div className="invoice-next-actions">
+                <Button onClick={() => { setPreview(null); setInvoiceDraft(null); setInvoiceWorkspace("create"); }}>Corriger la saisie</Button>
+                <Button onClick={() => void returnToInvoiceHistory()}>Retour à l’historique</Button>
+                <Button primary disabled={invoiceIssueBusy} onClick={() => void confirmInvoice()}>{invoiceIssueBusy ? "Émission en cours…" : "Confirmer l’émission"}</Button>
+              </div>
+            </Panel>
+          </div>
           <p className="help invoice-preview-status" role="status">Le calcul et les taxes viennent du moteur Rust. Cette prévisualisation n’a pas encore créé de facture.</p>
         </>}
       </>}
 
       {view === "payments" && <>
-        <PageHeading eyebrow="FINANCE / CAISSE" title="Journal de caisse" description="Enregistrer un règlement et l’affecter à une créance du même abonné." />
-        <PaymentForm customers={customers} sales={sales} onSubmit={submit} />
-        <Panel title="Encaissements enregistrés"><Table className="payment-table" headers={["Référence", "Date et heure", "Montant", "Mode", "État", "Document"]} empty="Aucun encaissement retourné par le serveur." data={payments.map((row) => [<strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong>, formatDateTime(row.paid_at ?? row.occurred_at), formatMoney(row.amount_received ?? row.received_amount, row.currency), domainLabel(row.method), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("payment", row.payment_id ?? row.id)}>Reçu PDF</Button>])} /></Panel>
+        {paymentWorkspace === "journal" && <>
+          <PageHeading eyebrow="SEL / PAIEMENTS / ENCAISSEMENTS / JOURNAL" title="Journal de caisse" description="Historique des paiements retournés par le service central." action={<Button primary onClick={() => void openPaymentEntry()}>Enregistrer un paiement</Button>} />
+          <div className="metrics payment-journal-metrics">
+            <Metric label="Règlements" value={payments.length} note="Enregistrements du serveur SEL" />
+            <Metric label="Confirmés" value={payments.filter((row) => text(row.status).toUpperCase() === "CENTRAL_ACCEPTED").length} note="Validés par le service central" />
+            <Metric label="À examiner" value={payments.filter((row) => ["CONFLICT_REQUIRES_REVIEW", "REJECTED"].includes(text(row.status).toUpperCase())).length} note="Conflits ou refus retournés par le serveur" />
+            <Metric label="Reçus disponibles" value={payments.filter((row) => text(row.payment_id ?? row.id, "")).length} note="Données structurées consultables" />
+          </div>
+          <div className="payment-journal-layout">
+            <Panel title="Opérations de caisse"><p className="help payment-journal-caption">Les références, montants et statuts proviennent du serveur SEL.</p><Table className="payment-table" headers={["Référence", "Client", "Montant", "Mode", "État", "Document / corrections"]} empty={loading ? "Chargement des règlements du serveur…" : "Aucun règlement retourné par le serveur."} data={payments.map((row) => {
+          const paymentId = text(row.payment_id ?? row.id, "");
+          const paymentAmount = text(row.amount_received ?? row.received_amount, "");
+          const canReverse = ["ADMIN", "CASHIER", "SUPERVISOR"].includes(text(session?.role).toUpperCase()) && paymentId && text(row.status).toUpperCase() === "CENTRAL_ACCEPTED";
+          return [<div className="payment-reference"><strong title={text(row.payment_number ?? row.payment_id)}>{text(row.payment_number ?? row.payment_id)}</strong><small>{formatDateTime(row.paid_at ?? row.occurred_at)}</small></div>, customerLabel(row.customer_id, customers), formatMoney(paymentAmount, row.currency), domainLabel(row.method), <Status value={row.status} />, <div className="page-actions"><Button disabled={documentBusy} onClick={() => void openDocument("payment", paymentId)}>Reçu PDF</Button>{canReverse && <Button onClick={() => beginFinancialAction({ kind: "reverse-payment", id: paymentId, amount: paymentAmount, reference: text(row.payment_number ?? paymentId) })}>Contre-passer</Button>}</div>];
+          })} /></Panel>
+            <Panel title="Actions suivantes">
+              <p className="help">Choisissez une étape ou ouvrez le reçu d’un règlement existant.</p>
+              <div className="payment-journal-actions">
+                <Button onClick={() => void openPaymentEntry()}>Enregistrer un règlement</Button>
+                <Button disabled={!payments.length} onClick={() => payments[0] && void openDocument("payment", payments[0].payment_id ?? payments[0].id)}>Détail d’un règlement</Button>
+                <Button onClick={() => void navigateTo("receivables")}>Suivi des créances</Button>
+              </div>
+              <p className="help">Le reçu PDF est créé sur ce poste à partir des données structurées centrales.</p>
+            </Panel>
+          </div>
+        </>}
+        {paymentWorkspace === "create" && <>
+          <PageHeading eyebrow="SEL / PAIEMENTS / ENCAISSEMENTS / NOUVEAU" title="Enregistrer un paiement" description="Affectez le règlement à une ou plusieurs créances du même abonné." action={<Button onClick={() => void returnToPaymentJournal()}>Journal des paiements</Button>} />
+          <PaymentForm customers={customers} sales={sales} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onSubmit={submit} />
+        </>}
       </>}
 
       {view === "solar" && <>
-        <PageHeading eyebrow="COMMERCE / FINANCE" title="Catalogue des kits solaires" description="Consultez les produits approuvés et les ventes enregistrées par le serveur." action={<Button primary onClick={() => setSolarSaleOpen(true)}>Créer une vente</Button>} />
-        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); }}>Fermer</Button>}><form className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
+        <PageHeading eyebrow="COMMERCE / FINANCE" title={solarWorkspace === "sales" ? "Catalogue des kits solaires" : "Contrats et échéanciers"} description={solarWorkspace === "sales" ? "Consultez les produits approuvés et les ventes enregistrées par le serveur." : "Vérifiez les échéances d’une vente approuvée avant de créer son contrat."} action={solarWorkspace === "sales" ? <Button primary onClick={() => { setSolarWorkspace("sales"); setSolarSaleOpen(true); }}>Créer une vente</Button> : undefined} />
+        <div className="metrics solar-metrics">
+          <Metric label="Produits disponibles" value={solarProducts.length} note="Catalogue central approuvé" />
+          <Metric label="Ventes enregistrées" value={sales.length} note="Historique chargé du serveur" />
+          <Metric label="Contrats à échéances" value={sales.filter((sale) => Boolean(sale.installment_plan_id)).length} note="Échéanciers associés" />
+          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Opérations centralisées" />
+        </div>
+        {solarWorkspace === "sales" ? <>
+        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); setDraftDirty(false); }}>Fermer</Button>}><form data-preserve-draft className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
           <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
           <label>Produit approuvé<select name="product_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
           <label>Devise du catalogue<select name="currency" defaultValue={text(solarProducts[0]?.currency, "USD")} required>{[...new Set(solarProducts.map((product) => text(product.currency, "")))].filter(Boolean).map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label>
@@ -710,23 +1027,28 @@ export default function App() {
           <div className="form-actions span-two"><Button primary type="submit">Vérifier le devis</Button></div>
         </form></Panel>}
         {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
-        <div className="metrics solar-metrics">
-          <Metric label="Produits disponibles" value={solarProducts.length} note="Catalogue central approuvé" />
-          <Metric label="Ventes enregistrées" value={sales.length} note="Historique chargé du serveur" />
-          <Metric label="Contrats à échéances" value={sales.filter((sale) => Boolean(sale.installment_plan_id)).length} note="Échéanciers associés" />
-          <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Opérations centralisées" />
-        </div>
         <Panel title="Catalogue approuvé">
           <Table headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]} empty="Aucun produit solaire approuvé et applicable n’est disponible sur le serveur." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), product.category ? domainLabel(product.category) : "—", formatMoney(product.price_reference, product.currency), <span className="status-badge success">Disponible</span>])} />
         </Panel>
         <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
-        <SolarContractManager sales={sales} customers={customers} onCreated={refresh} />
+        </> :
+        <SolarContractManager sales={sales} customers={customers} onCreated={refresh} confirmAction={requestConfirmation} onRecordPayment={async (customerId, receivableId, scheduleId) => {
+          if (await navigateTo("payments", customerId)) setPaymentPrefill({ receivableId, scheduleId });
+        }} />
+        }
       </>}
 
       {view === "receivables" && <>
         <PageHeading eyebrow="FINANCE / SOLDES" title="Suivi des créances" description="Soldes et obligations renvoyés par le serveur, sans recalcul dans l’interface." />
         <Panel title="Situation d’un abonné"><label className="customer-picker">Abonné<select value={selectedCustomer} onChange={(event) => setSelectedCustomer(event.target.value)}><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-          {statement ? <Table headers={["Référence", "Nature", "Solde", "Situation"]} empty="Aucune créance associée." data={rows<Row>(statement.receivables).map((row) => [<strong>{text(row.receivable_id ?? row.id)}</strong>, domainLabel(row.source_type), formatMoney(row.balance, row.currency), <Status value={row.status} />])} /> : <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
+          {(currentStatement?.loading || (!currentStatement && Boolean(selectedCustomer))) && <div className="empty-state" role="status">Chargement de la situation de cet abonné…</div>}
+          {currentStatement?.error && <div className="notice error" role="alert">{currentStatement.error}</div>}
+          {currentStatement?.data && <Table headers={["Référence", "Nature", "Solde", "Situation", "Actions"]} empty="Aucune créance associée." data={rows<Row>(currentStatement.data.receivables).map((row) => {
+            const receivableId = text(row.receivable_id ?? row.id, "");
+            return [<strong>{receivableId}</strong>, domainLabel(row.source_type), formatMoney(row.balance, row.currency), <Status value={row.status} />, receivableId && Number(row.balance) > 0 ? <Button onClick={() => beginFinancialAction({ kind: "credit-receivable", id: receivableId, reference: receivableId })}>Créer un avoir</Button> : "—"];
+          })} />}
+          {!selectedCustomer && <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
+          {selectedCustomer && currentStatement && !currentStatement.loading && !currentStatement.error && !currentStatement.data && <div className="empty-state">Aucune situation financière n’est disponible pour cet abonné.</div>}
         </Panel>
       </>}
 
@@ -737,13 +1059,50 @@ export default function App() {
 
       {view === "admin" && <>
         <PageHeading eyebrow="ADMIN / RÉFÉRENTIELS" title="Administration" description="Les écrans administratifs suivent les permissions et les paramètres effectivement exposés par le service Rust." />
-        <AdminConsole session={session} onSignedOut={() => void signOut()} />
+        <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} draftDirty={draftDirty} />
       </>}
 
       {documentPreview && <div className="document-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDocumentPreview(); }}>
         <section className="document-preview-dialog" role="dialog" aria-modal="true" aria-label={documentPreview.title}>
           <header className="document-preview-toolbar"><div><p className="eyebrow">DOCUMENT · A4</p><h2>{documentPreview.title}</h2><p className="muted">Aperçu préparé à partir des données renvoyées par le serveur SEL.</p></div><div className="page-actions"><Button onClick={() => window.print()}>Imprimer</Button><Button primary onClick={() => void saveDocument()}>Enregistrer le PDF</Button><Button aria-label="Fermer l’aperçu" onClick={closeDocumentPreview}>Fermer</Button></div></header>
       <ClientPdfPreview blob={documentPreview.blob} />
+        </section>
+      </div>}
+    {financialAction && <div className="action-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !financialActionBusy) setFinancialAction(null); }}>
+        <section className="action-dialog" role="dialog" aria-modal="true" aria-labelledby="financial-action-title" aria-describedby="financial-action-description" onKeyDown={(event) => {
+          if (event.key === "Escape" && !financialActionBusy) { event.preventDefault(); setFinancialAction(null); return; }
+          if (event.key !== "Tab") return;
+          const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('input:not([disabled]), textarea:not([disabled]), button:not([disabled])'));
+          const first = focusable[0]; const last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        }}>
+          <p className="eyebrow">CORRECTION FINANCIÈRE AUDITÉE</p>
+          <h2 id="financial-action-title">{financialAction.kind === "void-invoice" ? "Annuler une facture" : financialAction.kind === "reverse-payment" ? "Contre-passer un règlement" : "Créer un avoir"}</h2>
+          <p id="financial-action-description" className="muted">Référence : {financialAction.reference}. L’opération sera enregistrée par le serveur avec son motif ; l’écriture d’origine est conservée.</p>
+          <form className="form-grid" onSubmit={(event) => void commitFinancialAction(event)}>
+            {financialAction.kind !== "void-invoice" && <label>Montant à corriger<input name="amount" type="number" min="0.01" step="0.01" max={financialAction.amount || undefined} value={financialActionAmount} onChange={(event) => setFinancialActionAmount(event.target.value)} required /></label>}
+            <label className="span-two">Motif obligatoire<textarea autoFocus name="reason" maxLength={500} value={financialActionReason} onChange={(event) => setFinancialActionReason(event.target.value)} required /></label>
+            <div className="form-actions span-two"><Button type="button" disabled={financialActionBusy} onClick={() => setFinancialAction(null)}>Revenir sans corriger</Button><Button primary type="submit" disabled={financialActionBusy || !financialActionReason.trim() || (financialAction.kind !== "void-invoice" && !financialActionAmount)}>{financialActionBusy ? "Enregistrement…" : "Confirmer la correction"}</Button></div>
+          </form>
+        </section>
+      </div>}
+      {confirmationRequest && <div className="action-dialog-backdrop confirmation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) finishConfirmation(false); }}>
+        <section className="action-dialog confirmation-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-description" onKeyDown={(event) => {
+          if (event.key === "Escape") { event.preventDefault(); finishConfirmation(false); return; }
+          if (event.key !== "Tab") return;
+          const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled])'));
+          const first = focusable[0]; const last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        }}>
+          <p className="eyebrow">{confirmationRequest.tone === "warning" ? "ACTION SUR LE DOSSIER" : "SAISIE EN COURS"}</p>
+          <h2 id="confirmation-title">{confirmationRequest.title}</h2>
+          <p id="confirmation-description" className="muted">{confirmationRequest.description}</p>
+          <div className="form-actions">
+            <Button ref={confirmationCancelRef} onClick={() => finishConfirmation(false)}>Annuler</Button>
+            <Button primary className={confirmationRequest.tone === "warning" ? "button-warning" : undefined} onClick={() => finishConfirmation(true)}>{confirmationRequest.confirmLabel}</Button>
+          </div>
         </section>
       </div>}
       <footer>Application développée et sécurisée par LTEX · <button className="footer-link" onClick={() => void openMonarqueSite().catch((error: unknown) => setNotice({ message: humanError(error), error: true }))}>MonarQue Group</button></footer>
@@ -846,15 +1205,26 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: Row[]; onSubmit: (event: FormEvent<HTMLFormElement>, path: string, payload: Row, success: string) => Promise<boolean> }) {
-  const [customerId, setCustomerId] = useState("");
-  const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: "", amount: "", scheduleId: "" }]);
+function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId, initialScheduleId, onPrefillConsumed, onSubmit }: { customers: Row[]; sales: Row[]; initialCustomerId: string; initialReceivableId: string; initialScheduleId: string; onPrefillConsumed: () => void; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const [customerId, setCustomerId] = useState(initialCustomerId);
+  const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: initialReceivableId, amount: "", scheduleId: initialScheduleId }]);
   const [receivables, setReceivables] = useState<Row[]>([]);
   const [receivablesLoading, setReceivablesLoading] = useState(false);
   const [receivablesError, setReceivablesError] = useState("");
   const [planSchedules, setPlanSchedules] = useState<Record<string, { schedule: Row[]; currency: string; loading: boolean; error: string }>>({});
   const [receivedAmount, setReceivedAmount] = useState("");
   const [occurredAt, setOccurredAt] = useState(dateTimeInputValue);
+  const [paymentReview, setPaymentReview] = useState<Row | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+
+  useEffect(() => { setCustomerId(initialCustomerId); }, [initialCustomerId]);
+  useEffect(() => {
+    if (!initialReceivableId) return;
+    setAllocationRows([{ key: `solar-prefill-${initialReceivableId}`, receivableId: initialReceivableId, amount: "", scheduleId: initialScheduleId }]);
+    onPrefillConsumed();
+  }, [initialReceivableId, initialScheduleId, onPrefillConsumed]);
 
   useEffect(() => {
     if (!customerId) { setReceivables([]); setReceivablesLoading(false); setReceivablesError(""); return; }
@@ -917,13 +1287,34 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
       : allocation));
   }
 
-  return <div className="payment-workspace"><Panel title="Informations du règlement"><form id="central-payment-form" className="form-grid" onSubmit={async (event) => {
+  async function confirmPayment() {
+    const form = formRef.current;
+    if (!form || !paymentReview || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const saved = await onSubmit(form, "/v1/payments", paymentReview, "Règlement enregistré par le serveur SEL.");
+      if (saved) {
+        setPaymentReview(null);
+        setCustomerId("");
+        setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]);
+        setReceivedAmount("");
+        setOccurredAt(dateTimeInputValue());
+      }
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  return <div className="payment-workspace"><Panel title="Informations du règlement"><form ref={formRef} data-preserve-draft id="central-payment-form" className="form-grid" onChange={() => setPaymentReview(null)} onSubmit={(event) => {
+    event.preventDefault();
+    if (paymentBlocked || !event.currentTarget.reportValidity()) return;
     const form = new FormData(event.currentTarget);
-    const saved = await onSubmit(event, "/v1/payments", {
+    setPaymentReview({
       customer_id: form.get("customer_id"), received_amount: form.get("received_amount"), currency, method: form.get("method"), occurred_at: new Date(String(form.get("occurred_at"))).toISOString(),
       allocations: allocationRows.map((allocation) => ({ receivable_id: allocation.receivableId, amount: allocation.amount, schedule_id: allocation.scheduleId || null })),
-    }, "Règlement enregistré par le serveur SEL.");
-    if (saved) { setCustomerId(""); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); setReceivedAmount(""); setOccurredAt(dateTimeInputValue()); }
+    });
   }}>
     <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
     <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)} required /></label>
@@ -936,7 +1327,7 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
         const planState = planId ? planSchedules[planId] : undefined;
         const openSchedule = planState?.schedule.filter((item) => text(item.status).toUpperCase() !== "PAID") ?? [];
         return <fieldset className="allocation-card" key={allocation.key}><legend>Affectation {index + 1}</legend>
-          <label>Créance<select value={allocation.receivableId} onChange={(event) => updateAllocation(allocation.key, "receivableId", event.target.value)} required disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}><option value="">{!customerId ? "Sélectionnez d’abord un abonné" : receivablesLoading ? "Chargement des créances…" : "Sélectionner une créance"}</option>{receivables.map((item) => { const id = text(item.receivable_id ?? item.id); const usedElsewhere = allocationRows.some((other) => other.key !== allocation.key && other.receivableId === id); const wrongCurrency = text(item.currency, "USD") !== currency; return <option key={id} value={id} disabled={usedElsewhere || wrongCurrency}>{domainLabel(item.source_type ?? item.status)} · {formatMoney(item.balance, item.currency)}{usedElsewhere ? " · déjà sélectionnée" : wrongCurrency ? " · devise différente" : ""}</option>; })}</select></label>
+          <label>Créance<select value={allocation.receivableId} onChange={(event) => updateAllocation(allocation.key, "receivableId", event.target.value)} required disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}><option value="">{!customerId ? "Sélectionnez d’abord un abonné" : receivablesLoading ? "Chargement des créances…" : "Sélectionner une créance"}</option>{receivables.map((item) => { const id = text(item.receivable_id ?? item.id); const usedElsewhere = allocationRows.some((other) => other.key !== allocation.key && other.receivableId === id); const wrongCurrency = text(item.currency, "USD") !== currency; return <option key={id} value={id} disabled={usedElsewhere || wrongCurrency}>{domainLabel(item.source_type ?? item.status)} · {text(item.source_reference, id)} · {formatMoney(item.balance, item.currency)}{usedElsewhere ? " · déjà sélectionnée" : wrongCurrency ? " · devise différente" : ""}</option>; })}</select></label>
           <label>Montant affecté<input type="number" min="0.01" step="0.01" value={allocation.amount} onChange={(event) => updateAllocation(allocation.key, "amount", event.target.value)} required /></label>
           {planId && <label className="span-two">Échéance solaire<select value={allocation.scheduleId} onChange={(event) => updateAllocation(allocation.key, "scheduleId", event.target.value)} required disabled={!planState || planState.loading || Boolean(planState.error)}><option value="">{planState?.loading ? "Chargement de l’échéancier…" : "Sélectionner une échéance…"}</option>{openSchedule.map((item) => <option key={text(item.id)} value={text(item.id)}>N° {text(item.sequence)} · {text(item.due_date)} · restant {formatMoney(item.remaining, planState?.currency)}</option>)}</select></label>}
           {planState?.error && <p className="help error-text span-two" role="alert">Impossible de vérifier l’échéancier : {planState.error} Le règlement est bloqué.</p>}
@@ -950,14 +1341,39 @@ function PaymentForm({ customers, sales, onSubmit }: { customers: Row[]; sales: 
       <p className="help">Les montants, échéances et soldes sont vérifiés atomiquement par le moteur Rust. Chaque ligne reste affectée à une créance distincte.</p>
     </div>
     <label>Référence interne<input value="Générée par Rust à l’enregistrement" readOnly /></label>
-  </form></Panel><Panel title="Récapitulatif"><div className="payment-summary"><p className="eyebrow">PRÉPARATION DU RÈGLEMENT</p><h2>Règlement</h2><p className="muted">{primaryReceivable ? `${domainLabel(primaryReceivable.source_type ?? primaryReceivable.status)} · soldes retournés par Rust` : "Choisissez un abonné puis les créances à affecter."}</p><div className="payment-summary-values"><div><span>Abonné</span><strong>{customerId ? customerLabel(customerId, customers) : "—"}</strong></div><div><span>Créances sélectionnées</span><strong>{allocationRows.filter((allocation) => allocation.receivableId).length}</strong></div><div><span>Devise</span><strong>{currency}</strong></div></div><p className="eyebrow">MONTANT À CONFIRMER</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong><span className={`status-badge${primaryReceivable ? " pending" : ""}`}>{primaryReceivable ? "En attente d’enregistrement" : "Aucune créance sélectionnée"}</span><p className="help">Rust contrôle le montant reçu, l’ensemble des affectations, les devises et chaque solde avant d’enregistrer le règlement.</p><Button primary type="submit" form="central-payment-form" disabled={paymentBlocked}>Enregistrer le règlement</Button></div></Panel></div>;
+  </form></Panel><Panel title={paymentReview ? "Confirmation du règlement" : "Récapitulatif"}><div className="payment-summary">{paymentReview ? <section className="payment-review" aria-live="polite">
+    <p className="eyebrow">DERNIÈRE VÉRIFICATION</p>
+    <h2>Confirmer le règlement</h2>
+    <div className="payment-summary-values">
+      <div><span>Abonné</span><strong>{customerLabel(text(paymentReview.customer_id), customers)}</strong></div>
+      <div><span>Montant reçu</span><strong>{formatMoney(paymentReview.received_amount, paymentReview.currency)} · {domainLabel(paymentReview.method)}</strong></div>
+      <div><span>Date</span><strong>{new Date(String(paymentReview.occurred_at)).toLocaleString("fr-CD")}</strong></div>
+      <div><span>Affectations</span><strong>{rows<Row>(paymentReview.allocations).length}</strong></div>
+    </div>
+    <ul>{rows<Row>(paymentReview.allocations).map((allocation) => {
+      const receivable = receivables.find((item) => text(item.receivable_id ?? item.id) === text(allocation.receivable_id));
+      return <li key={text(allocation.receivable_id)}>{domainLabel(receivable?.source_type ?? receivable?.status)} · {text(receivable?.source_reference, text(allocation.receivable_id))} — {formatMoney(allocation.amount, paymentReview.currency)}{allocation.schedule_id ? " · échéance solaire sélectionnée" : ""}</li>;
+    })}</ul>
+    <p className="help">Le serveur Rust recontrôlera atomiquement le montant et les soldes avant validation.</p>
+    <div className="form-actions"><Button type="button" disabled={saving} onClick={() => setPaymentReview(null)}>Modifier</Button><Button primary type="button" disabled={saving} onClick={() => void confirmPayment()}>{saving ? "Enregistrement…" : "Confirmer et enregistrer"}</Button></div>
+  </section> : <>
+    <p className="eyebrow">PRÉPARATION DU RÈGLEMENT</p><h2>Règlement</h2>
+    <p className="muted">{primaryReceivable ? `${domainLabel(primaryReceivable.source_type ?? primaryReceivable.status)} · soldes retournés par Rust` : "Choisissez un abonné puis les créances à affecter."}</p>
+    <div className="payment-summary-values"><div><span>Abonné</span><strong>{customerId ? customerLabel(customerId, customers) : "—"}</strong></div><div><span>Créances sélectionnées</span><strong>{allocationRows.filter((allocation) => allocation.receivableId).length}</strong></div><div><span>Devise</span><strong>{currency}</strong></div></div>
+    <p className="eyebrow">MONTANT À CONFIRMER</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong>
+    <span className={`status-badge${primaryReceivable ? " pending" : ""}`}>{primaryReceivable ? "En attente d’enregistrement" : "Aucune créance sélectionnée"}</span>
+    <p className="help">Rust contrôle le montant reçu, l’ensemble des affectations, les devises et chaque solde avant d’enregistrer le règlement.</p>
+    <Button primary type="submit" form="central-payment-form" disabled={paymentBlocked || Boolean(paymentReview)}>Vérifier le règlement</Button>
+  </>}</div></Panel></div>;
 }
 
-function ServiceAccountsManager({ customerId }: { customerId: string }) {
+function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacement, confirmAction }: { customerId: string; canManageMeters: boolean; onConfirmReplacement: (oldSerial: string, newSerial: string, reason: string) => Promise<boolean>; confirmAction: (request: ConfirmationRequest) => Promise<boolean> }) {
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [metersByAccount, setMetersByAccount] = useState<Record<string, Row[]>>({});
   const [accountFormOpen, setAccountFormOpen] = useState(false);
   const [meterFormAccount, setMeterFormAccount] = useState("");
+  const [replacingMeterId, setReplacingMeterId] = useState("");
+  const [editingServiceAccount, setEditingServiceAccount] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -994,7 +1410,14 @@ function ServiceAccountsManager({ customerId }: { customerId: string }) {
     };
     setSaving(true); setMessage(""); setMessageError(false);
     try {
+      const accepted = await confirmAction({
+        title: "Vérifier le rattachement du service",
+        description: `${domainLabel(serviceCode)} pour l’abonné ${customerId}. État : ${domainLabel(payload.connection_status)}. Contrat : ${payload.contract_ref || "non renseigné"}. Date d’activation : ${payload.activated_at || "non renseignée"}. Aucun compteur ne sera créé.`,
+        confirmLabel: "Rattacher le service",
+      });
+      if (!accepted) return;
       await centralRequest(`/v1/customers/${encodeURIComponent(customerId)}/service-accounts`, "POST", payload);
+      announceDraftSaved();
       setAccountFormOpen(false);
       setMessage(`${domainLabel(serviceCode)} rattaché à l’abonné. Aucun compteur n’a été créé.`);
       await loadAccounts();
@@ -1008,16 +1431,72 @@ function ServiceAccountsManager({ customerId }: { customerId: string }) {
     if (!account) return;
     const form = new FormData(event.currentTarget);
     const unit = text(account.service_code).toUpperCase() === "WATER" ? "M3" : "KWH";
+    const serial = String(form.get("serial") ?? "").trim();
     setSaving(true); setMessage(""); setMessageError(false);
     try {
-      await centralRequest(`/v1/service-accounts/${encodeURIComponent(meterFormAccount)}/meters`, "POST", {
-        serial: String(form.get("serial") ?? "").trim(), unit,
+      const accepted = await confirmAction({
+        title: "Vérifier le numéro du compteur",
+        description: `Compteur ${serial}, service ${domainLabel(account.service_code)}, unité ${unit === "M3" ? "m³" : "kWh"}, abonné ${customerId}.`,
+        confirmLabel: "Enregistrer le compteur",
       });
+      if (!accepted) return;
+      await centralRequest(`/v1/service-accounts/${encodeURIComponent(meterFormAccount)}/meters`, "POST", {
+        serial, unit,
+      });
+      announceDraftSaved();
       setMeterFormAccount("");
       setMessage("Compteur enregistré. Les relevés pourront être saisis pour ce service.");
       await loadAccounts();
     } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
+  }
+
+  async function replaceMeter(event: FormEvent<HTMLFormElement>, meter: Row) {
+    event.preventDefault();
+    const meterId = text(meter.id, "");
+    if (!meterId) return;
+    const form = new FormData(event.currentTarget);
+    const serial = String(form.get("serial") ?? "").trim();
+    const reason = String(form.get("reason") ?? "").trim();
+    if (!await onConfirmReplacement(text(meter.serial), serial, reason)) return;
+    setSaving(true); setMessage(""); setMessageError(false);
+    try {
+      await centralRequest<Row>(`/v1/meters/${encodeURIComponent(meterId)}/replace`, "POST", { serial, reason });
+      announceDraftSaved();
+      setReplacingMeterId("");
+      setMessage(`Compteur ${text(meter.serial)} remplacé. Ses relevés et factures historiques sont conservés.`);
+      await loadAccounts();
+    } catch (error) { setMessage(humanError(error)); setMessageError(true); }
+    finally { setSaving(false); }
+  }
+
+  async function updateServiceAccount(event: FormEvent<HTMLFormElement>, account: Row) {
+    event.preventDefault();
+    const accountId = text(account.id, "");
+    if (!accountId) return;
+    const form = new FormData(event.currentTarget);
+    const payload = {
+      contract_ref: String(form.get("contract_ref") ?? "").trim() || null,
+      connection_status: String(form.get("connection_status") ?? "UNKNOWN"),
+      activated_at: String(form.get("activated_at") ?? "") || null,
+    };
+    setSaving(true); setMessage(""); setMessageError(false);
+    try {
+      const accepted = await confirmAction({
+        title: "Vérifier le raccordement",
+        description: `Service ${domainLabel(account.service_code)} de l’abonné ${customerId}. État : ${domainLabel(payload.connection_status)}. Contrat : ${payload.contract_ref || "non renseigné"}. Date d’activation : ${payload.activated_at || "non renseignée"}.`,
+        confirmLabel: "Enregistrer le raccordement",
+      });
+      if (!accepted) return;
+      await centralRequest(`/v1/service-accounts/${encodeURIComponent(accountId)}`, "PATCH", payload, Number(account.revision));
+      announceDraftSaved();
+      setEditingServiceAccount("");
+      setMessage("Raccordement mis à jour sur le serveur SEL.");
+      await loadAccounts();
+    } catch (error) {
+      setMessage(`${humanError(error)}${String(error).includes("409") ? " Votre saisie est conservée. Comparez-la avec la dernière version du dossier avant de réessayer." : ""}`);
+      setMessageError(true);
+    } finally { setSaving(false); }
   }
 
   const availableServices = ["ELECTRICITY", "WATER"].filter((code) => !accounts.some((account) => text(account.service_code).toUpperCase() === code));
@@ -1030,32 +1509,46 @@ function ServiceAccountsManager({ customerId }: { customerId: string }) {
       const unit = text(account.service_code).toUpperCase() === "WATER" ? "M3" : "KWH";
       const contractRef = text(account.contract_ref, "").trim();
       return <article className="service-account-card" key={accountId}>
-        <div className="service-account-head"><div><strong>{domainLabel(account.service_code)}</strong><span className="muted">{domainLabel(account.connection_status)}</span></div><Button onClick={() => setMeterFormAccount((current) => current === accountId ? "" : accountId)} disabled={saving}>{meterFormAccount === accountId ? "Annuler" : "Ajouter un compteur"}</Button></div>
+        <div className="service-account-head"><div><strong>{domainLabel(account.service_code)}</strong><span className="muted">{domainLabel(account.connection_status)}</span></div><div className="page-actions"><Button onClick={() => { announceDraftSaved(); setEditingServiceAccount((current) => current === accountId ? "" : accountId); }} disabled={saving}>{editingServiceAccount === accountId ? "Fermer la modification" : "Modifier le raccordement"}</Button>{canManageMeters && <Button onClick={() => { if (meterFormAccount === accountId) announceDraftSaved(); setMeterFormAccount((current) => current === accountId ? "" : accountId); }} disabled={saving}>{meterFormAccount === accountId ? "Annuler" : "Ajouter un compteur"}</Button>}</div></div>
         {contractRef && <p className="help">Contrat : {contractRef}</p>}
-        {accountMeters.length ? <ul className="service-meter-list">{accountMeters.map((meter) => <li key={text(meter.id)}><strong>{text(meter.serial)}</strong><span>{formatUnit(meter.unit)}{meter.active === false ? " · Inactif" : " · Actif"}</span></li>)}</ul> : <p className="help">Aucun compteur enregistré. Le service reste utilisable pour la facturation manuelle.</p>}
-        {meterFormAccount === accountId && <form className="form-grid service-meter-form" onSubmit={(event) => void createMeter(event)}>
-          <label>Numéro réel du compteur<input name="serial" maxLength={128} required placeholder="À saisir uniquement si le compteur existe" /></label>
+        {accountMeters.length ? <ul className="service-meter-list">{accountMeters.map((meter) => <li key={text(meter.id)}><strong>{text(meter.serial)}</strong><span>{formatUnit(meter.unit)}{meter.active === false ? " · Inactif" : " · Actif"}{canManageMeters && meter.active !== false && <Button type="button" onClick={() => setReplacingMeterId((current) => current === text(meter.id) ? "" : text(meter.id))} disabled={saving}>{replacingMeterId === text(meter.id) ? "Annuler" : "Remplacer"}</Button>}</span></li>)}</ul> : <p className="help">Aucun compteur enregistré. Le service reste utilisable pour la facturation manuelle.</p>}
+        {editingServiceAccount === accountId && <form data-preserve-draft className="form-grid service-account-form" onSubmit={(event) => void updateServiceAccount(event, account)}>
+          <label>État du raccordement<select name="connection_status" defaultValue={text(account.connection_status, "UNKNOWN")} disabled={saving}><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
+          <label>Référence du contrat<input name="contract_ref" maxLength={128} defaultValue={text(account.contract_ref, "")} disabled={saving} /></label>
+          <label>Date d’activation<input name="activated_at" type="date" defaultValue={text(account.activated_at, "").slice(0, 10)} disabled={saving} /></label>
+          <p className="help span-two">Modification protégée par révision du serveur. Une écriture concurrente est refusée ; les champs saisis restent à l’écran.</p>
+          <div className="form-actions span-two"><Button type="button" onClick={() => { announceDraftSaved(); setEditingServiceAccount(""); }}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer la modification"}</Button></div>
+        </form>}
+        {meterFormAccount === accountId && <form data-preserve-draft className="form-grid service-meter-form" onSubmit={(event) => void createMeter(event)}>
+          <label>Numéro réel du compteur<input name="serial" maxLength={128} required placeholder="À saisir uniquement si le compteur existe" disabled={saving} /></label>
           <label>Unité<input value={unit === "M3" ? "m³" : "kWh"} readOnly /></label>
           <p className="help span-two">Ce champ est obligatoire uniquement pour enregistrer un compteur réel. Aucun numéro fictif ne sera créé.</p>
           <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer le compteur"}</Button></div>
         </form>}
+        {replacingMeterId && accountMeters.find((meter) => text(meter.id) === replacingMeterId && meter.active !== false)?.service_account_id === accountId && <form data-preserve-draft className="form-grid service-meter-form" onSubmit={(event) => void replaceMeter(event, accountMeters.find((meter) => text(meter.id) === replacingMeterId)!)}>
+          <p className="help span-two">Le remplacement est enregistré en une transaction serveur. L’ancien compteur devient inactif ; ses index, corrections et factures restent consultables.</p>
+          <label>Nouveau numéro de compteur<input name="serial" maxLength={128} required placeholder="Numéro réel inscrit sur le compteur" disabled={saving} /></label>
+          <label>Unité<input value={unit === "M3" ? "m³" : "kWh"} readOnly /></label>
+          <label className="span-two">Motif du remplacement<textarea name="reason" maxLength={500} minLength={1} required placeholder="Panne, remplacement physique…" disabled={saving} /></label>
+          <div className="form-actions span-two"><Button type="button" onClick={() => setReplacingMeterId("")}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Remplacement…" : "Remplacer le compteur"}</Button></div>
+        </form>}
       </article>;
     })}</div> : <div className="empty-state">Aucun service n’est encore rattaché. Vous pouvez ajouter l’eau et l’électricité sans créer de compteur.</div>}
-    {accountFormOpen && availableServices.length > 0 && <form className="form-grid service-account-form" onSubmit={(event) => void createServiceAccount(event)}>
-      <label>Service<select name="service_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{availableServices.map((code) => <option key={code} value={code}>{domainLabel(code)}</option>)}</select></label>
-      <label>État du raccordement<select name="connection_status" defaultValue="UNKNOWN"><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
-      <label>Référence du contrat <span className="muted">(facultatif)</span><input name="contract_ref" maxLength={128} /></label>
-      <label>Date d’activation <span className="muted">(facultative)</span><input name="activated_at" type="date" /></label>
+    {accountFormOpen && availableServices.length > 0 && <form data-preserve-draft className="form-grid service-account-form" onSubmit={(event) => void createServiceAccount(event)}>
+      <label>Service<select name="service_code" required defaultValue="" disabled={saving}><option value="" disabled>Sélectionner…</option>{availableServices.map((code) => <option key={code} value={code}>{domainLabel(code)}</option>)}</select></label>
+      <label>État du raccordement<select name="connection_status" defaultValue="UNKNOWN" disabled={saving}><option value="UNKNOWN">Inconnu</option><option value="CONNECTED">Raccordé</option><option value="NOT_CONNECTED">Non raccordé</option></select></label>
+      <label>Référence du contrat <span className="muted">(facultatif)</span><input name="contract_ref" maxLength={128} disabled={saving} /></label>
+      <label>Date d’activation <span className="muted">(facultative)</span><input name="activated_at" type="date" disabled={saving} /></label>
       <p className="help span-two">Aucun numéro de compteur n’est demandé à cette étape. L’état « Inconnu » évite d’affirmer un raccordement non vérifié.</p>
-      <div className="form-actions span-two"><Button type="button" onClick={() => setAccountFormOpen(false)}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Rattacher le service"}</Button></div>
+      <div className="form-actions span-two"><Button type="button" onClick={() => { announceDraftSaved(); setAccountFormOpen(false); }}>Annuler</Button><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Rattacher le service"}</Button></div>
     </form>}
     {accountFormOpen && !availableServices.length && <p className="help">L’eau et l’électricité sont déjà rattachées à cet abonné.</p>}
     {message && <p role={messageError ? "alert" : "status"} className={`reading-message${messageError ? " error" : ""}`}>{message}</p>}
   </Panel>;
 }
 
-function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { customers: Row[]; onOpenInvoices: () => void; onOpenCustomer: (customerId: string) => void }) {
-  const [customerId, setCustomerId] = useState("");
+function MeterReadingsView({ customers, initialCustomerId, canCorrect, onOpenInvoices, onOpenCustomer }: { customers: Row[]; initialCustomerId: string; canCorrect: boolean; onOpenInvoices: () => void; onOpenCustomer: (customerId: string) => void }) {
+  const [customerId, setCustomerId] = useState(initialCustomerId);
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [accountId, setAccountId] = useState("");
   const [meters, setMeters] = useState<Row[]>([]);
@@ -1069,6 +1562,8 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<Row | null>(null);
   const [previewInput, setPreviewInput] = useState<Row | null>(null);
+
+  useEffect(() => { setCustomerId(initialCustomerId); }, [initialCustomerId]);
 
   useEffect(() => {
     if (!customerId) { setAccounts([]); setAccountId(""); setMeters([]); setMeterId(""); setReadings([]); setReadingPeriod(""); setPreviousIndex(""); return; }
@@ -1124,6 +1619,7 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
       setReadingPeriod("");
       setPreview(null); setPreviewInput(null);
       setMessage("Relevé enregistré par le serveur SEL."); setMessageError(false);
+      announceDraftSaved();
     } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
   }
@@ -1141,6 +1637,7 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
       const nextReadings = rows(result);
       setReadings(nextReadings); setPreviousIndex(nextReadings.length ? text(nextReadings[nextReadings.length - 1].current) : ""); setCorrectingReading(null);
       setMessage("Correction ajoutée à l’historique. Le relevé initial est conservé."); setMessageError(false);
+      announceDraftSaved();
     } catch (error) { setMessage(humanError(error)); setMessageError(true); }
     finally { setSaving(false); }
   }
@@ -1159,7 +1656,7 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
           <label>Service<select value={accountId} onChange={(event) => { setAccountId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!customerId}><option value="">{customerId ? "Sélectionner…" : "Sélectionnez d’abord un abonné"}</option>{accounts.map((account) => <option key={text(account.id)} value={text(account.id)}>{domainLabel(account.service_code)} · {domainLabel(account.connection_status)}</option>)}</select></label>
           <label className="span-two">Compteur<select value={meterId} onChange={(event) => { setMeterId(event.target.value); setPreview(null); setPreviewInput(null); }} disabled={!accountId}><option value="">{accountId ? "Sélectionner…" : "Sélectionnez d’abord un service"}</option>{meters.map((meter) => <option key={text(meter.id)} value={text(meter.id)}>{text(meter.serial)} · {formatUnit(meter.unit)}</option>)}</select></label>
         </div>
-        {meterId && <form className="form-grid reading-entry" onSubmit={(event) => void previewReading(event)} onChange={() => { setPreview(null); setPreviewInput(null); }}>
+        {meterId && <form data-preserve-draft className="form-grid reading-entry" onSubmit={(event) => void previewReading(event)} onChange={() => { setPreview(null); setPreviewInput(null); }}>
           <label>Période<input name="period" type="month" value={readingPeriod} onChange={(event) => { const selectedPeriod = event.target.value; setReadingPeriod(selectedPeriod); const preceding = readings.filter((reading) => text(reading.period) < selectedPeriod); setPreviousIndex(preceding.length ? text(preceding[preceding.length - 1].current) : ""); }} required /></label>
           <label>Index précédent<input name="previous" type="number" min="0" step="0.001" value={previousIndex} onChange={(event) => setPreviousIndex(event.target.value)} required /></label>
           <label>Nouvel index<input name="current" type="number" min="0" step="0.001" required /></label>
@@ -1186,17 +1683,17 @@ function MeterReadingsView({ customers, onOpenInvoices, onOpenCustomer }: { cust
         </div>
       </Panel>
     </div>
-    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), formatQuantity(reading.previous, selectedMeter?.unit), formatQuantity(reading.current, selectedMeter?.unit), formatQuantity(reading.measured_quantity, selectedMeter?.unit), text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
-    {correctingReading && <Panel title={`Correction du relevé · ${text(correctingReading.period)}`}><form className="form-grid" onSubmit={(event) => void correctReading(event)}>
+    {meterId && <Panel title="Historique des relevés"><Table headers={["Période", "Index précédent", "Nouvel index", "Consommation", "Source", "Correction", "Action"]} empty="Aucun relevé enregistré pour ce compteur." data={readings.map((reading) => [text(reading.period), formatQuantity(reading.previous, selectedMeter?.unit), formatQuantity(reading.current, selectedMeter?.unit), formatQuantity(reading.measured_quantity, selectedMeter?.unit), text(reading.source), reading.corrected_from_id ? text(reading.correction_reason) : "—", canCorrect && reading.id === latestReading?.id ? <button className="text-button" type="button" onClick={() => setCorrectingReading(reading)}>Corriger le dernier relevé</button> : "—"])} /></Panel>}
+    {correctingReading && <Panel title={`Correction du relevé · ${text(correctingReading.period)}`}><form data-preserve-draft className="form-grid" onSubmit={(event) => void correctReading(event)}>
       <label>Nouvel index corrigé<input name="current" type="number" min="0" step="0.001" defaultValue={text(correctingReading.current, "")} required /></label>
       <label className="span-two">Motif de correction<input name="reason" maxLength={500} required /></label>
       <p className="help span-two">La correction crée une nouvelle entrée d’audit et ne supprime pas le relevé initial.</p>
-      <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer la correction"}</Button><Button type="button" onClick={() => setCorrectingReading(null)}>Annuler</Button></div>
+      <div className="form-actions span-two"><Button primary type="submit" disabled={saving}>{saving ? "Enregistrement…" : "Enregistrer la correction"}</Button><Button type="button" onClick={() => { announceDraftSaved(); setCorrectingReading(null); }}>Annuler</Button></div>
     </form></Panel>}
   </>;
 }
 
-function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; customers: Row[]; onCreated: () => Promise<void> }) {
+function SolarContractManager({ sales, customers, onCreated, confirmAction, onRecordPayment }: { sales: Row[]; customers: Row[]; onCreated: () => Promise<void>; confirmAction: (request: ConfirmationRequest) => Promise<boolean>; onRecordPayment: (customerId: string, receivableId: string, scheduleId: string) => void }) {
   const [saleId, setSaleId] = useState("");
   const [schedule, setSchedule] = useState([{ due_date: "", amount: "" }]);
   const [plan, setPlan] = useState<Row | null>(null);
@@ -1216,16 +1713,25 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
     if (!sale || !sale.receivable_id) return;
     setSaving(true); setMessage("");
     try {
+      const approvedTermsRevision = String(form.get("approved_terms_revision") ?? "").trim();
+      const scheduleSummary = schedule.map((entry, index) => `Échéance ${index + 1} : ${entry.due_date}, ${entry.amount} ${sale.currency}`).join(" ; ");
+      const accepted = await confirmAction({
+        title: "Vérifier le contrat solaire",
+        description: `Vente ${text(sale.sale_id)} · créance existante ${text(sale.receivable_id)} · principal ${formatMoney(sale.principal, sale.currency)}. Échéancier : ${scheduleSummary}. Conditions approuvées : ${approvedTermsRevision}. Aucun intérêt ni frais supplémentaire.`,
+        confirmLabel: "Créer le contrat et l’échéancier",
+      });
+      if (!accepted) return;
       const result = await centralRequest<Row>("/v1/solar/contracts", "POST", {
         sale_id: sale.sale_id,
         receivable_id: sale.receivable_id,
         schedule: schedule.map((entry, index) => ({ sequence: index + 1, due_date: entry.due_date, amount: entry.amount })),
         currency: sale.currency,
-        approved_terms_revision: form.get("approved_terms_revision"),
+        approved_terms_revision: approvedTermsRevision,
       });
       const planId = text(result.installment_plan_id, "");
       if (planId) setPlan(await centralRequest<Row>(`/v1/installment-plans/${encodeURIComponent(planId)}`));
       setMessage("Contrat et échéancier enregistrés par le serveur SEL.");
+      announceDraftSaved();
       setSaleId(""); setSchedule([{ due_date: "", amount: "" }]);
       await onCreated();
     } catch (error) { setMessage(humanError(error)); }
@@ -1233,30 +1739,31 @@ function SolarContractManager({ sales, customers, onCreated }: { sales: Row[]; c
   }
 
   const planRows = rows<Row>(plan?.schedule);
+  const nextOpenSchedule = planRows.find((item) => text(item.status).toUpperCase() !== "PAID");
   return <>
     <Panel title="Contrats et échéanciers solaires">
-      {availableSales.length ? <form className="form-grid" onSubmit={(event) => void saveContract(event)}>
-        <label className="span-two">Vente à financer<select value={saleId} onChange={(event) => setSaleId(event.target.value)} required><option value="">Sélectionner une vente…</option>{availableSales.map((sale) => <option key={text(sale.sale_id)} value={text(sale.sale_id)}>{customerLabel(sale.customer_id, customers)} · {text(sale.sale_id)} · {formatMoney(sale.principal, sale.currency)}</option>)}</select></label>
+      {availableSales.length ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void saveContract(event)}>
+        <label className="span-two">Vente à financer<select value={saleId} onChange={(event) => setSaleId(event.target.value)} required disabled={saving}><option value="">Sélectionner une vente…</option>{availableSales.map((sale) => <option key={text(sale.sale_id)} value={text(sale.sale_id)}>{customerLabel(sale.customer_id, customers)} · {text(sale.sale_id)} · {formatMoney(sale.principal, sale.currency)}</option>)}</select></label>
         {schedule.map((entry, index) => <div className="schedule-entry span-two" key={index}>
-          <label>Échéance {index + 1} · Date<input type="date" required value={entry.due_date} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, due_date: event.target.value } : item))} /></label>
-          <label>Montant dû<input type="number" min="0.01" step="0.01" required value={entry.amount} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item))} /></label>
-          {schedule.length > 1 && <button className="text-button remove-installment" type="button" onClick={() => setSchedule((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Retirer</button>}
+          <label>Échéance {index + 1} · Date<input type="date" required value={entry.due_date} disabled={saving} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, due_date: event.target.value } : item))} /></label>
+          <label>Montant dû<input type="number" min="0.01" step="0.01" required value={entry.amount} disabled={saving} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item))} /></label>
+          {schedule.length > 1 && <button className="text-button remove-installment" type="button" disabled={saving} onClick={() => setSchedule((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Retirer</button>}
         </div>)}
-        <div className="schedule-actions span-two"><button className="text-button" type="button" onClick={() => setSchedule((current) => [...current, { due_date: "", amount: "" }])}>+ Ajouter une échéance</button></div>
-        <label className="span-two">Référence des conditions approuvées<input name="approved_terms_revision" required /></label>
+        <div className="schedule-actions span-two"><button className="text-button" type="button" disabled={saving} onClick={() => setSchedule((current) => [...current, { due_date: "", amount: "" }])}>+ Ajouter une échéance</button></div>
+        <label className="span-two">Référence des conditions approuvées<input name="approved_terms_revision" required disabled={saving} /></label>
         <p className="help span-two">Le moteur vérifie les échéances et leur total par rapport à la créance. Aucun intérêt ni frais n’est ajouté.</p>
-        <div className="form-actions span-two"><Button primary type="submit" disabled={saving || !saleId}>{saving ? "Enregistrement…" : "Créer le contrat"}</Button></div>
+        <div className="form-actions span-two"><Button primary type="submit" disabled={saving || !saleId}>{saving ? "Vérification…" : "Vérifier le contrat"}</Button></div>
       </form> : <div className="empty-state">Aucune vente sans échéancier n’est disponible pour créer un contrat.</div>}
       {message && <p role="status" className="reading-message">{message}</p>}
       {sales.some((sale) => sale.installment_plan_id) && <div className="table-scroll"><table><thead><tr><th>Abonné</th><th>Vente</th><th>Montant</th><th>Situation</th><th>Échéancier</th></tr></thead><tbody>{sales.filter((sale) => sale.installment_plan_id).map((sale) => <tr key={text(sale.sale_id)}><td>{customerLabel(sale.customer_id, customers)}</td><td><strong>{text(sale.sale_id)}</strong></td><td>{formatMoney(sale.principal, sale.currency)}</td><td><Status value={sale.status} /></td><td><button className="text-button" onClick={() => void viewPlan(text(sale.installment_plan_id))}>Consulter</button></td></tr>)}</tbody></table></div>}
     </Panel>
-    {plan && <Panel title="Échéancier consulté"><div className="metrics compact-metrics"><Metric label="Principal" value={formatMoney(plan.principal, plan.currency)} note="Créance du contrat" /><Metric label="Payé" value={formatMoney(plan.paid, plan.currency)} note="Règlements affectés" /><Metric label="Restant" value={formatMoney(plan.remaining, plan.currency)} note="Solde de la créance" /><Metric label="En retard" value={formatMoney(plan.overdue_amount, plan.currency)} note="Échéances échues" /></div><Table headers={["N°", "Échéance", "Montant dû", "Payé", "Restant", "État"]} empty="Aucune échéance." data={planRows.map((item) => [text(item.sequence), text(item.due_date), formatMoney(item.amount_due, plan.currency), formatMoney(item.paid, plan.currency), formatMoney(item.remaining, plan.currency), <Status value={item.status} />])} /></Panel>}
+    {plan && <Panel title="Échéancier consulté" action={nextOpenSchedule ? <Button primary onClick={() => onRecordPayment(text(plan.customer_id), text(plan.receivable_id), text(nextOpenSchedule.id))}>Enregistrer un versement</Button> : undefined}><div className="metrics compact-metrics"><Metric label="Principal" value={formatMoney(plan.principal, plan.currency)} note="Créance du contrat" /><Metric label="Payé" value={formatMoney(plan.paid, plan.currency)} note="Règlements affectés" /><Metric label="Restant" value={formatMoney(plan.remaining, plan.currency)} note="Solde de la créance" /><Metric label="En retard" value={formatMoney(plan.overdue_amount, plan.currency)} note="Échéances échues" /></div><Table headers={["N°", "Échéance", "Montant dû", "Payé", "Restant", "État"]} empty="Aucune échéance." data={planRows.map((item) => [text(item.sequence), text(item.due_date), formatMoney(item.amount_due, plan.currency), formatMoney(item.paid, plan.currency), formatMoney(item.remaining, plan.currency), <Status value={item.status} />])} /></Panel>}
   </>;
 }
 
-function CustomerStatement({ customerName, customerCode, statement }: { customerName: string; customerCode: string; statement: Row | null }) {
+function CustomerStatement({ customerName, customerCode, statement, loading, error }: { customerName: string; customerCode: string; statement: Row | null; loading: boolean; error: string }) {
   return <Panel title={`Situation du compte · ${customerName}`}>
-    {statement ? <><div className="dossier-metrics metrics compact-metrics"><Metric label="Compte client" value={customerCode} note="Référence abonné" /><Metric label="Factures" value={rows(statement.invoices).length} note="Documents conservés" /><Metric label="Versements" value={rows(statement.payments).length} note="Encaissements enregistrés" /><Metric label="Créances" value={rows(statement.receivables).length} note="Obligations suivies" /></div><div className="columns"><div><p><strong>Factures</strong></p><Table headers={["Référence", "Période", "État"]} empty="Aucune facture dans le relevé." data={rows<Row>(statement.invoices).map((item) => [text(item.invoice_number ?? item.invoice_id), text(item.period ?? item.billing_period), <Status value={item.status} />])} /></div><div><p><strong>Créances</strong></p><Table headers={["Référence", "Solde", "Situation"]} empty="Aucune créance dans le relevé." data={rows<Row>(statement.receivables).map((item) => [text(item.id ?? item.receivable_id), formatMoney(item.balance, item.currency), <Status value={item.status} />])} /></div></div></> : <div className="empty-state">Chargement du relevé abonné…</div>}
+    {error ? <div className="notice error" role="alert">{error}</div> : loading ? <div className="empty-state" role="status">Chargement du relevé de cet abonné…</div> : statement ? <><div className="dossier-metrics metrics compact-metrics"><Metric label="Compte client" value={customerCode} note="Référence abonné" /><Metric label="Factures" value={rows(statement.invoices).length} note="Documents conservés" /><Metric label="Versements" value={rows(statement.payments).length} note="Encaissements enregistrés" /><Metric label="Créances" value={rows(statement.receivables).length} note="Obligations suivies" /></div><div className="columns"><div><p><strong>Factures</strong></p><Table headers={["Référence", "Période", "État"]} empty="Aucune facture dans le relevé." data={rows<Row>(statement.invoices).map((item) => [text(item.invoice_number ?? item.invoice_id), text(item.period ?? item.billing_period), <Status value={item.status} />])} /></div><div><p><strong>Créances</strong></p><Table headers={["Référence", "Solde", "Situation"]} empty="Aucune créance dans le relevé." data={rows<Row>(statement.receivables).map((item) => [text(item.id ?? item.receivable_id), formatMoney(item.balance, item.currency), <Status value={item.status} />])} /></div></div></> : <div className="empty-state">Aucune situation financière n’est disponible pour cet abonné.</div>}
   </Panel>;
 }
 
@@ -1297,42 +1804,52 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
   ], columns: ["id", "label", "amount", "currency", "effective_from", "status"] },
 };
 
-function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }: {
+function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, confirmAction }: {
   kind: AdminCatalog; items: Row[]; busy: boolean;
-  onCreate: (kind: AdminCatalog, values: Record<string, string>) => void;
-  onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => void;
-  onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => void;
+  onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>;
+  onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => Promise<boolean>;
+  onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => Promise<boolean>;
+  confirmAction: (request: ConfirmationRequest) => Promise<boolean>;
 }) {
   const definition = adminCatalogDefinitions[kind];
   const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
   const [revokingId, setRevokingId] = useState("");
-  function create(event: FormEvent<HTMLFormElement>) {
+  const [creating, setCreating] = useState(false);
+  async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const values = Object.fromEntries([...new FormData(form).entries()].map(([key, value]) => [key, String(value).trim()]));
-    onCreate(kind, values);
-    form.reset();
+    setCreating(true);
+    try {
+      const summary = definition.fields.map((field) => `${field.label} : ${values[field.name] || "—"}`).join(". ");
+      const accepted = await confirmAction({
+        title: `Vérifier le brouillon · ${definition.title}`,
+        description: `${summary}. Ce brouillon n’est pas applicable aux opérations avant son approbation SEL.`,
+        confirmLabel: "Créer le brouillon",
+      });
+      if (accepted && await onCreate(kind, values)) { form.reset(); announceDraftSaved(); }
+    } finally { setCreating(false); }
   }
   return <Panel title={definition.title}>
-    <form className="form-grid admin-catalog-form" onSubmit={create}>
+    <form data-preserve-draft className="form-grid admin-catalog-form" onSubmit={create}>
       {definition.fields.map((field) => <label key={field.name}>{field.label}{field.options
-        ? <select name={field.name} defaultValue="" required={field.required !== false}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-        : <input name={field.name} type={field.type ?? "text"} step={field.step} required={field.required !== false} />}</label>)}
-      <div className="form-actions span-two"><Button primary type="submit" disabled={busy}>Créer un brouillon</Button></div>
+        ? <select name={field.name} defaultValue="" required={field.required !== false} disabled={busy || creating}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+        : <input name={field.name} type={field.type ?? "text"} step={field.step} required={field.required !== false} disabled={busy || creating} />}</label>)}
+      <div className="form-actions span-two"><Button primary type="submit" disabled={busy || creating}>{creating ? "Vérification…" : "Créer un brouillon"}</Button></div>
       <p className="help span-two">{kind === "communication-charge" ? "Cette charge SEL apparaît sur chaque facture eau + électricité. Elle entre dans l’assiette de la TVA, affichée séparément. L’activation exige une approbation SEL." : "Le brouillon n’est pas applicable aux factures. Seul un administrateur l’active après validation SEL et référence de décision."}</p>
     </form>
     <Table headers={[...definition.columns.map((field) => field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " ")), "Actions"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
       const id = text(item.id ?? item[idField], "");
       const status = text(item.status).toUpperCase();
-      const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={(event) => {
+      const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
         const values = new FormData(event.currentTarget);
-        onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
-      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Référence de décision SEL" required /><input aria-label="Tarif remplacé (facultatif)" name="supersedes_id" placeholder="Tarif remplacé (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={(event) => {
+        await onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
+      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Référence de décision SEL" required /><input aria-label="Tarif remplacé (facultatif)" name="supersedes_id" placeholder="Tarif remplacé (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
-        const changeRef = String(new FormData(event.currentTarget).get("change_ref") ?? "").trim();
-        onRevoke(kind, item, changeRef);
-        setRevokingId("");
+        const form = event.currentTarget;
+        const changeRef = String(new FormData(form).get("change_ref") ?? "").trim();
+        if (await onRevoke(kind, item, changeRef)) setRevokingId("");
       }}><input aria-label="Motif ou référence de révocation" name="change_ref" placeholder="Motif de révocation SEL" required /><Button type="button" onClick={() => setRevokingId("")}>Annuler</Button><Button type="submit" disabled={busy || !id}>Confirmer la révocation</Button></form> : <div className="admin-approve-form"><Status value="Approuvé" /><Button type="button" disabled={busy || !id} onClick={() => setRevokingId(id)}>Révoquer…</Button></div> : <Status value={status || "État inconnu"} />;
       return [...definition.columns.map((field) => {
         const payload = record(item.payload);
@@ -1343,7 +1860,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke }:
   </Panel>;
 }
 
-function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; onSignedOut: () => void }) {
+function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { session: CentralSessionInfo; onSignedOut: () => void; confirmAction: (request: ConfirmationRequest) => Promise<boolean>; draftDirty: boolean }) {
   const [users, setUsers] = useState<Row[]>([]);
   const [tariffs, setTariffs] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
@@ -1353,11 +1870,32 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
   const [auditEvents, setAuditEvents] = useState<Row[]>([]);
   const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
   const [passwordTarget, setPasswordTarget] = useState("");
+  const [adminArea, setAdminArea] = useState<"users" | "catalogs" | "audit">("users");
+  const [adminUserView, setAdminUserView] = useState<"directory" | "create" | "security">("directory");
+  const [selectedAdminUserId, setSelectedAdminUserId] = useState("");
+  const [userSearch, setUserSearch] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const [userMutationBusy, setUserMutationBusy] = useState(false);
   const authenticated = useRef(false);
+
+  async function navigateAdminArea(next: "users" | "catalogs" | "audit", openCreate = false) {
+    if (draftDirty && !await confirmAction({
+      title: "Abandonner les modifications ?",
+      description: "Les saisies non enregistrées dans cette rubrique d’administration seront perdues.",
+      confirmLabel: "Abandonner et continuer",
+    })) return;
+    if (draftDirty) {
+      announceDraftSaved();
+      setRoleDrafts({});
+      setPasswordTarget("");
+    }
+    setAdminArea(next);
+    setAdminUserView(next === "users" && openCreate ? "create" : "directory");
+    setPasswordTarget("");
+  }
 
   function clearAdminSession() {
     authenticated.current = false;
@@ -1399,36 +1937,77 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
+    const identityRef = String(values.get("identity_ref") ?? "").trim();
+    const role = String(values.get("role") ?? "BILLING_AGENT");
+    const password = String(values.get("password") ?? "");
+    const passwordConfirm = String(values.get("password_confirm") ?? "");
+    const requirePasswordChange = values.get("require_password_change") === "on";
+    if (password !== passwordConfirm) {
+      setMessage("Les deux mots de passe ne correspondent pas."); setError(true);
+      (form.elements.namedItem("password_confirm") as HTMLInputElement | null)?.focus();
+      return;
+    }
+    const roleLabels: Record<string, string> = { ADMIN: "Administrateur", BILLING_AGENT: "Agent facturation", CASHIER: "Caissier", SUPERVISOR: "Superviseur", AUDITOR_READONLY: "Auditeur lecture seule" };
+    setUserMutationBusy(true);
     try {
-      await centralAdminRequest("/v1/admin/users", "POST", {
-        identity_ref: String(values.get("identity_ref") ?? "").trim(),
-        role: String(values.get("role") ?? "BILLING_AGENT"),
-        password: String(values.get("password") ?? ""),
-        require_password_change: values.get("require_password_change") === "on",
+      const accepted = await confirmAction({
+        title: "Vérifier la création du compte",
+        description: `Identifiant : ${identityRef}. Rôle : ${roleLabels[role] ?? role}. ${requirePasswordChange ? "Le changement du mot de passe sera exigé à la première connexion." : "Le compte pourra se connecter avec le mot de passe défini."} Le mot de passe reste masqué.`,
+        confirmLabel: "Créer le compte",
       });
-      form.reset(); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
+      if (!accepted) return;
+      await centralAdminRequest("/v1/admin/users", "POST", {
+        identity_ref: identityRef,
+        role,
+        password,
+        require_password_change: requirePasswordChange,
+      });
+      form.reset(); announceDraftSaved(); setAdminUserView("directory"); setMessage("Utilisateur créé par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setUserMutationBusy(false); }
   }
 
   async function toggleUser(user: Row) {
     const id = text(user.id ?? user.user_id, "");
-    const status = text(user.status).toUpperCase() === "ACTIVE" ? "DISABLED" : "ACTIVE";
+    const status = text(user.status).toUpperCase() === "ACTIVE" ? "REVOKED" : "ACTIVE";
     if (!id) return;
+    const identity = text(user.identity_ref, "ce compte SEL");
+    const disabling = status === "REVOKED";
+    if (!await confirmAction({
+      title: disabling ? "Désactiver ce compte ?" : "Réactiver ce compte ?",
+      description: disabling
+        ? `Le compte ${identity} ne pourra plus ouvrir de session. Ses sessions seront révoquées ; les opérations déjà enregistrées restent conservées.`
+        : `Le compte ${identity} pourra à nouveau ouvrir une session avec son rôle actuel.`,
+      confirmLabel: disabling ? "Désactiver le compte" : "Réactiver le compte",
+      tone: disabling ? "warning" : "neutral",
+    })) return;
+    setUserMutationBusy(true);
     try {
       await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { status });
-      setMessage(status === "ACTIVE" ? "Compte réactivé." : "Compte désactivé. Les sessions associées sont révoquées côté serveur.");
+      setMessage(status === "ACTIVE" ? "Compte réactivé." : "Compte révoqué. Les sessions associées sont révoquées côté serveur.");
       setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setUserMutationBusy(false); }
   }
 
   async function updateUserRole(user: Row) {
     const id = text(user.id ?? user.user_id, "");
     const role = roleDrafts[id];
     if (!id || !role || role === text(user.role)) return;
+    const roleLabels: Record<string, string> = { ADMIN: "Administrateur", BILLING_AGENT: "Agent facturation", CASHIER: "Caissier", SUPERVISOR: "Superviseur", AUDITOR_READONLY: "Auditeur lecture seule" };
+    if (!await confirmAction({
+      title: "Vérifier le changement de rôle",
+      description: `Compte : ${text(user.identity_ref)}. Rôle actuel : ${roleLabels[text(user.role)] ?? text(user.role)}. Nouveau rôle : ${roleLabels[role] ?? role}. Les autorisations effectives seront appliquées par le serveur SEL.`,
+      confirmLabel: "Enregistrer le rôle",
+      tone: "warning",
+    })) return;
+    setUserMutationBusy(true);
     try {
       await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { role });
-      setMessage("Rôle modifié par le serveur central."); setError(false); await loadData();
+      setRoleDrafts((current) => { const next = { ...current }; delete next[id]; return next; });
+      announceDraftSaved(); setMessage("Rôle modifié par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
+    finally { setUserMutationBusy(false); }
   }
 
   async function resetUserPassword(event: FormEvent<HTMLFormElement>) {
@@ -1436,43 +2015,72 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
     if (!passwordTarget) return;
     const form = event.currentTarget;
     const password = String(new FormData(form).get("password") ?? "");
+    const user = users.find((item) => text(item.id ?? item.user_id) === passwordTarget);
+    const identity = text(user?.identity_ref, "ce compte SEL");
+    if (!await confirmAction({
+      title: "Vérifier la réinitialisation du mot de passe",
+      description: `Compte : ${identity}. Le nouveau mot de passe reste masqué. Les sessions existantes de ce compte seront révoquées par le serveur.`,
+      confirmLabel: "Confirmer le changement",
+      tone: "warning",
+    })) return;
+    setUserMutationBusy(true);
     try {
       await centralAdminRequest(`/v1/users/${encodeURIComponent(passwordTarget)}/password`, "POST", { password });
-      form.reset(); setPasswordTarget(""); setMessage("Mot de passe mis à jour. Les sessions existantes sont révoquées côté serveur."); setError(false); await loadData();
-    } catch (reason) { form.reset(); setMessage(humanError(reason)); setError(true); }
+      form.reset(); announceDraftSaved(); setPasswordTarget(""); setMessage("Mot de passe mis à jour. Les sessions existantes sont révoquées côté serveur."); setError(false); await loadData();
+    } catch (reason) { form.reset(); announceDraftSaved(); setMessage(humanError(reason)); setError(true); }
+    finally { setUserMutationBusy(false); }
   }
 
-  async function createCatalogDraft(kind: AdminCatalog, values: Record<string, string>) {
+  async function createCatalogDraft(kind: AdminCatalog, values: Record<string, string>): Promise<boolean> {
     setCatalogBusy(true);
     try {
       const body = { ...values, effective_to: values.effective_to || null };
       await centralAdminRequest(`/v1/admin/catalog/${kind}`, "POST", body);
       setMessage(`Brouillon ${adminCatalogDefinitions[kind].title.toLocaleLowerCase("fr")} transmis au serveur. Il n’est pas encore applicable.`); setError(false); await loadData();
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+      return true;
+    } catch (reason) { setMessage(humanError(reason)); setError(true); return false; }
     finally { setCatalogBusy(false); }
   }
 
-  async function approveCatalogDraft(kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) {
+  async function approveCatalogDraft(kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string): Promise<boolean> {
     const id = text(item.id ?? item[kind === "tariffs" ? "tariff_id" : "product_id"], "");
-    if (!id || !approvalRef) return;
+    if (!id || !approvalRef) return false;
     setCatalogBusy(true);
     try {
+      const label = text(item.label ?? record(item.payload).label ?? item.service_code ?? item.sku ?? id);
+      const accepted = await confirmAction({
+        title: "Vérifier l’approbation du référentiel",
+        description: `${adminCatalogDefinitions[kind].title} : ${label}. Référence d’approbation SEL : ${approvalRef}. Une version approuvée peut être utilisée par les opérations à venir.`,
+        confirmLabel: "Approuver cette version",
+        tone: "warning",
+      });
+      if (!accepted) return false;
       const supersedesKey = kind === "tariffs" ? "supersedes_tariff_id" : kind === "products" ? "supersedes_product_id" : "supersedes_id";
       const body = { approval_ref: approvalRef, [supersedesKey]: supersedesId || null };
       await centralAdminRequest(`/v1/admin/catalog/${kind}/${encodeURIComponent(id)}/approve`, "POST", body);
       setMessage("Référentiel approuvé par le serveur central avec la référence fournie."); setError(false); await loadData();
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+      return true;
+    } catch (reason) { setMessage(humanError(reason)); setError(true); return false; }
     finally { setCatalogBusy(false); }
   }
 
-  async function revokeCatalogItem(kind: AdminCatalog, item: Row, changeRef: string) {
+  async function revokeCatalogItem(kind: AdminCatalog, item: Row, changeRef: string): Promise<boolean> {
     const id = text(item.id ?? item[kind === "tariffs" ? "tariff_id" : "product_id"], "");
-    if (!id || !changeRef) return;
+    if (!id || !changeRef) return false;
     setCatalogBusy(true);
     try {
+      const label = text(item.label ?? record(item.payload).label ?? item.service_code ?? item.sku ?? id);
+      const accepted = await confirmAction({
+        title: "Vérifier la révocation du référentiel",
+        description: `${adminCatalogDefinitions[kind].title} : ${label}. Motif : ${changeRef}. La révocation sera historisée par le serveur SEL.`,
+        confirmLabel: "Révoquer cette version",
+        tone: "warning",
+      });
+      if (!accepted) return false;
       await centralAdminRequest(`/v1/admin/catalog/${kind}/${encodeURIComponent(id)}/revoke`, "POST", { change_ref: changeRef });
       setMessage("Révocation enregistrée par le serveur central avec la référence fournie."); setError(false); await loadData();
-    } catch (reason) { setMessage(humanError(reason)); setError(true); }
+      return true;
+    } catch (reason) { setMessage(humanError(reason)); setError(true); return false; }
     finally { setCatalogBusy(false); }
   }
 
@@ -1481,32 +2089,95 @@ function AdminConsole({ session, onSignedOut }: { session: CentralSessionInfo; o
     <div className="form-actions"><Button onClick={onSignedOut}>Fermer la session</Button></div>
   </Panel>;
 
+  const filteredUsers = users.filter((user) => {
+    const query = userSearch.trim().toLocaleLowerCase("fr");
+    return !query || [user.identity_ref, user.role, user.status].some((value) => text(value, "").toLocaleLowerCase("fr").includes(query));
+  });
+  const catalogEntries = [...tariffs, ...products, ...taxProfiles, ...fxRates, ...communicationCharges];
+  const approvedCatalogCount = catalogEntries.filter((item) => text(item.status).toUpperCase() === "APPROVED").length;
+  const selectedAdminUser = users.find((user) => text(user.id ?? user.user_id, "") === selectedAdminUserId) ?? null;
+
   return <>
     {message && <div className={`notice${error ? " error" : ""}`} role={error ? "alert" : "status"}>{message}</div>}
     <Panel title="Session administrateur" action={<div className="page-actions"><Button onClick={() => void loadData()} disabled={loading}>{loading ? "Actualisation…" : "Actualiser"}</Button><Button onClick={onSignedOut}>Se déconnecter</Button></div>}>
       <dl className="customer-details admin-session"><div><dt>Utilisateur</dt><dd>{text(session.user_id)}</dd></div><div><dt>Rôle</dt><dd>{text(session.role)}</dd></div><div><dt>Organisation</dt><dd>{text(session.organization_id)}</dd></div></dl>
     </Panel>
-    <Panel title="Utilisateurs et rôles">
-      <form className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
-        <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required /></label>
-        <label>Rôle<select name="role" defaultValue="BILLING_AGENT"><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
-        <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required /></label>
-        <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked /> Exiger le changement du mot de passe à la première connexion</span></label>
-        <div className="form-actions"><Button primary type="submit">Créer l’utilisateur</Button></div>
-      </form>
-      <Table headers={["Identifiant", "Rôle", "État", "Actions"]} empty="Aucun utilisateur retourné par le serveur." data={users.map((user) => {
-        const id = text(user.id ?? user.user_id, "");
-        return [text(user.identity_ref), <div className="admin-role-control"><select aria-label={`Rôle de ${text(user.identity_ref)}`} value={roleDrafts[id] ?? text(user.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [id]: event.target.value }))}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select><Button disabled={!roleDrafts[id] || roleDrafts[id] === text(user.role)} onClick={() => void updateUserRole(user)}>Enregistrer</Button></div>, <Status value={user.status} />, <div className="admin-user-actions"><Button onClick={() => setPasswordTarget(id)}>Réinitialiser le mot de passe</Button><Button onClick={() => void toggleUser(user)}>{text(user.status).toUpperCase() === "ACTIVE" ? "Désactiver" : "Réactiver"}</Button></div>];
-      })} />
-      {passwordTarget && <form className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Les sessions existantes de ce compte seront révoquées après validation côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required /></label><div className="page-actions"><Button type="button" onClick={() => setPasswordTarget("")}>Annuler</Button><Button primary type="submit">Confirmer le changement</Button></div></form>}
-    </Panel>
-    <div className="admin-grid admin-catalog-grid">
-      <AdminCatalogPanel kind="tariffs" items={tariffs} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-      <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-      <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-      <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-      <AdminCatalogPanel kind="communication-charge" items={communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} />
-    </div>
-    <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>
+    <nav className="admin-workspace-tabs" aria-label="Rubriques d’administration">
+      <Button className={adminArea === "users" ? "is-active" : ""} aria-pressed={adminArea === "users"} onClick={() => void navigateAdminArea("users")}>Utilisateurs</Button>
+      <Button className={adminArea === "catalogs" ? "is-active" : ""} aria-pressed={adminArea === "catalogs"} onClick={() => void navigateAdminArea("catalogs")}>Référentiels</Button>
+      <Button className={adminArea === "audit" ? "is-active" : ""} aria-pressed={adminArea === "audit"} onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button>
+    </nav>
+    {adminArea === "users" && <>
+      {adminUserView === "create" ? <>
+        <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / UTILISATEURS / CRÉATION</p><h2>Créer un utilisateur SEL</h2><p className="muted">Création isolée et attribution explicite d’un rôle.</p></div><Button onClick={() => void navigateAdminArea("users")}>Revenir au répertoire</Button></header>
+        <div className="admin-metrics">
+          <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
+          <Metric label="Référentiels approuvés" value={String(approvedCatalogCount)} note="Valeur du serveur SEL" />
+          <Metric label="Comptes actifs" value={String(users.filter((user) => text(user.status).toUpperCase() === "ACTIVE").length)} note="Valeur du serveur SEL" />
+          <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
+        </div>
+        <Panel title="Identité et autorisations">
+          <form data-preserve-draft className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
+            <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required disabled={userMutationBusy} /></label>
+            <label>Rôle<select name="role" defaultValue="BILLING_AGENT" disabled={userMutationBusy}><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
+            <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
+            <label>Confirmer le mot de passe<input name="password_confirm" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
+            <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked disabled={userMutationBusy} /> Exiger le changement du mot de passe à la première connexion</span></label>
+            <p className="help">Le compte est créé actif par le serveur. Le statut initial n’est pas modifiable par ce contrat API.</p>
+            <div className="form-actions"><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Vérification…" : "Vérifier la création"}</Button></div>
+          </form>
+        </Panel>
+        <Panel title="Étapes suivantes"><p className="muted">Après création, vérifiez le rôle et l’état du compte dans le répertoire. Le serveur SEL reste l’autorité sur les accès.</p><Button onClick={() => void navigateAdminArea("users")}>Utilisateurs et autorisations</Button></Panel>
+      </> : adminUserView === "security" && selectedAdminUser ? <>
+        <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / UTILISATEURS / SÉCURITÉ</p><h2>Modifier les accès d’un compte</h2><p className="muted">Changer un rôle, suspendre un compte ou réinitialiser son mot de passe.</p></div><Button onClick={() => void navigateAdminArea("users")}>Retour utilisateurs</Button></header>
+        <div className="admin-metrics">
+          <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
+          <Metric label="Référentiels approuvés" value={String(approvedCatalogCount)} note="Valeur du serveur SEL" />
+          <Metric label="Comptes actifs" value={String(users.filter((user) => text(user.status).toUpperCase() === "ACTIVE").length)} note="Valeur du serveur SEL" />
+          <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
+        </div>
+        <div className="admin-directory-layout">
+          <Panel title="Révision du compte">
+            <p className="help">Les modifications et la révocation des sessions sont validées par le serveur SEL.</p>
+            <dl className="customer-details admin-user-summary"><div><dt>Utilisateur sélectionné</dt><dd>{text(selectedAdminUser.identity_ref)}</dd></div><div><dt>Rôle actuel</dt><dd>{text(selectedAdminUser.role)}</dd></div><div><dt>État</dt><dd><Status value={selectedAdminUser.status} /></dd></div></dl>
+            {text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "") && <p className="notice">Votre propre rôle et statut ne peuvent pas être modifiés depuis cette session.</p>}
+            <form data-preserve-draft className="admin-role-edit" onSubmit={(event) => { event.preventDefault(); void updateUserRole(selectedAdminUser); }}>
+              <label>Nouveau rôle<select aria-label={`Nouveau rôle de ${text(selectedAdminUser.identity_ref)}`} value={roleDrafts[selectedAdminUserId] ?? text(selectedAdminUser.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [selectedAdminUserId]: event.target.value }))} disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "")}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select></label>
+              <Button primary type="submit" disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "") || !roleDrafts[selectedAdminUserId] || roleDrafts[selectedAdminUserId] === text(selectedAdminUser.role)}>{userMutationBusy ? "Vérification…" : "Vérifier la modification"}</Button>
+            </form>
+            <div className="admin-security-actions"><Button disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "")} onClick={() => void toggleUser(selectedAdminUser)}>{text(selectedAdminUser.status).toUpperCase() === "ACTIVE" ? "Désactiver ce compte" : "Réactiver ce compte"}</Button><Button disabled={userMutationBusy} onClick={() => setPasswordTarget(selectedAdminUserId)}>Réinitialiser le mot de passe</Button></div>
+            {passwordTarget === selectedAdminUserId && <form data-preserve-draft className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Le nouveau mot de passe reste masqué. Les sessions existantes seront révoquées côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label><div className="page-actions"><Button type="button" disabled={userMutationBusy} onClick={() => { announceDraftSaved(); setPasswordTarget(""); }}>Annuler</Button><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Enregistrement…" : "Confirmer le changement"}</Button></div></form>}
+          </Panel>
+          <Panel title="Actions suivantes"><div className="admin-next-actions"><Button onClick={() => void navigateAdminArea("users")}>Utilisateurs et autorisations</Button><Button onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button></div><p className="help">Aucun compte ni historique n’est supprimé physiquement.</p></Panel>
+        </div>
+      </> : <>
+        <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / RÉPERTOIRE</p><h2>Utilisateurs et autorisations</h2><p className="muted">Administrer les comptes sans mélanger les autres référentiels.</p></div><Button primary onClick={() => void navigateAdminArea("users", true)}>Créer un utilisateur</Button></header>
+        <div className="admin-metrics">
+          <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
+          <Metric label="Référentiels approuvés" value={String(approvedCatalogCount)} note="Valeur du serveur SEL" />
+          <Metric label="Comptes actifs" value={String(users.filter((user) => text(user.status).toUpperCase() === "ACTIVE").length)} note="Valeur du serveur SEL" />
+          <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
+        </div>
+        <div className="admin-directory-layout">
+          <Panel title="Répertoire des utilisateurs">
+            <p className="help">Recherchez un compte, puis ouvrez son dossier de sécurité.</p>
+            <input className="table-search" aria-label="Rechercher un compte" placeholder="Nom de compte, rôle ou état" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} />
+            <Table headers={["Identifiant", "Rôle", "État", "Action"]} empty={users.length ? "Aucun compte ne correspond à cette recherche." : "Aucun utilisateur retourné par le serveur."} data={filteredUsers.map((user) => {
+              const id = text(user.id ?? user.user_id, "");
+              return [text(user.identity_ref), text(user.role), <Status value={user.status} />, <Button aria-label={`Voir les accès de ${text(user.identity_ref)}`} disabled={userMutationBusy} onClick={() => { setSelectedAdminUserId(id); setAdminUserView("security"); }}>Voir</Button>];
+            })} />
+          </Panel>
+          <Panel title="Actions suivantes"><p className="help">Choisissez une étape ou revenez au répertoire.</p><div className="admin-next-actions"><Button onClick={() => void navigateAdminArea("users", true)}>Créer un utilisateur SEL</Button><Button onClick={() => void navigateAdminArea("catalogs")}>Tarifs et référentiels</Button><Button onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button></div><p className="help">Les opérations ne sont enregistrées qu’après confirmation.</p></Panel>
+        </div>
+      </>}
+    </>}
+    {adminArea === "catalogs" && <div className="admin-grid admin-catalog-grid">
+      <AdminCatalogPanel kind="tariffs" items={tariffs} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+      <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+      <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+      <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+      <AdminCatalogPanel kind="communication-charge" items={communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
+    </div>}
+    {adminArea === "audit" && <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>}
   </>;
 }
