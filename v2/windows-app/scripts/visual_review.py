@@ -430,7 +430,9 @@ async def capture_views() -> None:
                     pass
                 if await pending_confirmation.count():
                     await pending_confirmation.get_by_role("button", name="Abandonner et continuer").click()
-                if page_label:
+                if slug == "server":
+                    await page.get_by_role("button", name="État du serveur · diagnostic").click()
+                elif page_label:
                     await page.locator(".workspace-tabs").get_by_role("button", name=page_label, exact=True).click()
                 if slug == "customers":
                     await page.get_by_role("row").filter(has_text="SEL-DÉMO-0001").get_by_role("button", name="Ouvrir le dossier").click()
@@ -870,6 +872,7 @@ async def capture_views() -> None:
                     await page.screenshot(path=str(OUTPUT / f"admin-user-directory-{SHOT_SUFFIX}.png"), full_page=True)
                     await page.get_by_role("button", name="Créer un utilisateur", exact=True).click()
                     await page.get_by_role("heading", name="Créer un utilisateur SEL").wait_for()
+                    await page.screenshot(path=str(OUTPUT / f"admin-user-create-a02-{SHOT_SUFFIX}.png"), full_page=True)
                     user_form = page.locator("form.admin-create-user")
                     await user_form.locator('input[name="identity_ref"]').fill("agent-test-ux3")
                     await user_form.locator('select[name="role"]').select_option("CASHIER")
@@ -880,7 +883,7 @@ async def capture_views() -> None:
                     if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/users' && entry.method === 'POST').length") != 0:
                         raise AssertionError("Mismatched initial passwords must not send a write request")
                     await user_form.locator('input[name="password_confirm"]').fill("synthetic-secret-123")
-                    await user_form.get_by_role("button", name="Vérifier la création").click()
+                    await page.get_by_role("button", name="Vérifier le nouvel utilisateur").click()
                     user_review = page.get_by_role("alertdialog", name="Vérifier la création du compte")
                     await user_review.wait_for()
                     review_text = await user_review.inner_text()

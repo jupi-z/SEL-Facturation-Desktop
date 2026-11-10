@@ -385,11 +385,19 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert '`/v1/admin/offline-grants/${encodeURIComponent(id)}/revoke`' not in app
     assert "minLength={8}" in app
     assert "AdminCatalogPanel" in app
+    assert 'id="admin-create-user-form"' in app
+    assert 'form="admin-create-user-form"' in app
+    admin_styles = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    assert ".admin-create-user { grid-template-columns: repeat(2, minmax(0, 1fr))" in admin_styles
+    assert ".admin-create-user .form-actions { grid-column: auto; justify-content: flex-start; }" in admin_styles
+    assert 'f"admin-user-create-a02-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'page.get_by_role("button", name="Vérifier le nouvel utilisateur").click()' in visual_review
     assert '{adminArea !== "users" && <nav className="admin-workspace-tabs"' in app
     assert '{view !== "admin" && domainViews[domainByView[view]] && <nav className="workspace-tabs"' in app
     assert 'Panel title="Session administrateur"' not in app
     assert '"Données d’administration actualisées depuis le serveur central."' not in app
     assert '{view === "admin" && <AdminConsole' in app
+    assert 'page.get_by_role("button", name="État du serveur · diagnostic").click()' in visual_review
     assert 'page.get_by_role("button", name="Tarifs et référentiels", exact=True).click()' in visual_review
     assert 'className="admin-directory-layout"' in app
     assert 'className="customer-details admin-user-summary"' in app

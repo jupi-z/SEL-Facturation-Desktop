@@ -2190,18 +2190,21 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
           <Metric label="Comptes actifs" value={String(users.filter((user) => text(user.status).toUpperCase() === "ACTIVE").length)} note="Valeur du serveur SEL" />
           <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
         </div>
-        <Panel title="Identité et autorisations">
-          <form data-preserve-draft className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
-            <label>Identifiant utilisateur<input name="identity_ref" autoComplete="off" required disabled={userMutationBusy} /></label>
-            <label>Rôle<select name="role" defaultValue="BILLING_AGENT" disabled={userMutationBusy}><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
-            <label>Nouveau mot de passe<input name="password" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
-            <label>Confirmer le mot de passe<input name="password_confirm" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
-            <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked disabled={userMutationBusy} /> Exiger le changement du mot de passe à la première connexion</span></label>
-            <p className="help">Le compte est créé actif par le serveur. Le statut initial n’est pas modifiable par ce contrat API.</p>
-            <div className="form-actions"><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Vérification…" : "Vérifier la création"}</Button></div>
-          </form>
-        </Panel>
-        <Panel title="Étapes suivantes"><p className="muted">Après création, vérifiez le rôle et l’état du compte dans le répertoire. Le serveur SEL reste l’autorité sur les accès.</p><Button onClick={() => void navigateAdminArea("users")}>Utilisateurs et autorisations</Button></Panel>
+        <div className="admin-directory-layout admin-create-layout">
+          <Panel title="Identité et autorisations">
+            <p className="help">Informations et opérations contrôlées par le serveur SEL.</p>
+            <form id="admin-create-user-form" data-preserve-draft className="form-grid admin-create-user" onSubmit={(event) => void createUser(event)}>
+              <label>Identifiant SEL<input name="identity_ref" autoComplete="off" required disabled={userMutationBusy} /></label>
+              <label>Rôle initial<select name="role" defaultValue="BILLING_AGENT" disabled={userMutationBusy}><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option><option value="ADMIN">Administrateur</option></select></label>
+              <label>Mot de passe temporaire<input name="password" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
+              <label>Confirmer le mot de passe<input name="password_confirm" type="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label>
+              <label><span>Connexion initiale</span><span><input name="require_password_change" type="checkbox" defaultChecked disabled={userMutationBusy} /> Exiger le changement du mot de passe à la première connexion</span></label>
+              <p className="help">Le compte est activé par le serveur SEL. Son état initial n’est pas configurable par l’API actuelle.</p>
+              <div className="form-actions"><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Vérification…" : "Vérifier la création"}</Button></div>
+            </form>
+          </Panel>
+          <Panel title="Actions suivantes"><p className="help">Vérifiez les informations saisies avant de créer le compte.</p><div className="admin-next-actions"><Button type="submit" form="admin-create-user-form">Vérifier le nouvel utilisateur</Button><Button onClick={() => void navigateAdminArea("users")}>Utilisateurs et autorisations</Button></div><p className="help">Le compte n’est enregistré qu’après confirmation explicite.</p></Panel>
+        </div>
       </> : adminUserView === "security" && selectedAdminUser ? <>
         <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / UTILISATEURS / SÉCURITÉ</p><h2>Modifier les accès d’un compte</h2><p className="muted">Changer un rôle, suspendre un compte ou réinitialiser son mot de passe.</p></div><Button onClick={() => void navigateAdminArea("users")}>Retour utilisateurs</Button></header>
         <div className="admin-metrics">
