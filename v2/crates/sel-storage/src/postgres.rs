@@ -4044,6 +4044,125 @@ impl CentralStore {
         })))
     }
 
+    /// Organization-wide receivables register with balances and counters derived by PostgreSQL.
+    pub async fn list_receivables(&self) -> Result<serde_json::Value, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT r.id, r.customer_id, c.customer_code, c.legal_name,
+                    r.source_type, r.currency, r.principal_total,
+                    CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number, r.source_id::text)
+                         ELSE r.source_id::text END AS source_reference,
+                    COALESCE((
+                        SELECT SUM(pa.allocated_amount * GREATEST(
+                            p.amount_received - COALESCE(rev.reversed_amount, 0), 0
+                        ) / NULLIF(p.amount_received, 0))
+                        FROM payment_allocations pa
+                        JOIN payments p ON p.id = pa.payment_id
+                        LEFT JOIN (
+                            SELECT payment_id, SUM(amount) AS reversed_amount
+                            FROM payment_reversals GROUP BY payment_id
+                        ) rev ON rev.payment_id = p.id
+                        WHERE pa.receivable_id = r.id AND p.status = 'CENTRAL_ACCEPTED'
+                    ), 0) AS paid,
+                    COALESCE((SELECT SUM(cn.amount) FROM credit_notes cn WHERE cn.receivable_id = r.id), 0) AS credited,
+                    COALESCE((
+                        SELECT SUM(GREATEST(s.amount_due - COALESCE((
+                            SELECT SUM(pa.allocated_amount * GREATEST(
+                                p.amount_received - COALESCE(rev.reversed_amount, 0), 0
+                            ) / NULLIF(p.amount_received, 0))
+                            FROM payment_allocations pa
+                            JOIN payments p ON p.id = pa.payment_id
+                            LEFT JOIN (
+                                SELECT payment_id, SUM(amount) AS reversed_amount
+                                FROM payment_reversals GROUP BY payment_id
+                            ) rev ON rev.payment_id = p.id
+                            WHERE pa.schedule_id = s.id AND p.status = 'CENTRAL_ACCEPTED'
+                        ), 0), 0))
+                        FROM installment_plans ip
+                        JOIN installment_schedule s ON s.plan_id = ip.id
+                        WHERE ip.receivable_id = r.id AND s.due_date < CURRENT_DATE
+                    ), 0) AS overdue_amount,
+                    (SELECT COUNT(*) FROM installment_plans ip
+                     JOIN installment_schedule s ON s.plan_id = ip.id
+                     WHERE ip.receivable_id = r.id AND s.amount_due > COALESCE((
+                         SELECT SUM(pa.allocated_amount * GREATEST(
+                             p.amount_received - COALESCE(rev.reversed_amount, 0), 0
+                         ) / NULLIF(p.amount_received, 0))
+                         FROM payment_allocations pa
+                         JOIN payments p ON p.id = pa.payment_id
+                         LEFT JOIN (
+                             SELECT payment_id, SUM(amount) AS reversed_amount
+                             FROM payment_reversals GROUP BY payment_id
+                         ) rev ON rev.payment_id = p.id
+                         WHERE pa.schedule_id = s.id AND p.status = 'CENTRAL_ACCEPTED'
+                     ), 0)) AS open_installments
+             FROM receivables r
+             JOIN customers c ON c.id = r.customer_id
+             LEFT JOIN invoices i ON i.id = r.source_id AND r.source_type = 'INVOICE'
+             WHERE c.organization_id = $1 AND r.status <> 'VOID'
+             ORDER BY c.customer_code, r.source_type, r.source_id, r.id",
+        )
+        .bind(self.organization_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let mut receivables = Vec::with_capacity(rows.len());
+        let mut open_installments = 0_i64;
+        let mut overdue_count = 0_i64;
+        for row in &rows {
+            let principal = row.try_get::<Decimal, _>("principal_total")?.round_dp(2);
+            let paid = row.try_get::<Decimal, _>("paid")?.round_dp(2);
+            let credited = row.try_get::<Decimal, _>("credited")?.round_dp(2);
+            let balance = (principal - paid - credited).round_dp(2);
+            let overdue = row.try_get::<Decimal, _>("overdue_amount")?.round_dp(2);
+            let status = if balance <= Decimal::ZERO {
+                "SETTLED"
+            } else if overdue > Decimal::ZERO {
+                overdue_count += 1;
+                "OVERDUE"
+            } else {
+                "OPEN"
+            };
+            open_installments += row.try_get::<i64, _>("open_installments")?;
+            receivables.push(json!({
+                "receivable_id": row.try_get::<Uuid, _>("id")?,
+                "customer_id": row.try_get::<Uuid, _>("customer_id")?,
+                "customer_code": row.try_get::<String, _>("customer_code")?,
+                "customer_name": row.try_get::<String, _>("legal_name")?,
+                "source_type": row.try_get::<String, _>("source_type")?,
+                "source_reference": row.try_get::<String, _>("source_reference")?,
+                "currency": row.try_get::<String, _>("currency")?,
+                "principal": format!("{principal:.2}"),
+                "paid": format!("{paid:.2}"),
+                "credited": format!("{credited:.2}"),
+                "balance": format!("{balance:.2}"),
+                "overdue_amount": format!("{overdue:.2}"),
+                "status": status
+            }));
+        }
+        let payment_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM payments p
+             JOIN customers c ON c.id = p.customer_id
+             WHERE c.organization_id = $1 AND p.status = 'CENTRAL_ACCEPTED'",
+        )
+        .bind(self.organization_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(json!({
+            "receivables": receivables,
+            "metrics": {
+                "payment_count": payment_count,
+                "receivable_count": receivables.len(),
+                "open_installment_count": open_installments,
+                "overdue_count": overdue_count
+            }
+        }))
+    }
+
     pub async fn get_installment_plan(
         &self,
         plan_id: Uuid,

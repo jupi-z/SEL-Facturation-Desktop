@@ -93,6 +93,24 @@ button { cursor: pointer; }
 .metric-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .dossier-metrics { margin: 0 0 18px; }
 .dossier-metrics .metric-value { font-size: 17px; }
+.receivable-metrics { margin-bottom: 14px; }
+.receivable-metrics .metric { min-height: 88px; }
+.receivable-workspace { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(250px, .82fr); align-items: stretch; gap: 14px; }
+.receivable-workspace > .panel { min-height: 310px; }
+.receivable-caption { margin: -2px 0 12px; }
+.receivable-customer, .receivable-origin { display: grid; gap: 4px; min-width: 0; }
+.receivable-customer { padding: 0; border: 0; color: var(--navy); background: transparent; text-align: left; }
+.receivable-customer:hover strong, .receivable-customer.selected strong { color: var(--blue); text-decoration: underline; }
+.receivable-customer small, .receivable-origin small { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
+.receivable-origin strong { font-size: 11px; }
+.receivable-next-actions { display: flex; min-height: 240px; flex-direction: column; align-items: stretch; gap: 10px; padding-top: 4px; }
+.receivable-next-actions > .button { width: 100%; min-height: 39px; text-align: left; }
+.receivable-next-actions > .muted { margin: 0 0 4px; }
+.receivable-prototype-note { margin: auto 0 0; padding-top: 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.5; }
+.receivable-detail { display: grid; grid-template-columns: minmax(90px, .7fr) minmax(0, 1.3fr); margin: 5px 0; border-top: 1px solid var(--line); }
+.receivable-detail dt, .receivable-detail dd { margin: 0; padding: 7px 2px; border-bottom: 1px solid var(--line); font-size: 10px; }
+.receivable-detail dt { color: var(--muted); }
+.receivable-detail dd { color: var(--navy); font-weight: 650; text-align: right; overflow-wrap: anywhere; }
 .customer-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; margin: 0; }
 .customer-details div { display: grid; gap: 7px; min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .customer-details dt { color: var(--muted); font-size: 10px; }
@@ -312,7 +330,7 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
   .metric { padding-right: 14px; padding-left: 14px; }
   .payment-draft-summary { grid-template-columns: 1fr; }
   .columns, .customer-layout { grid-template-columns: 1fr; }
-  .invoice-workspace, .invoice-history-layout, .invoice-verification-layout, .payment-journal-layout, .reading-workspace { grid-template-columns: 1fr; }
+  .invoice-workspace, .invoice-history-layout, .invoice-verification-layout, .payment-journal-layout, .reading-workspace, .receivable-workspace { grid-template-columns: 1fr; }
   .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

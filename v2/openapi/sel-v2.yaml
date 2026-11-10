@@ -850,6 +850,19 @@ paths:
         '201': { description: Payment reversal recorded }
         '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+  /v1/receivables:
+    get:
+      operationId: listReceivables
+      description: Organization-scoped receivables register. Balances and overdue states are derived from the central financial ledger.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Current receivables and server-calculated register counters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReceivablesRegister' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
   /v1/receivables/{id}:
     get:
       operationId: getReceivable
@@ -1399,6 +1412,37 @@ components:
         tax: { type: string }
         total: { type: string }
         snapshot_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    ReceivablesRegister:
+      type: object
+      required: [receivables, metrics]
+      properties:
+        receivables:
+          type: array
+          items:
+            type: object
+            required: [receivable_id, customer_id, customer_code, customer_name, source_type, source_reference, currency, principal, paid, credited, balance, overdue_amount, status]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              customer_id: { type: string, format: uuid }
+              customer_code: { type: string }
+              customer_name: { type: string }
+              source_type: { type: string, enum: [INVOICE, SALE] }
+              source_reference: { type: string }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+              principal: { type: string }
+              paid: { type: string }
+              credited: { type: string }
+              balance: { type: string }
+              overdue_amount: { type: string }
+              status: { type: string, enum: [OPEN, OVERDUE, SETTLED] }
+        metrics:
+          type: object
+          required: [payment_count, receivable_count, open_installment_count, overdue_count]
+          properties:
+            payment_count: { type: integer, minimum: 0 }
+            receivable_count: { type: integer, minimum: 0 }
+            open_installment_count: { type: integer, minimum: 0 }
+            overdue_count: { type: integer, minimum: 0 }
     CustomerStatement:
       type: object
       required: [customer_id, receivables, invoices, payments]

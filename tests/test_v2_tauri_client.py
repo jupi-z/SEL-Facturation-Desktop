@@ -818,14 +818,19 @@ def test_customer_directory_surfaces_truthful_central_metrics_before_the_table()
     )
 
 
-def test_visual_review_captures_customer_record_and_receivable_statement() -> None:
+def test_visual_review_captures_customer_record_and_global_receivables_register() -> None:
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
 
     assert 'f"customer-record-{SHOT_SUFFIX}.png"' in visual_review
-    assert 'f"receivables-statement-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"receivables-register-f08-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'f"receivables-detail-f08-{SHOT_SUFFIX}.png"' in visual_review
+    assert 'path === \'/v1/receivables\'' in visual_review
+    assert 'view === "receivables"' in app
+    assert 'centralRequest<Row>("/v1/receivables")' in app
+    assert '› Détail d’une créance' in app
+    assert '› Enregistrer un règlement' in app
     assert 'get_by_role("button", name="Ouvrir le dossier →")' in visual_review
-    assert 'get_by_label("Abonné").select_option("demo-customer-0001")' in visual_review
     assert 'aria-label="Retour au répertoire"' in app
     assert 'view === "customers" && (selectedCustomer ? <>' in app
     assert 'page.get_by_role("heading", name="Dossier abonné")' in visual_review

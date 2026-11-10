@@ -71,6 +71,11 @@ SALES = [{
     "installment_plan_id": None,
     "status": "CENTRAL_ACCEPTED",
 }]
+RECEIVABLES = [
+    {"receivable_id": "demo-receivable-0001", "customer_id": "demo-customer-0001", "customer_code": "SEL-DÉMO-0001", "customer_name": "Client Alpha", "source_type": "INVOICE", "source_reference": "SEL-20261103-103000", "currency": "USD", "principal": "22.62", "paid": "3.00", "credited": "0.00", "balance": "19.62", "overdue_amount": "0.00", "status": "OPEN"},
+    {"receivable_id": "demo-receivable-solar-0001", "customer_id": "demo-customer-0001", "customer_code": "SEL-DÉMO-0001", "customer_name": "Client Alpha", "source_type": "SALE", "source_reference": "demo-sale-0001", "currency": "USD", "principal": "120.00", "paid": "0.00", "credited": "0.00", "balance": "120.00", "overdue_amount": "0.00", "status": "OPEN"},
+    {"receivable_id": "demo-receivable-0002", "customer_id": "demo-customer-0002", "customer_code": "SEL-DÉMO-0002", "customer_name": "Client Beta", "source_type": "INVOICE", "source_reference": "SEL-20261103-104000", "currency": "USD", "principal": "8.00", "paid": "0.00", "credited": "0.00", "balance": "8.00", "overdue_amount": "0.00", "status": "OPEN"},
+]
 SOLAR_PLAN = {
     "id": "demo-plan-0001",
     "receivable_id": "demo-receivable-solar-0001",
@@ -142,6 +147,7 @@ def mock_invoke_script() -> str:
         "customers": CUSTOMERS,
         "invoices": INVOICES,
         "payments": PAYMENTS,
+        "receivables": RECEIVABLES,
         "sales": SALES,
         "products": PRODUCTS,
         "tariffs": [
@@ -182,9 +188,13 @@ def mock_invoke_script() -> str:
         }}
         if (command !== 'central_request') throw new Error('Unexpected visual smoke command: ' + command);
         const path = args.path || '';
+        window.__centralRequestLog = window.__centralRequestLog || [];
+        window.__centralRequestLog.push({{path,method:args.method}});
         if (args.method !== 'GET') window.__centralWriteLog.push({{path,method:args.method,body:args.body}});
         let body = [];
-        if (path.endsWith('/statement')) {{
+        if (path === '/v1/receivables') {{ body = {{receivables:fixtures.receivables,metrics:{{payment_count:1,receivable_count:3,open_installment_count:2,overdue_count:0}}}}; }}
+        else if (path.startsWith('/v1/receivables/')) {{ const receivableId = path.split('/')[3]; const item = fixtures.receivables.find((entry) => entry.receivable_id === receivableId); body = item ? {{...item,id:item.receivable_id}} : {{}}; }}
+        else if (path.endsWith('/statement')) {{
           const customerId = path.split('/')[3];
           if (customerId === window.__delayStatementForCustomer) {{
             window.__statementRequestStarted = true;
@@ -406,6 +416,9 @@ async def capture_views() -> None:
                 ("server", "Administration", "État du serveur"),
                 ("admin", "Administration", "Administration"),
             ]
+            requested_views = {item.strip() for item in os.environ.get("SEL_VISUAL_VIEWS", "").split(",") if item.strip()}
+            if requested_views:
+                views = [item for item in views if item[0] in requested_views]
             for slug, domain_label, page_label in views:
                 await page.get_by_role("navigation", name="Navigation principale").get_by_role(
                     "button", name=domain_label, exact=True
@@ -700,11 +713,38 @@ async def capture_views() -> None:
                     await page.get_by_role("alertdialog", name="Vérifier le raccordement").get_by_role("button", name="Enregistrer le raccordement").click()
                     await page.wait_for_function("window.__centralWriteLog.filter(entry => entry.method === 'PATCH' && entry.path.includes('/service-accounts/')).length === 1")
                 if slug == "receivables":
-                    await page.get_by_label("Abonné").select_option("demo-customer-0001")
-                    await page.get_by_text("demo-receivable-0001").wait_for()
+                    await page.get_by_role("heading", name="Suivi des créances").wait_for()
+                    await page.locator(".receivable-customer").filter(has_text="Client Alpha").first.wait_for()
+                    await page.get_by_text("Client Beta", exact=True).wait_for()
+                    if await page.locator(".receivable-metrics .metric").count() != 4:
+                        raise AssertionError("Receivables F08 must show the four central server metrics")
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.wait_for_timeout(120)
-                    await page.screenshot(path=str(OUTPUT / f"receivables-statement-{SHOT_SUFFIX}.png"))
+                    await page.screenshot(path=str(OUTPUT / f"receivables-register-f08-{SHOT_SUFFIX}.png"))
+                    await page.locator(".receivable-customer").first.click()
+                    writes_before_detail = await page.evaluate("window.__centralWriteLog.length")
+                    await page.get_by_role("button", name="› Détail d’une créance").click()
+                    await page.locator(".receivable-detail").get_by_text("19,62", exact=False).wait_for()
+                    if await page.evaluate("window.__centralWriteLog.length") != writes_before_detail:
+                        raise AssertionError("Opening receivable details must be read-only")
+                    await page.screenshot(path=str(OUTPUT / f"receivables-detail-f08-{SHOT_SUFFIX}.png"))
+                    await page.get_by_role("button", name="› Enregistrer un règlement").click()
+                    await page.get_by_role("heading", name="Enregistrer un paiement").wait_for()
+                    if await page.locator('#central-payment-form select[name="customer_id"]').input_value() != "demo-customer-0001":
+                        raise AssertionError("Receivable payment shortcut must preselect its customer")
+                    await page.locator('#central-payment-form input[name="received_amount"]').fill("3.00")
+                    await page.get_by_role("button", name="Affecter un paiement aux créances").click()
+                    await page.wait_for_timeout(500)
+                    if await page.locator('.allocation-card select option[value="demo-receivable-0001"]').count() != 1:
+                        payment_diagnostic = await page.evaluate("({body:document.body.innerText,requests:window.__centralRequestLog})")
+                        await page.screenshot(path=str(OUTPUT / f"receivables-payment-diagnostic-{SHOT_SUFFIX}.png"))
+                        raise AssertionError(f"Receivable payment shortcut did not load its selected receivable: {payment_diagnostic}")
+                    if await page.locator('.allocation-card select').first.input_value() != "demo-receivable-0001":
+                        raise AssertionError("Receivable action must preselect the chosen obligation in payment entry")
+                    if not await page.locator(".page-heading > button").is_disabled():
+                        raise AssertionError("Payment allocation review must remain disabled until an amount is assigned")
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.screenshot(path=str(OUTPUT / f"receivables-payment-prefill-f08-{SHOT_SUFFIX}.png"))
                 if slug == "invoices":
                     await page.get_by_role("heading", name="Historique des factures").wait_for()
                     if await page.locator(".invoice-history-metrics .metric").count() != 4:
@@ -985,6 +1025,8 @@ async def capture_views() -> None:
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")
+            if requested_views:
+                return
             await page.get_by_role("button", name="Paiements", exact=True).click()
             pending_admin_draft = page.get_by_role("alertdialog", name="Abandonner la saisie ?")
             if await pending_admin_draft.count():

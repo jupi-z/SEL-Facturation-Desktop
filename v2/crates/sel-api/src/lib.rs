@@ -422,6 +422,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/payments/:id/allocate", post(allocate_payment))
         .route("/v1/payments/:id/reverse", post(reverse_payment))
+        .route("/v1/receivables", get(list_receivables))
         .route("/v1/receivables/:id", get(get_receivable))
         .route("/v1/installment-plans/:id", get(get_installment_plan))
         .route("/v1/receivables/:id/credit", post(create_credit_note))
@@ -584,6 +585,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/meters/:id/readings"
                     | "/v1/invoices"
                     | "/v1/payments"
+                    | "/v1/receivables"
                     | "/v1/solar/sales"
                     | "/v1/sync/pull"
                     | "/v1/sync/status"
@@ -3504,6 +3506,61 @@ async fn get_receivable(
     ))
 }
 
+async fn list_receivables(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        return store
+            .list_receivables()
+            .await
+            .map(Json)
+            .map_err(storage_error);
+    }
+
+    let customers = state.customers.read().await;
+    let receivables = state.receivables.read().await;
+    let payments = state.payments.read().await;
+    let entries = receivables
+        .values()
+        .map(|receivable| {
+            let paid: Decimal = payments
+                .values()
+                .flat_map(|payment| payment.allocations.iter())
+                .filter(|allocation| allocation.receivable_id == receivable.id)
+                .map(|allocation| allocation.amount)
+                .sum();
+            let balance = (receivable.principal - paid).round_dp(2);
+            let customer = customers.get(&receivable.customer_id);
+            json!({
+                "receivable_id": receivable.id,
+                "customer_id": receivable.customer_id,
+                "customer_code": customer.map(|item| item.customer_code.as_str()).unwrap_or(""),
+                "customer_name": customer.map(|item| item.legal_name.as_str()).unwrap_or(""),
+                "source_type": receivable.source_type,
+                "source_reference": receivable.source_reference,
+                "currency": receivable.currency,
+                "principal": format!("{:.2}", receivable.principal.round_dp(2)),
+                "paid": format!("{:.2}", paid.round_dp(2)),
+                "credited": "0.00",
+                "balance": format!("{balance:.2}"),
+                "overdue_amount": "0.00",
+                "status": if balance <= Decimal::ZERO { "SETTLED" } else { "OPEN" }
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "receivables": entries,
+        "metrics": {
+            "payment_count": payments.len(),
+            "receivable_count": entries.len(),
+            "open_installment_count": 0,
+            "overdue_count": 0
+        }
+    })))
+}
+
 async fn get_statement(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4812,6 +4869,7 @@ mod tests {
             format!("/v1/invoices/{id}"),
             format!("/v1/invoices/{id}/document-data"),
             "/v1/payments".to_owned(),
+            "/v1/receivables".to_owned(),
             format!("/v1/payments/{id}/document-data"),
             format!("/v1/receivables/{id}"),
             format!("/v1/installment-plans/{id}"),

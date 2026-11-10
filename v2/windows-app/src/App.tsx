@@ -222,6 +222,11 @@ export default function App() {
   const [customerEditBusy, setCustomerEditBusy] = useState(false);
   const [customerCreateBusy, setCustomerCreateBusy] = useState(false);
   const [statementState, setStatementState] = useState<{ customerId: string; data: Row | null; loading: boolean; error: string }>({ customerId: "", data: null, loading: false, error: "" });
+  const [receivablesState, setReceivablesState] = useState<{ data: Row | null; loading: boolean; error: string }>({ data: null, loading: false, error: "" });
+  const [selectedReceivableId, setSelectedReceivableId] = useState("");
+  const [receivableDetail, setReceivableDetail] = useState<Row | null>(null);
+  const [receivableDetailId, setReceivableDetailId] = useState("");
+  const [receivableDetailBusy, setReceivableDetailBusy] = useState(false);
   const [preview, setPreview] = useState<Row | null>(null);
   const [invoiceDraft, setInvoiceDraft] = useState<Row | null>(null);
   const [invoiceIssueBusy, setInvoiceIssueBusy] = useState(false);
@@ -395,6 +400,22 @@ export default function App() {
       });
     return () => { active = false; };
   }, [selectedCustomer]);
+
+  useEffect(() => {
+    if (view !== "receivables") return;
+    let active = true;
+    setReceivablesState({ data: null, loading: true, error: "" });
+    setSelectedReceivableId("");
+    setReceivableDetail(null);
+    setReceivableDetailId("");
+    centralRequest<Row>("/v1/receivables")
+      .then((data) => { if (active) setReceivablesState({ data, loading: false, error: "" }); })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setReceivablesState({ data: null, loading: false, error: humanError(error) });
+      });
+    return () => { active = false; };
+  }, [view]);
 
   const currentStatement = statementState.customerId === selectedCustomer ? statementState : null;
 
@@ -1038,17 +1059,41 @@ export default function App() {
       </>}
 
       {view === "receivables" && <>
-        <PageHeading eyebrow="FINANCE / SOLDES" title="Suivi des créances" description="Soldes et obligations renvoyés par le serveur, sans recalcul dans l’interface." />
-        <Panel title="Situation d’un abonné"><label className="customer-picker">Abonné<select value={selectedCustomer} onChange={(event) => setSelectedCustomer(event.target.value)}><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-          {(currentStatement?.loading || (!currentStatement && Boolean(selectedCustomer))) && <div className="empty-state" role="status">Chargement de la situation de cet abonné…</div>}
-          {currentStatement?.error && <div className="notice error" role="alert">{currentStatement.error}</div>}
-          {currentStatement?.data && <Table headers={["Référence", "Nature", "Solde", "Situation", "Actions"]} empty="Aucune créance associée." data={rows<Row>(currentStatement.data.receivables).map((row) => {
-            const receivableId = text(row.receivable_id ?? row.id, "");
-            return [<strong>{receivableId}</strong>, domainLabel(row.source_type), formatMoney(row.balance, row.currency), <Status value={row.status} />, receivableId && Number(row.balance) > 0 ? <Button onClick={() => beginFinancialAction({ kind: "credit-receivable", id: receivableId, reference: receivableId })}>Créer un avoir</Button> : "—"];
-          })} />}
-          {!selectedCustomer && <div className="empty-state">Choisissez un abonné pour consulter son relevé et ses créances.</div>}
-          {selectedCustomer && currentStatement && !currentStatement.loading && !currentStatement.error && !currentStatement.data && <div className="empty-state">Aucune situation financière n’est disponible pour cet abonné.</div>}
-        </Panel>
+        <PageHeading eyebrow="SEL / COMMERCE & FINANCE" title="Suivi des créances" description="Distinguer les soldes dus, échus et réglés." action={<Button onClick={() => { setSelectedReceivableId(""); setReceivableDetail(null); setReceivableDetailId(""); setReceivablesState((current) => ({ ...current, loading: true, error: "" })); centralRequest<Row>("/v1/receivables").then((data) => setReceivablesState({ data, loading: false, error: "" })).catch((error: unknown) => setReceivablesState({ data: null, loading: false, error: humanError(error) })); }}>Actualiser</Button>} />
+        {receivablesState.error && <div className="notice error" role="alert">Impossible de charger les créances : {receivablesState.error}</div>}
+        {receivablesState.loading && <div className="empty-state" role="status">Chargement des créances depuis le serveur SEL…</div>}
+        {receivablesState.data && <>
+          <div className="metrics receivable-metrics">
+            <Metric label="Règlements" value={text(record(receivablesState.data.metrics).payment_count, "0")} note="Encaissements acceptés par SEL" />
+            <Metric label="Créances" value={text(record(receivablesState.data.metrics).receivable_count, "0")} note="Obligations suivies" />
+            <Metric label="Échéances" value={text(record(receivablesState.data.metrics).open_installment_count, "0")} note="Échéances restant à régler" />
+            <Metric label="Statut" value={`${text(record(receivablesState.data.metrics).overdue_count, "0")} en retard`} note="Créances avec échéance impayée" />
+          </div>
+          <div className="receivable-workspace">
+            <Panel title="Créances suivies"><p className="muted receivable-caption">Mise en page de référence · Soldes et états fournis par le serveur SEL.</p>
+              {receivableDetailBusy && <p className="empty-state" role="status">Chargement du détail depuis le serveur…</p>}
+              <Table headers={["Abonné", "Origine", "Solde", "État"]} empty={receivablesState.loading ? "Chargement des créances…" : "Aucune créance retournée par le serveur SEL."} data={rows<Row>(receivablesState.data.receivables).map((row) => {
+                const id = text(row.receivable_id, "");
+                return [<button type="button" className={`receivable-customer${selectedReceivableId === id ? " selected" : ""}`} aria-pressed={selectedReceivableId === id} onClick={() => { setSelectedReceivableId(id); setReceivableDetail(null); setReceivableDetailId(""); }}><strong>{text(row.customer_name)}</strong><small>{text(row.customer_code)}</small></button>, <span className="receivable-origin"><strong>{domainLabel(row.source_type)}</strong><small>{text(row.source_reference)}</small></span>, formatMoney(row.balance, row.currency), <Status value={row.status} />];
+              })} />
+            </Panel>
+            <Panel title="Actions suivantes"><div className="receivable-next-actions">
+              <p className="muted">{selectedReceivableId ? "Consultez le détail ou ouvrez un règlement pour l’abonné sélectionné." : "Choisissez une créance dans la liste pour continuer."}</p>
+              <Button disabled={!selectedReceivableId || receivableDetailBusy} onClick={() => {
+                const id = selectedReceivableId;
+                setReceivableDetailBusy(true);
+                centralRequest<Row>(`/v1/receivables/${encodeURIComponent(id)}`).then((detail) => { setReceivableDetailId(id); setReceivableDetail(detail); }).catch((error: unknown) => setNotice({ message: humanError(error), error: true })).finally(() => setReceivableDetailBusy(false));
+              }}>› Détail d’une créance</Button>
+              <Button primary disabled={!selectedReceivableId} onClick={async () => {
+                const selected = rows<Row>(receivablesState.data?.receivables).find((item) => text(item.receivable_id) === selectedReceivableId);
+                if (!selected || Number(selected.balance) <= 0) return;
+                if (await navigateTo("payments", text(selected.customer_id))) setPaymentPrefill({ receivableId: selectedReceivableId, scheduleId: "" });
+              }}>› Enregistrer un règlement</Button>
+              {receivableDetail && receivableDetailId === selectedReceivableId && <dl className="receivable-detail"><dt>Référence</dt><dd>{text(receivableDetail.id, selectedReceivableId)}</dd><dt>Principal</dt><dd>{formatMoney(receivableDetail.principal, receivableDetail.currency)}</dd><dt>Réglé</dt><dd>{formatMoney(receivableDetail.paid, receivableDetail.currency)}</dd><dt>Crédité</dt><dd>{formatMoney(receivableDetail.credited, receivableDetail.currency)}</dd><dt>Solde</dt><dd>{formatMoney(receivableDetail.balance, receivableDetail.currency)}</dd><dt>En retard</dt><dd>{formatMoney(receivableDetail.overdue_amount, receivableDetail.currency)}</dd><dt>État</dt><dd><Status value={receivableDetail.status} /></dd></dl>}
+              <p className="receivable-prototype-note">Les données financières sont lues sur le serveur SEL. Aucune opération n’est créée depuis cet écran.</p>
+            </div></Panel>
+          </div>
+        </>}
       </>}
 
       {view === "server" && <>
@@ -1316,7 +1361,7 @@ function PaymentForm({ customers, sales, payments, initialCustomerId, initialRec
     }
   }
 
-  return <><PageHeading eyebrow={paymentStep === "entry" ? "SEL / PAIEMENTS / ENCAISSEMENTS / NOUVEAU RÈGLEMENT" : paymentStep === "allocation" ? "SEL / PAIEMENTS / ENCAISSEMENTS / AFFECTATION" : "SEL / PAIEMENTS / ENCAISSEMENTS / CONFIRMATION"} title={paymentStep === "entry" ? "Enregistrer un paiement" : paymentStep === "allocation" ? "Affecter un paiement aux créances" : "Confirmer l’encaissement"} description={paymentStep === "entry" ? "Distinguer l’identité du payeur, le montant et le mode d’encaissement." : paymentStep === "allocation" ? "Répartir le versement entre les obligations du même abonné." : "Dernière vérification avant l’écriture financière."} action={<Button primary={paymentStep === "allocation"} onClick={() => paymentStep === "allocation" ? formRef.current?.requestSubmit() : paymentReview ? setPaymentReview(null) : void onReturnToJournal()}>{paymentStep === "confirm" ? "Modifier la saisie" : paymentStep === "allocation" ? "Vérifier l’affectation" : "Retour au journal"}</Button>} />
+  return <><PageHeading eyebrow={paymentStep === "entry" ? "SEL / PAIEMENTS / ENCAISSEMENTS / NOUVEAU RÈGLEMENT" : paymentStep === "allocation" ? "SEL / PAIEMENTS / ENCAISSEMENTS / AFFECTATION" : "SEL / PAIEMENTS / ENCAISSEMENTS / CONFIRMATION"} title={paymentStep === "entry" ? "Enregistrer un paiement" : paymentStep === "allocation" ? "Affecter un paiement aux créances" : "Confirmer l’encaissement"} description={paymentStep === "entry" ? "Distinguer l’identité du payeur, le montant et le mode d’encaissement." : paymentStep === "allocation" ? "Répartir le versement entre les obligations du même abonné." : "Dernière vérification avant l’écriture financière."} action={<Button primary={paymentStep === "allocation"} disabled={paymentStep === "allocation" && (paymentBlocked || Boolean(paymentReview))} onClick={() => paymentStep === "allocation" ? formRef.current?.requestSubmit() : paymentReview ? setPaymentReview(null) : void onReturnToJournal()}>{paymentStep === "confirm" ? "Modifier la saisie" : paymentStep === "allocation" ? "Vérifier l’affectation" : "Retour au journal"}</Button>} />
   <div className="metrics payment-entry-metrics">
     <Metric label="Règlements" value={payments.length} note="Valeur retournée par le serveur SEL" />
     <Metric label="Créances" value={receivablesLoading ? "…" : receivables.length} note={customerId ? "Disponibles pour cet abonné" : "Sélectionnez un abonné"} />
