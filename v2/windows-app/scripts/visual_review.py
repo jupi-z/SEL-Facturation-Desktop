@@ -179,7 +179,7 @@ def mock_invoke_script() -> str:
           let adminBody = [];
           if (adminPath === '/v1/admin/users') adminBody = [{{id:'demo-admin-0001',identity_ref:'admin-demo',role:'ADMIN',status:'ACTIVE'}},{{id:'demo-agent-0001',identity_ref:'agent-demo',role:'BILLING_AGENT',status:'ACTIVE'}}];
           else if (adminPath === '/v1/admin/audit-events') adminBody = [{{id:'demo-audit-0001',event_type:'USER_CREATED',actor_identity:'admin-demo',subject_id:'demo-agent-0001',occurred_at:'2026-11-04T08:10:00Z',redacted_metadata:{{role:'BILLING_AGENT'}}}}];
-          else if (adminPath === '/v1/admin/catalog/tariffs') adminBody = [{{tariff_id:'demo-tariff-draft',service_code:'WATER',customer_category:'DEMO',unit_price:'0.30',currency:'USD',effective_from:'2026-01-01',status:'DRAFT'}},{{tariff_id:'demo-tariff-approved',service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',effective_from:'2026-01-01',approval_ref:'DEMO-APPROVED',status:'APPROVED'}}];
+          else if (adminPath === '/v1/admin/catalog/tariffs') adminBody = [{{tariff_id:'demo-tariff-draft',service_code:'WATER',customer_category:'DEMO',unit:'M3',unit_price:'0.30',currency:'USD',effective_from:'2026-01-01',status:'DRAFT'}},{{tariff_id:'demo-tariff-approved',service_code:'ELECTRICITY',customer_category:'DEMO',unit:'KWH',unit_price:'0.095',currency:'USD',effective_from:'2026-01-01',approval_ref:'DEMO-APPROVED',status:'APPROVED'}}];
           else if (adminPath.endsWith('/tariffs')) adminBody = [{{service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',status:'APPROVED'}}];
           else if (adminPath.endsWith('/products')) adminBody = fixtures.products.map(product => ({{...product,status:'APPROVED'}}));
           else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{service_code:'DEMO',jurisdiction:'DEMO',base:'NET',rate:'0.16',status:'APPROVED'}}];
@@ -992,17 +992,31 @@ async def capture_views() -> None:
                     await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
                     await page.get_by_role("button", name="Référentiel des kits solaires").wait_for()
                     draft_tariff = tariff_panel.get_by_role("row").filter(has_text="Brouillon").first
-                    await draft_tariff.get_by_label("Référence de la décision d’approbation SEL").fill("DEMO-APPROVAL-UX3")
-                    await draft_tariff.get_by_role("button", name="Approuver").click()
+                    await draft_tariff.get_by_role("button", name="Examiner la révision").click()
+                    review_panel = page.locator(".admin-reference-layout > .panel").first
+                    await review_panel.get_by_role("heading", name="Détails soumis à validation").wait_for()
+                    await review_panel.get_by_label("Référence de décision d’approbation SEL").fill("DEMO-APPROVAL-UX3")
+                    if await page.locator(".admin-reference-actions .button").count() != 2:
+                        raise AssertionError("Tariff approval review must expose only its two contextual next actions")
+                    if "USD / m³" not in await review_panel.inner_text():
+                        raise AssertionError("Tariff approval review must show the configured currency and unit")
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.screenshot(path=str(OUTPUT / f"admin-catalog-approval-{SHOT_SUFFIX}.png"))
+                    await review_panel.get_by_role("button", name="Annuler la révision").click()
+                    abandon_tariff_review = page.get_by_role("alertdialog", name="Annuler la révision ?")
+                    await abandon_tariff_review.wait_for()
+                    await abandon_tariff_review.get_by_role("button", name="Annuler", exact=True).click()
+                    if await review_panel.get_by_label("Référence de décision d’approbation SEL").input_value() != "DEMO-APPROVAL-UX3":
+                        raise AssertionError("Canceling tariff review navigation must preserve the approval reference")
+                    await review_panel.get_by_role("button", name="Confirmer l’approbation").click()
                     approval_review = page.get_by_role("alertdialog", name="Vérifier l’approbation du référentiel")
                     await approval_review.wait_for()
-                    await page.screenshot(path=str(OUTPUT / f"admin-catalog-approval-{SHOT_SUFFIX}.png"))
                     if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs/demo-tariff-draft/approve').length") != 0:
                         raise AssertionError("Catalog approval must wait for explicit confirmation")
                     await approval_review.get_by_role("button", name="Annuler").click()
-                    if await draft_tariff.get_by_label("Référence de la décision d’approbation SEL").input_value() != "DEMO-APPROVAL-UX3":
-                        raise AssertionError("Canceling approval review must preserve its entered reference")
-                    await draft_tariff.get_by_role("button", name="Approuver").click()
+                    if await review_panel.get_by_label("Référence de décision d’approbation SEL").input_value() != "DEMO-APPROVAL-UX3":
+                        raise AssertionError("Canceling approval confirmation must preserve its entered reference")
+                    await review_panel.get_by_role("button", name="Confirmer l’approbation").click()
                     await page.get_by_role("alertdialog", name="Vérifier l’approbation du référentiel").get_by_role("button", name="Approuver cette version").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs/demo-tariff-draft/approve').length === 1")
                     approved_tariff = tariff_panel.get_by_role("row").filter(has_text="Approuvé").last

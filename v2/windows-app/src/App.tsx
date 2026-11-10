@@ -1881,13 +1881,16 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
   ], columns: ["id", "label", "amount", "currency", "effective_from", "status"] },
 };
 
-function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, confirmAction, draftDirty }: {
+function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, confirmAction, draftDirty, reviewingId, onReview, onCancelReview }: {
   kind: AdminCatalog; items: Row[]; busy: boolean;
   onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>;
   onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => Promise<boolean>;
   onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => Promise<boolean>;
   confirmAction: (request: ConfirmationRequest) => Promise<boolean>;
   draftDirty: boolean;
+  reviewingId: string;
+  onReview: (id: string) => void;
+  onCancelReview: () => void;
 }) {
   const definition = adminCatalogDefinitions[kind];
   const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
@@ -1918,6 +1921,34 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
       if (accepted && await onCreate(kind, values)) { form.reset(); setDraftOpen(false); announceDraftSaved(); }
     } finally { setCreating(false); }
   }
+  const reviewedItem = kind === "tariffs" && reviewingId ? items.find((item) => text(item.id ?? item.tariff_id, "") === reviewingId) : undefined;
+  if (reviewedItem) {
+    const payload = record(reviewedItem.payload);
+    const tariffValue = formatMoney(reviewedItem.unit_price ?? payload.unit_price, text(reviewedItem.currency ?? payload.currency, "USD"));
+    return <Panel title="Détails soumis à validation" action={<Button onClick={async () => {
+      if (draftDirty && !await confirmAction({ title: "Annuler la révision ?", description: "La référence non enregistrée sera perdue. Le brouillon du tarif reste inchangé.", confirmLabel: "Annuler la révision" })) return;
+      onCancelReview();
+    }}>Annuler la révision</Button>}>
+      <p className="help">Informations et opérations contrôlées par le serveur SEL.</p>
+      <dl className="admin-review-details">
+        <div><dt>Service</dt><dd>{domainLabel(text(reviewedItem.service_code ?? payload.service_code))}</dd></div>
+        <div><dt>Catégorie</dt><dd>{text(reviewedItem.customer_category ?? payload.customer_category, "—")}</dd></div>
+        <div><dt>Prix unitaire</dt><dd>{tariffValue} / {formatUnit(text(reviewedItem.unit ?? payload.unit))}</dd></div>
+        <div><dt>Date d’effet</dt><dd>{text(reviewedItem.effective_from ?? payload.effective_from, "—")}</dd></div>
+        <div><dt>État</dt><dd><Status value={reviewedItem.status} /></dd></div>
+      </dl>
+      <form data-preserve-draft className="admin-approval-form" onSubmit={async (event) => {
+        event.preventDefault();
+        const values = new FormData(event.currentTarget);
+        const accepted = await onApprove(kind, reviewedItem, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
+        if (accepted) onCancelReview();
+      }}>
+        <label>Numéro de révision<input name="approval_ref" aria-label="Référence de décision d’approbation SEL" placeholder="Référence SEL" required /></label>
+        <label>Version remplacée (facultatif)<input name="supersedes_id" aria-label="Tarif remplacé (facultatif)" placeholder="Référence antérieure" /></label>
+        <div className="form-actions span-two"><Button primary type="submit" disabled={busy || !reviewingId}>Confirmer l’approbation</Button></div>
+      </form>
+    </Panel>;
+  }
   return <Panel title={definition.title} action={<Button primary onClick={() => void toggleDraft()}>{draftOpen ? "Fermer la révision" : "Préparer une révision"}</Button>}>
     {draftOpen && <form data-preserve-draft className="form-grid admin-catalog-form" onSubmit={create}>
       {definition.fields.map((field) => <label key={field.name}>{field.label}{field.options
@@ -1929,7 +1960,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
     <Table headers={[...definition.columns.map((field) => ({ service_code: "Service", customer_category: "Catégorie", unit_price: "Tarif", status: "État" } as Record<string, string>)[field] ?? (field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " "))), "Actions"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
       const id = text(item.id ?? item[idField], "");
       const status = text(item.status).toUpperCase();
-      const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={async (event) => {
+      const approval = status === "DRAFT" && kind === "tariffs" ? <Button type="button" disabled={busy || !id} onClick={() => onReview(id)}>Examiner la révision</Button> : status === "DRAFT" ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
         const values = new FormData(event.currentTarget);
         await onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
@@ -1963,6 +1994,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
   const [passwordTarget, setPasswordTarget] = useState("");
   const [adminArea, setAdminArea] = useState<"users" | "catalogs" | "audit">("users");
   const [catalogKind, setCatalogKind] = useState<AdminCatalog>("tariffs");
+  const [reviewingTariffId, setReviewingTariffId] = useState("");
   const [adminUserView, setAdminUserView] = useState<"directory" | "create" | "security">("directory");
   const [selectedAdminUserId, setSelectedAdminUserId] = useState("");
   const [adminChangeReason, setAdminChangeReason] = useState("");
@@ -1999,6 +2031,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
     })) return;
     if (draftDirty) announceDraftSaved();
     setMessage(""); setError(false);
+    setReviewingTariffId("");
     setCatalogKind(next);
   }
 
@@ -2290,7 +2323,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
       </>}
     </>}
     {adminArea === "catalogs" && <>
-      <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / TARIFS / CATALOGUE</p><h2>{catalogKind === "tariffs" ? "Tarifs eau et électricité" : adminCatalogDefinitions[catalogKind].title}</h2><p className="muted">Consultation des versions et des catégories avant toute modification.</p></div><span className="service-state">● Service central · données SEL</span></header>
+      <header className="admin-page-heading"><div><p className="eyebrow">{reviewingTariffId ? "ADMIN / TARIFS / APPROBATION" : "ADMIN / TARIFS / CATALOGUE"}</p><h2>{reviewingTariffId ? "Valider une révision tarifaire" : catalogKind === "tariffs" ? "Tarifs eau et électricité" : adminCatalogDefinitions[catalogKind].title}</h2><p className="muted">{reviewingTariffId ? "Vérifiez les montants et la période d’application avant activation." : "Consultation des versions et des catégories avant toute modification."}</p></div><span className="service-state">● Service central · données SEL</span></header>
       <div className="admin-metrics">
         <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
         <Metric label="Référentiels" value={String(catalogEntries.length)} note="Valeur du serveur SEL" />
@@ -2298,13 +2331,16 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
         <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
       </div>
       <div className="admin-directory-layout admin-reference-layout">
-        <AdminCatalogPanel key={catalogKind} kind={catalogKind} items={catalogKind === "tariffs" ? tariffs : catalogKind === "products" ? products : catalogKind === "tax-profiles" ? taxProfiles : catalogKind === "fx-rates" ? fxRates : communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} draftDirty={draftDirty} />
-        <Panel title="Actions suivantes"><p className="help">Choisissez le référentiel à consulter ou à administrer.</p><div className="admin-next-actions admin-reference-actions">
+        <AdminCatalogPanel key={catalogKind} kind={catalogKind} items={catalogKind === "tariffs" ? tariffs : catalogKind === "products" ? products : catalogKind === "tax-profiles" ? taxProfiles : catalogKind === "fx-rates" ? fxRates : communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} draftDirty={draftDirty} reviewingId={reviewingTariffId} onReview={setReviewingTariffId} onCancelReview={() => setReviewingTariffId("")} />
+        <Panel title="Actions suivantes"><p className="help">{reviewingTariffId ? "Choisissez une étape ou revenez au catalogue." : "Choisissez le référentiel à consulter ou à administrer."}</p><div className="admin-next-actions admin-reference-actions">
+          {reviewingTariffId && <><Button onClick={() => setReviewingTariffId("")}>Tarifs eau et électricité</Button><Button onClick={() => setReviewingTariffId("")}>Historique des versions de paramètres</Button></>}
+          {!reviewingTariffId && <>
           <Button className={catalogKind === "tariffs" ? "is-active" : ""} aria-pressed={catalogKind === "tariffs"} onClick={() => void selectCatalogKind("tariffs")}>Catalogue tarifaire</Button>
           <Button className={catalogKind === "tax-profiles" ? "is-active" : ""} aria-pressed={catalogKind === "tax-profiles"} onClick={() => void selectCatalogKind("tax-profiles")}>Paramètres de TVA</Button>
           <Button className={catalogKind === "fx-rates" ? "is-active" : ""} aria-pressed={catalogKind === "fx-rates"} onClick={() => void selectCatalogKind("fx-rates")}>Devises et taux de change</Button>
           <Button className={catalogKind === "products" ? "is-active" : ""} aria-pressed={catalogKind === "products"} onClick={() => void selectCatalogKind("products")}>Référentiel des kits solaires</Button>
           <Button className={catalogKind === "communication-charge" ? "is-active" : ""} aria-pressed={catalogKind === "communication-charge"} onClick={() => void selectCatalogKind("communication-charge")}>Ligne de communication</Button>
+          </>}
         </div><p className="help">Les révisions restent inactives tant qu’un administrateur SEL ne les a pas approuvées.</p></Panel>
       </div>
     </>}

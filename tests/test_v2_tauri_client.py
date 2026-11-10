@@ -584,6 +584,24 @@ def test_catalog_draft_form_resets_only_after_server_accepts_creation() -> None:
     assert "return false" in app.split("async function createCatalogDraft(", 1)[1].split("\n  async function approveCatalogDraft", 1)[0]
 
 
+def test_tariff_approval_uses_a_separate_review_screen_and_confirmation() -> None:
+    app = (ROOT / "v2" / "windows-app" / "src" / "App.tsx").read_text(encoding="utf-8")
+    panel = app.split("function AdminCatalogPanel(", 1)[1].split("\nfunction AdminConsole", 1)[0]
+    approval_review = panel.split("if (reviewedItem)", 1)[1].split("return <Panel title={definition.title}", 1)[0]
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert 'onClick={() => onReview(id)}>Examiner la révision</Button>' in panel
+    assert 'Panel title="Détails soumis à validation"' in approval_review
+    assert 'name="approval_ref" aria-label="Référence de décision d’approbation SEL"' in approval_review
+    assert 'name="supersedes_id" aria-label="Tarif remplacé (facultatif)"' in approval_review
+    assert 'onApprove(kind, reviewedItem, String(values.get("approval_ref")' in approval_review
+    assert 'onCancelReview();' in approval_review
+    assert 'Valider une révision tarifaire' in app
+    assert 'Annuler la révision ?' in visual_review
+    assert 'Canceling tariff review navigation must preserve the approval reference' in visual_review
+    assert 'Canceling approval confirmation must preserve its entered reference' in visual_review
+
+
 def test_payment_form_can_allocate_one_receipt_to_multiple_real_receivables() -> None:
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     payment_form = app.split("function PaymentForm(", 1)[1].split("\n}\n\nfunction MeterReadingsView", 1)[0]
