@@ -976,7 +976,21 @@ async def capture_views() -> None:
                     if await abandon_admin_review.count():
                         await abandon_admin_review.get_by_role("button", name="Abandonner et continuer").click()
                     await page.get_by_role("button", name="Tarifs et référentiels", exact=True).click()
-                    tariff_panel = page.locator(".admin-catalog-grid .panel").first
+                    await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.screenshot(path=str(OUTPUT / f"admin-tariffs-catalog-a04-{SHOT_SUFFIX}.png"))
+                    tariff_panel = page.locator(".admin-reference-layout > .panel").first
+                    for catalog_label, catalog_heading in [
+                        ("Paramètres de TVA", "Profils fiscaux"),
+                        ("Devises et taux de change", "Taux de change"),
+                        ("Référentiel des kits solaires", "Catalogue solaire"),
+                        ("Ligne de communication", "Ligne de communication"),
+                    ]:
+                        await page.get_by_role("button", name=catalog_label).click()
+                        await page.get_by_role("heading", name=catalog_heading).first.wait_for()
+                    await page.get_by_role("button", name="Catalogue tarifaire").click()
+                    await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
+                    await page.get_by_role("button", name="Référentiel des kits solaires").wait_for()
                     draft_tariff = tariff_panel.get_by_role("row").filter(has_text="Brouillon").first
                     await draft_tariff.get_by_label("Référence de la décision d’approbation SEL").fill("DEMO-APPROVAL-UX3")
                     await draft_tariff.get_by_role("button", name="Approuver").click()
@@ -1006,6 +1020,7 @@ async def capture_views() -> None:
                     await approved_tariff.get_by_role("button", name="Confirmer la révocation").click()
                     await page.get_by_role("alertdialog", name="Vérifier la révocation du référentiel").get_by_role("button", name="Révoquer cette version").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs/demo-tariff-approved/revoke').length === 1")
+                    await page.get_by_role("button", name="Préparer une révision").click()
                     tariff_form = page.locator("form.admin-catalog-form").first
                     await tariff_form.locator('select[name="service_code"]').select_option("ELECTRICITY")
                     await tariff_form.locator('input[name="customer_category"]').fill("DEMO")
@@ -1015,7 +1030,7 @@ async def capture_views() -> None:
                     await tariff_form.locator('input[name="effective_from"]').fill("2026-01-01")
                     await page.evaluate("window.__rejectCatalogDraft = true")
                     await tariff_form.get_by_role("button", name="Créer un brouillon").click()
-                    draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Tarifs")
+                    draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Catalogue tarifaire")
                     await draft_review.wait_for()
                     await page.screenshot(path=str(OUTPUT / f"admin-catalog-draft-confirmation-{SHOT_SUFFIX}.png"))
                     if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs' && entry.method === 'POST').length") != 0:
@@ -1024,7 +1039,7 @@ async def capture_views() -> None:
                     if await tariff_form.locator('input[name="unit_price"]').input_value() != "0.095":
                         raise AssertionError("Canceling catalog draft review must preserve the entered values")
                     await tariff_form.get_by_role("button", name="Créer un brouillon").click()
-                    draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Tarifs")
+                    draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Catalogue tarifaire")
                     await draft_review.get_by_role("button", name="Créer le brouillon").click()
                     rejected_draft_notice = page.get_by_role("alert")
                     await rejected_draft_notice.get_by_text("Certaines données ne sont pas acceptées par les règles SEL.").wait_for()
@@ -1033,6 +1048,17 @@ async def capture_views() -> None:
                     if await tariff_form.locator('select[name="service_code"]').input_value() != "ELECTRICITY":
                         raise AssertionError("Catalog draft input must be retained when the server rejects creation")
                     await page.evaluate("window.__rejectCatalogDraft = false")
+                    await page.get_by_role("button", name="Paramètres de TVA").click()
+                    abandon_catalog = page.get_by_role("alertdialog", name="Abandonner la révision ?")
+                    await abandon_catalog.wait_for()
+                    await abandon_catalog.get_by_role("button", name="Annuler").click()
+                    if await tariff_form.locator('input[name="unit_price"]').input_value() != "0.095":
+                        raise AssertionError("Canceling catalog navigation must preserve the tariff draft")
+                    await page.get_by_role("button", name="Paramètres de TVA").click()
+                    await page.get_by_role("alertdialog", name="Abandonner la révision ?").get_by_role("button", name="Abandonner la saisie").click()
+                    await page.get_by_role("heading", name="Profils fiscaux").first.wait_for()
+                    await page.get_by_role("button", name="Catalogue tarifaire").click()
+                    await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:
                     raise AssertionError(f"{slug} overflows horizontally: {dimensions}")

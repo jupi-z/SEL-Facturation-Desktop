@@ -1848,7 +1848,7 @@ type AdminCatalog = "tariffs" | "products" | "tax-profiles" | "fx-rates" | "comm
 type AdminCatalogField = { name: string; label: string; type?: string; required?: boolean; step?: string; options?: { value: string; label: string }[] };
 
 const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: AdminCatalogField[]; columns: string[] }> = {
-  tariffs: { title: "Tarifs", fields: [
+  tariffs: { title: "Catalogue tarifaire", fields: [
     { name: "service_code", label: "Service", options: [{ value: "ELECTRICITY", label: "Électricité" }, { value: "WATER", label: "Eau" }] },
     { name: "customer_category", label: "Code de catégorie (ex. RESIDENTIAL)" },
     { name: "unit", label: "Unité", options: [{ value: "KWH", label: "kWh" }, { value: "M3", label: "m³" }] },
@@ -1856,7 +1856,7 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
     { name: "currency", label: "Devise", options: [{ value: "USD", label: "USD" }, { value: "CDF", label: "CDF" }] },
     { name: "effective_from", label: "Début d’effet", type: "date" },
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
-  ], columns: ["service_code", "customer_category", "unit_price", "currency", "effective_from", "status", "approval_ref"] },
+  ], columns: ["service_code", "customer_category", "unit_price", "status"] },
   products: { title: "Catalogue solaire", fields: [
     { name: "sku", label: "Référence produit" }, { name: "label", label: "Désignation" },
     { name: "price_reference", label: "Prix de référence", type: "number", step: "any" },
@@ -1881,17 +1881,28 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
   ], columns: ["id", "label", "amount", "currency", "effective_from", "status"] },
 };
 
-function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, confirmAction }: {
+function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, confirmAction, draftDirty }: {
   kind: AdminCatalog; items: Row[]; busy: boolean;
   onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>;
   onApprove: (kind: AdminCatalog, item: Row, approvalRef: string, supersedesId: string) => Promise<boolean>;
   onRevoke: (kind: AdminCatalog, item: Row, changeRef: string) => Promise<boolean>;
   confirmAction: (request: ConfirmationRequest) => Promise<boolean>;
+  draftDirty: boolean;
 }) {
   const definition = adminCatalogDefinitions[kind];
   const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
   const [revokingId, setRevokingId] = useState("");
   const [creating, setCreating] = useState(false);
+  const [draftOpen, setDraftOpen] = useState(false);
+  async function toggleDraft() {
+    if (draftOpen && draftDirty && !await confirmAction({
+      title: "Abandonner la révision ?",
+      description: "Les informations non enregistrées dans ce brouillon seront perdues.",
+      confirmLabel: "Abandonner la saisie",
+    })) return;
+    if (draftOpen && draftDirty) announceDraftSaved();
+    setDraftOpen((current) => !current);
+  }
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1904,34 +1915,37 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
         description: `${summary}. Ce brouillon n’est pas applicable aux opérations avant son approbation SEL.`,
         confirmLabel: "Créer le brouillon",
       });
-      if (accepted && await onCreate(kind, values)) { form.reset(); announceDraftSaved(); }
+      if (accepted && await onCreate(kind, values)) { form.reset(); setDraftOpen(false); announceDraftSaved(); }
     } finally { setCreating(false); }
   }
-  return <Panel title={definition.title}>
-    <form data-preserve-draft className="form-grid admin-catalog-form" onSubmit={create}>
+  return <Panel title={definition.title} action={<Button primary onClick={() => void toggleDraft()}>{draftOpen ? "Fermer la révision" : "Préparer une révision"}</Button>}>
+    {draftOpen && <form data-preserve-draft className="form-grid admin-catalog-form" onSubmit={create}>
       {definition.fields.map((field) => <label key={field.name}>{field.label}{field.options
         ? <select name={field.name} defaultValue="" required={field.required !== false} disabled={busy || creating}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
         : <input name={field.name} type={field.type ?? "text"} step={field.step} required={field.required !== false} disabled={busy || creating} />}</label>)}
-      <div className="form-actions span-two"><Button primary type="submit" disabled={busy || creating}>{creating ? "Vérification…" : "Créer un brouillon"}</Button></div>
+      <div className="form-actions span-two"><Button type="button" disabled={busy || creating} onClick={() => void toggleDraft()}>Annuler</Button><Button primary type="submit" disabled={busy || creating}>{creating ? "Vérification…" : "Créer un brouillon"}</Button></div>
       <p className="help span-two">{kind === "communication-charge" ? "Cette charge SEL apparaît sur chaque facture eau + électricité. Elle entre dans l’assiette de la TVA, affichée séparément. L’activation exige une approbation SEL." : "Le brouillon n’est pas applicable aux factures. Seul un administrateur l’active après validation SEL et référence de décision."}</p>
-    </form>
-    <Table headers={[...definition.columns.map((field) => field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " ")), "Actions"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
+    </form>}
+    <Table headers={[...definition.columns.map((field) => ({ service_code: "Service", customer_category: "Catégorie", unit_price: "Tarif", status: "État" } as Record<string, string>)[field] ?? (field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " "))), "Actions"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
       const id = text(item.id ?? item[idField], "");
       const status = text(item.status).toUpperCase();
       const approval = status === "DRAFT" ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
         const values = new FormData(event.currentTarget);
         await onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
-      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Référence de décision SEL" required /><input aria-label="Tarif remplacé (facultatif)" name="supersedes_id" placeholder="Tarif remplacé (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={async (event) => {
+      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Réf. SEL" required /><input aria-label="Tarif remplacé (facultatif)" name="supersedes_id" placeholder="Remplace… (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
         const form = event.currentTarget;
         const changeRef = String(new FormData(form).get("change_ref") ?? "").trim();
         if (await onRevoke(kind, item, changeRef)) setRevokingId("");
-      }}><input aria-label="Motif ou référence de révocation" name="change_ref" placeholder="Motif de révocation SEL" required /><Button type="button" onClick={() => setRevokingId("")}>Annuler</Button><Button type="submit" disabled={busy || !id}>Confirmer la révocation</Button></form> : <div className="admin-approve-form"><Status value="Approuvé" /><Button type="button" disabled={busy || !id} onClick={() => setRevokingId(id)}>Révoquer…</Button></div> : <Status value={status || "État inconnu"} />;
+      }}><input aria-label="Motif ou référence de révocation" name="change_ref" placeholder="Motif de révocation SEL" required /><Button type="button" onClick={() => setRevokingId("")}>Annuler</Button><Button type="submit" disabled={busy || !id}>Confirmer la révocation</Button></form> : <div className="admin-approve-actions"><Button type="button" disabled={busy || !id} onClick={() => setRevokingId(id)}>Révoquer…</Button></div> : <Status value={status || "État inconnu"} />;
       return [...definition.columns.map((field) => {
         const payload = record(item.payload);
         const displayed = field === "label" ? payload.label : field === "amount" ? payload.amount : field === "currency" ? payload.currency : item[field];
-        return field === "status" ? <Status value={item[field]} /> : text(displayed);
+        if (field === "status") return <Status value={item[field]} />;
+        if (kind === "tariffs" && field === "service_code") return domainLabel(text(displayed));
+        if (kind === "tariffs" && field === "unit_price") return <div className="admin-tariff-value"><strong>{formatMoney(item.unit_price, text(item.currency, "USD"))}</strong><span className="help">{formatUnit(text(item.unit))} · depuis {text(item.effective_from)}</span></div>;
+        return text(displayed);
       }), kind === "communication-charge" && status === "APPROVED" ? <span className="help">Version protégée — remplacez-la par un nouveau brouillon approuvé.</span> : approval];
     })} />
   </Panel>;
@@ -1948,6 +1962,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
   const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
   const [passwordTarget, setPasswordTarget] = useState("");
   const [adminArea, setAdminArea] = useState<"users" | "catalogs" | "audit">("users");
+  const [catalogKind, setCatalogKind] = useState<AdminCatalog>("tariffs");
   const [adminUserView, setAdminUserView] = useState<"directory" | "create" | "security">("directory");
   const [selectedAdminUserId, setSelectedAdminUserId] = useState("");
   const [adminChangeReason, setAdminChangeReason] = useState("");
@@ -1973,6 +1988,18 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
     setAdminArea(next);
     setAdminUserView(next === "users" && openCreate ? "create" : "directory");
     setPasswordTarget("");
+  }
+
+  async function selectCatalogKind(next: AdminCatalog) {
+    if (next === catalogKind) return;
+    if (draftDirty && !await confirmAction({
+      title: "Abandonner la révision ?",
+      description: "Les informations non enregistrées dans ce brouillon seront perdues.",
+      confirmLabel: "Abandonner la saisie",
+    })) return;
+    if (draftDirty) announceDraftSaved();
+    setMessage(""); setError(false);
+    setCatalogKind(next);
   }
 
   function clearAdminSession() {
@@ -2262,13 +2289,25 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
         </div>
       </>}
     </>}
-    {adminArea === "catalogs" && <div className="admin-grid admin-catalog-grid">
-      <AdminCatalogPanel kind="tariffs" items={tariffs} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
-      <AdminCatalogPanel kind="products" items={products} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
-      <AdminCatalogPanel kind="tax-profiles" items={taxProfiles} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
-      <AdminCatalogPanel kind="fx-rates" items={fxRates} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
-      <AdminCatalogPanel kind="communication-charge" items={communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} />
-    </div>}
+    {adminArea === "catalogs" && <>
+      <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / TARIFS / CATALOGUE</p><h2>{catalogKind === "tariffs" ? "Tarifs eau et électricité" : adminCatalogDefinitions[catalogKind].title}</h2><p className="muted">Consultation des versions et des catégories avant toute modification.</p></div><span className="service-state">● Service central · données SEL</span></header>
+      <div className="admin-metrics">
+        <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
+        <Metric label="Référentiels" value={String(catalogEntries.length)} note="Valeur du serveur SEL" />
+        <Metric label="État" value={String(approvedCatalogCount)} note="Versions approuvées" />
+        <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
+      </div>
+      <div className="admin-directory-layout admin-reference-layout">
+        <AdminCatalogPanel key={catalogKind} kind={catalogKind} items={catalogKind === "tariffs" ? tariffs : catalogKind === "products" ? products : catalogKind === "tax-profiles" ? taxProfiles : catalogKind === "fx-rates" ? fxRates : communicationCharges} busy={catalogBusy} onCreate={createCatalogDraft} onApprove={approveCatalogDraft} onRevoke={revokeCatalogItem} confirmAction={confirmAction} draftDirty={draftDirty} />
+        <Panel title="Actions suivantes"><p className="help">Choisissez le référentiel à consulter ou à administrer.</p><div className="admin-next-actions admin-reference-actions">
+          <Button className={catalogKind === "tariffs" ? "is-active" : ""} aria-pressed={catalogKind === "tariffs"} onClick={() => void selectCatalogKind("tariffs")}>Catalogue tarifaire</Button>
+          <Button className={catalogKind === "tax-profiles" ? "is-active" : ""} aria-pressed={catalogKind === "tax-profiles"} onClick={() => void selectCatalogKind("tax-profiles")}>Paramètres de TVA</Button>
+          <Button className={catalogKind === "fx-rates" ? "is-active" : ""} aria-pressed={catalogKind === "fx-rates"} onClick={() => void selectCatalogKind("fx-rates")}>Devises et taux de change</Button>
+          <Button className={catalogKind === "products" ? "is-active" : ""} aria-pressed={catalogKind === "products"} onClick={() => void selectCatalogKind("products")}>Référentiel des kits solaires</Button>
+          <Button className={catalogKind === "communication-charge" ? "is-active" : ""} aria-pressed={catalogKind === "communication-charge"} onClick={() => void selectCatalogKind("communication-charge")}>Ligne de communication</Button>
+        </div><p className="help">Les révisions restent inactives tant qu’un administrateur SEL ne les a pas approuvées.</p></Panel>
+      </div>
+    </>}
     {adminArea === "audit" && <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>}
   </>;
 }

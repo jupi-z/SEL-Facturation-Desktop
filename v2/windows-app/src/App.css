@@ -276,6 +276,7 @@ input:disabled, select:disabled, textarea:disabled { color: #77869a; background:
 .admin-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 8px 0 18px; }
 .admin-page-heading h2 { margin: 5px 0; color: var(--navy); font-size: 23px; }
 .admin-page-heading .muted { margin: 0; }
+.admin-page-heading .service-state { padding: 9px 12px; border-radius: 3px; color: #14794f; background: #e5f4ed; font-size: 10px; font-weight: 750; white-space: nowrap; }
 .admin-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
 .admin-metrics .metric { border: 1px solid var(--line); border-radius: 3px; background: #fff; }
 .admin-directory-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(245px, .9fr); align-items: start; gap: 16px; }
@@ -289,6 +290,15 @@ input:disabled, select:disabled, textarea:disabled { color: #77869a; background:
 .admin-security-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; padding-top: 10px; }
 .admin-next-actions { display: grid; gap: 9px; }
 .admin-next-actions .button { text-align: left; }
+.admin-reference-actions .button.is-active { border-color: var(--blue); color: var(--navy); background: #eaf1f9; }
+.admin-reference-layout > .panel { min-width: 0; }
+.admin-reference-layout table { min-width: 0; }
+.admin-reference-layout .admin-approve-form { min-width: 300px; }
+.admin-reference-layout .admin-approve-actions { display: flex; min-width: 300px; justify-content: flex-end; }
+.admin-reference-layout .status-badge { white-space: nowrap; }
+.admin-reference-layout .admin-approve-form input { min-width: 0; padding-inline: 6px; }
+.admin-tariff-value { display: grid; gap: 3px; min-width: 108px; }
+.admin-tariff-value .help { white-space: nowrap; }
 .admin-card h2 { margin: 10px 0 5px; color: var(--navy); font-size: 15px; }
 .admin-card .muted { margin: 0 0 14px; }
 .admin-card .status-badge { white-space: normal; }
@@ -334,6 +344,10 @@ footer { margin-top: auto; padding: 14px 0 1px; border-top: 1px solid var(--line
   .columns, .customer-layout { grid-template-columns: 1fr; }
   .invoice-workspace, .invoice-history-layout, .invoice-verification-layout, .payment-journal-layout, .reading-workspace, .receivable-workspace { grid-template-columns: 1fr; }
   .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 1360px) {
+  .admin-reference-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 760px) {

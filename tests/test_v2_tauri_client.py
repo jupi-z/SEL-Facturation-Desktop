@@ -568,10 +568,19 @@ def test_catalog_draft_form_resets_only_after_server_accepts_creation() -> None:
     create = panel.split("async function create(", 1)[1].split("\n  return <Panel", 1)[0]
 
     assert "const accepted = await confirmAction({" in create
-    assert "if (accepted && await onCreate(kind, values)) { form.reset(); announceDraftSaved(); }" in create
+    assert "if (accepted && await onCreate(kind, values)) { form.reset(); setDraftOpen(false); announceDraftSaved(); }" in create
     assert "onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>" in panel
     assert "title: `Vérifier le brouillon · ${definition.title}`" in create
-    assert '<form data-preserve-draft className="form-grid admin-catalog-form"' in panel
+    assert '{draftOpen && <form data-preserve-draft className="form-grid admin-catalog-form"' in panel
+    assert 'Préparer une révision' in panel and 'Abandonner la révision ?' in panel
+    assert 'admin-reference-layout' in app and 'admin-reference-actions' in app
+    assert 'admin-tariffs-catalog-a04-{SHOT_SUFFIX}.png' in (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+    assert 'async function selectCatalogKind(next: AdminCatalog)' in app
+    assert 'title: "Abandonner la révision ?"' in app.split('async function selectCatalogKind', 1)[1].split('\n  function clearAdminSession', 1)[0]
+    assert 'columns: ["service_code", "customer_category", "unit_price", "status"]' in app
+    assert 'formatUnit(text(item.unit))' in panel
+    assert '@media (max-width: 1360px)' in (APP / "src" / "App.css").read_text(encoding="utf-8")
+    assert '.admin-reference-layout { grid-template-columns: minmax(0, 1fr); }' in (APP / "src" / "App.css").read_text(encoding="utf-8")
     assert "return false" in app.split("async function createCatalogDraft(", 1)[1].split("\n  async function approveCatalogDraft", 1)[0]
 
 
