@@ -4,6 +4,15 @@
 
 ## Progression vérifiée — 10 novembre 2026
 
+### A01–A03 — Administration / utilisateurs
+
+- A01 (répertoire) et A02 (création de compte) sont alignés sur leurs frames Figma et présents sur la branche de continuation. Le commit `3d266704708f46973e139676a02fa1018fd495e0` a passé les quatre workflows GitHub, y compris la recette de paquet Windows MSI/NSIS et le test d’installation/mise à niveau isolé : [CI Windows](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42803112179), [CI backend](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42803112572), [paquet serveur](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42803112181), [régression V1](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42803112309).
+- A03 ajoute le champ « Motif du changement » pour les changements de rôle et de statut. Le client refuse la mutation sans motif et envoie celui-ci avec le PATCH; le stockage l’ajoute à l’événement d’audit PostgreSQL dans la même transaction que la modification. L’API conserve le caractère facultatif du champ pour les clients antérieurs, mais rejette une valeur blanche ou de plus de 500 caractères.
+- Le test HTTP/PostgreSQL vérifie le rejet d’un motif vide, applique une modification avec motif, puis vérifie sa conservation dans `audit_events.redacted_metadata`. Il compile localement; son exécution contre PostgreSQL reste à établir dans la CI du commit A03.
+- Recette visuelle synthétique de l’écran A03 réussie à 1440×900 et 1280×720; les captures sont conservées dans `evidence/a03-2026-11-10/`. La capture ne contient pas de message d’erreur résiduel et le champ motif reprend le style des autres contrôles.
+- Vérifications locales A03 : `npm run build` PASS (avertissement de taille des chunks PDF/fonts existant); `python -m pytest tests/test_v2_tauri_client.py -q` PASS — 66 tests; `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` PASS; `cargo clippy --manifest-path v2/Cargo.toml -p sel-api -p sel-storage --all-targets -- -D warnings` PASS; `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` PASS — 12 tests; `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` PASS — 1 test; `cargo test --manifest-path v2/Cargo.toml -p sel-api --test postgres_admin_directory --no-run` PASS — compilation seulement.
+- Statut : A01–A02 `COMPLETED` pour code, tests locaux, revue visuelle et CI du commit indiqué; non vérifiés sur un poste SEL réel. A03 `IN_PROGRESS` jusqu’à la CI du commit contenant cette modification, notamment son exécution PostgreSQL. Aucune opération de production n’a été faite.
+
 ### F01 — Journal de caisse et séparation de la saisie
 
 - Comparaison directe avec le frame Figma `178:1194` de la page `16 · SEL V2 — Prototype intégral & CRUD`.

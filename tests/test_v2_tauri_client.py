@@ -404,6 +404,10 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert 'aria-label={`Voir les accès de ${text(user.identity_ref)}`}' in app
     assert 'Modifier les accès d’un compte' in app
     assert 'Nouveau rôle de ${text(selectedAdminUser.identity_ref)}' in app
+    assert 'Motif du changement<textarea name="admin-change-reason"' in app
+    assert 'PATCH", { role, reason }' in app and 'PATCH", { status, reason }' in app
+    assert 'admin-user-security-a03-{SHOT_SUFFIX}.png' in visual_review
+    assert 'get_by_label("Motif du changement").fill("Réaffectation de responsabilités (fixture)")' in visual_review
     assert 'navigateAdminArea("users", true)' in app
     assert ">Référentiels</Button>" in app and ">Journal d’audit</Button>" in app
     assert "Créer un brouillon" in app

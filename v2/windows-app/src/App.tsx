@@ -1950,6 +1950,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
   const [adminArea, setAdminArea] = useState<"users" | "catalogs" | "audit">("users");
   const [adminUserView, setAdminUserView] = useState<"directory" | "create" | "security">("directory");
   const [selectedAdminUserId, setSelectedAdminUserId] = useState("");
+  const [adminChangeReason, setAdminChangeReason] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
@@ -2049,18 +2050,24 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
     const status = text(user.status).toUpperCase() === "ACTIVE" ? "REVOKED" : "ACTIVE";
     if (!id) return;
     const identity = text(user.identity_ref, "ce compte SEL");
+    const reason = adminChangeReason.trim();
+    if (!reason) {
+      setMessage("Saisissez le motif du changement avant de modifier les accès."); setError(true);
+      return;
+    }
     const disabling = status === "REVOKED";
     if (!await confirmAction({
       title: disabling ? "Désactiver ce compte ?" : "Réactiver ce compte ?",
       description: disabling
-        ? `Le compte ${identity} ne pourra plus ouvrir de session. Ses sessions seront révoquées ; les opérations déjà enregistrées restent conservées.`
-        : `Le compte ${identity} pourra à nouveau ouvrir une session avec son rôle actuel.`,
+        ? `Le compte ${identity} ne pourra plus ouvrir de session. Ses sessions seront révoquées ; les opérations déjà enregistrées restent conservées. Motif : ${reason}`
+        : `Le compte ${identity} pourra à nouveau ouvrir une session avec son rôle actuel. Motif : ${reason}`,
       confirmLabel: disabling ? "Désactiver le compte" : "Réactiver le compte",
       tone: disabling ? "warning" : "neutral",
     })) return;
     setUserMutationBusy(true);
     try {
-      await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { status });
+      await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { status, reason });
+      setAdminChangeReason("");
       setMessage(status === "ACTIVE" ? "Compte réactivé." : "Compte révoqué. Les sessions associées sont révoquées côté serveur.");
       setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
@@ -2071,16 +2078,22 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
     const id = text(user.id ?? user.user_id, "");
     const role = roleDrafts[id];
     if (!id || !role || role === text(user.role)) return;
+    const reason = adminChangeReason.trim();
+    if (!reason) {
+      setMessage("Saisissez le motif du changement avant de modifier les accès."); setError(true);
+      return;
+    }
     const roleLabels: Record<string, string> = { ADMIN: "Administrateur", BILLING_AGENT: "Agent facturation", CASHIER: "Caissier", SUPERVISOR: "Superviseur", AUDITOR_READONLY: "Auditeur lecture seule" };
     if (!await confirmAction({
       title: "Vérifier le changement de rôle",
-      description: `Compte : ${text(user.identity_ref)}. Rôle actuel : ${roleLabels[text(user.role)] ?? text(user.role)}. Nouveau rôle : ${roleLabels[role] ?? role}. Les autorisations effectives seront appliquées par le serveur SEL.`,
+      description: `Compte : ${text(user.identity_ref)}. Rôle actuel : ${roleLabels[text(user.role)] ?? text(user.role)}. Nouveau rôle : ${roleLabels[role] ?? role}. Motif : ${reason}. Les autorisations effectives seront appliquées par le serveur SEL.`,
       confirmLabel: "Enregistrer le rôle",
       tone: "warning",
     })) return;
     setUserMutationBusy(true);
     try {
-      await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { role });
+      await centralAdminRequest(`/v1/admin/users/${encodeURIComponent(id)}`, "PATCH", { role, reason });
+      setAdminChangeReason("");
       setRoleDrafts((current) => { const next = { ...current }; delete next[id]; return next; });
       announceDraftSaved(); setMessage("Rôle modifié par le serveur central."); setError(false); await loadData();
     } catch (reason) { setMessage(humanError(reason)); setError(true); }
@@ -2220,9 +2233,10 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
             {text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "") && <p className="notice">Votre propre rôle et statut ne peuvent pas être modifiés depuis cette session.</p>}
             <form data-preserve-draft className="admin-role-edit" onSubmit={(event) => { event.preventDefault(); void updateUserRole(selectedAdminUser); }}>
               <label>Nouveau rôle<select aria-label={`Nouveau rôle de ${text(selectedAdminUser.identity_ref)}`} value={roleDrafts[selectedAdminUserId] ?? text(selectedAdminUser.role)} onChange={(event) => setRoleDrafts((current) => ({ ...current, [selectedAdminUserId]: event.target.value }))} disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "")}><option value="ADMIN">Administrateur</option><option value="BILLING_AGENT">Agent facturation</option><option value="CASHIER">Caissier</option><option value="SUPERVISOR">Superviseur</option><option value="AUDITOR_READONLY">Auditeur lecture seule</option></select></label>
-              <Button primary type="submit" disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "") || !roleDrafts[selectedAdminUserId] || roleDrafts[selectedAdminUserId] === text(selectedAdminUser.role)}>{userMutationBusy ? "Vérification…" : "Vérifier la modification"}</Button>
+              <label className="span-two">Motif du changement<textarea name="admin-change-reason" maxLength={500} minLength={1} required value={adminChangeReason} onChange={(event) => setAdminChangeReason(event.target.value)} disabled={userMutationBusy} placeholder="Expliquer la raison de la modification des accès…" /></label>
+              <Button primary type="submit" disabled={userMutationBusy || !adminChangeReason.trim() || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "") || !roleDrafts[selectedAdminUserId] || roleDrafts[selectedAdminUserId] === text(selectedAdminUser.role)}>{userMutationBusy ? "Vérification…" : "Vérifier la modification"}</Button>
             </form>
-            <div className="admin-security-actions"><Button disabled={userMutationBusy || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "")} onClick={() => void toggleUser(selectedAdminUser)}>{text(selectedAdminUser.status).toUpperCase() === "ACTIVE" ? "Désactiver ce compte" : "Réactiver ce compte"}</Button><Button disabled={userMutationBusy} onClick={() => setPasswordTarget(selectedAdminUserId)}>Réinitialiser le mot de passe</Button></div>
+            <div className="admin-security-actions"><Button disabled={userMutationBusy || !adminChangeReason.trim() || text(selectedAdminUser.id ?? selectedAdminUser.user_id, "") === text(session.user_id, "")} onClick={() => void toggleUser(selectedAdminUser)}>{text(selectedAdminUser.status).toUpperCase() === "ACTIVE" ? "Désactiver ce compte" : "Réactiver ce compte"}</Button><Button disabled={userMutationBusy} onClick={() => setPasswordTarget(selectedAdminUserId)}>Réinitialiser le mot de passe</Button></div>
             {passwordTarget === selectedAdminUserId && <form data-preserve-draft className="form-grid admin-password-reset" onSubmit={(event) => void resetUserPassword(event)}><p className="help span-two">Le nouveau mot de passe reste masqué. Les sessions existantes seront révoquées côté serveur.</p><label>Nouveau mot de passe<input type="password" name="password" minLength={8} autoComplete="new-password" required disabled={userMutationBusy} /></label><div className="page-actions"><Button type="button" disabled={userMutationBusy} onClick={() => { announceDraftSaved(); setPasswordTarget(""); }}>Annuler</Button><Button primary type="submit" disabled={userMutationBusy}>{userMutationBusy ? "Enregistrement…" : "Confirmer le changement"}</Button></div></form>}
           </Panel>
           <Panel title="Actions suivantes"><div className="admin-next-actions"><Button onClick={() => void navigateAdminArea("users")}>Utilisateurs et autorisations</Button><Button onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button></div><p className="help">Aucun compte ni historique n’est supprimé physiquement.</p></Panel>
@@ -2241,7 +2255,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
             <input className="table-search" aria-label="Rechercher un compte" placeholder="Nom de compte, rôle ou état" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} />
             <Table headers={["Identifiant", "Rôle", "État", "Action"]} empty={users.length ? "Aucun compte ne correspond à cette recherche." : "Aucun utilisateur retourné par le serveur."} data={filteredUsers.map((user) => {
               const id = text(user.id ?? user.user_id, "");
-              return [text(user.identity_ref), text(user.role), <Status value={user.status} />, <Button aria-label={`Voir les accès de ${text(user.identity_ref)}`} disabled={userMutationBusy} onClick={() => { setSelectedAdminUserId(id); setAdminUserView("security"); }}>Voir</Button>];
+              return [text(user.identity_ref), text(user.role), <Status value={user.status} />, <Button aria-label={`Voir les accès de ${text(user.identity_ref)}`} disabled={userMutationBusy} onClick={() => { setMessage(""); setError(false); setAdminChangeReason(""); setSelectedAdminUserId(id); setAdminUserView("security"); }}>Voir</Button>];
             })} />
           </Panel>
           <Panel title="Actions suivantes"><p className="help">Choisissez une étape ou revenez au répertoire.</p><div className="admin-next-actions"><Button onClick={() => void navigateAdminArea("users", true)}>Créer un utilisateur SEL</Button><Button onClick={() => void navigateAdminArea("catalogs")}>Tarifs et référentiels</Button><Button onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button></div><p className="help">Les opérations ne sont enregistrées qu’après confirmation.</p></Panel>

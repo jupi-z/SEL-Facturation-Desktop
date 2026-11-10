@@ -102,6 +102,7 @@ pub struct RenewOfflineGrantRequest {
 pub struct UpdateAdminUserRequest {
     pub role: Option<String>,
     pub status: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -1711,6 +1712,16 @@ async fn admin_update_user(
             "status must be ACTIVE or REVOKED",
         ));
     }
+    if input
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.trim().is_empty() || reason.chars().count() > 500)
+    {
+        return Err(ApiError::unprocessable(
+            "USER_CHANGE_REASON_INVALID",
+            "reason must contain between 1 and 500 characters",
+        ));
+    }
     if input.role.is_none() && input.status.is_none() {
         return Err(ApiError::unprocessable(
             "USER_UPDATE_EMPTY",
@@ -1723,6 +1734,7 @@ async fn admin_update_user(
             user_id,
             input.role.as_deref(),
             input.status.as_deref(),
+            input.reason.as_deref(),
         )
         .await
         .map(Json)

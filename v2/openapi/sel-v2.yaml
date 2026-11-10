@@ -1139,10 +1139,13 @@ components:
         require_password_change: { type: boolean, default: false, description: Require the user to replace the temporary password before accessing business routes }
     UpdateAdminUserRequest:
       type: object
-      minProperties: 1
+      anyOf:
+        - required: [role]
+        - required: [status]
       properties:
         role: { type: string, enum: [ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR, AUDITOR_READONLY] }
         status: { type: string, enum: [ACTIVE, REVOKED] }
+        reason: { type: string, minLength: 1, maxLength: 500, description: Optional audit reason; required by the Windows client for access changes. }
     CatalogProduct:
       type: object
       required: [id, sku, product_type, label, price_reference, currency, effective_from]
