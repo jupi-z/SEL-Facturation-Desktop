@@ -370,6 +370,7 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     adapter = (APP / "src" / "api.ts").read_text(encoding="utf-8")
     native = (APP / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
 
     assert "centralLogin" in app
     assert '"/v1/admin/users"' in app
@@ -384,7 +385,12 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert '`/v1/admin/offline-grants/${encodeURIComponent(id)}/revoke`' not in app
     assert "minLength={8}" in app
     assert "AdminCatalogPanel" in app
-    assert 'className="admin-workspace-tabs"' in app
+    assert '{adminArea !== "users" && <nav className="admin-workspace-tabs"' in app
+    assert '{view !== "admin" && domainViews[domainByView[view]] && <nav className="workspace-tabs"' in app
+    assert 'Panel title="Session administrateur"' not in app
+    assert '"Données d’administration actualisées depuis le serveur central."' not in app
+    assert '{view === "admin" && <AdminConsole' in app
+    assert 'page.get_by_role("button", name="Tarifs et référentiels", exact=True).click()' in visual_review
     assert 'className="admin-directory-layout"' in app
     assert 'className="customer-details admin-user-summary"' in app
     assert 'aria-label={`Voir les accès de ${text(user.identity_ref)}`}' in app

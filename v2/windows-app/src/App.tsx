@@ -835,7 +835,7 @@ export default function App() {
       <header className="topbar"><div className="topbar-context">{viewHistory.length > 0 && <Button className="back-button" onClick={navigateBack} aria-label="Revenir à l’écran précédent">← Retour</Button>}<p className="eyebrow">{activePage.context}</p></div>
         <div className="connection-status"><span className="status-dot" aria-hidden="true" />{serverStatus?.status === "CENTRAL_CONNECTED" ? "Serveur SEL · connecté" : "Serveur SEL · état inconnu"}<Button onClick={() => void signOut()}>Se déconnecter</Button></div>
       </header>
-      {domainViews[domainByView[view]] && <nav className="workspace-tabs" aria-label={`Pages ${navigation.find((item) => item.id === domainByView[view])?.label ?? ""}`}>
+      {view !== "admin" && domainViews[domainByView[view]] && <nav className="workspace-tabs" aria-label={`Pages ${navigation.find((item) => item.id === domainByView[view])?.label ?? ""}`}>
         {domainViews[domainByView[view]]?.map((item) => <button key={item.id} className={`workspace-tab${view === item.id ? " active" : ""}`} aria-current={view === item.id ? "page" : undefined} onClick={() => navigateTo(item.id)}>{item.label}</button>)}
       </nav>}
       {view === "solar" && <nav className="workspace-tabs" aria-label="Pages solaire">
@@ -1101,10 +1101,7 @@ export default function App() {
         <Panel title="État de la connexion"><div className="summary-state"><Status value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Connecté au serveur SEL" : serverStatus?.status === "CENTRAL_UNCONFIGURED" ? "Configuration serveur incomplète" : "Serveur indisponible"} /><p>{serverStatus?.status === "CENTRAL_CONNECTED" ? "Les opérations sont envoyées directement au serveur central." : serverStatus?.status === "CENTRAL_UNCONFIGURED" ? "Le service répond, mais la configuration de production doit être terminée avant toute opération." : "Aucune opération métier n’est possible sans connexion au serveur SEL."}</p></div></Panel>
       </>}
 
-      {view === "admin" && <>
-        <PageHeading eyebrow="ADMIN / RÉFÉRENTIELS" title="Administration" description="Les écrans administratifs suivent les permissions et les paramètres effectivement exposés par le service Rust." />
-        <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} draftDirty={draftDirty} />
-      </>}
+      {view === "admin" && <AdminConsole session={session} onSignedOut={() => void signOut()} confirmAction={requestConfirmation} draftDirty={draftDirty} />}
 
       {documentPreview && <div className="document-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDocumentPreview(); }}>
         <section className="document-preview-dialog" role="dialog" aria-modal="true" aria-label={documentPreview.title}>
@@ -2002,7 +1999,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
         return;
       }
     }
-    setMessage(failed.length ? `${7 - failed.length} rubrique(s) chargée(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "Données d’administration actualisées depuis le serveur central.");
+    setMessage(failed.length ? `${7 - failed.length} rubrique(s) chargée(s). ${failed.length} lecture(s) refusée(s) ou indisponible(s).` : "");
     setError(failed.length > 0);
     setLoading(false);
   }, []);
@@ -2179,14 +2176,11 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
 
   return <>
     {message && <div className={`notice${error ? " error" : ""}`} role={error ? "alert" : "status"}>{message}</div>}
-    <Panel title="Session administrateur" action={<div className="page-actions"><Button onClick={() => void loadData()} disabled={loading}>{loading ? "Actualisation…" : "Actualiser"}</Button><Button onClick={onSignedOut}>Se déconnecter</Button></div>}>
-      <dl className="customer-details admin-session"><div><dt>Utilisateur</dt><dd>{text(session.user_id)}</dd></div><div><dt>Rôle</dt><dd>{text(session.role)}</dd></div><div><dt>Organisation</dt><dd>{text(session.organization_id)}</dd></div></dl>
-    </Panel>
-    <nav className="admin-workspace-tabs" aria-label="Rubriques d’administration">
-      <Button className={adminArea === "users" ? "is-active" : ""} aria-pressed={adminArea === "users"} onClick={() => void navigateAdminArea("users")}>Utilisateurs</Button>
+    {adminArea !== "users" && <nav className="admin-workspace-tabs" aria-label="Rubriques d’administration">
+      <Button onClick={() => void navigateAdminArea("users")}>Utilisateurs</Button>
       <Button className={adminArea === "catalogs" ? "is-active" : ""} aria-pressed={adminArea === "catalogs"} onClick={() => void navigateAdminArea("catalogs")}>Référentiels</Button>
       <Button className={adminArea === "audit" ? "is-active" : ""} aria-pressed={adminArea === "audit"} onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button>
-    </nav>
+    </nav>}
     {adminArea === "users" && <>
       {adminUserView === "create" ? <>
         <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / UTILISATEURS / CRÉATION</p><h2>Créer un utilisateur SEL</h2><p className="muted">Création isolée et attribution explicite d’un rôle.</p></div><Button onClick={() => void navigateAdminArea("users")}>Revenir au répertoire</Button></header>
@@ -2231,7 +2225,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
           <Panel title="Actions suivantes"><div className="admin-next-actions"><Button onClick={() => void navigateAdminArea("users")}>Utilisateurs et autorisations</Button><Button onClick={() => void navigateAdminArea("audit")}>Journal d’audit</Button></div><p className="help">Aucun compte ni historique n’est supprimé physiquement.</p></Panel>
         </div>
       </> : <>
-        <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / RÉPERTOIRE</p><h2>Utilisateurs et autorisations</h2><p className="muted">Administrer les comptes sans mélanger les autres référentiels.</p></div><Button primary onClick={() => void navigateAdminArea("users", true)}>Créer un utilisateur</Button></header>
+        <header className="admin-page-heading"><div><p className="eyebrow">ADMIN / RÉPERTOIRE</p><h2>Utilisateurs et autorisations</h2><p className="muted">{loading ? "Actualisation des données du serveur SEL…" : "Administrer les comptes sans mélanger les autres référentiels."}</p></div><Button primary onClick={() => void navigateAdminArea("users", true)}>Créer un utilisateur</Button></header>
         <div className="admin-metrics">
           <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
           <Metric label="Référentiels approuvés" value={String(approvedCatalogCount)} note="Valeur du serveur SEL" />

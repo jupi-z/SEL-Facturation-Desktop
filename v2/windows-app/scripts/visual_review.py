@@ -414,7 +414,7 @@ async def capture_views() -> None:
                 ("solar", "Solaire", None),
                 ("receivables", "Paiements", "Créances"),
                 ("server", "Administration", "État du serveur"),
-                ("admin", "Administration", "Administration"),
+                ("admin", "Administration", None),
             ]
             requested_views = {item.strip() for item in os.environ.get("SEL_VISUAL_VIEWS", "").split(",") if item.strip()}
             if requested_views:
@@ -964,7 +964,11 @@ async def capture_views() -> None:
                     await reset_form.get_by_role("button", name="Confirmer le changement").click()
                     await page.get_by_role("alertdialog", name="Vérifier la réinitialisation du mot de passe").get_by_role("button", name="Confirmer le changement").click()
                     await page.wait_for_function(f"window.__adminWriteLog.filter(entry => entry.path === '{password_path}' && entry.method === 'POST').length === 1")
-                    await page.get_by_role("button", name="Référentiels", exact=True).click()
+                    await page.get_by_role("button", name="Retour utilisateurs").click()
+                    abandon_admin_review = page.get_by_role("alertdialog", name="Abandonner les modifications ?")
+                    if await abandon_admin_review.count():
+                        await abandon_admin_review.get_by_role("button", name="Abandonner et continuer").click()
+                    await page.get_by_role("button", name="Tarifs et référentiels", exact=True).click()
                     tariff_panel = page.locator(".admin-catalog-grid .panel").first
                     draft_tariff = tariff_panel.get_by_role("row").filter(has_text="Brouillon").first
                     await draft_tariff.get_by_label("Référence de la décision d’approbation SEL").fill("DEMO-APPROVAL-UX3")
