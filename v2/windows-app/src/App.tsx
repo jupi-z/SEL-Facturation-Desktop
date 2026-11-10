@@ -1004,8 +1004,7 @@ export default function App() {
           </div>
         </>}
         {paymentWorkspace === "create" && <>
-          <PageHeading eyebrow="SEL / PAIEMENTS / ENCAISSEMENTS / NOUVEAU" title="Enregistrer un paiement" description="Affectez le règlement à une ou plusieurs créances du même abonné." action={<Button onClick={() => void returnToPaymentJournal()}>Journal des paiements</Button>} />
-          <PaymentForm customers={customers} sales={sales} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onSubmit={submit} />
+          <PaymentForm customers={customers} sales={sales} payments={payments} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onReturnToJournal={returnToPaymentJournal} onSubmit={submit} />
         </>}
       </>}
 
@@ -1205,7 +1204,7 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId, initialScheduleId, onPrefillConsumed, onSubmit }: { customers: Row[]; sales: Row[]; initialCustomerId: string; initialReceivableId: string; initialScheduleId: string; onPrefillConsumed: () => void; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
+function PaymentForm({ customers, sales, payments, initialCustomerId, initialReceivableId, initialScheduleId, onPrefillConsumed, onReturnToJournal, onSubmit }: { customers: Row[]; sales: Row[]; payments: Row[]; initialCustomerId: string; initialReceivableId: string; initialScheduleId: string; onPrefillConsumed: () => void; onReturnToJournal: () => Promise<void>; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [customerId, setCustomerId] = useState(initialCustomerId);
   const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: initialReceivableId, amount: "", scheduleId: initialScheduleId }]);
@@ -1215,7 +1214,9 @@ function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId,
   const [planSchedules, setPlanSchedules] = useState<Record<string, { schedule: Row[]; currency: string; loading: boolean; error: string }>>({});
   const [receivedAmount, setReceivedAmount] = useState("");
   const [occurredAt, setOccurredAt] = useState(dateTimeInputValue);
+  const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [paymentReview, setPaymentReview] = useState<Row | null>(null);
+  const [allocationStep, setAllocationStep] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
 
@@ -1280,6 +1281,12 @@ function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId,
   });
   const paymentBlocked = receivablesLoading || Boolean(receivablesError) || !allocationsReady || duplicateAllocation || currencyMismatch;
   const primaryReceivable = selectedReceivables.find(Boolean);
+  const openScheduleCount = Object.values(planSchedules).reduce((count, state) => count + state.schedule.filter((item) => text(item.status).toUpperCase() !== "PAID").length, 0);
+  const paymentStep = paymentReview ? "confirm" : allocationStep ? "allocation" : "entry";
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }, [paymentStep]);
 
   function updateAllocation(key: string, field: "receivableId" | "amount" | "scheduleId", value: string) {
     setAllocationRows((current) => current.map((allocation) => allocation.key === key
@@ -1296,10 +1303,12 @@ function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId,
       const saved = await onSubmit(form, "/v1/payments", paymentReview, "Règlement enregistré par le serveur SEL.");
       if (saved) {
         setPaymentReview(null);
+        setAllocationStep(false);
         setCustomerId("");
         setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]);
         setReceivedAmount("");
         setOccurredAt(dateTimeInputValue());
+        setPaymentMethod("CASH");
       }
     } finally {
       savingRef.current = false;
@@ -1307,7 +1316,13 @@ function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId,
     }
   }
 
-  return <div className="payment-workspace"><Panel title="Informations du règlement"><form ref={formRef} data-preserve-draft id="central-payment-form" className="form-grid" onChange={() => setPaymentReview(null)} onSubmit={(event) => {
+  return <><PageHeading eyebrow={paymentStep === "entry" ? "SEL / PAIEMENTS / ENCAISSEMENTS / NOUVEAU RÈGLEMENT" : paymentStep === "allocation" ? "SEL / PAIEMENTS / ENCAISSEMENTS / AFFECTATION" : "SEL / PAIEMENTS / ENCAISSEMENTS / CONFIRMATION"} title={paymentStep === "entry" ? "Enregistrer un paiement" : paymentStep === "allocation" ? "Affecter un paiement aux créances" : "Confirmer l’encaissement"} description={paymentStep === "entry" ? "Distinguer l’identité du payeur, le montant et le mode d’encaissement." : paymentStep === "allocation" ? "Répartir le versement entre les obligations du même abonné." : "Dernière vérification avant l’écriture financière."} action={<Button primary={paymentStep === "allocation"} onClick={() => paymentStep === "allocation" ? formRef.current?.requestSubmit() : paymentReview ? setPaymentReview(null) : void onReturnToJournal()}>{paymentStep === "confirm" ? "Modifier la saisie" : paymentStep === "allocation" ? "Vérifier l’affectation" : "Retour au journal"}</Button>} />
+  <div className="metrics payment-entry-metrics">
+    <Metric label="Règlements" value={payments.length} note="Valeur retournée par le serveur SEL" />
+    <Metric label="Créances" value={receivablesLoading ? "…" : receivables.length} note={customerId ? "Disponibles pour cet abonné" : "Sélectionnez un abonné"} />
+    <Metric label="Échéances" value={openScheduleCount} note="Ouvertes dans les échéanciers chargés" />
+    <Metric label="Statut" value={receivablesError ? "À vérifier" : receivablesLoading ? "Chargement" : customerId ? "Prêt" : "En attente"} note="Données vérifiées par le serveur" />
+  </div><div className="payment-workspace"><Panel title={paymentStep === "entry" ? "Saisie de l’encaissement" : paymentStep === "allocation" ? "Ventilation du paiement" : "Résumé des fonds reçus"}><p className="help payment-entry-caption" hidden={paymentStep === "confirm"}>Identité du payeur, date et mode d’encaissement. Le serveur SEL contrôle la créance et les montants avant toute écriture.</p><form ref={formRef} data-preserve-draft id="central-payment-form" className="form-grid" hidden={paymentStep === "confirm"} onChange={() => setPaymentReview(null)} onSubmit={(event) => {
     event.preventDefault();
     if (paymentBlocked || !event.currentTarget.reportValidity()) return;
     const form = new FormData(event.currentTarget);
@@ -1316,12 +1331,20 @@ function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId,
       allocations: allocationRows.map((allocation) => ({ receivable_id: allocation.receivableId, amount: allocation.amount, schedule_id: allocation.scheduleId || null })),
     });
   }}>
-    <label className="span-two">Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-    <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)} required /></label>
-    <label>Mode<select name="method"><option value="CASH">Espèces</option><option value="BANK">Banque</option><option value="MOBILE_MONEY">Mobile Money</option><option value="OTHER">Autre</option></select></label>
-    <label>Date du règlement<input name="occurred_at" type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} required /></label>
-    <label>Devise<input value={currency} readOnly required /></label>
-    <div className="allocation-list span-two"><div className="allocation-list-heading"><strong>Répartition sur les créances</strong><Button type="button" disabled={allocationRows.length >= 10 || receivables.length <= allocationRows.length} onClick={() => setAllocationRows((current) => [...current, { key: `allocation-${Date.now()}-${current.length}`, receivableId: "", amount: "", scheduleId: "" }])}>+ Ajouter une créance</Button></div>
+    {paymentStep === "entry" && <>
+      <label>Abonné<select name="customer_id" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setAllocationRows([{ key: `allocation-${Date.now()}`, receivableId: "", amount: "", scheduleId: "" }]); }} required><option value="">Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
+      <label>Date du règlement<input name="occurred_at" type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} required /></label>
+      <label>Montant reçu<input name="received_amount" type="number" min="0.01" step="0.01" value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)} required /></label>
+      <label>Devise<input value={currency} readOnly required aria-label="Devise déterminée par la créance" /></label>
+      <label>Mode de règlement<select name="method" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="CASH">Espèces</option><option value="BANK">Banque</option><option value="MOBILE_MONEY">Mobile Money</option><option value="OTHER">Autre</option></select></label>
+    </>}
+    {paymentStep === "allocation" && <>
+    <input type="hidden" name="customer_id" value={customerId} />
+    <input type="hidden" name="occurred_at" value={new Date(occurredAt).toISOString()} />
+    <input type="hidden" name="received_amount" value={receivedAmount} />
+    <input type="hidden" name="method" value={paymentMethod} />
+    <div className="payment-draft-summary span-two"><span>Abonné<strong>{customerLabel(customerId, customers)}</strong></span><span>Montant reçu<strong>{formatMoney(receivedAmount, currency)}</strong></span><span>Mode<strong>{domainLabel(paymentMethod)}</strong></span></div>
+    <div className="allocation-list span-two" id="payment-allocation-section"><div className="allocation-list-heading"><strong>Répartition sur les créances</strong><Button type="button" disabled={allocationRows.length >= 10 || receivables.length <= allocationRows.length} onClick={() => setAllocationRows((current) => [...current, { key: `allocation-${Date.now()}-${current.length}`, receivableId: "", amount: "", scheduleId: "" }])}>+ Ajouter une créance</Button></div>
       {allocationRows.map((allocation, index) => {
         const planId = installmentPlanByReceivable.get(allocation.receivableId);
         const planState = planId ? planSchedules[planId] : undefined;
@@ -1340,8 +1363,9 @@ function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId,
       {currencyMismatch && <p className="help error-text" role="alert">Toutes les créances d’un même règlement doivent utiliser la même devise.</p>}
       <p className="help">Les montants, échéances et soldes sont vérifiés atomiquement par le moteur Rust. Chaque ligne reste affectée à une créance distincte.</p>
     </div>
-    <label>Référence interne<input value="Générée par Rust à l’enregistrement" readOnly /></label>
-  </form></Panel><Panel title={paymentReview ? "Confirmation du règlement" : "Récapitulatif"}><div className="payment-summary">{paymentReview ? <section className="payment-review" aria-live="polite">
+    <label className="span-two">Référence interne<input value="Générée par Rust à l’enregistrement" readOnly /></label>
+    </>}
+  </form><section className="payment-confirmation-summary" hidden={!paymentReview} aria-live="polite"><p className="help">Le serveur calculera et validera atomiquement le solde après réception.</p><dl><dt>Abonné</dt><dd>{paymentReview ? customerLabel(text(paymentReview.customer_id), customers) : "—"}</dd><dt>Total encaissé</dt><dd>{paymentReview ? formatMoney(paymentReview.received_amount, paymentReview.currency) : "—"}</dd><dt>Répartition</dt><dd>{paymentReview ? rows<Row>(paymentReview.allocations).length : 0} créance(s) sélectionnée(s)</dd><dt>Mode</dt><dd>{paymentReview ? domainLabel(paymentReview.method) : "—"}</dd><dt>Reçu</dt><dd>Généré après confirmation</dd></dl></section></Panel><Panel title="Actions suivantes"><div className="payment-summary">{paymentReview ? <section className="payment-review" aria-live="polite">
     <p className="eyebrow">DERNIÈRE VÉRIFICATION</p>
     <h2>Confirmer le règlement</h2>
     <div className="payment-summary-values">
@@ -1356,15 +1380,26 @@ function PaymentForm({ customers, sales, initialCustomerId, initialReceivableId,
     })}</ul>
     <p className="help">Le serveur Rust recontrôlera atomiquement le montant et les soldes avant validation.</p>
     <div className="form-actions"><Button type="button" disabled={saving} onClick={() => setPaymentReview(null)}>Modifier</Button><Button primary type="button" disabled={saving} onClick={() => void confirmPayment()}>{saving ? "Enregistrement…" : "Confirmer et enregistrer"}</Button></div>
-  </section> : <>
-    <p className="eyebrow">PRÉPARATION DU RÈGLEMENT</p><h2>Règlement</h2>
-    <p className="muted">{primaryReceivable ? `${domainLabel(primaryReceivable.source_type ?? primaryReceivable.status)} · soldes retournés par Rust` : "Choisissez un abonné puis les créances à affecter."}</p>
+  </section> : paymentStep === "entry" ? <>
+    <p className="help">Choisissez une étape ou revenez au journal.</p>
+    <div className="payment-next-actions">
+      <Button primary type="button" disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length} onClick={() => { if (formRef.current?.reportValidity()) setAllocationStep(true); }}>Affecter un paiement aux créances</Button>
+      <Button type="button" onClick={() => void onReturnToJournal()}>Abandonner le brouillon non enregistré</Button>
+      <Button type="button" onClick={() => void onReturnToJournal()}>Journal de caisse</Button>
+    </div>
+    <p className="help">La devise sera déterminée par les créances sélectionnées; Rust validera les soldes avant toute écriture.</p>
+  </> : <>
+    <p className="help">Vérifiez la répartition des fonds avant l’écriture financière.</p>
     <div className="payment-summary-values"><div><span>Abonné</span><strong>{customerId ? customerLabel(customerId, customers) : "—"}</strong></div><div><span>Créances sélectionnées</span><strong>{allocationRows.filter((allocation) => allocation.receivableId).length}</strong></div><div><span>Devise</span><strong>{currency}</strong></div></div>
-    <p className="eyebrow">MONTANT À CONFIRMER</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong>
-    <span className={`status-badge${primaryReceivable ? " pending" : ""}`}>{primaryReceivable ? "En attente d’enregistrement" : "Aucune créance sélectionnée"}</span>
-    <p className="help">Rust contrôle le montant reçu, l’ensemble des affectations, les devises et chaque solde avant d’enregistrer le règlement.</p>
-    <Button primary type="submit" form="central-payment-form" disabled={paymentBlocked || Boolean(paymentReview)}>Vérifier le règlement</Button>
-  </>}</div></Panel></div>;
+    <p className="eyebrow">MONTANT REÇU</p><strong className="payment-amount">{receivedAmount ? formatMoney(receivedAmount, currency) : "—"}</strong>
+    <span className={`status-badge${primaryReceivable ? " pending" : ""}`}>{primaryReceivable ? "En attente de vérification" : "Aucune créance sélectionnée"}</span>
+    <div className="payment-next-actions">
+      <Button primary type="submit" form="central-payment-form" disabled={paymentBlocked || Boolean(paymentReview)}>Vérifier l’affectation</Button>
+      <Button type="button" onClick={() => setAllocationStep(false)}>Modifier la saisie</Button>
+      <Button type="button" onClick={() => void onReturnToJournal()}>Journal de caisse</Button>
+    </div>
+    <p className="help">Le serveur Rust contrôle atomiquement les montants, devises et soldes.</p>
+  </>}</div></Panel></div></>;
 }
 
 function ServiceAccountsManager({ customerId, canManageMeters, onConfirmReplacement, confirmAction }: { customerId: string; canManageMeters: boolean; onConfirmReplacement: (oldSerial: string, newSerial: string, reason: string) => Promise<boolean>; confirmAction: (request: ConfirmationRequest) => Promise<boolean> }) {

@@ -21,6 +21,7 @@ OUTPUT = Path(os.environ.get("SEL_VISUAL_OUTPUT", ROOT / "artifacts" / "phase8-d
 VIEWPORT_WIDTH = int(os.environ.get("SEL_VIEWPORT_WIDTH", "1440"))
 VIEWPORT_HEIGHT = int(os.environ.get("SEL_VIEWPORT_HEIGHT", "900"))
 SHOT_SUFFIX = f"{VIEWPORT_WIDTH}x{VIEWPORT_HEIGHT}"
+FAILED_REQUESTS: list[str] = []
 
 CUSTOMERS = [{
     "id": "demo-customer-0001",
@@ -278,7 +279,7 @@ async def assert_pdf_rendered(page, label: str, expected_pages: int | None = 1) 
     page_count = await page.locator(".document-pdf-page").count()
     if not page_count:
         status = await page.locator(".document-pdf-status").inner_text()
-        raise AssertionError(f"{label} PDF could not be rendered: {status}")
+        raise AssertionError(f"{label} PDF could not be rendered: {status}; failed requests: {FAILED_REQUESTS[-8:]}")
     if expected_pages is not None and page_count != expected_pages:
         raise AssertionError(f"{label} should render {expected_pages} A4 page(s), got {page_count}")
     if expected_pages is None and page_count < 2:
@@ -370,7 +371,9 @@ async def capture_views() -> None:
             browser = await playwright.chromium.launch(**browser_options)
             page = await browser.new_page(viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}, device_scale_factor=1, locale="fr-CD")
             browser_errors: list[str] = []
+            FAILED_REQUESTS.clear()
             page.on("pageerror", lambda error: browser_errors.append(str(error)))
+            page.on("requestfailed", lambda request: FAILED_REQUESTS.append(f"{request.url}: {request.failure}"))
             await page.add_init_script(mock_invoke_script())
             await page.add_init_script("""(() => {
               const original = Blob.prototype.arrayBuffer;
@@ -462,15 +465,23 @@ async def capture_views() -> None:
                     await page.screenshot(path=str(OUTPUT / f"payment-journal-f01-{SHOT_SUFFIX}.png"))
                     await page.get_by_role("button", name="Enregistrer un paiement", exact=True).first.click()
                     await page.get_by_role("heading", name="Enregistrer un paiement").wait_for()
+                    if await page.locator(".payment-entry-metrics .metric").count() != 4:
+                        raise AssertionError("Payment entry must show four server-derived summary metrics")
+                    await page.screenshot(path=str(OUTPUT / f"payment-entry-f02-{SHOT_SUFFIX}.png"))
                     await page.locator('.payment-workspace form select[name="customer_id"]').select_option("demo-customer-0001")
+                    await page.locator('input[name="received_amount"]').fill("3.00")
+                    await page.locator('input[name="occurred_at"]').fill("2026-11-04T10:00")
+                    await page.get_by_role("button", name="Affecter un paiement aux créances").click()
+                    await page.get_by_role("heading", name="Affecter un paiement aux créances").wait_for()
                     await page.locator('.allocation-card select option[value="demo-receivable-0001"]').wait_for(state="attached")
                     await page.locator('.allocation-card select').first.select_option("demo-receivable-0001")
-                    await page.locator('input[name="received_amount"]').fill("3.00")
                     await page.locator('.allocation-card input[type="number"]').fill("3.00")
-                    await page.locator('input[name="occurred_at"]').fill("2026-11-04T10:00")
-                    await page.get_by_role("button", name="Vérifier le règlement").click()
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.wait_for_timeout(120)
+                    await page.screenshot(path=str(OUTPUT / f"payment-allocation-f03-{SHOT_SUFFIX}.png"))
+                    await page.locator(".page-heading > button").click()
                     await page.get_by_role("heading", name="Confirmer le règlement").wait_for()
-                    await page.screenshot(path=str(OUTPUT / f"payment-review-{SHOT_SUFFIX}.png"))
+                    await page.screenshot(path=str(OUTPUT / f"payment-confirmation-f04-{SHOT_SUFFIX}.png"))
                     if await page.evaluate("window.__paymentPostCount") != 0:
                         raise AssertionError("Payment review step must not post a payment to the server")
                     await page.get_by_role("button", name="Confirmer et enregistrer").click()
@@ -521,12 +532,20 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Enregistrer un versement").click()
                     await page.get_by_role("heading", name="Enregistrer un paiement").wait_for()
                     await page.wait_for_function("document.querySelector('#central-payment-form select[name=customer_id]')?.value === 'demo-customer-0001'")
+                    await page.locator('input[name="received_amount"]').fill("10.00")
+                    await page.get_by_role("button", name="Affecter un paiement aux créances").click()
+                    await page.get_by_role("heading", name="Affecter un paiement aux créances").wait_for()
                     if await page.locator(".allocation-card select").first.input_value() != "demo-receivable-solar-0001":
                         raise AssertionError("Solar plan payment shortcut must preselect its original receivable")
                     if await page.locator(".allocation-card select").nth(1).input_value() != "demo-solar-schedule-0001":
                         raise AssertionError("Solar plan payment shortcut must preselect the next open installment")
                     await page.screenshot(path=str(OUTPUT / f"solar-payment-prefill-{SHOT_SUFFIX}.png"))
                     await page.get_by_role("navigation", name="Navigation principale").get_by_role("button", name="Solaire", exact=True).click()
+                    solar_payment_draft = page.get_by_role("alertdialog", name="Abandonner la saisie ?")
+                    if await solar_payment_draft.count():
+                        await solar_payment_draft.get_by_role("button", name="Abandonner et continuer").click()
+                    await page.locator(".workspace-tabs").get_by_role("button", name="Catalogue et ventes", exact=True).click()
+                    await page.get_by_role("heading", name="Catalogue des kits solaires").wait_for()
                 await page.evaluate("window.scrollTo(0, 0)")
                 await page.wait_for_timeout(120)
                 await page.screenshot(path=str(OUTPUT / f"{slug}-{SHOT_SUFFIX}.png"))
@@ -974,6 +993,11 @@ async def capture_views() -> None:
             await page.get_by_role("button", name="Enregistrer un paiement", exact=True).first.click()
             await page.get_by_role("heading", name="Enregistrer un paiement").wait_for()
             await page.locator('.payment-workspace form select[name="customer_id"]').select_option("demo-customer-0001")
+            await page.locator('input[name="received_amount"]').fill("3.00")
+            await page.get_by_role("button", name="Affecter un paiement aux créances").click()
+            await page.get_by_role("heading", name="Affecter un paiement aux créances").wait_for()
+            if await page.evaluate("window.scrollY") != 0:
+                raise AssertionError("Payment allocation stage must return to the page heading")
             await page.get_by_role("button", name="+ Ajouter une créance").click()
             await page.locator('.allocation-card select').first.locator('option[value="demo-receivable-0001"]').wait_for(state="attached")
             await page.locator('.allocation-card select').nth(0).select_option("demo-receivable-0001")
@@ -982,12 +1006,11 @@ async def capture_views() -> None:
             await page.locator('.allocation-card select').nth(2).select_option("demo-solar-schedule-0001")
             await page.locator('.allocation-card input[type="number"]').nth(0).fill("1.00")
             await page.locator('.allocation-card input[type="number"]').nth(1).fill("2.00")
-            await page.locator('input[name="received_amount"]').fill("3.00")
-            await page.get_by_role("button", name="Vérifier le règlement").click()
+            await page.locator(".page-heading > button").click()
             await page.get_by_role("heading", name="Confirmer le règlement").wait_for()
-            await page.get_by_role("button", name="Confirmer et enregistrer").click()
+            await page.get_by_role("button", name="Confirmer et enregistrer", exact=True).click()
             await page.wait_for_function("window.__paymentPostCount === 2")
-            await page.get_by_role("button", name="Journal des paiements", exact=True).click()
+            await page.get_by_role("button", name="Retour au journal", exact=True).click()
             await page.get_by_role("heading", name="Journal de caisse").wait_for()
             await page.get_by_role("button", name="Reçu PDF").first.wait_for()
             await page.get_by_role("button", name="Reçu PDF").first.click()

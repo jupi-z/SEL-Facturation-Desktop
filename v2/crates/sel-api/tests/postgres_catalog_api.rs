@@ -464,7 +464,7 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
         json!({
             "amount": "12.50",
             "currency": "USD",
-            "effective_from": "2026-11-07",
+            "effective_from": (chrono::Utc::now().date_naive() + chrono::Duration::days(1)).to_string(),
             "effective_to": null
         }),
     )

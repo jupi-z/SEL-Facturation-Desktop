@@ -198,11 +198,29 @@ def test_payment_journal_matches_figma_f01_and_separates_payment_entry() -> None
     assert 'title="Journal de caisse"' in app
     assert 'title="Opérations de caisse"' in app
     assert 'title="Actions suivantes"' in app
-    assert 'title="Enregistrer un paiement"' in app
+    assert '"Enregistrer un paiement" : paymentStep === "allocation"' in app
     assert 'Suivi des créances' in app
     assert 'className="payment-journal-layout"' in app
     assert '.payment-journal-layout { display: grid;' in css
     assert 'payment-journal-f01-{SHOT_SUFFIX}.png' in visual_review
+
+
+def test_payment_entry_uses_server_facts_and_matches_figma_f02_structure() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+
+    assert '"Enregistrer un paiement" : paymentStep === "allocation"' in app
+    assert 'paymentStep === "entry" ? "Saisie de l’encaissement"' in app
+    assert 'label="Règlements" value={payments.length}' in app
+    assert 'label="Créances" value={receivablesLoading ? "…" : receivables.length}' in app
+    assert 'label="Échéances" value={openScheduleCount}' in app
+    assert 'className="payment-next-actions"' in app
+    assert 'window.scrollTo({ top: 0, behavior: "instant" })' in app
+    assert 'disabled={paymentBlocked || Boolean(paymentReview)}>Vérifier l’affectation</Button>' in app
+    assert 'payment-entry-metrics' in css
+    assert 'payment-entry-f02-{SHOT_SUFFIX}.png' in visual_review
+    assert 'Payment allocation stage must return to the page heading' in visual_review
 
 
 def test_solar_sales_use_the_approved_central_catalog_and_rust_quote() -> None:
@@ -623,17 +641,18 @@ def test_payment_workspace_uses_two_desktop_columns_and_stacks_below_breakpoint(
     css = (APP / "src" / "App.css").read_text(encoding="utf-8")
 
     assert 'className="payment-workspace"' in app
-    assert 'title="Récapitulatif"' in app
+    assert 'title="Actions suivantes"' in app
     assert 'formatMoney(item.balance, item.currency)' in app
     assert 'formatMoney(receivedAmount, currency)' in app
     payment_form = app.split("function PaymentForm(", 1)[1].split("\nfunction MeterReadingsView(", 1)[0]
-    assert 'label className="span-two">Abonné<select name="customer_id" value={customerId}' in payment_form
+    assert 'label>Abonné<select name="customer_id" value={customerId}' in payment_form
     assert 'name="occurred_at" type="datetime-local"' in payment_form
     assert 'new Date(String(form.get("occurred_at"))).toISOString()' in payment_form
-    assert 'label>Référence interne<input value="Générée par Rust à l’enregistrement" readOnly' in payment_form
+    assert 'label className="span-two">Référence interne<input value="Générée par Rust à l’enregistrement" readOnly' in payment_form
     assert 'await page.locator(\'input[name="occurred_at"]\').fill("2026-11-04T10:00")' in (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     assert ".payment-workspace { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(285px, .72fr);" in css
     assert "@media (max-width: 1280px)" in css
+    assert "@media (max-width: 760px)" in css
     assert ".payment-workspace { grid-template-columns: 1fr; }" in css
 
 

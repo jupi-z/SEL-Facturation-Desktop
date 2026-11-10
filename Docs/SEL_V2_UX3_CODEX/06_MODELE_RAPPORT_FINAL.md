@@ -1,8 +1,8 @@
-# Rapport d’exécution UX3 — état au 7 novembre 2026
+# Rapport d’exécution UX3 — état au 10 novembre 2026
 
 > Rapport d’étape, non rapport de clôture. Les statuts reflètent les preuves exécutées; la recette complète et la validation Figma de toutes les frames ne sont pas terminées.
 
-## Progression vérifiée — 7 novembre 2026
+## Progression vérifiée — 10 novembre 2026
 
 ### F01 — Journal de caisse et séparation de la saisie
 
@@ -22,6 +22,18 @@
 | CI GitHub de l’incrément | À vérifier après publication du commit |
 
 F01 est implémenté et validé dans l’application de test. Le flux contre PostgreSQL réel, la permission réelle, l’imprimante SEL et le poste cible restent à valider.
+
+### F02–F04 — Saisie, affectation et confirmation d’un paiement
+
+- F02 sépare la saisie de l’encaissement (abonné, date, montant, devise, mode) et affiche des indicateurs provenant des réponses API. Le bouton d’étape ne crée aucun paiement.
+- F03 récapitule la saisie et permet de répartir le paiement entre des créances/échéances; le serveur Rust reste responsable de la validation des montants et soldes.
+- F04 présente une dernière revue et ne déclenche l’écriture qu’avec « Confirmer et enregistrer ». Les champs de référence et les sommes ne sont pas calculés par l’interface.
+- Tests ciblés : 66 tests `tests/test_v2_tauri_client.py` passent; `npm run build`, `cargo fmt --all -- --check` et `git diff --check` passent. Le build conserve un avertissement non bloquant sur les gros chunks PDF/fonts.
+- Captures inspectées et conservées sous `evidence/` : `payment-entry-f02-2026-11-10-{1440x900,1280x720}.png`, `payment-allocation-f03-2026-11-10-{1440x900,1280x720}.png` et `payment-confirmation-f04-2026-11-10-{1440x900,1280x720}.png`.
+- Aucune transaction réelle n’a été créée; le flux de navigateur utilise des réponses API synthétiques. PostgreSQL de production, droits réels, reçu/imprimante et poste SEL restent non testés.
+- La recette CI précédente du backend a échoué sur le test de période tarifaire : la date effective du test chevauchait le tarif de communication semé pour la date courante. Le test emploie maintenant le lendemain de la date courante; la réussite sera établie uniquement par une nouvelle CI sur le commit poussé.
+
+F02–F04 sont implémentés. La recette complète navigateur a réussi à 1440×900 et 1280×720 avec API synthétique. Un premier passage 1280×720 avait échoué au chargement du worker PDF du reçu; deux exécutions complètes ultérieures ont réussi sans changement du code PDF. Ce défaut intermittent reste à surveiller. La CI backend du correctif reste à exécuter sur le prochain commit.
 
 ### F07 — Historique des factures
 
@@ -165,7 +177,7 @@ Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440
 | O01–O03, C07–C10, C32 services/compteurs | services avec ou sans compteur; rattachement, ajout et remplacement non destructif relus avant écriture; édition du raccordement relue avant PATCH | revue Playwright à 1440×900 et 1280×720; annulation sans requête et saisie préservée; captures `evidence/service-account-confirmation-1280x720.png`, `evidence/meter-create-confirmation-1280x720.png`, `evidence/service-account-edit-confirmation-1280x720.png`; test HTTP/PostgreSQL de remplacement inclus dans CI backend | PARTIAL — détails Figma à contrôler sur chaque écran |
 | O04–O05, C11–C12, C33 relevés | saisie, aperçu, historique et correction append-only | visual review; tests API backend en CI | PARTIAL |
 | F05–F07, C13–C14 facture | émission, vérification et historique rapprochés des frames Figma; confirmation explicite, conservation du brouillon, document-data local, annulation avec motif | 65 tests client; captures F05/F06/F07 1440×900 et 1280×720; recette PDF et émission synthétiques | PARTIAL — API réelle, imprimante cible et validation sur poste SEL restent à faire |
-| F01–F04, C15–C17, C34 paiements | journal séparé de la saisie; sélection client/créances, récapitulatif avant POST, verrou anti-double clic, reçu, contrepassation | 65 tests Python; captures journal/revue/reçu; test API/RBAC | PARTIAL — parcours HTTP réel contre PostgreSQL requis en recette; F02–F04 restent à comparer |
+| F01–F04, C15–C17, C34 paiements | journal, saisie, affectation et confirmation séparés; revue avant POST, verrou anti-double clic, reçu, contrepassation | 66 tests Python; captures F01–F04; recettes complètes 1440×900 et 1280×720 avec API synthétique | PARTIAL — recette HTTP réelle contre PostgreSQL, revue Figma complète, permissions et poste SEL requis |
 | F08, C18–C19, C35 créances | consultation, références source, avoir via API | réponse JSON additive, test PostgreSQL en CI, écran visuel | PARTIAL |
 | O06–O10, C20–C22, C28 solaire | catalogue/ventes et contrats/échéanciers ont des onglets séparés; transitions avec brouillon protégées; suivi expose les métriques renvoyées par le serveur et son CTA mène à l’encaissement prérempli avec client/créance/prochaine échéance; contrat revu avant POST | Playwright synthétique à 1440×900 et 1280×720 : refus de navigation conserve le brouillon, validation l’abandonne; un seul POST contrat après acceptation; la transition O10 sélectionne l’abonné, la créance et l’échéance sans créer de paiement; captures `evidence/solar-contract-workspace-1440x900.png`, `evidence/solar-payment-prefill-1280x720.png` | PARTIAL — annulation vente et avenant/résiliation contrat non exposés; autres détails O06–O10 à comparer |
 | A01–A09, C23–C25, C29 administration | répertoire, création et sécurité séparés; rôles/statuts verrouillés pour le compte courant; création, changement de rôle/statut, réinitialisation et mutations de référentiels relus avant écriture; erreurs 403/409/422 localisées sans URL API | recette Playwright synthétique : conflit identité doublon, droits propres désactivés, apparence disabled, dialogue clavier avec focus trap/Échap/restauration; preuves datées `admin-user-directory-*`, `admin-duplicate-user-conflict-*`, `admin-self-access-locked-*`, `customer-archive-keyboard-focus-*`, approbation et brouillon | PARTIAL — revue de toutes les frames d’administration et recette des erreurs réelles contre PostgreSQL restent à faire |
