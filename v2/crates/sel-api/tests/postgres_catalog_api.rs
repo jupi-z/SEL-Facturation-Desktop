@@ -947,7 +947,7 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|item| item["key"] == "communication_charge" && item["ready"] == false));
+        .any(|item| item["key"] == "electricity_residential" && item["ready"] == false));
 
     let future = today + chrono::Duration::days(20);
     let fx_pair = Uuid::new_v4().simple().to_string().to_ascii_uppercase();
