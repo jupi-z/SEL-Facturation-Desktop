@@ -9,6 +9,8 @@
 - Créer une **branche de code distincte** de la branche de handoff, dérivée de la base vérifiée. Ne pas écrire directement sur `main`. Si la PR du handoff n'est pas fusionnée, inclure ce dossier de manière sûre, sans perdre les modifications existantes.
 - Respecter l'architecture **actuelle** : React + TypeScript + Tauri 2 pour l'application Windows, API Rust centrale + PostgreSQL, client connecté. Les anciens mandats offline/Flask ne constituent pas la cible actuelle. Les clauses encore applicables (préservation V1 et données, immutabilité, sécurité, absence de PDF serveur) restent obligatoires.
 
+**Correctif prioritaire ajouté le 11 novembre 2026 :** lire et intégrer [08_CORRECTIF_CATALOGUE_SOLAIRE_SKU.md](08_CORRECTIF_CATALOGUE_SOLAIRE_SKU.md). L'ajout d'un kit solaire échoue lorsque le SKU contient des espaces ou une virgule ; implémenter une validation locale explicite, préserver la saisie sur erreur, améliorer les messages et tester le flux DRAFT sans modifier les règles Rust. Vérifier la branche technique/PR #60 et son HEAD avant toute modification, sans écraser un correctif éventuellement déjà présent.
+
 ## 1. Objectif produit
 
 Livrer l'UX complète SEL V2, simple et sûre, sur la base de **76 écrans Figma** (page 16) et du handoff de **4 planches** (page 17). Le rendu Figma est une référence de composition et d'interaction, pas une injonction de coder 76 composants React indépendants : factoriser en layouts, pages, panneaux, formulaires, détails, dialogs et états réutilisables. Il faut aboutir à des **parcours métiers fonctionnels réels**, pas uniquement des captures ou une navigation décorative.
