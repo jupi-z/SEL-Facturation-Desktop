@@ -6,6 +6,11 @@ import { buildClientPdf, renderClientPdfPreview } from "./documents";
 import "./App.css";
 
 export type View = "dashboard" | "customers" | "readings" | "invoices" | "payments" | "solar" | "receivables" | "server" | "admin";
+const PRIMARY_CURRENCY = "USD";
+const CURRENCY_OPTIONS: { value: string; label: string }[] = [
+  { value: "USD", label: "USD · principale" },
+  { value: "CDF", label: "CDF" },
+];
 type Domain = "home" | "customers" | "billing" | "payments" | "solar" | "admin";
 type Row = Record<string, unknown>;
 type Notice = { message: string; error?: boolean } | null;
@@ -116,6 +121,7 @@ function domainLabel(value: unknown): string {
     INVOICE: "Facture eau + électricité",
     SOLAR_SALE: "Vente de kit solaire",
     SALE: "Vente de kit solaire",
+    SOLAR_KIT: "Kit solaire",
     CASH: "Espèces",
     BANK: "Banque",
     MOBILE_MONEY: "Mobile Money",
@@ -191,6 +197,9 @@ export default function App() {
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [view, setView] = useState<View>("dashboard");
   const [solarWorkspace, setSolarWorkspace] = useState<"sales" | "contracts">("sales");
+  const [solarProductCode, setSolarProductCode] = useState("");
+  const [solarPaymentMode, setSolarPaymentMode] = useState<"CASH" | "INSTALLMENT">("CASH");
+  const [solarContractSalePrefill, setSolarContractSalePrefill] = useState("");
   const [paymentWorkspace, setPaymentWorkspace] = useState<"journal" | "create">("journal");
   const [invoiceWorkspace, setInvoiceWorkspace] = useState<"history" | "create">("history");
   const [viewHistory, setViewHistory] = useState<View[]>([]);
@@ -216,7 +225,7 @@ export default function App() {
   const [notice, setNotice] = useState<Notice>(null);
   const [loading, setLoading] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState("");
-  const [paymentPrefill, setPaymentPrefill] = useState<{ receivableId: string; scheduleId: string } | null>(null);
+  const [paymentPrefill, setPaymentPrefill] = useState<{ receivableId: string; scheduleId: string; amount?: string } | null>(null);
   const [selectedCustomerData, setSelectedCustomerData] = useState<Row | null>(null);
   const [customerEditOpen, setCustomerEditOpen] = useState(false);
   const [customerEditBusy, setCustomerEditBusy] = useState(false);
@@ -438,7 +447,7 @@ export default function App() {
       const from = text(row.effective_from, "");
       const to = text(row.effective_to, "");
       return text(row.customer_category, "").trim().toUpperCase() === invoiceCategory
-        && text(row.currency, "").trim().toUpperCase() === "USD"
+        && text(row.currency, "").trim().toUpperCase() === PRIMARY_CURRENCY
         && text(row.approval_ref, "").trim() !== ""
         && from <= invoiceEffectiveDate
         && (!to || to >= invoiceEffectiveDate);
@@ -513,7 +522,7 @@ export default function App() {
       electricity: { quantity: form.get("electricity_quantity"), unit: "KWH" },
       water: { quantity: water, unit: "M3" },
       water_zero_confirmed: zeroConfirmed,
-      currency: "USD",
+      currency: PRIMARY_CURRENCY,
       tariff_revision: invoiceTariffRevision,
       due_date: form.get("due_date") || null,
     };
@@ -697,10 +706,15 @@ export default function App() {
   async function quoteSolar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const selectedProduct = solarProducts.find((product) => text(product.sku) === solarProductCode);
+    if (!selectedProduct) {
+      setNotice({ message: "Sélectionnez un kit approuvé dans le catalogue SEL.", error: true });
+      return;
+    }
     const draft = {
       customer_id: form.get("customer_id"),
-      product_code: form.get("product_code"),
-      currency: form.get("currency"),
+      product_code: solarProductCode,
+      currency: text(selectedProduct.currency, PRIMARY_CURRENCY),
       terms_revision: form.get("terms_revision"),
     };
     try {
@@ -718,13 +732,29 @@ export default function App() {
   async function confirmSolarSale() {
     if (!solarSaleDraft) return;
     try {
-      await centralRequest("/v1/solar/sales", "POST", solarSaleDraft);
+      const sale = await centralRequest<Row>("/v1/solar/sales", "POST", solarSaleDraft);
+      const customerId = text(solarSaleDraft.customer_id, "");
+      const receivableId = text(sale.receivable_id, "");
+      const saleId = text(sale.sale_id, "");
+      const paymentMode = solarPaymentMode;
       setDraftDirty(false);
       setSolarQuote(null);
       setSolarSaleDraft(null);
+      setSolarProductCode("");
       setSolarSaleOpen(false);
-      setNotice({ message: "Vente enregistrée sur le serveur SEL avec sa créance. Un paiement comptant se saisit dans le journal de caisse." });
       await refresh();
+      if (paymentMode === "CASH" && customerId && receivableId) {
+        if (await navigateTo("payments", customerId)) {
+          setPaymentPrefill({ receivableId, scheduleId: "", amount: text(sale.principal ?? solarSaleDraft.principal, "") });
+          setNotice({ message: "Vente enregistrée. Sa créance est présélectionnée : saisissez le montant reçu et confirmez le règlement comptant." });
+        }
+      } else if (paymentMode === "INSTALLMENT" && saleId) {
+        setSolarContractSalePrefill(saleId);
+        setSolarWorkspace("contracts");
+        setNotice({ message: "Vente enregistrée. Vérifiez maintenant les conditions et l’échéancier du contrat." });
+      } else {
+        setNotice({ message: "Vente enregistrée sur le serveur SEL avec sa créance. Le règlement reste à enregistrer dans le journal des paiements." });
+      }
     } catch (error) { setNotice({ message: humanError(error), error: true }); }
   }
 
@@ -732,7 +762,7 @@ export default function App() {
     setDraftDirty(false);
     setPreview(null); setInvoiceDraft(null); setZeroConfirmed(false);
     setCustomerCreateOpen(false); setCustomerEditOpen(false);
-    setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null);
+    setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); setSolarProductCode("");
   }
 
   async function returnToInvoiceHistory() {
@@ -1025,34 +1055,35 @@ export default function App() {
           </div>
         </>}
         {paymentWorkspace === "create" && <>
-          <PaymentForm customers={customers} sales={sales} payments={payments} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onReturnToJournal={returnToPaymentJournal} onSubmit={submit} />
+          <PaymentForm customers={customers} sales={sales} payments={payments} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} initialAmount={paymentPrefill?.amount ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onReturnToJournal={returnToPaymentJournal} onSubmit={submit} />
         </>}
       </>}
 
       {view === "solar" && <>
-        <PageHeading eyebrow="COMMERCE / FINANCE" title={solarWorkspace === "sales" ? "Catalogue des kits solaires" : "Contrats et échéanciers"} description={solarWorkspace === "sales" ? "Consultez les produits approuvés et les ventes enregistrées par le serveur." : "Vérifiez les échéances d’une vente approuvée avant de créer son contrat."} action={solarWorkspace === "sales" ? <Button primary onClick={() => { setSolarWorkspace("sales"); setSolarSaleOpen(true); }}>Créer une vente</Button> : undefined} />
+        <PageHeading eyebrow="COMMERCE / FINANCE" title={solarWorkspace === "sales" ? "Catalogue des kits solaires" : "Contrats et échéanciers"} description={solarWorkspace === "sales" ? "Consultez les produits approuvés et les ventes enregistrées par le serveur." : "Vérifiez les échéances d’une vente approuvée avant de créer son contrat."} action={solarWorkspace === "sales" ? <Button primary onClick={() => { setSolarWorkspace("sales"); setSolarProductCode(""); setSolarSaleOpen(true); }}>Créer une vente</Button> : undefined} />
         <div className="metrics solar-metrics">
-          <Metric label="Produits disponibles" value={solarProducts.length} note="Catalogue central approuvé" />
+          <Metric label="Kits commercialisables" value={solarProducts.length} note="Catalogue central approuvé" />
           <Metric label="Ventes enregistrées" value={sales.length} note="Historique chargé du serveur" />
           <Metric label="Contrats à échéances" value={sales.filter((sale) => Boolean(sale.installment_plan_id)).length} note="Échéanciers associés" />
           <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Opérations centralisées" />
         </div>
         {solarWorkspace === "sales" ? <>
-        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); setDraftDirty(false); }}>Fermer</Button>}><form data-preserve-draft className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
+        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); setSolarProductCode(""); setDraftDirty(false); }}>Fermer</Button>}><form data-preserve-draft className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
           <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
-          <label>Produit approuvé<select name="product_code" required defaultValue=""><option value="" disabled>Sélectionner…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
-          <label>Devise du catalogue<select name="currency" defaultValue={text(solarProducts[0]?.currency, "USD")} required>{[...new Set(solarProducts.map((product) => text(product.currency, "")))].filter(Boolean).map((currency) => <option key={currency} value={currency}>{currency}</option>)}</select></label>
-          <label className="span-two">Révision des conditions approuvées<input name="terms_revision" required /></label>
-          <p className="help span-two">Le prix est relu et vérifié par le moteur Rust avant l’émission. La vente crée une créance ; enregistrez tout règlement dans le journal de caisse.</p>
+          <label>Kit solaire<select name="product_code" value={solarProductCode} onChange={(event) => setSolarProductCode(event.target.value)} required><option value="" disabled>Sélectionner un kit…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
+          <label>Devise du kit<input value={text(solarProducts.find((product) => text(product.sku) === solarProductCode)?.currency, PRIMARY_CURRENCY)} readOnly aria-label="Devise définie par le produit du catalogue" /></label>
+          <label>Mode de règlement<select value={solarPaymentMode} onChange={(event) => setSolarPaymentMode(event.target.value as "CASH" | "INSTALLMENT")}><option value="CASH">Comptant</option><option value="INSTALLMENT">Paiement échelonné</option></select></label>
+          <label className="span-two">Référence des conditions de vente approuvées<input name="terms_revision" placeholder="Référence communiquée par SEL" required /></label>
+          <p className="help span-two">Le prix et la devise viennent du kit approuvé et sont revérifiés par Rust. Au comptant, l’étape suivante ouvre l’encaissement avec le montant prérempli. En paiement échelonné, l’étape suivante ouvre le contrat ; aucun échéancier n’est créé pour une vente comptant.</p>
           <div className="form-actions span-two"><Button primary type="submit">Vérifier le devis</Button></div>
         </form></Panel>}
-        {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
+        {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Mode</span><strong>{solarPaymentMode === "CASH" ? "Comptant" : "Paiement échelonné"}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
         <Panel title="Catalogue approuvé">
-          <Table headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]} empty="Aucun produit solaire approuvé et applicable n’est disponible sur le serveur." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), product.category ? domainLabel(product.category) : "—", formatMoney(product.price_reference, product.currency), <span className="status-badge success">Disponible</span>])} />
+          <Table headers={["SKU", "Produit", "Type", "Prix de référence", "État commercial"]} empty="Aucun kit approuvé et applicable n’est disponible dans le catalogue SEL." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), domainLabel(text(product.product_type, "SOLAR_KIT")), formatMoney(product.price_reference, product.currency), <span className="status-badge success">Approuvé · vendable</span>])} />
         </Panel>
         <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
         </> :
-        <SolarContractManager sales={sales} customers={customers} onCreated={refresh} confirmAction={requestConfirmation} onRecordPayment={async (customerId, receivableId, scheduleId) => {
+        <SolarContractManager sales={sales} customers={customers} initialSaleId={solarContractSalePrefill} onInitialSaleConsumed={() => setSolarContractSalePrefill("")} onCreated={refresh} confirmAction={requestConfirmation} onRecordPayment={async (customerId, receivableId, scheduleId) => {
           if (await navigateTo("payments", customerId)) setPaymentPrefill({ receivableId, scheduleId });
         }} />
         }
@@ -1246,7 +1277,7 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, sales, payments, initialCustomerId, initialReceivableId, initialScheduleId, onPrefillConsumed, onReturnToJournal, onSubmit }: { customers: Row[]; sales: Row[]; payments: Row[]; initialCustomerId: string; initialReceivableId: string; initialScheduleId: string; onPrefillConsumed: () => void; onReturnToJournal: () => Promise<void>; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
+function PaymentForm({ customers, sales, payments, initialCustomerId, initialReceivableId, initialScheduleId, initialAmount, onPrefillConsumed, onReturnToJournal, onSubmit }: { customers: Row[]; sales: Row[]; payments: Row[]; initialCustomerId: string; initialReceivableId: string; initialScheduleId: string; initialAmount: string; onPrefillConsumed: () => void; onReturnToJournal: () => Promise<void>; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [customerId, setCustomerId] = useState(initialCustomerId);
   const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: initialReceivableId, amount: "", scheduleId: initialScheduleId }]);
@@ -1254,7 +1285,7 @@ function PaymentForm({ customers, sales, payments, initialCustomerId, initialRec
   const [receivablesLoading, setReceivablesLoading] = useState(false);
   const [receivablesError, setReceivablesError] = useState("");
   const [planSchedules, setPlanSchedules] = useState<Record<string, { schedule: Row[]; currency: string; loading: boolean; error: string }>>({});
-  const [receivedAmount, setReceivedAmount] = useState("");
+  const [receivedAmount, setReceivedAmount] = useState(initialAmount);
   const [occurredAt, setOccurredAt] = useState(dateTimeInputValue);
   const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [paymentReview, setPaymentReview] = useState<Row | null>(null);
@@ -1263,6 +1294,9 @@ function PaymentForm({ customers, sales, payments, initialCustomerId, initialRec
   const savingRef = useRef(false);
 
   useEffect(() => { setCustomerId(initialCustomerId); }, [initialCustomerId]);
+  useEffect(() => {
+    if (initialReceivableId && initialAmount) setReceivedAmount(initialAmount);
+  }, [initialReceivableId, initialAmount]);
   useEffect(() => {
     if (!initialReceivableId) return;
     setAllocationRows([{ key: `solar-prefill-${initialReceivableId}`, receivableId: initialReceivableId, amount: "", scheduleId: initialScheduleId }]);
@@ -1310,9 +1344,9 @@ function PaymentForm({ customers, sales, payments, initialCustomerId, initialRec
   }, [schedulePlanKey]);
 
   const selectedReceivables = allocationRows.map((allocation) => receivables.find((item) => text(item.receivable_id ?? item.id) === allocation.receivableId));
-  const currency = text(selectedReceivables.find(Boolean)?.currency, "USD");
+  const currency = text(selectedReceivables.find(Boolean)?.currency, PRIMARY_CURRENCY);
   const duplicateAllocation = allocationRows.some((allocation, index) => allocation.receivableId && allocationRows.some((other, otherIndex) => otherIndex !== index && other.receivableId === allocation.receivableId));
-  const currencyMismatch = selectedReceivables.some((item) => item && text(item.currency, "USD") !== currency);
+  const currencyMismatch = selectedReceivables.some((item) => item && text(item.currency, PRIMARY_CURRENCY) !== currency);
   const allocationsReady = allocationRows.length > 0 && allocationRows.every((allocation) => {
     if (!allocation.receivableId || !allocation.amount) return false;
     const planId = installmentPlanByReceivable.get(allocation.receivableId);
@@ -1392,7 +1426,7 @@ function PaymentForm({ customers, sales, payments, initialCustomerId, initialRec
         const planState = planId ? planSchedules[planId] : undefined;
         const openSchedule = planState?.schedule.filter((item) => text(item.status).toUpperCase() !== "PAID") ?? [];
         return <fieldset className="allocation-card" key={allocation.key}><legend>Affectation {index + 1}</legend>
-          <label>Créance<select value={allocation.receivableId} onChange={(event) => updateAllocation(allocation.key, "receivableId", event.target.value)} required disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}><option value="">{!customerId ? "Sélectionnez d’abord un abonné" : receivablesLoading ? "Chargement des créances…" : "Sélectionner une créance"}</option>{receivables.map((item) => { const id = text(item.receivable_id ?? item.id); const usedElsewhere = allocationRows.some((other) => other.key !== allocation.key && other.receivableId === id); const wrongCurrency = text(item.currency, "USD") !== currency; return <option key={id} value={id} disabled={usedElsewhere || wrongCurrency}>{domainLabel(item.source_type ?? item.status)} · {text(item.source_reference, id)} · {formatMoney(item.balance, item.currency)}{usedElsewhere ? " · déjà sélectionnée" : wrongCurrency ? " · devise différente" : ""}</option>; })}</select></label>
+      <label>Créance<select value={allocation.receivableId} onChange={(event) => updateAllocation(allocation.key, "receivableId", event.target.value)} required disabled={!customerId || receivablesLoading || Boolean(receivablesError) || !receivables.length}><option value="">{!customerId ? "Sélectionnez d’abord un abonné" : receivablesLoading ? "Chargement des créances…" : "Sélectionner une créance"}</option>{receivables.map((item) => { const id = text(item.receivable_id ?? item.id); const usedElsewhere = allocationRows.some((other) => other.key !== allocation.key && other.receivableId === id); const wrongCurrency = text(item.currency, PRIMARY_CURRENCY) !== currency; return <option key={id} value={id} disabled={usedElsewhere || wrongCurrency}>{domainLabel(item.source_type ?? item.status)} · {text(item.source_reference, id)} · {formatMoney(item.balance, item.currency)}{usedElsewhere ? " · déjà sélectionnée" : wrongCurrency ? " · devise différente" : ""}</option>; })}</select></label>
           <label>Montant affecté<input type="number" min="0.01" step="0.01" value={allocation.amount} onChange={(event) => updateAllocation(allocation.key, "amount", event.target.value)} required /></label>
           {planId && <label className="span-two">Échéance solaire<select value={allocation.scheduleId} onChange={(event) => updateAllocation(allocation.key, "scheduleId", event.target.value)} required disabled={!planState || planState.loading || Boolean(planState.error)}><option value="">{planState?.loading ? "Chargement de l’échéancier…" : "Sélectionner une échéance…"}</option>{openSchedule.map((item) => <option key={text(item.id)} value={text(item.id)}>N° {text(item.sequence)} · {text(item.due_date)} · restant {formatMoney(item.remaining, planState?.currency)}</option>)}</select></label>}
           {planState?.error && <p className="help error-text span-two" role="alert">Impossible de vérifier l’échéancier : {planState.error} Le règlement est bloqué.</p>}
@@ -1770,13 +1804,19 @@ function MeterReadingsView({ customers, initialCustomerId, canCorrect, onOpenInv
   </>;
 }
 
-function SolarContractManager({ sales, customers, onCreated, confirmAction, onRecordPayment }: { sales: Row[]; customers: Row[]; onCreated: () => Promise<void>; confirmAction: (request: ConfirmationRequest) => Promise<boolean>; onRecordPayment: (customerId: string, receivableId: string, scheduleId: string) => void }) {
+function SolarContractManager({ sales, customers, initialSaleId, onInitialSaleConsumed, onCreated, confirmAction, onRecordPayment }: { sales: Row[]; customers: Row[]; initialSaleId: string; onInitialSaleConsumed: () => void; onCreated: () => Promise<void>; confirmAction: (request: ConfirmationRequest) => Promise<boolean>; onRecordPayment: (customerId: string, receivableId: string, scheduleId: string) => void }) {
   const [saleId, setSaleId] = useState("");
   const [schedule, setSchedule] = useState([{ due_date: "", amount: "" }]);
   const [plan, setPlan] = useState<Row | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const availableSales = sales.filter((sale) => sale.receivable_id && !sale.installment_plan_id);
+
+  useEffect(() => {
+    if (!initialSaleId || !availableSales.some((sale) => text(sale.sale_id) === initialSaleId)) return;
+    setSaleId(initialSaleId);
+    onInitialSaleConsumed();
+  }, [initialSaleId, availableSales, onInitialSaleConsumed]);
 
   async function viewPlan(planId: string) {
     try { setPlan(await centralRequest<Row>(`/v1/installment-plans/${encodeURIComponent(planId)}`)); }
@@ -1827,7 +1867,7 @@ function SolarContractManager({ sales, customers, onCreated, confirmAction, onRe
           {schedule.length > 1 && <button className="text-button remove-installment" type="button" disabled={saving} onClick={() => setSchedule((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Retirer</button>}
         </div>)}
         <div className="schedule-actions span-two"><button className="text-button" type="button" disabled={saving} onClick={() => setSchedule((current) => [...current, { due_date: "", amount: "" }])}>+ Ajouter une échéance</button></div>
-        <label className="span-two">Référence des conditions approuvées<input name="approved_terms_revision" required disabled={saving} /></label>
+        <label className="span-two">Référence des conditions approuvées<input name="approved_terms_revision" placeholder="Référence communiquée par SEL" required disabled={saving} /></label>
         <p className="help span-two">Le moteur vérifie les échéances et leur total par rapport à la créance. Aucun intérêt ni frais n’est ajouté.</p>
         <div className="form-actions span-two"><Button primary type="submit" disabled={saving || !saleId}>{saving ? "Vérification…" : "Vérifier le contrat"}</Button></div>
       </form> : <div className="empty-state">Aucune vente sans échéancier n’est disponible pour créer un contrat.</div>}
@@ -1845,7 +1885,7 @@ function CustomerStatement({ customerName, customerCode, statement, loading, err
 }
 
 type AdminCatalog = "tariffs" | "products" | "tax-profiles" | "fx-rates" | "communication-charge";
-type AdminCatalogField = { name: string; label: string; type?: string; required?: boolean; step?: string; min?: string; max?: string; multiline?: boolean; placeholder?: string; options?: { value: string; label: string }[] };
+type AdminCatalogField = { name: string; label: string; type?: string; required?: boolean; step?: string; min?: string; max?: string; multiline?: boolean; placeholder?: string; defaultValue?: string; options?: { value: string; label: string }[] };
 
 const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: AdminCatalogField[]; columns: string[] }> = {
   tariffs: { title: "Catalogue tarifaire", fields: [
@@ -1853,14 +1893,14 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
     { name: "customer_category", label: "Catégorie d’abonné", options: [{ value: "RESIDENTIAL", label: "Résidentiel" }, { value: "COMMERCIAL", label: "Commercial" }] },
     { name: "unit", label: "Unité", options: [{ value: "KWH", label: "kWh" }, { value: "M3", label: "m³" }] },
     { name: "unit_price", label: "Prix unitaire", type: "number", step: "any" },
-    { name: "currency", label: "Devise", options: [{ value: "USD", label: "USD" }, { value: "CDF", label: "CDF" }] },
+    { name: "currency", label: "Devise", options: CURRENCY_OPTIONS, defaultValue: PRIMARY_CURRENCY },
     { name: "effective_from", label: "Début d’effet", type: "date" },
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["service_code", "customer_category", "unit_price", "status"] },
   products: { title: "Catalogue solaire", fields: [
     { name: "sku", label: "Référence produit" }, { name: "label", label: "Désignation" },
     { name: "price_reference", label: "Prix de référence", type: "number", step: "any" },
-    { name: "currency", label: "Devise" }, { name: "effective_from", label: "Début d’effet", type: "date" },
+    { name: "currency", label: "Devise", options: CURRENCY_OPTIONS, defaultValue: PRIMARY_CURRENCY }, { name: "effective_from", label: "Début d’effet", type: "date" },
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["sku", "label", "price_reference", "currency", "effective_from", "status"] },
   "tax-profiles": { title: "Paramètres de TVA", fields: [
@@ -1874,13 +1914,13 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["service_code", "jurisdiction", "rate", "effective_from", "status"] },
   "fx-rates": { title: "Taux de change", fields: [
-    { name: "from_currency", label: "Devise source" }, { name: "to_currency", label: "Devise cible" },
+    { name: "from_currency", label: "Devise source", options: CURRENCY_OPTIONS, defaultValue: PRIMARY_CURRENCY }, { name: "to_currency", label: "Devise cible", options: CURRENCY_OPTIONS, defaultValue: "CDF" },
     { name: "value", label: "Taux", type: "number", step: "any" }, { name: "source", label: "Référence approuvée par SEL" },
     { name: "effective_from", label: "Début d’effet", type: "date" }, { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["from_currency", "to_currency", "value", "effective_from", "status"] },
   "communication-charge": { title: "Ligne de communication", fields: [
     { name: "amount", label: "Montant hors TVA", type: "number", step: "0.01" },
-    { name: "currency", label: "Devise" }, { name: "effective_from", label: "Début d’effet", type: "date" },
+    { name: "currency", label: "Devise", options: CURRENCY_OPTIONS, defaultValue: PRIMARY_CURRENCY }, { name: "effective_from", label: "Début d’effet", type: "date" },
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["id", "label", "amount", "currency", "effective_from", "status"] },
 };
@@ -1897,14 +1937,25 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
   onCancelReview: () => void;
 }) {
   const definition = adminCatalogDefinitions[kind];
+  const addingLabel = kind === "products" ? "Ajouter un kit" : kind === "tax-profiles" ? "Ajouter un profil fiscal" : "Ajouter une version";
+  const formTitle = kind === "products" ? "Nouveau kit solaire" : kind === "tax-profiles" ? "Nouveau profil de TVA" : `Nouvelle version · ${definition.title}`;
+  const actionHelp = kind === "products"
+    ? "Le kit devient vendable après approbation SEL. Un changement de prix crée une nouvelle version ; les ventes passées gardent leur prix. Pour changer la devise, créez une nouvelle référence produit."
+    : kind === "communication-charge"
+      ? "Cette ligne figure sur chaque facture eau + électricité et entre dans l’assiette de la TVA. Toute nouvelle valeur doit être approuvée par SEL."
+      : kind === "tax-profiles"
+        ? "Indiquez la source et la date d’effet. Le serveur conserve les versions précédentes et applique uniquement le profil approuvé correspondant à la période."
+        : kind === "fx-rates"
+          ? "Le taux est versionné avec sa source et sa date d’effet. USD est la devise principale ; n’enregistrez que des taux approuvés par SEL."
+          : "La nouvelle version reste inactive jusqu’à son approbation SEL. Les opérations déjà émises gardent leur instantané d’origine.";
   const idField = kind === "tariffs" ? "tariff_id" : kind === "products" ? "product_id" : "id";
   const [revokingId, setRevokingId] = useState("");
   const [creating, setCreating] = useState(false);
   const [draftOpen, setDraftOpen] = useState(false);
   async function toggleDraft() {
     if (draftOpen && draftDirty && !await confirmAction({
-      title: "Abandonner la révision ?",
-      description: "Les informations non enregistrées dans ce brouillon seront perdues.",
+      title: kind === "products" ? "Abandonner l’ajout du kit ?" : "Abandonner la saisie ?",
+      description: "Les informations non enregistrées seront perdues.",
       confirmLabel: "Abandonner la saisie",
     })) return;
     if (draftOpen && draftDirty) announceDraftSaved();
@@ -1914,13 +1965,21 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
     event.preventDefault();
     const form = event.currentTarget;
     const values = Object.fromEntries([...new FormData(form).entries()].map(([key, value]) => [key, String(value).trim()]));
+    if (kind === "fx-rates") {
+      const target = form.elements.namedItem("to_currency");
+      if (target instanceof HTMLSelectElement) {
+        const sameCurrency = values.from_currency === values.to_currency;
+        target.setCustomValidity(sameCurrency ? "Choisissez une devise cible différente de la devise source." : "");
+        if (sameCurrency) { target.reportValidity(); return; }
+      }
+    }
     setCreating(true);
     try {
       const summary = definition.fields.map((field) => `${field.label} : ${values[field.name] || "—"}`).join(". ");
       const accepted = await confirmAction({
-        title: `Vérifier le brouillon · ${definition.title}`,
-        description: `${summary}. Ce brouillon n’est pas applicable aux opérations avant son approbation SEL.`,
-        confirmLabel: "Créer le brouillon",
+        title: kind === "products" ? "Vérifier le nouveau kit" : `Vérifier · ${definition.title}`,
+        description: `${summary}. ${actionHelp}`,
+        confirmLabel: kind === "products" ? "Enregistrer le kit" : "Créer le brouillon",
       });
       if (accepted && await onCreate(kind, values)) { form.reset(); setDraftOpen(false); announceDraftSaved(); }
     } finally { setCreating(false); }
@@ -1928,7 +1987,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
   const reviewedItem = kind === "tariffs" && reviewingId ? items.find((item) => text(item.id ?? item.tariff_id, "") === reviewingId) : undefined;
   if (reviewedItem) {
     const payload = record(reviewedItem.payload);
-    const tariffValue = formatMoney(reviewedItem.unit_price ?? payload.unit_price, text(reviewedItem.currency ?? payload.currency, "USD"));
+    const tariffValue = formatMoney(reviewedItem.unit_price ?? payload.unit_price, text(reviewedItem.currency ?? payload.currency, PRIMARY_CURRENCY));
     return <Panel title="Détails soumis à validation" action={<Button onClick={async () => {
       if (draftDirty && !await confirmAction({ title: "Annuler la révision ?", description: "La référence non enregistrée sera perdue. Le brouillon du tarif reste inchangé.", confirmLabel: "Annuler la révision" })) return;
       onCancelReview();
@@ -1953,24 +2012,35 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
       </form>
     </Panel>;
   }
-  return <Panel title={kind === "tax-profiles" ? "Profil fiscal SEL" : definition.title} action={<Button primary onClick={() => void toggleDraft()}>{draftOpen ? "Fermer la révision" : kind === "tax-profiles" ? "Créer une version rectificative" : "Préparer une révision"}</Button>}>
-    {draftOpen && <form data-preserve-draft className="form-grid admin-catalog-form" onSubmit={create}>
+  return <Panel title={definition.title} action={<Button primary onClick={() => void toggleDraft()}>{draftOpen ? "Fermer" : addingLabel}</Button>}>
+    {draftOpen && <form data-preserve-draft className="form-grid admin-catalog-form" onSubmit={create} onChange={(event) => { const target = event.target; if (target instanceof HTMLSelectElement && ["from_currency", "to_currency"].includes(target.name)) { const destination = event.currentTarget.elements.namedItem("to_currency"); if (destination instanceof HTMLSelectElement) destination.setCustomValidity(""); } }} aria-label={formTitle}>
       {definition.fields.map((field) => <label key={field.name} className={field.multiline ? "span-two" : undefined}>{field.label}{field.options
-        ? <select name={field.name} defaultValue="" required={field.required !== false} disabled={busy || creating}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+        ? <select name={field.name} defaultValue={field.defaultValue ?? ""} required={field.required !== false} disabled={busy || creating}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
         : field.multiline
           ? <textarea name={field.name} rows={3} maxLength={500} required={field.required !== false} disabled={busy || creating} />
           : <input name={field.name} type={field.type ?? "text"} step={field.step} min={field.min} max={field.max} placeholder={field.placeholder} required={field.required !== false} disabled={busy || creating} />}</label>)}
-      <div className="form-actions span-two"><Button type="button" disabled={busy || creating} onClick={() => void toggleDraft()}>Annuler</Button><Button primary type="submit" disabled={busy || creating}>{creating ? "Vérification…" : "Créer un brouillon"}</Button></div>
-      <p className="help span-two">{kind === "communication-charge" ? "Cette charge SEL apparaît sur chaque facture eau + électricité. Elle entre dans l’assiette de la TVA, affichée séparément. L’activation exige une approbation SEL." : kind === "tax-profiles" ? "Saisissez le document ou la source qui justifie le profil. La référence d’approbation SEL sera demandée séparément lors de l’activation. Le taux est entré en pourcentage; le serveur le convertit pour les calculs. Juridiction et assiette : SEL et SERVICE par défaut." : "Le brouillon n’est pas applicable aux factures. Seul un administrateur l’active après validation SEL et référence de décision."}</p>
+      <div className="form-actions span-two"><Button type="button" disabled={busy || creating} onClick={() => void toggleDraft()}>Annuler</Button><Button primary type="submit" disabled={busy || creating}>{creating ? "Vérification…" : kind === "products" ? "Enregistrer le kit" : "Créer le brouillon"}</Button></div>
+      <p className="help span-two">{actionHelp}</p>
     </form>}
-    <div id={kind === "tax-profiles" ? "tax-profile-version-history" : undefined}><Table headers={[...definition.columns.map((field) => ({ service_code: kind === "tax-profiles" ? "Prestation" : "Service", customer_category: "Catégorie", unit_price: "Tarif", jurisdiction: "Juridiction", rate: "TVA", effective_from: "Date d’effet", status: "État" } as Record<string, string>)[field] ?? (field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " "))), "Actions"]} empty="Aucune entrée retournée par le serveur central." data={items.map((item) => {
+    <div id={kind === "tax-profiles" ? "tax-profile-version-history" : undefined}><Table headers={[...definition.columns.map((field) => ({ service_code: kind === "tax-profiles" ? "Prestation" : "Service", customer_category: "Catégorie", unit_price: "Tarif", jurisdiction: "Juridiction", rate: "TVA", effective_from: "Date d’effet", status: "État" } as Record<string, string>)[field] ?? (field === "approval_ref" ? "Référence d’approbation" : field.replace(/_/g, " "))), "Actions"]} empty={kind === "products" ? "Aucun kit n’est encore configuré. Ajoutez uniquement les références et prix communiqués par SEL." : kind === "tariffs" ? "Aucune version tarifaire n’est configurée pour cette rubrique." : "Aucune version configurée pour cette rubrique."} data={items.map((item) => {
       const id = text(item.id ?? item[idField], "");
       const status = text(item.status).toUpperCase();
+      const draftFrom = text(item.effective_from, "");
+      const supersededProduct = kind === "products" && status === "DRAFT" ? items
+        .filter((candidate) => text(candidate.id ?? candidate.product_id, "") !== id
+          && text(candidate.status).toUpperCase() === "APPROVED"
+          && text(candidate.sku).trim().toUpperCase() === text(item.sku).trim().toUpperCase()
+          && text(candidate.currency).trim().toUpperCase() === text(item.currency).trim().toUpperCase()
+          && text(candidate.product_type, "SOLAR_KIT") === text(item.product_type, "SOLAR_KIT")
+          && text(candidate.effective_from, "") < draftFrom
+          && (!text(candidate.effective_to, "") || text(candidate.effective_to, "") >= draftFrom))
+        .sort((left, right) => text(right.effective_from, "").localeCompare(text(left.effective_from, "")))[0] : undefined;
+      const supersededProductId = text(supersededProduct?.id ?? supersededProduct?.product_id, "");
       const approval = status === "DRAFT" && kind === "tariffs" ? <Button type="button" disabled={busy || !id} onClick={() => onReview(id)}>Examiner la révision</Button> : status === "DRAFT" ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
         const values = new FormData(event.currentTarget);
-        await onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), String(values.get("supersedes_id") ?? "").trim());
-      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Réf. SEL" required /><input aria-label="Tarif remplacé (facultatif)" name="supersedes_id" placeholder="Remplace… (facultatif)" /><Button primary type="submit" disabled={busy || !id}>Approuver</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={async (event) => {
+        await onApprove(kind, item, String(values.get("approval_ref") ?? "").trim(), kind === "products" ? supersededProductId : String(values.get("supersedes_id") ?? "").trim());
+      }}><input aria-label="Référence de la décision d’approbation SEL" name="approval_ref" placeholder="Réf. décision SEL" required />{kind === "products" ? <span className="help">{supersededProduct ? `Remplacera automatiquement la version du ${text(supersededProduct.effective_from)}.` : "Première version du kit, ou nouvelle période sans chevauchement."}</span> : <input aria-label={kind === "tariffs" ? "Tarif remplacé (facultatif)" : "Version remplacée (facultatif)"} name="supersedes_id" placeholder={kind === "tariffs" ? "Tarif antérieur (facultatif)" : "Version précédente (facultatif)"} />}<Button primary type="submit" disabled={busy || !id}>{kind === "products" ? "Approuver le kit" : "Approuver"}</Button></form> : status === "APPROVED" ? revokingId === id ? <form className="admin-approve-form" onSubmit={async (event) => {
         event.preventDefault();
         const form = event.currentTarget;
         const changeRef = String(new FormData(form).get("change_ref") ?? "").trim();
@@ -1981,7 +2051,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
         const displayed = field === "label" ? payload.label : field === "amount" ? payload.amount : field === "currency" ? payload.currency : item[field] ?? payload[field];
         if (field === "status") return <Status value={item[field]} />;
         if (kind === "tariffs" && field === "service_code") return domainLabel(text(displayed));
-        if (kind === "tariffs" && field === "unit_price") return <div className="admin-tariff-value"><strong>{formatMoney(item.unit_price, text(item.currency, "USD"))}</strong><span className="help">{formatUnit(text(item.unit))} · depuis {text(item.effective_from)}</span></div>;
+        if (kind === "tariffs" && field === "unit_price") return <div className="admin-tariff-value"><strong>{formatMoney(item.unit_price, text(item.currency, PRIMARY_CURRENCY))}</strong><span className="help">{formatUnit(text(item.unit))} · depuis {text(item.effective_from)}</span></div>;
         if (kind === "tax-profiles" && field === "rate") return `${(Number(displayed) * 100).toLocaleString("fr-FR", { maximumFractionDigits: 4 })} %`;
         if (kind === "tax-profiles" && field === "service_code") return domainLabel(text(displayed));
         return text(displayed);
@@ -2216,7 +2286,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
         delete body.rate_percent;
       }
       await centralAdminRequest(`/v1/admin/catalog/${kind}`, "POST", body);
-      setMessage(`Brouillon ${adminCatalogDefinitions[kind].title.toLocaleLowerCase("fr")} transmis au serveur. Il n’est pas encore applicable.`); setError(false); await loadData();
+      setMessage(kind === "products" ? "Kit enregistré comme brouillon. Il pourra être vendu après son approbation par SEL." : `Brouillon ${adminCatalogDefinitions[kind].title.toLocaleLowerCase("fr")} transmis au serveur. Il reste inactif jusqu’à son approbation SEL.`); setError(false); await loadData();
       return true;
     } catch (reason) { setMessage(humanError(reason)); setError(true); return false; }
     finally { setCatalogBusy(false); }
@@ -2228,9 +2298,10 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
     setCatalogBusy(true);
     try {
       const label = text(item.label ?? record(item.payload).label ?? item.service_code ?? item.sku ?? id);
+      const versionNote = kind === "products" ? supersedesId ? "Cette version remplace la version précédente approuvée du même kit." : "Cette version n’en remplace aucune." : "Une version approuvée peut être utilisée par les opérations à venir.";
       const accepted = await confirmAction({
         title: "Vérifier l’approbation du référentiel",
-        description: `${adminCatalogDefinitions[kind].title} : ${label}. Référence d’approbation SEL : ${approvalRef}. Une version approuvée peut être utilisée par les opérations à venir.`,
+        description: `${adminCatalogDefinitions[kind].title} : ${label}. Référence d’approbation SEL : ${approvalRef}. ${versionNote}`,
         confirmLabel: "Approuver cette version",
         tone: "warning",
       });
@@ -2275,6 +2346,20 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
   });
   const catalogEntries = [...tariffs, ...products, ...taxProfiles, ...fxRates, ...communicationCharges];
   const approvedCatalogCount = catalogEntries.filter((item) => text(item.status).toUpperCase() === "APPROVED").length;
+  const catalogItemsByKind: Record<AdminCatalog, Row[]> = { tariffs, products, "tax-profiles": taxProfiles, "fx-rates": fxRates, "communication-charge": communicationCharges };
+  const selectedCatalogItems = catalogItemsByKind[catalogKind];
+  const selectedCatalogItemCount = catalogKind === "products" ? new Set(selectedCatalogItems.map((item) => text(item.sku).trim().toUpperCase()).filter(Boolean)).size : selectedCatalogItems.length;
+  const selectedApprovedCount = selectedCatalogItems.filter((item) => text(item.status).toUpperCase() === "APPROVED").length;
+  const catalogBreadcrumb = catalogKind === "products" ? "ADMIN / KITS SOLAIRES" : catalogKind === "tariffs" ? "ADMIN / TARIFS" : catalogKind === "tax-profiles" ? "ADMIN / TVA" : catalogKind === "fx-rates" ? "ADMIN / TAUX DE CHANGE" : "ADMIN / LIGNE DE COMMUNICATION";
+  const catalogDescription = catalogKind === "products"
+    ? "Gérez les kits vendus par SEL. Le prix est figé dans chaque vente ; le paiement comptant ou échelonné se choisit au moment de la vente."
+    : catalogKind === "tariffs"
+      ? "Tarifs d’eau et d’électricité versionnés selon la catégorie d’abonné et leur période d’application."
+      : catalogKind === "tax-profiles"
+        ? "Profils de TVA versionnés et appliqués selon leur prestation et leur période d’effet."
+        : catalogKind === "fx-rates"
+          ? `Taux de change approuvés et datés. Devise principale : ${PRIMARY_CURRENCY}.`
+          : "Montant de la ligne de communication appliqué aux factures et versionné dans le temps.";
   const selectedAdminUser = users.find((user) => text(user.id ?? user.user_id, "") === selectedAdminUserId) ?? null;
 
   return <>
@@ -2371,11 +2456,11 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
       </>}
     </>}
     {adminArea === "catalogs" && <>
-      <header className="admin-page-heading"><div><p className="eyebrow">{reviewingTariffId ? "ADMIN / TARIFS / APPROBATION" : "ADMIN / TARIFS / CATALOGUE"}</p><h2>{reviewingTariffId ? "Valider une révision tarifaire" : catalogKind === "tariffs" ? "Tarifs eau et électricité" : adminCatalogDefinitions[catalogKind].title}</h2><p className="muted">{reviewingTariffId ? "Vérifiez les montants et la période d’application avant activation." : "Consultation des versions et des catégories avant toute modification."}</p></div><span className="service-state">● Service central · données SEL</span></header>
+      <header className="admin-page-heading"><div><p className="eyebrow">{reviewingTariffId ? "ADMIN / TARIFS / APPROBATION" : `${catalogBreadcrumb} / CATALOGUE`}</p><h2>{reviewingTariffId ? "Valider une révision tarifaire" : catalogKind === "tariffs" ? "Tarifs eau et électricité" : adminCatalogDefinitions[catalogKind].title}</h2><p className="muted">{reviewingTariffId ? "Vérifiez les montants et la période d’application avant activation." : catalogDescription}</p></div><span className="service-state">● Service central · données SEL</span></header>
       <div className="admin-metrics">
-        <Metric label="Comptes" value={String(users.length)} note="Valeur du serveur SEL" />
-        <Metric label="Référentiels" value={String(catalogEntries.length)} note="Valeur du serveur SEL" />
-        <Metric label="État" value={String(approvedCatalogCount)} note="Versions approuvées" />
+        <Metric label={catalogKind === "products" ? "Kits référencés" : "Versions"} value={String(selectedCatalogItemCount)} note={catalogKind === "products" ? `${selectedCatalogItems.length} version(s) dans le catalogue` : "Dans cette rubrique"} />
+        <Metric label="Approuvées" value={String(selectedApprovedCount)} note={catalogKind === "products" ? "Versions de kit approuvées" : "Dans cette rubrique"} />
+        <Metric label="Devise principale" value={PRIMARY_CURRENCY} note="Devise par défaut" />
         <Metric label="Contrôle" value="RBAC" note="Autorisations du serveur SEL" />
       </div>
       <div className="admin-directory-layout admin-reference-layout">
@@ -2383,7 +2468,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
         <Panel title="Actions suivantes"><p className="help">{catalogKind === "tax-profiles" && !reviewingTariffId ? "Consultez les versions fiscales ou revenez aux tarifs." : reviewingTariffId ? "Choisissez une étape ou revenez au catalogue." : "Choisissez le référentiel à consulter ou à administrer."}</p><div className="admin-next-actions admin-reference-actions">
           {reviewingTariffId && <><Button onClick={() => setReviewingTariffId("")}>Quitter la revue tarifaire</Button><Button onClick={() => void navigateAdminSection("audit")}>Journal d’audit</Button></>}
           {catalogKind === "tax-profiles" && !reviewingTariffId && <><Button onClick={() => document.getElementById("tax-profile-version-history")?.scrollIntoView({ behavior: "smooth", block: "start" })}>Consulter les versions</Button><Button onClick={() => void navigateAdminSection("tariffs")}>Revenir aux tarifs</Button></>}
-        </div><p className="help">Les révisions restent inactives tant qu’un administrateur SEL ne les a pas approuvées.</p></Panel>
+        </div><p className="help">{catalogKind === "products" ? "Seuls les kits approuvés sont proposés à la vente. Les ventes passées conservent leur prix enregistré." : "Les nouvelles versions restent inactives jusqu’à leur approbation par un administrateur SEL."}</p></Panel>
       </div>
     </>}
     {adminArea === "audit" && <Panel title="Journal d’audit récent"><p className="help">Lecture seule — 100 événements les plus récents associés à cette organisation. Les métadonnées sensibles ne sont pas affichées.</p><Table headers={["Action", "Agent", "Élément concerné", "Date"]} empty="Aucun événement d’audit disponible pour cette organisation." data={auditEvents.map((event) => [<strong>{text(event.event_type)}</strong>, text(event.actor_identity ?? event.actor_id ?? event.device_id), text(event.subject_id), formatDateTime(event.occurred_at)])} /></Panel>}

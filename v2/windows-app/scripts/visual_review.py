@@ -993,12 +993,32 @@ async def capture_views() -> None:
                     ]:
                         await admin_nav.get_by_role("button", name=catalog_label, exact=True).click()
                         await page.get_by_role("heading", name=catalog_heading).first.wait_for()
+                        if catalog_label == "Taux de change":
+                            await page.get_by_role("button", name="Ajouter une version").click()
+                            fx_form = page.locator("form.admin-catalog-form")
+                            if await fx_form.locator('select[name="from_currency"]').input_value() != "USD" or await fx_form.locator('select[name="to_currency"]').input_value() != "CDF":
+                                raise AssertionError("FX catalog must default from the primary USD currency to CDF")
+                            for currency_field in ("from_currency", "to_currency"):
+                                options = await fx_form.locator(f'select[name="{currency_field}"] option:not([disabled])').evaluate_all("elements => elements.map(element => element.value)")
+                                if options != ["USD", "CDF"]:
+                                    raise AssertionError(f"FX {currency_field} options must be limited to configured SEL currencies, got {options}")
+                            await fx_form.locator('button[type="button"]').first.click()
+                        elif catalog_label == "Kits solaires":
+                            await page.get_by_role("button", name="Ajouter un kit").click()
+                            product_form = page.locator("form.admin-catalog-form")
+                            product_currency = product_form.locator('select[name="currency"]')
+                            if await product_currency.input_value() != "USD":
+                                raise AssertionError("New solar catalog products must default to the primary USD currency")
+                            product_options = await product_currency.locator('option:not([disabled])').evaluate_all("elements => elements.map(element => element.value)")
+                            if product_options != ["USD", "CDF"]:
+                                raise AssertionError(f"Solar product currency options must be limited to USD/CDF, got {product_options}")
+                            await product_form.locator('button[type="button"]').first.click()
                     await admin_nav.get_by_role("button", name="Tarifs eau et électricité", exact=True).click()
                     await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
                     await admin_nav.get_by_role("button", name="TVA", exact=True).click()
                     await page.get_by_role("heading", name="Paramètres de TVA").first.wait_for()
                     tax_form = page.locator("form.admin-catalog-form").first
-                    await page.get_by_role("button", name="Créer une version rectificative").click()
+                    await page.get_by_role("button", name="Ajouter un profil fiscal").click()
                     tax_form = page.locator("form.admin-catalog-form").first
                     await tax_form.locator('select[name="service_code"]').select_option("WATER")
                     await tax_form.locator('input[name="rate_percent"]').fill("16")
@@ -1007,8 +1027,8 @@ async def capture_views() -> None:
                     await tax_form.locator('input[name="effective_from"]').fill("2026-11-10")
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.screenshot(path=str(OUTPUT / f"admin-tax-profile-a06-{SHOT_SUFFIX}.png"))
-                    await tax_form.get_by_role("button", name="Créer un brouillon").click()
-                    tax_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Paramètres de TVA")
+                    await tax_form.locator('button[type="submit"]').click()
+                    tax_review = page.get_by_role("alertdialog", name="Vérifier · Paramètres de TVA")
                     await tax_review.wait_for()
                     await tax_review.get_by_role("button", name="Créer le brouillon").click()
                     await page.wait_for_function("window.__adminWriteLog.some(entry => entry.path === '/v1/admin/catalog/tax-profiles' && entry.method === 'POST')")
@@ -1063,7 +1083,7 @@ async def capture_views() -> None:
                     await approved_tariff.get_by_role("button", name="Confirmer la révocation").click()
                     await page.get_by_role("alertdialog", name="Vérifier la révocation du référentiel").get_by_role("button", name="Révoquer cette version").click()
                     await page.wait_for_function("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs/demo-tariff-approved/revoke').length === 1")
-                    await page.get_by_role("button", name="Préparer une révision").click()
+                    await page.get_by_role("button", name="Ajouter une version").click()
                     tariff_form = page.locator("form.admin-catalog-form").first
                     await tariff_form.locator('select[name="service_code"]').select_option("ELECTRICITY")
                     await tariff_form.locator('select[name="customer_category"]').select_option("RESIDENTIAL")
@@ -1072,8 +1092,8 @@ async def capture_views() -> None:
                     await tariff_form.locator('select[name="currency"]').select_option("USD")
                     await tariff_form.locator('input[name="effective_from"]').fill("2026-01-01")
                     await page.evaluate("window.__rejectCatalogDraft = true")
-                    await tariff_form.get_by_role("button", name="Créer un brouillon").click()
-                    draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Catalogue tarifaire")
+                    await tariff_form.locator('button[type="submit"]').click()
+                    draft_review = page.get_by_role("alertdialog", name="Vérifier · Catalogue tarifaire")
                     await draft_review.wait_for()
                     await page.screenshot(path=str(OUTPUT / f"admin-catalog-draft-confirmation-{SHOT_SUFFIX}.png"))
                     if await page.evaluate("window.__adminWriteLog.filter(entry => entry.path === '/v1/admin/catalog/tariffs' && entry.method === 'POST').length") != 0:
@@ -1081,8 +1101,8 @@ async def capture_views() -> None:
                     await draft_review.get_by_role("button", name="Annuler").click()
                     if await tariff_form.locator('input[name="unit_price"]').input_value() != "0.095":
                         raise AssertionError("Canceling catalog draft review must preserve the entered values")
-                    await tariff_form.get_by_role("button", name="Créer un brouillon").click()
-                    draft_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Catalogue tarifaire")
+                    await tariff_form.locator('button[type="submit"]').click()
+                    draft_review = page.get_by_role("alertdialog", name="Vérifier · Catalogue tarifaire")
                     await draft_review.get_by_role("button", name="Créer le brouillon").click()
                     rejected_draft_notice = page.get_by_role("alert")
                     await rejected_draft_notice.get_by_text("Certaines données ne sont pas acceptées par les règles SEL.").wait_for()
