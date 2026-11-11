@@ -286,6 +286,7 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
     app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     css = (APP / "src" / "App.css").read_text(encoding="utf-8")
     visual_review = (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
+    solar_view = app.split('{view === "solar"', 1)[1].split('{view === "receivables"', 1)[0]
 
     assert 'title={solarWorkspace === "sales" ? "Catalogue des kits solaires" : "Contrats et échéanciers"}' in app
     assert 'aria-label="Pages solaire"' in app
@@ -294,7 +295,13 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
     assert 'title: "Abandonner la saisie solaire ?"' in app
     assert "Créer une vente" in app
     assert 'className="metrics solar-metrics"' in app
-    assert 'headers={["SKU", "Produit", "Catégorie", "Prix de référence", "État"]}' in app
+    assert 'headers={["SKU", "Produit", "Type", "Prix de référence", "État commercial"]}' in solar_view
+    assert 'Approuvé · vendable' in solar_view
+    assert 'value={text(solarProducts.find((product) => text(product.sku) === solarProductCode)?.currency, PRIMARY_CURRENCY)} readOnly' in solar_view
+    assert 'label>Mode de règlement<select value={solarPaymentMode}' in solar_view
+    assert 'currency: text(selectedProduct.currency, PRIMARY_CURRENCY)' in app
+    assert 'aucun échéancier n’est créé pour une vente comptant.' in app
+    assert 'stock' not in solar_view.lower()
     assert "solarSaleOpen &&" in app
     assert ".solar-metrics { grid-template-columns: repeat(4, minmax(0, 1fr));" in css
     assert 'f"{slug}-{SHOT_SUFFIX}.png"' in visual_review
@@ -410,7 +417,7 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert 'get_by_label("Motif du changement").fill("Réaffectation de responsabilités (fixture)")' in visual_review
     assert 'navigateAdminArea("users", true)' in app
     assert '>Journal d’audit</button>' in app
-    assert "Créer un brouillon" in app
+    assert "Créer le brouillon" in app
     assert "Référence de la décision d’approbation SEL" in app
     assert "Journal d’audit récent" in app
     assert '"/local/v1/' not in app
@@ -503,10 +510,10 @@ def test_tax_profile_editor_matches_ux3_and_keeps_reason_in_versioned_api_payloa
     assert 'label: "Document ou source fiscale"' in app
     assert 'name: "change_reason", label: "Motif du changement", multiline: true' in app
     assert "body.rate = String(percent / 100)" in app
-    assert 'title={kind === "tax-profiles" ? "Profil fiscal SEL"' in app
+    assert 'return <Panel title={definition.title}' in app
     assert "Consulter les versions" in app
-    assert "La référence d’approbation SEL sera demandée séparément lors de l’activation." in app
-    assert "Créer une version rectificative" in app
+    assert "Le serveur conserve les versions précédentes" in app
+    assert "Ajouter un profil fiscal" in app
     assert 'pub change_reason: String' in api
     assert '"change_reason": change_reason' in storage
     assert "change_reason: { type: string, maxLength: 500" in openapi
@@ -607,9 +614,10 @@ def test_catalog_draft_form_resets_only_after_server_accepts_creation() -> None:
     assert "const accepted = await confirmAction({" in create
     assert "if (accepted && await onCreate(kind, values)) { form.reset(); setDraftOpen(false); announceDraftSaved(); }" in create
     assert "onCreate: (kind: AdminCatalog, values: Record<string, string>) => Promise<boolean>" in panel
-    assert "title: `Vérifier le brouillon · ${definition.title}`" in create
+    assert "title: kind === \"products\" ? \"Vérifier le nouveau kit\" : `Vérifier · ${definition.title}`" in create
     assert '{draftOpen && <form data-preserve-draft className="form-grid admin-catalog-form"' in panel
-    assert 'Préparer une révision' in panel and 'Abandonner la révision ?' in panel
+    assert 'kind === "products" ? "Ajouter un kit" : kind === "tax-profiles" ? "Ajouter un profil fiscal" : "Ajouter une version"' in panel
+    assert 'title: kind === "products" ? "Abandonner l’ajout du kit ?" : "Abandonner la saisie ?"' in panel
     assert 'admin-reference-layout' in app and 'admin-reference-actions' in app
     assert 'admin-tariffs-catalog-a04-{SHOT_SUFFIX}.png' in (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
     assert 'async function navigateAdminSection(section: "users" | "audit" | AdminCatalog)' in app
