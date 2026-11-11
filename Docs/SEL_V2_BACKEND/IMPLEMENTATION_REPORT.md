@@ -1153,3 +1153,26 @@ Le serveur résout maintenant cette référence quand le client omet le champ ou
 | CI PostgreSQL, paquet serveur et installation Windows pour ce nouveau commit | NOT_RUN à cette étape |
 
 Les modifications de cette intervention sont dans le worktree et nécessitent encore un commit candidat, la CI GitHub PostgreSQL/Windows et une sauvegarde fraîche avant déploiement. Aucun tarif, facture, paiement ou compte réel n’a été modifié pendant l’audit.
+
+### Intégrité des échéances solaires et QR de facture autonome — 12 novembre 2026
+
+Les paiements centraux pouvaient précédemment être affectés plusieurs fois à la même échéance, jusqu'à dépasser son montant, même si le solde global de la créance restait suffisant. Une autre incohérence permettait d'affecter un paiement à la créance d'un contrat échelonné sans sélectionner d'échéance : le solde de la créance baissait, mais le plan restait inchangé. Les deux chemins PostgreSQL (`record_payment` et `allocate_payment`) agrègent maintenant les lignes par créance et échéance, verrouillent l'échéance, tiennent compte des contre-écritures, et rejettent les dépassements ou l'absence d'échéance. La validation des paiements sur créance tient aussi compte des contre-écritures et des avoirs.
+
+La validation du plan solaire exige désormais un principal et des versements strictement positifs, des séquences consécutives commençant à 1, des dates `YYYY-MM-DD` valides et strictement croissantes, ainsi que la somme exacte au principal. Aucun intérêt ni frais n'est ajouté.
+
+Le document d'une facture expose maintenant un QR autonome, JSON versionné `SEL-INVOICE` v1 : identité émettrice disponible (nom légal et code SEL), identifiant et référence de facture, émission, période, échéance, code abonné, devise, lignes et totaux. Les coordonnées personnelles du client sont exclues. Le QR et son libellé précisent qu'il s'agit d'une identification interne sans authentification fiscale. L'organisation ne stocke actuellement que son nom légal ; adresse, téléphone et identifiants légaux de l'entreprise ne sont donc pas ajoutés artificiellement au QR.
+
+| Vérification | Résultat |
+|---|---|
+| `cargo fmt --all -- --check` | PASS |
+| `cargo test --workspace` | PASS — tests exécutables réussis; les tests PostgreSQL annotés `ignore` n'ont pas tourné |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| Tests domaine solaire et payload QR | PASS — `cargo test -p sel-domain -p sel-contracts`; 3 tests de plans solaires et test QR versionné |
+| Compilation des tests API, stockage et agent local | PASS — `cargo check -p sel-api -p sel-storage -p sel-local --tests` |
+| Client Windows | PASS — `npm run build` |
+| Recette PDF visuelle | PASS — `python scripts/visual_review.py`, documents A4 testés sur données fictives via réponses simulées |
+| Tests PostgreSQL d'affectation/contre-écriture/concurrence | NOT_TESTED — serveur de test indisponible, `TEST_DATABASE_URL` absent et Docker daemon arrêté; test d'intégration ajouté mais ignoré par la suite standard |
+| Vérification du décodage du QR depuis un scanner | NOT_TESTED — le rendu PDF est confirmé, mais aucun décodeur QR n'est installé dans cet environnement |
+| Production | NOT_TOUCHED — aucun changement, déploiement, migration ni écriture en base réelle |
+
+**État de livraison :** modifications isolées sur `monarque/sel-financial-integrity-qr-20261112`, basée sur `0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6`. Le test PostgreSQL ajouté vérifie les affectations répétées, l'obligation de préciser une échéance et deux paiements concurrents; il doit être exécuté sur une base de test réelle avant toute mise en production. Le QR ne prétend pas être un QR fiscal officiel.
