@@ -182,8 +182,9 @@ def mock_invoke_script() -> str:
           else if (adminPath === '/v1/admin/catalog/tariffs') adminBody = [{{tariff_id:'demo-tariff-draft',service_code:'WATER',customer_category:'DEMO',unit:'M3',unit_price:'0.30',currency:'USD',effective_from:'2026-01-01',status:'DRAFT'}},{{tariff_id:'demo-tariff-approved',service_code:'ELECTRICITY',customer_category:'DEMO',unit:'KWH',unit_price:'0.095',currency:'USD',effective_from:'2026-01-01',approval_ref:'DEMO-APPROVED',status:'APPROVED'}}];
           else if (adminPath.endsWith('/tariffs')) adminBody = [{{service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',status:'APPROVED'}}];
           else if (adminPath.endsWith('/products')) adminBody = fixtures.products.map(product => ({{...product,status:'APPROVED'}}));
-          else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{service_code:'DEMO',jurisdiction:'DEMO',base:'NET',rate:'0.16',status:'APPROVED'}}];
+          else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{id:'demo-tax-approved',reference_type:'TAX_PROFILE',payload:{{service_code:'WATER',jurisdiction:'SEL',base:'SERVICE',rate:'0.16',source:'DEMO-SEL-APPROVED'}},effective_from:'2026-01-01',status:'APPROVED'}}];
           else if (adminPath.endsWith('/fx-rates')) adminBody = [{{from_currency:'USD',to_currency:'CDF',value:'DEMO',effective_from:'2026-01-01',status:'APPROVED'}}];
+          else if (adminPath === '/v1/admin/configuration/readiness') adminBody = {{configured:false,effective_on:'2026-11-11',requirements:[{{key:'electricity_residential',label:'Tarif électricité résidentiel',ready:false,approved_current_count:0}},{{key:'electricity_commercial',label:'Tarif électricité commercial',ready:true,approved_current_count:1}},{{key:'water_residential',label:'Tarif eau résidentiel',ready:true,approved_current_count:1}},{{key:'water_commercial',label:'Tarif eau commercial',ready:false,approved_current_count:2}},{{key:'tax_ELECTRICITY',label:'Profil TVA électricité',ready:true,approved_current_count:1}},{{key:'tax_WATER',label:'Profil TVA eau',ready:true,approved_current_count:1}},{{key:'communication_charge',label:'Ligne de communication',ready:false,approved_current_count:0}}]}};
           return {{status:200,body:adminBody}};
         }}
         if (command !== 'central_request') throw new Error('Unexpected visual smoke command: ' + command);
@@ -868,6 +869,10 @@ async def capture_views() -> None:
                 if slug == "admin":
                     await page.get_by_role("heading", name="Utilisateurs et autorisations").wait_for()
                     await page.get_by_role("cell", name="admin-demo").first.wait_for()
+                    await page.get_by_role("heading", name="Référentiels à finaliser").wait_for()
+                    await page.get_by_text("Tarif eau commercial").wait_for()
+                    admin_nav = page.get_by_role("navigation", name="Navigation Administration")
+                    await admin_nav.get_by_role("button", name="TVA", exact=True).wait_for()
                     await page.screenshot(path=str(OUTPUT / f"admin-full-{SHOT_SUFFIX}.png"), full_page=True)
                     await page.screenshot(path=str(OUTPUT / f"admin-user-directory-{SHOT_SUFFIX}.png"), full_page=True)
                     await page.get_by_role("button", name="Créer un utilisateur", exact=True).click()
@@ -981,16 +986,40 @@ async def capture_views() -> None:
                     await page.screenshot(path=str(OUTPUT / f"admin-tariffs-catalog-a04-{SHOT_SUFFIX}.png"))
                     tariff_panel = page.locator(".admin-reference-layout > .panel").first
                     for catalog_label, catalog_heading in [
-                        ("Paramètres de TVA", "Profils fiscaux"),
-                        ("Devises et taux de change", "Taux de change"),
-                        ("Référentiel des kits solaires", "Catalogue solaire"),
+                        ("TVA", "Paramètres de TVA"),
+                        ("Taux de change", "Taux de change"),
+                        ("Kits solaires", "Catalogue solaire"),
                         ("Ligne de communication", "Ligne de communication"),
                     ]:
-                        await page.get_by_role("button", name=catalog_label).click()
+                        await admin_nav.get_by_role("button", name=catalog_label, exact=True).click()
                         await page.get_by_role("heading", name=catalog_heading).first.wait_for()
-                    await page.get_by_role("button", name="Catalogue tarifaire").click()
+                    await admin_nav.get_by_role("button", name="Tarifs eau et électricité", exact=True).click()
                     await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
-                    await page.get_by_role("button", name="Référentiel des kits solaires").wait_for()
+                    await admin_nav.get_by_role("button", name="TVA", exact=True).click()
+                    await page.get_by_role("heading", name="Paramètres de TVA").first.wait_for()
+                    tax_form = page.locator("form.admin-catalog-form").first
+                    await page.get_by_role("button", name="Créer une version rectificative").click()
+                    tax_form = page.locator("form.admin-catalog-form").first
+                    await tax_form.locator('select[name="service_code"]').select_option("WATER")
+                    await tax_form.locator('input[name="rate_percent"]').fill("16")
+                    await tax_form.locator('input[name="source"]').fill("DEMO-TAX-APPROVAL")
+                    await tax_form.locator('textarea[name="change_reason"]').fill("Révision fiscale de démonstration")
+                    await tax_form.locator('input[name="effective_from"]').fill("2026-11-10")
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.screenshot(path=str(OUTPUT / f"admin-tax-profile-a06-{SHOT_SUFFIX}.png"))
+                    await tax_form.get_by_role("button", name="Créer un brouillon").click()
+                    tax_review = page.get_by_role("alertdialog", name="Vérifier le brouillon · Paramètres de TVA")
+                    await tax_review.wait_for()
+                    await tax_review.get_by_role("button", name="Créer le brouillon").click()
+                    await page.wait_for_function("window.__adminWriteLog.some(entry => entry.path === '/v1/admin/catalog/tax-profiles' && entry.method === 'POST')")
+                    tax_body = await page.evaluate("window.__adminWriteLog.find(entry => entry.path === '/v1/admin/catalog/tax-profiles' && entry.method === 'POST').body")
+                    if tax_body.get("rate") != "0.16" or tax_body.get("change_reason") != "Révision fiscale de démonstration":
+                        raise AssertionError("Tax rate must be normalized to the Rust fraction and change reason persisted")
+                    if tax_body.get("jurisdiction") != "" or tax_body.get("base") != "":
+                        raise AssertionError("Blank jurisdiction and tax base must reach the Rust SEL defaults")
+                    await admin_nav.get_by_role("button", name="Tarifs eau et électricité", exact=True).click()
+                    await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
+                    await admin_nav.get_by_role("button", name="Kits solaires", exact=True).wait_for()
                     draft_tariff = tariff_panel.get_by_role("row").filter(has_text="Brouillon").first
                     await draft_tariff.get_by_role("button", name="Examiner la révision").click()
                     review_panel = page.locator(".admin-reference-layout > .panel").first
@@ -1037,7 +1066,7 @@ async def capture_views() -> None:
                     await page.get_by_role("button", name="Préparer une révision").click()
                     tariff_form = page.locator("form.admin-catalog-form").first
                     await tariff_form.locator('select[name="service_code"]').select_option("ELECTRICITY")
-                    await tariff_form.locator('input[name="customer_category"]').fill("DEMO")
+                    await tariff_form.locator('select[name="customer_category"]').select_option("RESIDENTIAL")
                     await tariff_form.locator('select[name="unit"]').select_option("KWH")
                     await tariff_form.locator('input[name="unit_price"]').fill("0.095")
                     await tariff_form.locator('select[name="currency"]').select_option("USD")
@@ -1062,16 +1091,16 @@ async def capture_views() -> None:
                     if await tariff_form.locator('select[name="service_code"]').input_value() != "ELECTRICITY":
                         raise AssertionError("Catalog draft input must be retained when the server rejects creation")
                     await page.evaluate("window.__rejectCatalogDraft = false")
-                    await page.get_by_role("button", name="Paramètres de TVA").click()
-                    abandon_catalog = page.get_by_role("alertdialog", name="Abandonner la révision ?")
+                    await admin_nav.get_by_role("button", name="TVA", exact=True).click()
+                    abandon_catalog = page.get_by_role("alertdialog", name="Abandonner les modifications ?")
                     await abandon_catalog.wait_for()
                     await abandon_catalog.get_by_role("button", name="Annuler").click()
                     if await tariff_form.locator('input[name="unit_price"]').input_value() != "0.095":
                         raise AssertionError("Canceling catalog navigation must preserve the tariff draft")
-                    await page.get_by_role("button", name="Paramètres de TVA").click()
-                    await page.get_by_role("alertdialog", name="Abandonner la révision ?").get_by_role("button", name="Abandonner la saisie").click()
-                    await page.get_by_role("heading", name="Profils fiscaux").first.wait_for()
-                    await page.get_by_role("button", name="Catalogue tarifaire").click()
+                    await admin_nav.get_by_role("button", name="TVA", exact=True).click()
+                    await page.get_by_role("alertdialog", name="Abandonner les modifications ?").get_by_role("button", name="Abandonner et continuer").click()
+                    await page.get_by_role("heading", name="Paramètres de TVA").first.wait_for()
+                    await admin_nav.get_by_role("button", name="Tarifs eau et électricité", exact=True).click()
                     await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")
                 if dimensions["content"] > dimensions["viewport"]:

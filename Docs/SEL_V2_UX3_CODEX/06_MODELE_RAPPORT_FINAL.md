@@ -1,8 +1,15 @@
-# Rapport d’exécution UX3 — état au 10 novembre 2026
+# Rapport d’exécution UX3 — état au 11 novembre 2026
 
 > Rapport d’étape, non rapport de clôture. Les statuts reflètent les preuves exécutées; la recette complète et la validation Figma de toutes les frames ne sont pas terminées.
 
 ## Progression vérifiée — 10 novembre 2026
+
+### Mise à jour — 11 novembre 2026
+
+- A05 est maintenant `COMPLETED` sur le commit `3674f6ad972b2ab2c912a95b0521d793e13feeee`. Les quatre workflows correspondants sont `SUCCESS` : [client Windows/Tauri](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42816284610), [backend](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42816284555), [paquet serveur](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42816284652), [régression V1](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42816284569). La recette reste synthétique; aucun poste SEL réel ni tarif de production n’a été modifié.
+- A06 est en cours : le taux est saisi sous forme de pourcentage dans l’interface et converti en fraction avant l’appel Rust (`16` → `0.16`). Le champ « Motif du changement » est conservé dans le payload JSON versionné; il est facultatif dans le contrat API pour compatibilité ascendante, mais requis dans le formulaire UX3. Les valeurs vides de juridiction et d’assiette prennent respectivement `SEL` et `SERVICE` côté repository PostgreSQL.
+- A06 ajoute le rendu des versions fiscales depuis leur payload, la migration d’aucune donnée historique, et la documentation OpenAPI du motif. Tests locaux déjà exécutés : `python -m pytest tests/test_v2_tauri_client.py -q` PASS — 68 tests; `npm run build` PASS (avertissement existant sur les chunks PDF/fonts); `cargo fmt --all -- --check` PASS; `cargo check -p sel-api -p sel-storage` PASS; `git diff --check` PASS.
+- La première recette Playwright A06 a échoué uniquement sur un sélecteur de test encore nommé « Profils fiscaux » après renommage. Ce sélecteur a été corrigé; la deuxième recette visuelle 1440×900 est en cours. L’URL PostgreSQL de test n’est pas configurée localement; l’intégration HTTP/PostgreSQL est prévue dans les workflows CI.
 
 ### A01–A03 — Administration / utilisateurs
 
@@ -32,7 +39,14 @@
 - Recette Playwright synthétique complète réussie à 1440×900 et 1280×720, code de sortie 0 : ouverture de la revue, présence du prix/devise/unité, annulation de la navigation sans perte, absence d’appel API avant confirmation, annulation de confirmation avec saisie conservée, puis un seul POST d’approbation après validation.
 - Captures : `evidence/a05-2026-11-10/1440/admin-catalog-approval-1440x900.png` et `evidence/a05-2026-11-10/1280/admin-catalog-approval-1280x720.png`.
 - Vérifications locales A05 après les derniers ajustements : `python -m pytest tests/test_v2_tauri_client.py -q` PASS — 67 tests; `npm run build` PASS avec l’avertissement existant de chunks PDF/fonts >500 kB; `git diff --check` PASS. Aucune mutation sur API ou production.
-- Statut : A05 `IN_PROGRESS` — implémentation et recette visuelle locales faites; commit et quatre workflows CI restent à exécuter. L’écran et ses scénarios reposent sur des données synthétiques, sans approbation réelle de tarif.
+- Statut : A05 `COMPLETED` pour code, tests locaux, recette synthétique et CI. L’écran et ses scénarios reposent sur des données synthétiques, sans approbation réelle de tarif ni validation sur poste SEL.
+
+### A06 — Paramètres fiscaux / TVA
+
+- Référence Figma : frame `178:665`, « Paramètres de TVA ». Le formulaire comprend prestation, taux en pourcentage, date d’effet, référence de décision et motif; la juridiction et l’assiette peuvent conserver les valeurs usuelles SEL/SERVICE.
+- Le serveur Rust reste autoritaire : aucun calcul fiscal n’est ajouté au frontend. Le taux affiché en pourcentage est converti en valeur décimale attendue par l’API. Le motif est inclus dans le payload versionné du brouillon pour assurer sa traçabilité; les anciennes requêtes sans motif restent acceptées.
+- Le tableau de versions lit maintenant les propriétés imbriquées du payload, notamment prestation, juridiction et taux. Le taux est affiché en pourcentage. Les révisions restent des brouillons et ne sont pas utilisables en facturation avant approbation SEL.
+- Statut : `IN_PROGRESS` — implémentation et tests locaux passent; la recette visuelle corrigée, l’exécution PostgreSQL par CI et les quatre workflows sur le commit A06 restent à confirmer. Aucun accès ni changement de production.
 
 ### F01 — Journal de caisse et séparation de la saisie
 
@@ -276,3 +290,34 @@ Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440
 | Production | NO-GO / NON TOUCHÉE | hors périmètre de cette PR; aucune bascule production demandée ou faite |
 
 **Décision :** PR #60 reste ouverte et non fusionnée. Aucun installateur, release ou déploiement n’est publié par ce lot. La mission UX3 n’est pas terminée tant que les comparaisons de frames et les validations restantes ne sont pas clôturées.
+
+### Mise à jour prioritaire — administration commerciale et A06 (11 novembre 2026)
+
+**Constat vérifiable dans le code :** `/health/ready` indique seulement `configured: false` et ne donne pas le motif. Le blocage exige exactement une version approuvée, USD et en vigueur pour chacun des quatre tarifs (électricité/eau × résidentiel/commercial), exactement un profil TVA approuvé/en vigueur pour chacun des deux services, et exactement une ligne de communication USD approuvée/en vigueur. Une entrée absente, expirée, non approuvée ou en doublon bloque donc la préparation commerciale. C’est une règle du code serveur, pas une inspection des valeurs actuellement enregistrées en production.
+
+**Correctifs préparés sur la branche de continuation :**
+
+- Nouvelle route de lecture seule `GET /v1/admin/configuration/readiness`, réservée au rôle ADMIN, qui retourne les sept critères, leurs libellés, le nombre de versions approuvées/en vigueur et la date de contrôle. Elle réutilise le même prédicat que l’état de préparation serveur; aucune donnée n’est modifiée.
+- L’administration a une navigation secondaire fixe : utilisateurs/accès, tarifs, TVA, change, catalogue solaire, ligne de communication et journal d’audit. Les catégories tarifaires sont des choix « Résidentiel/Commercial » au lieu d’un code à taper.
+- Si une lecture administrative échoue, la section correspondante est vidée au lieu de laisser visibles des données anciennes comme si elles étaient fraîches. Le message indique précisément les rubriques qui n’ont pas été chargées.
+- A06 distingue la source/document fiscal de la référence d’approbation (demandée à l’activation), affiche le taux en %, persiste le motif dans la version, et garde les valeurs par défaut SEL/SERVICE dans le repository PostgreSQL. Le brouillon n’active pas lui-même un profil.
+- Un test HTTP/PostgreSQL est ajouté au parcours de gestion des versions fiscales pour vérifier la route de diagnostic et ses critères. Il compile localement, mais son exécution nécessite une base PostgreSQL de test.
+
+**Preuves exécutées dans cette session :**
+
+| Contrôle | Résultat |
+|---|---|
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 69 tests |
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript et bundle Windows compilés; avertissement existant de taille des chunks PDF/fonts |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 13 tests, dont les règles manque/doublon et RBAC de la route de diagnostic |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test |
+| `cargo clippy --manifest-path v2/Cargo.toml -p sel-api -p sel-storage --all-targets -- -D warnings` | PASS |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-api --test postgres_catalog_api --no-run` | PASS — compilation du test d’intégration seulement |
+| `python v2/windows-app/scripts/visual_review.py`, 1440×900 et 1280×720 | PASS — code de sortie 0; parcours synthétique d’administration et écrans A06 |
+| `git diff --check`, `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` | PASS après formatage |
+
+Captures de la revue : `evidence/admin-2026-11-11/1440/admin-full-1440x900.png`, `admin-tax-profile-a06-1440x900.png`, `admin-user-security-a03-1440x900.png`, `admin-catalog-approval-1440x900.png`, et équivalents sous `evidence/admin-2026-11-11/1280/`.
+
+**Non exécuté / limites :** `TEST_DATABASE_URL` et `DATABASE_URL` ne sont pas configurés dans l’environnement; Docker Desktop n’est pas démarré. Le test PostgreSQL d’intégration n’a donc pas été exécuté ici. La CI du commit contenant ces changements n’a pas encore tourné. Aucune lecture ni écriture de la base SEL de production n’a été effectuée; il n’est donc pas vérifié quels critères manquent réellement dans cette base. Cette interface rendra le diagnostic précis une fois le correctif déployé et appelé avec une session admin, mais ne crée/approuve aucun tarif ou paramètre à la place de SEL.
+
+**Statuts d’étape :** A06 `IN_PROGRESS` — code, tests unitaires et recette visuelle synthétique réussis; exécution PostgreSQL, nouvelle CI et comparaison finale aux critères visuels Figma restantes. Urgence Administration `PARTIAL` — navigation, diagnostic, gestion UI des utilisateurs/référentiels et tests synthétiques prêts sur la branche; état exact de production et déploiement restent non vérifiés/non effectués. Backend et données réelles de production non touchés.

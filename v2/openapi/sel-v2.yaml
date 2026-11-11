@@ -218,6 +218,34 @@ paths:
         '204': { description: Grant revoked }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+  /v1/admin/configuration/readiness:
+    get:
+      operationId: getAdminConfigurationReadiness
+      description: ADMIN only. Reports the same current approved settings that gate commercial readiness; it performs no writes.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Current commercial configuration requirements and readiness
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configured, effective_on, requirements]
+                properties:
+                  configured: { type: boolean }
+                  effective_on: { type: string, format: date }
+                  requirements:
+                    type: array
+                    items:
+                      type: object
+                      required: [key, label, ready, approved_current_count]
+                      properties:
+                        key: { type: string }
+                        label: { type: string }
+                        ready: { type: boolean }
+                        approved_current_count: { type: integer, minimum: 0 }
+        '403': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
   /v1/meta/capabilities:
     get:
       operationId: capabilities
@@ -1295,6 +1323,7 @@ components:
         base: { type: string, minLength: 1, maxLength: 64 }
         rate: { type: string, pattern: '^[0-9]+(\\.[0-9]{1,6})?$' }
         source: { type: string, minLength: 1, maxLength: 160 }
+        change_reason: { type: string, maxLength: 500, description: Optional explanation for this tax profile revision; retained in the versioned catalog payload. }
         effective_from: { type: string, format: date }
         effective_to: { type: [string, 'null'], format: date }
     CreateFxRateDraftRequest:

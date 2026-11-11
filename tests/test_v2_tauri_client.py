@@ -392,7 +392,7 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert ".admin-create-user .form-actions { grid-column: auto; justify-content: flex-start; }" in admin_styles
     assert 'f"admin-user-create-a02-{SHOT_SUFFIX}.png"' in visual_review
     assert 'page.get_by_role("button", name="Vérifier le nouvel utilisateur").click()' in visual_review
-    assert '{adminArea !== "users" && <nav className="admin-workspace-tabs"' in app
+    assert 'className="admin-sidebar" aria-label="Navigation Administration"' in app
     assert '{view !== "admin" && domainViews[domainByView[view]] && <nav className="workspace-tabs"' in app
     assert 'Panel title="Session administrateur"' not in app
     assert '"Données d’administration actualisées depuis le serveur central."' not in app
@@ -409,7 +409,7 @@ def test_admin_console_uses_individual_session_without_offline_device_controls()
     assert 'admin-user-security-a03-{SHOT_SUFFIX}.png' in visual_review
     assert 'get_by_label("Motif du changement").fill("Réaffectation de responsabilités (fixture)")' in visual_review
     assert 'navigateAdminArea("users", true)' in app
-    assert ">Référentiels</Button>" in app and ">Journal d’audit</Button>" in app
+    assert '>Journal d’audit</button>' in app
     assert "Créer un brouillon" in app
     assert "Référence de la décision d’approbation SEL" in app
     assert "Journal d’audit récent" in app
@@ -490,6 +490,43 @@ def test_admin_reference_writes_use_native_idempotency_and_require_explicit_appr
     assert 'onRevoke={revokeCatalogItem}' in app
     assert 'change_ref: changeRef' in app
     assert "Brouillon" in app
+
+
+def test_tax_profile_editor_matches_ux3_and_keeps_reason_in_versioned_api_payload() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    api = (ROOT / "v2" / "crates" / "sel-api" / "src" / "lib.rs").read_text(encoding="utf-8")
+    storage = (ROOT / "v2" / "crates" / "sel-storage" / "src" / "postgres.rs").read_text(encoding="utf-8")
+    openapi = (ROOT / "v2" / "openapi" / "sel-v2.yaml").read_text(encoding="utf-8")
+
+    assert 'title: "Paramètres de TVA"' in app
+    assert 'label: "Taux de TVA (%)"' in app
+    assert 'label: "Document ou source fiscale"' in app
+    assert 'name: "change_reason", label: "Motif du changement", multiline: true' in app
+    assert "body.rate = String(percent / 100)" in app
+    assert 'title={kind === "tax-profiles" ? "Profil fiscal SEL"' in app
+    assert "Consulter les versions" in app
+    assert "La référence d’approbation SEL sera demandée séparément lors de l’activation." in app
+    assert "Créer une version rectificative" in app
+    assert 'pub change_reason: String' in api
+    assert '"change_reason": change_reason' in storage
+    assert "change_reason: { type: string, maxLength: 500" in openapi
+
+
+def test_admin_has_direct_section_navigation_and_exact_server_readiness_diagnostics() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (APP / "src" / "App.css").read_text(encoding="utf-8")
+    api = (ROOT / "v2" / "crates" / "sel-api" / "src" / "lib.rs").read_text(encoding="utf-8")
+    openapi = (ROOT / "v2" / "openapi" / "sel-v2.yaml").read_text(encoding="utf-8")
+
+    for label in ("Utilisateurs et accès", "Tarifs eau et électricité", "TVA", "Taux de change", "Kits solaires", "Ligne de communication", "Journal d’audit"):
+        assert label in app
+    assert 'aria-label="Navigation Administration"' in app
+    assert "admin-console-layout" in css and "admin-sidebar" in css
+    assert '"/v1/admin/configuration/readiness"' in api
+    assert "configuration_requirements(&tariffs, &taxes, &communication" in api
+    assert "approved_current_count" in api
+    assert "/v1/admin/configuration/readiness:" in openapi
+    assert "Référentiels à finaliser" in app
 
 
 def test_phase_seven_audit_and_sync_issue_contracts_are_documented() -> None:
@@ -575,8 +612,8 @@ def test_catalog_draft_form_resets_only_after_server_accepts_creation() -> None:
     assert 'Préparer une révision' in panel and 'Abandonner la révision ?' in panel
     assert 'admin-reference-layout' in app and 'admin-reference-actions' in app
     assert 'admin-tariffs-catalog-a04-{SHOT_SUFFIX}.png' in (APP / "scripts" / "visual_review.py").read_text(encoding="utf-8")
-    assert 'async function selectCatalogKind(next: AdminCatalog)' in app
-    assert 'title: "Abandonner la révision ?"' in app.split('async function selectCatalogKind', 1)[1].split('\n  function clearAdminSession', 1)[0]
+    assert 'async function navigateAdminSection(section: "users" | "audit" | AdminCatalog)' in app
+    assert 'title: "Abandonner les modifications ?"' in app.split('async function navigateAdminSection', 1)[1].split('\n  function clearAdminSession', 1)[0]
     assert 'columns: ["service_code", "customer_category", "unit_price", "status"]' in app
     assert 'formatUnit(text(item.unit))' in panel
     assert '@media (max-width: 1360px)' in (APP / "src" / "App.css").read_text(encoding="utf-8")

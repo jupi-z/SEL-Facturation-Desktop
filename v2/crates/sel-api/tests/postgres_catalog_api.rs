@@ -843,6 +843,7 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
     let tax_request = json!({
         "service_code": "WATER", "jurisdiction": format!("SEL-{key_suffix}"),
         "base": "SERVICE", "rate": "0.16", "source": "SEL-approved schedule",
+        "change_reason": "Align with approved SEL fiscal profile",
         "effective_from": today.to_string(), "effective_to": null
     });
     let tax_draft_response = post_json(
@@ -857,6 +858,44 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
     let tax_draft = json_body(tax_draft_response).await;
     assert_eq!(tax_draft["status"], "DRAFT");
     let tax_id = tax_draft["id"].as_str().unwrap().to_owned();
+    let admin_drafts = get_json_authenticated(&app, tax_create_path, &token).await;
+    let stored_tax_draft = admin_drafts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == tax_id)
+        .expect("tax draft appears in admin version history");
+    assert_eq!(
+        stored_tax_draft["payload"]["change_reason"],
+        "Align with approved SEL fiscal profile"
+    );
+    let default_tax_key = format!("TAX-SEL-DEFAULTS-{key_suffix}");
+    let default_tax = post_json(
+        &app,
+        tax_create_path,
+        Some(&token),
+        Some(&default_tax_key),
+        json!({
+            "service_code": "ELECTRICITY", "jurisdiction": "", "base": "",
+            "rate": "0.16", "source": "SEL default-value contract test",
+            "effective_from": today.to_string(), "effective_to": null
+        }),
+    )
+    .await;
+    assert_eq!(default_tax.status(), axum::http::StatusCode::CREATED);
+    let default_tax_id = json_body(default_tax).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let admin_drafts = get_json_authenticated(&app, tax_create_path, &token).await;
+    let stored_default_tax = admin_drafts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == default_tax_id)
+        .expect("defaulted tax draft appears in admin version history");
+    assert_eq!(stored_default_tax["payload"]["jurisdiction"], "SEL");
+    assert_eq!(stored_default_tax["payload"]["base"], "SERVICE");
     let replay = post_json(
         &app,
         tax_create_path,
@@ -895,6 +934,20 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
             .iter()
             .any(|row| row["id"] == tax_id)
     );
+
+    let readiness = get_json_authenticated(&app, "/v1/admin/configuration/readiness", &token).await;
+    assert_eq!(readiness["configured"], false);
+    assert_eq!(readiness["requirements"].as_array().unwrap().len(), 7);
+    assert!(readiness["requirements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["key"] == "tax_WATER" && item["ready"] == true));
+    assert!(readiness["requirements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["key"] == "communication_charge" && item["ready"] == false));
 
     let future = today + chrono::Duration::days(20);
     let fx_pair = Uuid::new_v4().simple().to_string().to_ascii_uppercase();

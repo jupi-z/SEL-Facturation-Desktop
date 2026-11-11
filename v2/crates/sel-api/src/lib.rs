@@ -152,6 +152,8 @@ pub struct CreateTaxProfileDraftRequest {
     pub base: String,
     pub rate: Decimal,
     pub source: String,
+    #[serde(default)]
+    pub change_reason: String,
     pub effective_from: chrono::NaiveDate,
     pub effective_to: Option<chrono::NaiveDate>,
 }
@@ -307,6 +309,10 @@ pub fn router(state: AppState) -> Router {
             get(admin_list_users).post(admin_create_user),
         )
         .route("/v1/admin/audit-events", get(admin_list_audit_events))
+        .route(
+            "/v1/admin/configuration/readiness",
+            get(admin_configuration_readiness),
+        )
         .route("/v1/admin/users/:id", patch(admin_update_user))
         .route("/v1/admin/devices", get(admin_list_devices))
         .route(
@@ -561,6 +567,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 | "/v1/admin/devices"
                 | "/v1/admin/offline-grants"
                 | "/v1/admin/audit-events"
+                | "/v1/admin/configuration/readiness"
         ) || matches!(
             path,
             "/v1/admin/catalog/tariffs"
@@ -737,26 +744,14 @@ async fn health_ready(State(state): State<AppState>) -> Json<serde_json::Value> 
             store.admin_reference_versions("COMMUNICATION_CHARGE").await,
         ) {
             (Ok(tariffs), Ok(tax_profiles), Ok(communication_charges)) => {
-                let today = Utc::now().date_naive();
-                let today_string = today.format("%Y-%m-%d").to_string();
-                utility_catalog_is_configured(&tariffs, &tax_profiles, today)
-                    && communication_charges
-                        .iter()
-                        .filter(|row| {
-                            row["payload"]["currency"] == "USD"
-                                && row["status"] == "APPROVED"
-                                && row["approval_ref"]
-                                    .as_str()
-                                    .is_some_and(|reference| !reference.trim().is_empty())
-                                && row["effective_from"]
-                                    .as_str()
-                                    .is_some_and(|from| from <= today_string.as_str())
-                                && row["effective_to"]
-                                    .as_str()
-                                    .is_none_or(|to| to >= today_string.as_str())
-                        })
-                        .count()
-                        == 1
+                configuration_requirements(
+                    &tariffs,
+                    &tax_profiles,
+                    &communication_charges,
+                    Utc::now().date_naive(),
+                )
+                .iter()
+                .all(|requirement| requirement["ready"] == true)
             }
             _ => false,
         }
@@ -766,6 +761,132 @@ async fn health_ready(State(state): State<AppState>) -> Json<serde_json::Value> 
     Json(json!({"status":"ready","service":"sel-api","configured":configured}))
 }
 
+async fn admin_configuration_readiness(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    require_admin(principal)?;
+    let store = central_store(&state)?;
+    let tariffs = store.admin_catalog_tariffs().await.map_err(storage_error)?;
+    let taxes = store
+        .admin_reference_versions("TAX_PROFILE")
+        .await
+        .map_err(storage_error)?;
+    let communication = store
+        .admin_reference_versions("COMMUNICATION_CHARGE")
+        .await
+        .map_err(storage_error)?;
+    let effective_on = Utc::now().date_naive();
+    let requirements = configuration_requirements(&tariffs, &taxes, &communication, effective_on);
+    let configured = requirements.iter().all(|item| item["ready"] == true);
+    Ok(Json(json!({
+        "configured": configured,
+        "effective_on": effective_on,
+        "requirements": requirements
+    })))
+}
+
+fn configuration_requirements(
+    tariffs: &[serde_json::Value],
+    tax_profiles: &[serde_json::Value],
+    communication_charges: &[serde_json::Value],
+    effective_on: NaiveDate,
+) -> Vec<serde_json::Value> {
+    fn effective(row: &serde_json::Value, date: NaiveDate) -> bool {
+        let date = date.format("%Y-%m-%d").to_string();
+        let from = row["effective_from"].as_str().unwrap_or_default();
+        let to = row["effective_to"].as_str();
+        from <= date.as_str() && to.is_none_or(|to| to >= date.as_str())
+    }
+
+    fn approved(row: &serde_json::Value, date: NaiveDate) -> bool {
+        row["status"] == "APPROVED"
+            && row["approved_by"].as_str().is_some_and(|id| !id.is_empty())
+            && row["approval_ref"]
+                .as_str()
+                .is_some_and(|reference| !reference.trim().is_empty())
+            && effective(row, date)
+    }
+
+    let mut requirements = Vec::with_capacity(7);
+    for (key, label, service, category, unit) in [
+        (
+            "electricity_residential",
+            "Tarif électricité résidentiel",
+            "ELECTRICITY",
+            "RESIDENTIAL",
+            "KWH",
+        ),
+        (
+            "electricity_commercial",
+            "Tarif électricité commercial",
+            "ELECTRICITY",
+            "COMMERCIAL",
+            "KWH",
+        ),
+        (
+            "water_residential",
+            "Tarif eau résidentiel",
+            "WATER",
+            "RESIDENTIAL",
+            "M3",
+        ),
+        (
+            "water_commercial",
+            "Tarif eau commercial",
+            "WATER",
+            "COMMERCIAL",
+            "M3",
+        ),
+    ] {
+        let count = tariffs
+            .iter()
+            .filter(|row| {
+                row["service_code"] == service
+                    && row["customer_category"] == category
+                    && row["unit"] == unit
+                    && row["currency"] == "USD"
+                    && approved(row, effective_on)
+            })
+            .count();
+        requirements.push(
+            json!({"key":key,"label":label,"ready":count == 1,"approved_current_count":count}),
+        );
+    }
+    for (service, label) in [
+        ("ELECTRICITY", "Profil TVA électricité"),
+        ("WATER", "Profil TVA eau"),
+    ] {
+        let count = tax_profiles
+            .iter()
+            .filter(|row| row["payload"]["service_code"] == service && approved(row, effective_on))
+            .count();
+        requirements.push(json!({"key":format!("tax_{service}"),"label":label,"ready":count == 1,"approved_current_count":count}));
+    }
+    let date = effective_on.format("%Y-%m-%d").to_string();
+    let communication_count = communication_charges
+        .iter()
+        .filter(|row| {
+            row["payload"]["currency"] == "USD"
+                && row["status"] == "APPROVED"
+                && row["approval_ref"]
+                    .as_str()
+                    .is_some_and(|reference| !reference.trim().is_empty())
+                && row["effective_from"]
+                    .as_str()
+                    .is_some_and(|from| from <= date.as_str())
+                && row["effective_to"]
+                    .as_str()
+                    .is_none_or(|to| to >= date.as_str())
+        })
+        .count();
+    requirements.push(json!({"key":"communication_charge","label":"Ligne de communication","ready":communication_count == 1,"approved_current_count":communication_count}));
+    requirements
+}
+
+#[cfg(test)]
 fn utility_catalog_is_configured(
     tariffs: &[serde_json::Value],
     tax_profiles: &[serde_json::Value],
@@ -976,6 +1097,7 @@ async fn create_tax_profile_draft(
                 &input.base,
                 input.rate,
                 &input.source,
+                &input.change_reason,
                 input.effective_from,
                 input.effective_to,
                 principal.user_id,
@@ -4634,7 +4756,7 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{role_allows_request, utility_catalog_is_configured};
+    use super::{configuration_requirements, role_allows_request, utility_catalog_is_configured};
     use axum::http::Method;
     use chrono::NaiveDate;
     use serde_json::json;
@@ -4756,6 +4878,18 @@ mod tests {
             &format!("/v1/admin/catalog/tariffs/{tariff_id}/approve"),
             "BILLING_AGENT"
         ));
+        assert!(role_allows_request(
+            &Method::GET,
+            "/v1/admin/configuration/readiness",
+            "ADMIN"
+        ));
+        for role in ["BILLING_AGENT", "CASHIER", "SUPERVISOR", "AUDITOR_READONLY"] {
+            assert!(!role_allows_request(
+                &Method::GET,
+                "/v1/admin/configuration/readiness",
+                role
+            ));
+        }
     }
 
     #[test]
@@ -5086,5 +5220,73 @@ mod tests {
             &duplicate_tax,
             today
         ));
+    }
+
+    #[test]
+    fn admin_readiness_names_missing_and_duplicate_commercial_configuration() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        let requirements = configuration_requirements(&[], &[], &[], today);
+        assert_eq!(requirements.len(), 7);
+        assert!(requirements.iter().all(|item| item["ready"] == false));
+
+        let tariff = json!({
+            "service_code":"WATER", "customer_category":"RESIDENTIAL", "unit":"M3",
+            "currency":"USD", "effective_from":"2026-01-01", "effective_to":null,
+            "approval_ref":"SEL-APPROVAL", "approved_by":"admin", "status":"APPROVED"
+        });
+        let taxes = [json!({
+            "payload":{"service_code":"WATER"}, "effective_from":"2026-01-01",
+            "effective_to":null, "approval_ref":"SEL-TAX", "approved_by":"admin", "status":"APPROVED"
+        })];
+        let communication = [json!({
+            "payload":{"currency":"USD"}, "effective_from":"2026-01-01", "effective_to":null,
+            "approval_ref":"SEL-COMM", "status":"APPROVED"
+        })];
+        let partial = configuration_requirements(
+            std::slice::from_ref(&tariff),
+            &taxes,
+            &communication,
+            today,
+        );
+        assert!(partial
+            .iter()
+            .find(|item| item["key"] == "water_residential")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
+        assert!(partial
+            .iter()
+            .find(|item| item["key"] == "tax_WATER")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
+        assert!(partial
+            .iter()
+            .find(|item| item["key"] == "communication_charge")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
+        assert!(!partial
+            .iter()
+            .find(|item| item["key"] == "electricity_residential")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
+
+        let duplicate =
+            configuration_requirements(&[tariff.clone(), tariff], &taxes, &communication, today);
+        assert_eq!(
+            duplicate
+                .iter()
+                .find(|item| item["key"] == "water_residential")
+                .unwrap()["approved_current_count"],
+            2
+        );
+        assert!(!duplicate
+            .iter()
+            .find(|item| item["key"] == "water_residential")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
     }
 }

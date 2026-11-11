@@ -2966,6 +2966,7 @@ impl CentralStore {
         base: &str,
         rate: Decimal,
         source: &str,
+        change_reason: &str,
         effective_from: NaiveDate,
         effective_to: Option<NaiveDate>,
         actor_id: Uuid,
@@ -2973,9 +2974,18 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
         let service_code = service_code.trim().to_ascii_uppercase();
-        let jurisdiction = jurisdiction.trim().to_ascii_uppercase();
-        let base = base.trim().to_ascii_uppercase();
+        let jurisdiction = if jurisdiction.trim().is_empty() {
+            "SEL".to_owned()
+        } else {
+            jurisdiction.trim().to_ascii_uppercase()
+        };
+        let base = if base.trim().is_empty() {
+            "SERVICE".to_owned()
+        } else {
+            base.trim().to_ascii_uppercase()
+        };
         let source = source.trim();
+        let change_reason = change_reason.trim();
         let max_rate = Decimal::new(99_999_999_999_999, 0);
         if !matches!(service_code.as_str(), "ELECTRICITY" | "WATER")
             || jurisdiction.is_empty()
@@ -2984,6 +2994,7 @@ impl CentralStore {
             || base.len() > 64
             || source.is_empty()
             || source.len() > 160
+            || change_reason.chars().count() > 500
             || rate < Decimal::ZERO
             || rate > max_rate
             || rate.normalize().scale() > 6
@@ -2996,7 +3007,8 @@ impl CentralStore {
             "jurisdiction": jurisdiction,
             "base": base,
             "rate": rate.normalize().to_string(),
-            "source": source
+            "source": source,
+            "change_reason": change_reason
         });
         self.create_reference_draft(
             "TAX_PROFILE",
