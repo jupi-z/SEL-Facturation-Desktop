@@ -2138,12 +2138,11 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
     const setters = [setUsers, setTariffs, setProducts, setTaxProfiles, setFxRates, setCommunicationCharges, setAuditEvents] as const;
     results.slice(0, setters.length).forEach((result, index) => {
       if (result.status === "fulfilled") setters[index](rows<Row>(result.value));
-      else setters[index]([]);
     });
     const readinessResult = results[7];
     if (readinessResult?.status === "fulfilled") {
       setConfigurationReadiness(readinessResult.value as { configured: boolean; effective_on: string; requirements: { key: string; label: string; ready: boolean; approved_current_count: number }[] });
-    } else setConfigurationReadiness(null);
+    }
     const labels = ["utilisateurs", "tarifs", "kits solaires", "profils TVA", "taux de change", "ligne de communication", "journal d’audit", "diagnostic de configuration"];
     const failed = results.flatMap((result, index) => result.status === "rejected" ? [labels[index]] : []);
     if (failed.length) {
@@ -2154,7 +2153,7 @@ function AdminConsole({ session, onSignedOut, confirmAction, draftDirty }: { ses
         return;
       }
     }
-    setMessage(failed.length ? `Données indisponibles : ${failed.join(", ")}. Les sections concernées ont été vidées ; réessayez l’actualisation.` : "");
+    setMessage(failed.length ? `Chargement partiel : ${failed.join(", ")}. Les données déjà chargées sont conservées. Vérifiez la connexion puis actualisez.` : "");
     setError(failed.length > 0);
     setLoading(false);
   }, []);

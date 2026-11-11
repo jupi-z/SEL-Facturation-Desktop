@@ -173,6 +173,7 @@ def mock_invoke_script() -> str:
         if (command === 'central_logout') {{ window.__ADMIN_DEMO_SESSION__ = false; return null; }}
         if (command === 'central_admin_request') {{
           const adminPath = args.path || '';
+          if ((window.__adminReadFailures || []).includes(adminPath)) throw new Error('Synthetic administration read failure');
           if (args.method !== 'GET') window.__adminWriteLog.push({{path: adminPath, method: args.method, body: args.body}});
           if (window.__rejectDuplicateUser && adminPath === '/v1/admin/users' && args.method === 'POST') return {{status:409,body:{{code:'USER_IDENTITY_EXISTS',detail:'identity_ref is empty or already exists in this organization'}}}};
           if (window.__rejectCatalogDraft && adminPath.endsWith('/tariffs') && args.method === 'POST') return {{status:422,body:{{code:'DEMO_VALIDATION_ERROR',message:'Validation refusal simulated'}}}};
@@ -184,6 +185,7 @@ def mock_invoke_script() -> str:
           else if (adminPath.endsWith('/products')) adminBody = fixtures.products.map(product => ({{...product,status:'APPROVED'}}));
           else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{id:'demo-tax-approved',reference_type:'TAX_PROFILE',payload:{{service_code:'WATER',jurisdiction:'SEL',base:'SERVICE',rate:'0.16',source:'DEMO-SEL-APPROVED'}},effective_from:'2026-01-01',status:'APPROVED'}}];
           else if (adminPath.endsWith('/fx-rates')) adminBody = [{{from_currency:'USD',to_currency:'CDF',value:'DEMO',effective_from:'2026-01-01',status:'APPROVED'}}];
+          else if (adminPath === '/v1/admin/catalog/communication-charge') adminBody = [{{id:'demo-communication-charge',reference_type:'COMMUNICATION_CHARGE',natural_key:'SEL-COMMUNICATION',payload:{{label:'Ligne de communication — fixture',amount:'10.00',currency:'USD'}},effective_from:'2026-01-01',approval_ref:'DEMO-APPROVED',status:'APPROVED'}}];
           else if (adminPath === '/v1/admin/configuration/readiness') adminBody = {{configured:false,effective_on:'2026-11-11',requirements:[{{key:'electricity_residential',label:'Tarif électricité résidentiel',ready:false,approved_current_count:0}},{{key:'electricity_commercial',label:'Tarif électricité commercial',ready:true,approved_current_count:1}},{{key:'water_residential',label:'Tarif eau résidentiel',ready:true,approved_current_count:1}},{{key:'water_commercial',label:'Tarif eau commercial',ready:false,approved_current_count:2}},{{key:'tax_ELECTRICITY',label:'Profil TVA électricité',ready:true,approved_current_count:1}},{{key:'tax_WATER',label:'Profil TVA eau',ready:true,approved_current_count:1}},{{key:'communication_charge',label:'Ligne de communication',ready:false,approved_current_count:0}}]}};
           return {{status:200,body:adminBody}};
         }}
@@ -873,6 +875,19 @@ async def capture_views() -> None:
                     await page.get_by_text("Tarif eau commercial").wait_for()
                     admin_nav = page.get_by_role("navigation", name="Navigation Administration")
                     await admin_nav.get_by_role("button", name="TVA", exact=True).wait_for()
+                    await page.evaluate("window.__adminReadFailures = ['/v1/admin/catalog/communication-charge', '/v1/admin/configuration/readiness']")
+                    await page.get_by_role("button", name="Actualiser les données").click()
+                    partial_load_notice = page.get_by_role("alert").filter(has_text="Chargement partiel")
+                    await partial_load_notice.wait_for()
+                    if "Les données déjà chargées sont conservées." not in await partial_load_notice.inner_text():
+                        raise AssertionError("Partial administration refresh must say previously loaded data was preserved")
+                    await admin_nav.get_by_role("button", name="Ligne de communication", exact=True).click()
+                    await page.get_by_role("heading", name="Ligne de communication").first.wait_for()
+                    await page.get_by_role("row").filter(has_text="Ligne de communication — fixture").wait_for()
+                    await page.evaluate("window.__adminReadFailures = []")
+                    await page.get_by_role("button", name="Actualiser les données").click()
+                    await admin_nav.get_by_role("button", name="Utilisateurs et accès", exact=True).click()
+                    await page.get_by_role("heading", name="Utilisateurs et autorisations").wait_for()
                     await page.screenshot(path=str(OUTPUT / f"admin-full-{SHOT_SUFFIX}.png"), full_page=True)
                     await page.screenshot(path=str(OUTPUT / f"admin-user-directory-{SHOT_SUFFIX}.png"), full_page=True)
                     await page.get_by_role("button", name="Créer un utilisateur", exact=True).click()
@@ -981,7 +996,21 @@ async def capture_views() -> None:
                     if await abandon_admin_review.count():
                         await abandon_admin_review.get_by_role("button", name="Abandonner et continuer").click()
                     await page.get_by_role("button", name="Tarifs et référentiels", exact=True).click()
-                    await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
+                    catalog_discard = page.get_by_role("alertdialog", name="Abandonner les modifications ?")
+                    try:
+                        await catalog_discard.wait_for(timeout=1000)
+                    except Exception:
+                        pass
+                    if await catalog_discard.count():
+                        await catalog_discard.get_by_role("button", name="Abandonner et continuer").click()
+                    await page.get_by_role("heading", name="Ligne de communication").first.wait_for()
+                    await admin_nav.get_by_role("button", name="Tarifs eau et électricité", exact=True).click()
+                    try:
+                        await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for(timeout=5000)
+                    except Exception:
+                        await page.screenshot(path=str(OUTPUT / f"admin-catalog-navigation-diagnostic-{SHOT_SUFFIX}.png"), full_page=True)
+                        print("Admin catalog navigation diagnostic:", (await page.locator("body").inner_text())[:2500].encode("ascii", "replace").decode())
+                        raise
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.screenshot(path=str(OUTPUT / f"admin-tariffs-catalog-a04-{SHOT_SUFFIX}.png"))
                     tariff_panel = page.locator(".admin-reference-layout > .panel").first

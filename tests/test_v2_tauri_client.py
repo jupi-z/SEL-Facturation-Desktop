@@ -476,11 +476,23 @@ def test_native_central_admin_bridge_is_allowlisted_and_never_uses_sync_token_as
     admin_command = native.split("async fn central_admin_request(", 1)[1].split("\n#[tauri::command]", 1)[0]
     assert "central_api_token" not in admin_command
     assert "v1/auth/login" in native
-    assert '"tariffs" | "products" | "tax-profiles" | "fx-rates"' in native
+    assert '"communication-charge" => *action == "approve"' in native
+    assert '"/v1/admin/configuration/readiness"' in native
+    assert '"communication-charge"' in native
     assert '"", "v1", "devices", id, "revoke"' not in native
     assert '"/v1/users/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/password"' in native
     assert "localStorage" not in (APP / "src" / "App.tsx").read_text(encoding="utf-8")
     assert ".." in native
+
+
+def test_admin_partial_refresh_preserves_successful_data_when_one_route_fails() -> None:
+    app = (APP / "src" / "App.tsx").read_text(encoding="utf-8")
+    loader = app.split("const loadData = useCallback(async () => {", 1)[1].split("\n  }, []);", 1)[0]
+
+    assert 'if (result.status === "fulfilled") setters[index](rows<Row>(result.value));' in loader
+    assert "else setters[index]([])" not in loader
+    assert "else setConfigurationReadiness(null)" not in loader
+    assert "Les données déjà chargées sont conservées." in loader
 
 
 def test_admin_reference_writes_use_native_idempotency_and_require_explicit_approval() -> None:

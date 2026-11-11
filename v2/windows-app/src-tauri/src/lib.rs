@@ -213,6 +213,13 @@ fn validate_central_admin_request(path: &str, method: &str) -> Result<(), String
     if path == "/v1/auth/change-password" && method == "POST" {
         return Ok(());
     }
+    if path == "/v1/admin/configuration/readiness" {
+        return if method == "GET" {
+            Ok(())
+        } else {
+            Err("Méthode interdite pour cette route.".into())
+        };
+    }
     if let ["", "v1", "users", id, "password"] = parts.as_slice() {
         if is_uuid_segment(id) && method == "POST" {
             return Ok(());
@@ -235,10 +242,12 @@ fn validate_central_admin_request(path: &str, method: &str) -> Result<(), String
         ["", "v1", "admin", "catalog", collection, id, action]
             if is_uuid_segment(id) && matches!(*action, "approve" | "revoke") =>
         {
-            if !matches!(
-                *collection,
-                "tariffs" | "products" | "tax-profiles" | "fx-rates"
-            ) {
+            let action_allowed = match *collection {
+                "communication-charge" => *action == "approve",
+                "tariffs" | "products" | "tax-profiles" | "fx-rates" => true,
+                _ => false,
+            };
+            if !action_allowed {
                 return Err("Référentiel central non autorisé.".into());
             }
             return if method == "POST" {
@@ -254,13 +263,19 @@ fn validate_central_admin_request(path: &str, method: &str) -> Result<(), String
     };
     if !matches!(
         collection,
-        "users" | "audit-events" | "tariffs" | "products" | "tax-profiles" | "fx-rates"
+        "users"
+            | "audit-events"
+            | "tariffs"
+            | "products"
+            | "tax-profiles"
+            | "fx-rates"
+            | "communication-charge"
     ) {
         return Err("Référentiel central non autorisé.".into());
     }
     let create_allowed = matches!(
         collection,
-        "users" | "tariffs" | "products" | "tax-profiles" | "fx-rates"
+        "users" | "tariffs" | "products" | "tax-profiles" | "fx-rates" | "communication-charge"
     );
     match method {
         "GET" => Ok(()),
@@ -794,7 +809,10 @@ mod tests {
                 "GET",
             ),
             ("/v1/solar/quotes", "POST"),
-            ("/v1/meters/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/replace", "POST"),
+            (
+                "/v1/meters/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/replace",
+                "POST",
+            ),
             ("/v1/catalog/products", "GET"),
             ("/v1/admin/catalog/tariffs", "GET"),
         ] {
@@ -830,6 +848,9 @@ mod tests {
             ("/v1/admin/users", "GET"),
             ("/v1/admin/users", "POST"),
             ("/v1/admin/audit-events", "GET"),
+            ("/v1/admin/configuration/readiness", "GET"),
+            ("/v1/admin/catalog/communication-charge", "GET"),
+            ("/v1/admin/catalog/communication-charge", "POST"),
             ("/v1/admin/catalog/tariffs", "GET"),
             ("/v1/admin/catalog/products", "POST"),
             (
@@ -842,6 +863,10 @@ mod tests {
             ),
             (
                 "/v1/admin/catalog/tariffs/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/approve",
+                "POST",
+            ),
+            (
+                "/v1/admin/catalog/communication-charge/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/approve",
                 "POST",
             ),
             (
@@ -860,8 +885,13 @@ mod tests {
                 "POST",
             ),
             ("/v1/admin/offline-grants", "GET"),
+            ("/v1/admin/configuration/readiness", "POST"),
             (
                 "/v1/admin/offline-grants/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke",
+                "POST",
+            ),
+            (
+                "/v1/admin/catalog/communication-charge/3e5f9d4a-e3a2-4ce2-82f9-f50cc4497aa0/revoke",
                 "POST",
             ),
         ] {
