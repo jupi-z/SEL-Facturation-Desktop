@@ -1176,3 +1176,5 @@ Le document d'une facture expose maintenant un QR autonome, JSON versionné `SEL
 | Production | NOT_TOUCHED — aucun changement, déploiement, migration ni écriture en base réelle |
 
 **État de livraison :** modifications isolées sur `monarque/sel-financial-integrity-qr-20261112`, basée sur `0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6`. Le test PostgreSQL ajouté vérifie les affectations répétées, l'obligation de préciser une échéance et deux paiements concurrents; il doit être exécuté sur une base de test réelle avant toute mise en production. Le QR ne prétend pas être un QR fiscal officiel.
+
+La première exécution GitHub a révélé un test de catalogue préexistant dépendant d'une date fixe (`2026-11-07`) devenue antérieure à la date d'exécution. L'API a correctement refusé la révision rétrospective (HTTP 422). Le scénario a été rendu stable en fixant sa prise d'effet deux jours après la date du test; il n'a pas été désactivé. La CI doit être relancée sur le nouveau commit.
