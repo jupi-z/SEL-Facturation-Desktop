@@ -1153,3 +1153,22 @@ Le serveur résout maintenant cette référence quand le client omet le champ ou
 | CI PostgreSQL, paquet serveur et installation Windows pour ce nouveau commit | NOT_RUN à cette étape |
 
 Les modifications de cette intervention sont dans le worktree et nécessitent encore un commit candidat, la CI GitHub PostgreSQL/Windows et une sauvegarde fraîche avant déploiement. Aucun tarif, facture, paiement ou compte réel n’a été modifié pendant l’audit.
+
+
+### Déploiement production de la ligne de communication — 6 novembre 2026
+
+**Cet état courant remplace les mentions `NOT_DONE` des notes d’exécution précédentes.** La PR #61 a été fusionnée dans `main` au commit `c8f1fc47d113314a2408d342e06e8b57d9d776cf`. Les quatre contrôles PR ont réussi, dont le build MSI/NSIS et le test d’installation/mise à niveau conservant le profil; le workflow de régression déclenché sur `main` a également réussi.
+
+| Vérification de livraison | Résultat |
+|---|---|
+| API production | PASS — `https://sel.shuleops.com/health/ready` retourne `configured:true`, conteneur sain; image `sha256:a7e21d99615b6cca710d112f829295174228ca8f51ee52af21b156c87128728d`. |
+| Migration PostgreSQL 0021 | PASS — 21 migrations enregistrées. Une version `COMMUNICATION_CHARGE` USD approuvée est présente : 10 USD, libellé « Ligne de communication », effective le 2026-11-06, référence `SEL-OWNER-CONFIRMED-COMMUNICATION-10-USD`. |
+| Sauvegarde préalable | PASS — `/srv/sel-v2/backups/predeploy-communication-20261106T061702Z.dump`, 97 730 octets, `pg_restore -l` réussi, SHA-256 `82f3f902704c180b0860483327dc94203a5205b2ae18bf57ccff13ff68703422`. |
+| Données financières | PASS — aucune facture ni aucun paiement modifié; migration additive de catalogue/contraintes seulement. Les snapshots des factures antérieures sont conservés. |
+| Setup NSIS v0.4.4 | PASS — [télécharger le setup](https://github.com/jupi-z/SEL-Facturation-Desktop/releases/download/v0.4.4/SEL.Facturation_0.4.4_x64-setup.exe), SHA-256 `4fa9e62a385f34df5f5a4773f2e2da5dd1a0d00a89cb9ffa306e52064088fc31`. |
+| MSI v0.4.4 | PASS — [télécharger le MSI](https://github.com/jupi-z/SEL-Facturation-Desktop/releases/download/v0.4.4/SEL.Facturation_0.4.4_x64_en-US.msi), SHA-256 `108ef1db8c4ad1a9470ee512f7c1f9cc24e1ff4c590bbbad47ebe8259e393f25`. |
+| Release GitHub | PASS — [v0.4.4](https://github.com/jupi-z/SEL-Facturation-Desktop/releases/tag/v0.4.4), commit source `c8f1fc47d113314a2408d342e06e8b57d9d776cf`, empreintes jointes dans `SHA256SUMS.txt`. |
+| SafeUpdate natif | BLOCKED — `https://update.sel.shuleops.com/updates/latest.json` retourne HTTP 404. Aucun manifeste Ed25519 de production n’a été publié; la release GitHub est une distribution manuelle vérifiable par hash, pas une activation du mécanisme de mise à jour automatique. |
+| Recette sur poste SEL | NOT_TESTED — l’installation et l’impression n’ont pas été exécutées sur le poste de Clarisse dans cette intervention. |
+
+**Incident de déploiement et prévention :** une première archive créée depuis Windows a converti les fins de ligne des migrations en CRLF (`core.autocrlf=true`). SQLx a alors refusé le démarrage avant d’appliquer la migration 0021; la sonde a répondu 504 pendant cet essai. L’ancienne image a été restaurée immédiatement. La base est restée à 20 migrations, sans modification de données. Le déploiement réussi a été construit depuis un checkout Git Linux propre au même commit, avec les fins de ligne LF; les SHA-384 des migrations 1–20 ont été comparés à `_sqlx_migrations` et correspondaient tous avant le redémarrage. La procédure de déploiement est mise à jour ci-dessous pour éviter cette régression.
