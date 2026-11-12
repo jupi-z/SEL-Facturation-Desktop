@@ -295,6 +295,10 @@ pub enum PaymentWriteError {
     IdempotencyPayloadMismatch,
     #[error("receivable balance would be overallocated")]
     Overallocated,
+    #[error("payment would exceed the remaining installment balance")]
+    InstallmentOverallocated,
+    #[error("payments against an installment receivable must target a schedule installment")]
+    InstallmentRequired,
     #[error("payment customer or currency does not match the receivable")]
     ContextInvalid,
     #[error("payment allocations exceed the received amount")]
@@ -326,6 +330,10 @@ pub enum PaymentAllocationWriteError {
     AllocationExceedsPayment,
     #[error("receivable balance would be overallocated")]
     Overallocated,
+    #[error("payment would exceed the remaining installment balance")]
+    InstallmentOverallocated,
+    #[error("payments against an installment receivable must target a schedule installment")]
+    InstallmentRequired,
     #[error("payment customer or currency does not match the receivable")]
     ContextInvalid,
     #[error("stored idempotency response is invalid: {0}")]
@@ -4577,13 +4585,34 @@ impl CentralStore {
             }
             let principal: Decimal = row.try_get("principal_total")?;
             let paid: Decimal = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(allocated_amount), 0) FROM payment_allocations WHERE receivable_id = $1",
+                "SELECT COALESCE(SUM(
+                     pa.allocated_amount * GREATEST(p.amount_received - COALESCE(rev.reversed_amount, 0), 0)
+                     / NULLIF(p.amount_received, 0)
+                 ), 0)
+                 FROM payment_allocations pa
+                 JOIN payments p ON p.id = pa.payment_id
+                 LEFT JOIN (
+                     SELECT payment_id, SUM(amount) AS reversed_amount
+                     FROM payment_reversals GROUP BY payment_id
+                 ) rev ON rev.payment_id = p.id
+                 WHERE pa.receivable_id = $1 AND p.status = 'CENTRAL_ACCEPTED'",
             )
             .bind(receivable_id)
             .fetch_one(&mut *tx)
             .await?;
-            if paid + allocated_amount > principal {
+            let credited: Decimal = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(amount), 0) FROM credit_notes WHERE receivable_id = $1",
+            )
+            .bind(receivable_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if paid + credited + allocated_amount > principal {
                 return Err(PaymentWriteError::Overallocated);
+            }
+            if receivable_has_installment_plan(tx, *receivable_id).await?
+                && persisted_allocations.contains_key(&(*receivable_id, None))
+            {
+                return Err(PaymentWriteError::InstallmentRequired);
             }
             for ((_allocation_receivable_id, schedule_id), _) in persisted_allocations
                 .iter()
@@ -4592,19 +4621,19 @@ impl CentralStore {
                 })
             {
                 if let Some(schedule_id) = schedule_id {
-                    let schedule_exists = sqlx::query(
-                        "SELECT s.id FROM installment_schedule s
-                         JOIN installment_plans p ON p.id = s.plan_id
-                         WHERE s.id = $1 AND p.receivable_id = $2
-                         FOR SHARE",
+                    match validate_installment_allocation(
+                        tx,
+                        *schedule_id,
+                        *receivable_id,
+                        *persisted_allocations
+                            .get(&(*receivable_id, Some(*schedule_id)))
+                            .expect("grouped schedule allocation exists"),
                     )
-                    .bind(schedule_id)
-                    .bind(receivable_id)
-                    .fetch_optional(&mut *tx)
                     .await?
-                    .is_some();
-                    if !schedule_exists {
-                        return Err(PaymentWriteError::ContextInvalid);
+                    {
+                        None => return Err(PaymentWriteError::ContextInvalid),
+                        Some(false) => {}
+                        Some(true) => return Err(PaymentWriteError::InstallmentOverallocated),
                     }
                 }
             }
@@ -4789,33 +4818,56 @@ impl CentralStore {
             }
             let principal: Decimal = receivable.try_get("principal_total")?;
             let paid: Decimal = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(allocated_amount), 0)
-                 FROM payment_allocations WHERE receivable_id = $1",
+                "SELECT COALESCE(SUM(
+                     pa.allocated_amount * GREATEST(p.amount_received - COALESCE(rev.reversed_amount, 0), 0)
+                     / NULLIF(p.amount_received, 0)
+                 ), 0)
+                 FROM payment_allocations pa
+                 JOIN payments p ON p.id = pa.payment_id
+                 LEFT JOIN (
+                     SELECT payment_id, SUM(amount) AS reversed_amount
+                     FROM payment_reversals GROUP BY payment_id
+                 ) rev ON rev.payment_id = p.id
+                 WHERE pa.receivable_id = $1 AND p.status = 'CENTRAL_ACCEPTED'",
             )
             .bind(receivable_id)
             .fetch_one(&mut *tx)
             .await?;
-            if paid + allocated_amount > principal {
+            let credited: Decimal = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(amount), 0) FROM credit_notes WHERE receivable_id = $1",
+            )
+            .bind(receivable_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if paid + credited + allocated_amount > principal {
                 return Err(PaymentAllocationWriteError::Overallocated);
+            }
+            if receivable_has_installment_plan(tx, *receivable_id).await?
+                && persisted_allocations.contains_key(&(*receivable_id, None))
+            {
+                return Err(PaymentAllocationWriteError::InstallmentRequired);
             }
             for ((_, schedule_id), _) in persisted_allocations
                 .iter()
                 .filter(|((id, _), _)| id == receivable_id)
             {
                 if let Some(schedule_id) = schedule_id {
-                    let exists = sqlx::query(
-                        "SELECT s.id FROM installment_schedule s
-                         JOIN installment_plans p ON p.id = s.plan_id
-                         WHERE s.id = $1 AND p.receivable_id = $2
-                         FOR SHARE",
+                    let requested = *persisted_allocations
+                        .get(&(*receivable_id, Some(*schedule_id)))
+                        .expect("grouped schedule allocation exists");
+                    match validate_installment_allocation(
+                        tx,
+                        *schedule_id,
+                        *receivable_id,
+                        requested,
                     )
-                    .bind(schedule_id)
-                    .bind(receivable_id)
-                    .fetch_optional(&mut *tx)
                     .await?
-                    .is_some();
-                    if !exists {
-                        return Err(PaymentAllocationWriteError::ContextInvalid);
+                    {
+                        None => return Err(PaymentAllocationWriteError::ContextInvalid),
+                        Some(false) => {}
+                        Some(true) => {
+                            return Err(PaymentAllocationWriteError::InstallmentOverallocated)
+                        }
                     }
                 }
             }
@@ -8506,6 +8558,64 @@ fn customer_from_row(row: &sqlx::postgres::PgRow) -> Result<Customer, sqlx::Erro
         status: row.try_get("status")?,
         revision: row.try_get("revision")?,
     })
+}
+
+/// Validates an allocation against the outstanding value of one installment.
+/// The schedule row lock serializes writers; its receivable lock is acquired by
+/// callers first in stable UUID order. Reversals reduce the net allocation in
+/// the same proportion used by the installment-plan projection.
+async fn validate_installment_allocation(
+    tx: &mut sqlx::PgConnection,
+    schedule_id: Uuid,
+    receivable_id: Uuid,
+    requested: Decimal,
+) -> Result<Option<bool>, sqlx::Error> {
+    let amount_due = sqlx::query_scalar::<_, Decimal>(
+        "SELECT s.amount_due
+         FROM installment_schedule s
+         JOIN installment_plans p ON p.id = s.plan_id
+         WHERE s.id = $1 AND p.receivable_id = $2
+         FOR UPDATE OF s",
+    )
+    .bind(schedule_id)
+    .bind(receivable_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(amount_due) = amount_due else {
+        return Ok(None);
+    };
+    let already_paid = sqlx::query_scalar::<_, Decimal>(
+        "SELECT COALESCE(SUM(
+             pa.allocated_amount * GREATEST(
+                 p.amount_received - COALESCE((
+                     SELECT SUM(pr.amount)
+                     FROM payment_reversals pr
+                     WHERE pr.payment_id = p.id
+                 ), 0),
+                 0
+             ) / NULLIF(p.amount_received, 0)
+         ), 0)
+         FROM payment_allocations pa
+         JOIN payments p ON p.id = pa.payment_id
+         WHERE pa.schedule_id = $1
+           AND pa.receivable_id = $2
+           AND p.status = 'CENTRAL_ACCEPTED'",
+    )
+    .bind(schedule_id)
+    .bind(receivable_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    Ok(Some(already_paid + requested > amount_due))
+}
+
+async fn receivable_has_installment_plan(
+    tx: &mut sqlx::PgConnection,
+    receivable_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM installment_plans WHERE receivable_id = $1)")
+        .bind(receivable_id)
+        .fetch_one(&mut *tx)
+        .await
 }
 
 async fn load_invoice_identity_snapshot(

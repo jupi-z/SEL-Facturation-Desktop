@@ -1693,13 +1693,14 @@ components:
               overdue: { type: boolean }
     DocumentData:
       type: object
-      required: [document_schema_version, template_version, document_reference, invoice, qr_internal_reference, origin]
+      required: [document_schema_version, template_version, document_reference, invoice, qr_internal_reference, qr_payload, origin]
       properties:
         document_schema_version: { type: integer }
         template_version: { type: string }
         document_reference: { type: string }
         invoice: { $ref: '#/components/schemas/UtilityBillingResponse' }
         qr_internal_reference: { type: string }
+        qr_payload: { type: string, description: Versioned self-contained SEL invoice data encoded as JSON in the client-generated QR; internal identification only, not fiscal authentication. }
         origin: { type: string }
     ProblemDetails:
       type: object

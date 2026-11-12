@@ -7,12 +7,12 @@ use axum::{
     Json, Router,
 };
 use sel_contracts::{
-    utility_snapshot_sha256, ActivateSolarContractRequest, CatalogSnapshot, CorrectMeterReading,
-    CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest,
-    CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData, InvoiceLineResponse,
-    PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest, SolarSaleResponse,
-    SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount,
-    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    invoice_qr_payload, utility_snapshot_sha256, ActivateSolarContractRequest, CatalogSnapshot,
+    CorrectMeterReading, CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount,
+    CreateSolarQuoteRequest, CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData,
+    InvoiceLineResponse, PaymentAllocationRequest, RecordPaymentRequest, ReversePaymentRequest,
+    SolarSaleResponse, SyncEventResult, SyncPushRequest, SyncPushResponse, UpdateCustomer,
+    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_storage::{LocalMeterError, LocalSolarSaleError, LocalStore};
@@ -964,6 +964,7 @@ async fn get_invoice_document_data(
         .get_invoice_issued_at(id)
         .await
         .map_err(internal_error)?;
+    let qr_payload = invoice_qr_payload(&invoice, &identity_snapshot, issued_at.as_deref());
     Ok(Json(DocumentData {
         document_schema_version: 1,
         template_version: "v2-a4-2".into(),
@@ -972,6 +973,7 @@ async fn get_invoice_document_data(
         identity_snapshot,
         issued_at,
         qr_internal_reference: reference,
+        qr_payload: Some(qr_payload),
         origin: origin.into(),
     }))
 }

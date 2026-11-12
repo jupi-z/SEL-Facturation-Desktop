@@ -161,6 +161,25 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         invoice_document["qr_internal_reference"],
         format!("SEL-V2-{}", invoice["invoice_id"].as_str().unwrap())
     );
+    let qr_payload: serde_json::Value = serde_json::from_str(
+        invoice_document["qr_payload"]
+            .as_str()
+            .expect("invoice QR payload"),
+    )
+    .expect("invoice QR payload is valid JSON");
+    assert_eq!(qr_payload["schema"], "SEL-INVOICE");
+    assert_eq!(qr_payload["version"], 1);
+    assert_eq!(qr_payload["issuer"]["code"], "SEL");
+    assert_eq!(qr_payload["invoice"]["id"], invoice["invoice_id"]);
+    assert_eq!(qr_payload["invoice"]["reference"], invoice_reference);
+    assert_eq!(qr_payload["currency"], "USD");
+    assert!(qr_payload["lines"]
+        .as_array()
+        .is_some_and(|lines| !lines.is_empty()));
+    assert_eq!(
+        qr_payload["notice"],
+        "Identification interne SEL; sans authentification fiscale"
+    );
 
     let history = app
         .clone()
