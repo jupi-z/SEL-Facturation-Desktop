@@ -213,7 +213,7 @@ function qrFooter(reference: string, explanatoryLine: string, invoice = false): 
         { width: 54, qr: reference, fit: 48, alignment: "center", margin: [2, 1, 2, 1] },
         { width: "*", stack: [
           { text: invoice ? "QR d’identification" : "Référence interne SEL", color: "#152c4b", bold: true, fontSize: 8, margin: [0, 3, 0, 5] },
-          { text: invoice ? "Identification interne de la facture" : "QR interne de repérage · sans authentification fiscale", style: "muted", fontSize: 7 },
+          { text: invoice ? "Données internes de la facture · sans authentification fiscale" : "QR interne de repérage · sans authentification fiscale", style: "muted", fontSize: 7 },
           ...(!invoice && explanatoryLine ? [{ text: explanatoryLine, style: "muted", fontSize: 7, margin: [0, 5, 0, 0] } as Content] : []),
         ], margin: [10, 0, 0, 0] },
       ],
@@ -239,7 +239,7 @@ function invoiceDefinition(data: Data): TDocumentDefinitions {
     ]);
   }
   const reference = value(invoice, "invoice_number", value(invoice, "invoice_id"));
-  const internalQr = value(data, "qr_internal_reference", value(data, "document_reference"));
+  const internalQr = value(data, "qr_payload", value(data, "qr_internal_reference", value(data, "document_reference")));
   const issueTitle = String(invoice.status) === "VOID" ? "FACTURE ANNULÉE" : "FACTURE DE CONSOMMATION";
   const invoiceStatus = String(invoice.status ?? data.origin);
   const subtitle = "Électricité et eau · Facture combinée";

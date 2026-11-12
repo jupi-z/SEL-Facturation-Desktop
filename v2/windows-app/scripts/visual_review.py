@@ -191,7 +191,7 @@ def mock_invoke_script() -> str:
               : {{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}},
             {{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}
           ];
-          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',origin:'CENTRAL',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'Société d’Énergie du Lualaba',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'21.00':'19.50',tax:positiveWater?'3.36':'3.12',total:positiveWater?'24.36':'22.62',lines:invoiceLines}}}};
+          body = {{document_schema_version:1,template_version:'v2-a4-2',document_reference:'SEL-DÉMO-0001',qr_internal_reference:'SEL-V2-demo-invoice-0001',qr_payload:JSON.stringify({{schema:'SEL-INVOICE',version:1,issuer:{{code:'SEL',name:'Société d’Énergie du Lualaba'}},invoice:{{id:'demo-invoice-0001',reference:'SEL-DÉMO-0001',issued_at:'2026-11-03T10:30:00Z',period:'2026-10',due_date:'2026-11-15'}},customer:{{code:'SEL-DÉMO-0001'}},currency:'USD',lines:invoiceLines,totals:{{subtotal:positiveWater?'21.00':'19.50',tax:positiveWater?'3.36':'3.12',total:positiveWater?'24.36':'22.62'}},notice:'Identification interne SEL; sans authentification fiscale'}}),origin:'CENTRAL',issued_at:'2026-11-03T10:30:00Z',identity_snapshot:{{organization_name:'Société d’Énergie du Lualaba',customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi',phone:'+243 000 000 000'}},invoice:{{...fixtures.invoices[0],invoice_number:'SEL-DÉMO-0001',billing_period:'2026-10',due_date:'2026-11-15',subtotal:positiveWater?'21.00':'19.50',tax:positiveWater?'3.36':'3.12',total:positiveWater?'24.36':'22.62',lines:invoiceLines}}}};
         }}
         else if (path.startsWith('/v1/invoices/')) body = {{...fixtures.invoices[0],lines:[{{service_code:'ELECTRICITY',quantity:'100',unit:'KWH',unit_price:'0.095',subtotal:'9.50',tax:'1.52',total:'11.02'}},{{service_code:'WATER',quantity:'0',unit:'M3',unit_price:'0',subtotal:'0',tax:'0',total:'0'}},{{service_code:'COMMUNICATION',quantity:'1',unit:'FORFAIT',unit_price:'10.00',subtotal:'10.00',tax:'1.60',total:'11.60'}}],subtotal:'19.50',tax:'3.12'}};
         else if (path.startsWith('/v1/invoices')) body = fixtures.invoices;
@@ -261,7 +261,7 @@ async def assert_generated_pdf_contract(page, label: str, expected_pages: int | 
         if token.casefold() not in text.casefold():
             raise AssertionError(f"{label}: expected PDF text {token!r} was missing; extracted PDF text: {text!r}")
     if label.startswith("Invoice"):
-        for token in ("QR d’identification", "Identification interne de la facture"):
+        for token in ("QR d’identification", "Données internes de la facture"):
             if token.casefold() not in text.casefold():
                 raise AssertionError(f"{label}: expected invoice QR label {token!r} was missing")
         if "Confirmé par le serveur".casefold() in text.casefold():

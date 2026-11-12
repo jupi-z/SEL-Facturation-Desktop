@@ -331,6 +331,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn invoice_qr_is_versioned_self_contained_and_excludes_customer_contact_data() {
+        let invoice = UtilityBillingResponse {
+            invoice_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+            receivable_id: Some(Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap()),
+            invoice_number: Some("SEL-20261112-143025".into()),
+            status: "CENTRAL_ACCEPTED".into(),
+            billing_period: "2026-10".into(),
+            due_date: Some(NaiveDate::from_ymd_opt(2026, 11, 30).unwrap()),
+            currency: "USD".into(),
+            lines: vec![InvoiceLineResponse {
+                service_code: "COMMUNICATION".into(),
+                quantity: Decimal::ONE,
+                unit: "FORFAIT".into(),
+                unit_price: Some(Decimal::new(10, 0)),
+                subtotal: Decimal::new(10, 0),
+                tax: Decimal::new(1, 0),
+                total: Decimal::new(11, 0),
+            }],
+            subtotal: Decimal::new(10, 0),
+            tax: Decimal::ONE,
+            total: Decimal::new(11, 0),
+            snapshot_sha256: "snapshot-hash".into(),
+        };
+        let identity = InvoiceIdentitySnapshot {
+            organization_name: "Société d’Énergie du Lualaba".into(),
+            customer_code: "SEL-C-0001".into(),
+            legal_name: "Client".into(),
+            address: Some("private address".into()),
+            phone: Some("private phone".into()),
+        };
+        let payload: serde_json::Value = serde_json::from_str(&invoice_qr_payload(
+            &invoice,
+            &identity,
+            Some("2026-11-12T14:30:25Z"),
+        ))
+        .unwrap();
+
+        assert_eq!(payload["schema"], "SEL-INVOICE");
+        assert_eq!(payload["version"], 1);
+        assert_eq!(payload["issuer"]["code"], "SEL");
+        assert_eq!(payload["issuer"]["name"], "Société d’Énergie du Lualaba");
+        assert_eq!(payload["invoice"]["id"], invoice.invoice_id.to_string());
+        assert_eq!(payload["invoice"]["reference"], "SEL-20261112-143025");
+        assert_eq!(payload["invoice"]["period"], "2026-10");
+        assert_eq!(payload["customer"]["code"], "SEL-C-0001");
+        assert_eq!(payload["lines"][0]["service_code"], "COMMUNICATION");
+        assert_eq!(payload["totals"]["total"], "11");
+        assert_eq!(
+            payload["notice"],
+            "Identification interne SEL; sans authentification fiscale"
+        );
+        let encoded = payload.to_string();
+        assert!(!encoded.contains("private address"));
+        assert!(!encoded.contains("private phone"));
+    }
+
+    #[test]
     fn utility_snapshot_hash_is_shared_and_ignores_sync_status() {
         let mut pending = UtilityBillingResponse {
             invoice_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
@@ -765,5 +822,44 @@ pub struct DocumentData {
     #[serde(default)]
     pub issued_at: Option<String>,
     pub qr_internal_reference: String,
+    /// Compact versioned payload encoded directly in the client-generated QR.
+    #[serde(default)]
+    pub qr_payload: Option<String>,
     pub origin: String,
+}
+
+/// Builds the versioned, self-contained payload encoded in an invoice QR.
+/// Only the subscriber code is included; personal contact details are excluded.
+pub fn invoice_qr_payload(
+    invoice: &UtilityBillingResponse,
+    identity: &InvoiceIdentitySnapshot,
+    issued_at: Option<&str>,
+) -> String {
+    let issuer_name = if identity.organization_name.is_empty() {
+        "Société d’Énergie du Lualaba"
+    } else {
+        identity.organization_name.as_str()
+    };
+    let payload = serde_json::json!({
+        "schema": "SEL-INVOICE",
+        "version": 1,
+        "issuer": { "code": "SEL", "name": issuer_name },
+        "invoice": {
+            "id": invoice.invoice_id,
+            "reference": invoice.invoice_number,
+            "issued_at": issued_at,
+            "period": invoice.billing_period,
+            "due_date": invoice.due_date
+        },
+        "customer": { "code": identity.customer_code },
+        "currency": invoice.currency,
+        "lines": invoice.lines,
+        "totals": {
+            "subtotal": invoice.subtotal,
+            "tax": invoice.tax,
+            "total": invoice.total
+        },
+        "notice": "Identification interne SEL; sans authentification fiscale"
+    });
+    serde_json::to_string(&payload).expect("invoice QR payload is JSON serializable")
 }

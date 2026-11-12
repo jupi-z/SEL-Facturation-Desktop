@@ -456,6 +456,8 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
     .expect("count concurrently approved tariffs");
     assert_eq!(approved_count, 1);
 
+    let communication_effective_from =
+        (chrono::Utc::now().date_naive() + chrono::Duration::days(2)).to_string();
     let communication_draft = post_json(
         &app,
         "/v1/admin/catalog/communication-charge",
@@ -464,7 +466,7 @@ async fn tariff_drafts_require_admin_approval_reference_and_non_overlapping_peri
         json!({
             "amount": "12.50",
             "currency": "USD",
-            "effective_from": "2026-11-07",
+            "effective_from": communication_effective_from,
             "effective_to": null
         }),
     )

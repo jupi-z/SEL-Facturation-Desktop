@@ -13,14 +13,14 @@ use chrono::{Duration, NaiveDate, Utc};
 use ed25519_dalek::{Signer, SigningKey};
 use rust_decimal::Decimal;
 use sel_contracts::{
-    catalog_snapshot_sha256, offline_grant_canonical_bytes, utility_snapshot_sha256,
-    CatalogSnapshot, CatalogSnapshotPayload, CorrectMeterReading, CreateCustomer, CreateMeter,
-    CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
-    CreditNoteRequest, Customer, DocumentData, InvoiceIdentitySnapshot, InvoiceLineResponse, Meter,
-    MeterReading, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
-    ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse, SyncPullResponse,
-    SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
-    UtilityBillingResponse, VoidInvoiceRequest,
+    catalog_snapshot_sha256, invoice_qr_payload, offline_grant_canonical_bytes,
+    utility_snapshot_sha256, CatalogSnapshot, CatalogSnapshotPayload, CorrectMeterReading,
+    CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest,
+    CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData, InvoiceIdentitySnapshot,
+    InvoiceLineResponse, Meter, MeterReading, PaymentAllocationRequest, ProblemDetails,
+    RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse,
+    SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount,
+    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -2968,21 +2968,25 @@ async fn get_document_data(
             .invoice_number
             .clone()
             .unwrap_or_else(|| format!("SEL-V2-{id}"));
+        let identity_snapshot = store
+            .get_invoice_identity_snapshot(id)
+            .await
+            .map_err(storage_error)?
+            .unwrap_or_default();
+        let issued_at = store
+            .get_invoice_issued_at(id)
+            .await
+            .map_err(storage_error)?;
+        let qr_payload = invoice_qr_payload(&invoice, &identity_snapshot, issued_at.as_deref());
         return Ok(Json(DocumentData {
             document_schema_version: 1,
             template_version: "v2-a4-2".into(),
             document_reference: reference.clone(),
             invoice,
-            identity_snapshot: store
-                .get_invoice_identity_snapshot(id)
-                .await
-                .map_err(storage_error)?
-                .unwrap_or_default(),
-            issued_at: store
-                .get_invoice_issued_at(id)
-                .await
-                .map_err(storage_error)?,
+            identity_snapshot,
+            issued_at,
             qr_internal_reference: format!("SEL-V2-{id}"),
+            qr_payload: Some(qr_payload),
             origin: "CENTRAL_ACCEPTED".into(),
         }));
     }
@@ -2994,14 +2998,20 @@ async fn get_document_data(
         .cloned()
         .ok_or_else(|| ApiError::not_found("INVOICE_NOT_FOUND", "invoice not found"))?;
     let reference = format!("SEL-V2-{id}");
+    let identity_snapshot = InvoiceIdentitySnapshot {
+        organization_name: "Société d’Énergie du Lualaba".into(),
+        ..InvoiceIdentitySnapshot::default()
+    };
+    let qr_payload = invoice_qr_payload(&invoice.response, &identity_snapshot, None);
     Ok(Json(DocumentData {
         document_schema_version: 1,
         template_version: "v2-a4-2".into(),
         document_reference: reference.clone(),
         invoice: invoice.response,
-        identity_snapshot: InvoiceIdentitySnapshot::default(),
+        identity_snapshot,
         issued_at: None,
         qr_internal_reference: reference,
+        qr_payload: Some(qr_payload),
         origin: "CENTRAL_ACCEPTED".into(),
     }))
 }
@@ -4197,6 +4207,14 @@ fn payment_write_error(error: sel_storage::postgres::PaymentWriteError) -> ApiEr
             "RECEIVABLE_OVERALLOCATED",
             "payment would exceed the receivable balance",
         ),
+        sel_storage::postgres::PaymentWriteError::InstallmentOverallocated => ApiError::conflict(
+            "INSTALLMENT_OVERALLOCATED",
+            "payment would exceed the remaining balance of the selected installment",
+        ),
+        sel_storage::postgres::PaymentWriteError::InstallmentRequired => ApiError::unprocessable(
+            "INSTALLMENT_ALLOCATION_REQUIRED",
+            "payments for this receivable must be assigned to a specific installment",
+        ),
         sel_storage::postgres::PaymentWriteError::ContextInvalid => ApiError::unprocessable(
             "PAYMENT_CONTEXT_INVALID",
             "payment customer or currency does not match the receivable",
@@ -4251,6 +4269,18 @@ fn payment_allocation_error(error: sel_storage::postgres::PaymentAllocationWrite
             "RECEIVABLE_OVERALLOCATED",
             "payment would exceed the receivable balance",
         ),
+        sel_storage::postgres::PaymentAllocationWriteError::InstallmentOverallocated => {
+            ApiError::conflict(
+                "INSTALLMENT_OVERALLOCATED",
+                "payment would exceed the remaining balance of the selected installment",
+            )
+        }
+        sel_storage::postgres::PaymentAllocationWriteError::InstallmentRequired => {
+            ApiError::unprocessable(
+                "INSTALLMENT_ALLOCATION_REQUIRED",
+                "payments for this receivable must be assigned to a specific installment",
+            )
+        }
         sel_storage::postgres::PaymentAllocationWriteError::ContextInvalid => {
             ApiError::unprocessable(
                 "PAYMENT_CONTEXT_INVALID",
