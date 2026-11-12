@@ -14,14 +14,13 @@ use ed25519_dalek::{Signer, SigningKey};
 use rust_decimal::Decimal;
 use sel_contracts::{
     catalog_snapshot_sha256, invoice_qr_payload, offline_grant_canonical_bytes,
-    utility_snapshot_sha256,
-    CatalogSnapshot, CatalogSnapshotPayload, CorrectMeterReading, CreateCustomer, CreateMeter,
-    CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
-    CreditNoteRequest, Customer, DocumentData, InvoiceIdentitySnapshot, InvoiceLineResponse, Meter,
-    MeterReading, MeterReplacement, PaymentAllocationRequest, ProblemDetails, RecordPaymentRequest,
-    ReplaceMeter, ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse, SyncPullResponse,
-    SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
-    UtilityBillingResponse, VoidInvoiceRequest,
+    utility_snapshot_sha256, CatalogSnapshot, CatalogSnapshotPayload, CorrectMeterReading,
+    CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest,
+    CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData, InvoiceIdentitySnapshot,
+    InvoiceLineResponse, Meter, MeterReading, MeterReplacement, PaymentAllocationRequest,
+    ProblemDetails, RecordPaymentRequest, ReplaceMeter, ReversePaymentRequest, SolarQuoteResponse,
+    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
+    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
