@@ -729,12 +729,12 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
                     sel_contracts::InstallmentRequest {
                         sequence: 1,
                         due_date: "2026-12-01".parse().unwrap(),
-                        amount: "60.00".parse().unwrap(),
+                        amount: "70.00".parse().unwrap(),
                     },
                     sel_contracts::InstallmentRequest {
                         sequence: 2,
                         due_date: "2027-01-01".parse().unwrap(),
-                        amount: "60.00".parse().unwrap(),
+                        amount: "50.00".parse().unwrap(),
                     },
                 ],
                 currency: "USD".into(),
