@@ -1187,7 +1187,7 @@ async def capture_views() -> None:
             await page.get_by_role("heading", name="Confirmer le règlement").wait_for()
             await page.get_by_role("button", name="Confirmer et enregistrer", exact=True).click()
             await page.wait_for_function("window.__paymentPostCount === 2")
-            await page.get_by_role("button", name="Journal de caisse", exact=True).click()
+            await page.get_by_role("button", name="Journal de caisse", exact=True).last.click()
             await page.get_by_role("heading", name="Journal de caisse").wait_for()
             await page.get_by_role("button", name="Reçu PDF").first.wait_for()
             await page.get_by_role("button", name="Reçu PDF").first.click()

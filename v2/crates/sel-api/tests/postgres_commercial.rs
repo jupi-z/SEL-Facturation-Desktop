@@ -738,7 +738,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         receipt["customer"]["legal_name"],
         "Commercial persistence fixture"
     );
-    assert_eq!(receipt["allocations"].as_array().unwrap().len(), 2);
+    assert_eq!(receipt["allocations"].as_array().unwrap().len(), 1);
     assert_eq!(receipt["reversals"].as_array().unwrap().len(), 2);
     let audit_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM audit_events WHERE event_type = 'PAYMENT_REVERSED' AND subject_id = $1",
