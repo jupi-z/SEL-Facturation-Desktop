@@ -39,6 +39,16 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     .execute(&store.pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO tax_profile_versions
+         (id, service_code, jurisdiction, base, rate, source, effective_from, status)
+         VALUES ($1, 'SOLAR_KIT', 'FIXTURE', 'SUBTOTAL', 0.16,
+                 'SEL-approved standard VAT fixture', CURRENT_DATE, 'APPROVED')",
+    )
+    .bind(Uuid::new_v4())
+    .execute(&store.pool)
+    .await
+    .unwrap();
 
     let app = router(AppState::with_central_store(store.clone()));
     let customer = app
@@ -85,12 +95,16 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     assert_eq!(quote.status(), StatusCode::OK);
     let quote_body = json_body(quote).await;
     assert_eq!(quote_body["product_code"], product_code);
-    assert_eq!(quote_body["principal"], "1000.00");
+    assert_eq!(quote_body["subtotal"], "1000.00");
+    assert_eq!(quote_body["tax_rate"], "0.16");
+    assert_eq!(quote_body["tax_amount"], "160.00");
+    assert_eq!(quote_body["principal"], "1160.00");
+    assert_eq!(quote_body["total"], "1160.00");
     assert_eq!(quote_body["status"], "QUOTED_FROM_APPROVED_CATALOG");
     let sale_request = json!({
         "customer_id": customer["id"],
         "product_code": product_code,
-        "principal": "1000.00",
+        "principal": quote_body["principal"],
         "currency": "USD",
         "terms_revision": "solar-terms-v1"
     });
@@ -127,7 +141,10 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         .unwrap();
     assert_eq!(sale.status(), StatusCode::CREATED);
     let sale_body = json_body(sale).await;
-    assert_eq!(sale_body["principal"], "1000.00");
+    assert_eq!(sale_body["subtotal"], "1000.00");
+    assert_eq!(sale_body["tax_amount"], "160.00");
+    assert_eq!(sale_body["total"], "1160.00");
+    assert_eq!(sale_body["principal"], "1160.00");
     let sale_retry = app
         .clone()
         .oneshot(
@@ -149,8 +166,8 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         "sale_id": sale_body["sale_id"],
         "receivable_id": sale_body["receivable_id"],
         "schedule": [
-            {"sequence": 1, "due_date": "2026-12-01", "amount": "400.00"},
-            {"sequence": 2, "due_date": "2027-01-01", "amount": "600.00"}
+            {"sequence": 1, "due_date": "2026-12-01", "amount": "460.00"},
+            {"sequence": 2, "due_date": "2027-01-01", "amount": "700.00"}
         ],
         "currency": "USD",
         "approved_terms_revision": "solar-terms-v1"
@@ -171,7 +188,7 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         .unwrap();
     assert_eq!(contract.status(), StatusCode::OK);
     let contract_body = json_body(contract).await;
-    assert_eq!(contract_body["principal"], "1000.00");
+    assert_eq!(contract_body["principal"], "1160.00");
     assert_eq!(contract_body["schedule"].as_array().unwrap().len(), 2);
     let contract_retry = app
         .clone()
@@ -208,11 +225,90 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     assert_eq!(plan.status(), StatusCode::OK);
     let plan_body = json_body(plan).await;
     assert_eq!(plan_body["id"], contract_body["installment_plan_id"]);
-    assert_eq!(plan_body["principal"], "1000.00");
+    assert_eq!(plan_body["principal"], "1160.00");
     assert_eq!(plan_body["paid"], "0.00");
-    assert_eq!(plan_body["remaining"], "1000.00");
+    assert_eq!(plan_body["remaining"], "1160.00");
     assert_eq!(plan_body["schedule"].as_array().unwrap().len(), 2);
     assert_eq!(plan_body["schedule"][0]["status"], "OPEN");
+
+    let solar_partial_payment = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/payments")
+                .header("authorization", "Bearer test")
+                .header("Idempotency-Key", "pg-solar-partial-payment-1")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "customer_id": customer["id"],
+                        "received_amount": "300.00",
+                        "currency": "USD",
+                        "method": "CASH",
+                        "occurred_at": "2026-11-13T10:00:00Z",
+                        "allocations": [{
+                            "receivable_id": sale_body["receivable_id"],
+                            "schedule_id": plan_body["schedule"][0]["id"],
+                            "amount": "300.00"
+                        }]
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(solar_partial_payment.status(), StatusCode::CREATED);
+    let solar_partial_payment = json_body(solar_partial_payment).await;
+    let solar_receipt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/payments/{}/document-data",
+                    solar_partial_payment["payment_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(solar_receipt.status(), StatusCode::OK);
+    let solar_receipt = json_body(solar_receipt).await;
+    assert_eq!(solar_receipt["allocations"][0]["principal"], "1160.00");
+    assert_eq!(
+        solar_receipt["allocations"][0]["tax_snapshot"]["rate"],
+        "0.16"
+    );
+    assert_eq!(
+        solar_receipt["allocations"][0]["tax_snapshot"]["amount"],
+        "160.00"
+    );
+    assert_eq!(solar_receipt["allocations"][0]["paid_before"], "0.00");
+    assert_eq!(solar_receipt["allocations"][0]["amount"], "300.00");
+    assert_eq!(solar_receipt["allocations"][0]["balance_after"], "860.00");
+    assert_eq!(solar_receipt["payment"]["amount_received"], "300.00");
+    let plan_after_payment = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/installment-plans/{}",
+                    contract_body["installment_plan_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan_after_payment.status(), StatusCode::OK);
+    let plan_after_payment = json_body(plan_after_payment).await;
+    assert_eq!(plan_after_payment["principal"], "1160.00");
+    assert_eq!(plan_after_payment["paid"], "300.00");
+    assert_eq!(plan_after_payment["remaining"], "860.00");
 
     let sales = app
         .clone()
@@ -268,6 +364,16 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         customer["customer_code"]
     );
     assert_eq!(document_body["lines"].as_array().unwrap().len(), 1);
+    assert_eq!(document_body["lines"][0]["subtotal"], "1000.00");
+    assert_eq!(document_body["lines"][0]["tax_snapshot"]["rate"], "0.16");
+    assert_eq!(
+        document_body["lines"][0]["tax_snapshot"]["amount"],
+        "160.00"
+    );
+    assert_eq!(document_body["lines"][0]["total"], "1160.00");
+    assert_eq!(document_body["sale"]["subtotal"], "1000.00");
+    assert_eq!(document_body["sale"]["tax_amount"], "160.00");
+    assert_eq!(document_body["sale"]["principal"], "1160.00");
     assert_eq!(
         document_body["installment_plan"]["schedule"]
             .as_array()

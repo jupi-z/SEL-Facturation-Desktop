@@ -1002,6 +1002,10 @@ impl LocalStore {
             sale_id,
             receivable_id,
             customer_id: input.customer_id,
+            subtotal: product_price.round_dp(2),
+            tax_rate: Decimal::ZERO,
+            tax_amount: Decimal::ZERO,
+            total: product_price.round_dp(2),
             principal: product_price.round_dp(2),
             currency: input.currency.clone(),
             status: "LOCAL_PENDING".into(),
@@ -1085,6 +1089,10 @@ impl LocalStore {
         })?;
         Ok(Some(SolarQuoteResponse {
             product_code: input.product_code.trim().to_owned(),
+            subtotal: principal.round_dp(2),
+            tax_rate: Decimal::ZERO,
+            tax_amount: Decimal::ZERO,
+            total: principal.round_dp(2),
             principal: principal.round_dp(2),
             currency: input.currency.clone(),
             terms_revision: input.terms_revision.clone(),

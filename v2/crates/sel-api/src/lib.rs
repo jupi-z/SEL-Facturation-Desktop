@@ -3896,6 +3896,10 @@ async fn create_solar_sale(
         sale_id,
         receivable_id,
         customer_id: input.customer_id,
+        subtotal: input.principal,
+        tax_rate: Decimal::ZERO,
+        tax_amount: Decimal::ZERO,
+        total: input.principal,
         principal: input.principal,
         currency: input.currency.clone(),
         status: "CENTRAL_ACCEPTED".into(),
@@ -3967,7 +3971,7 @@ async fn create_solar_quote(
     store
         .create_solar_quote(&input)
         .await
-        .map_err(storage_error)?
+        .map_err(solar_quote_error)?
         .map(Json)
         .ok_or_else(|| {
             ApiError::not_found(
@@ -4654,6 +4658,12 @@ fn solar_sale_write_error(error: sel_storage::postgres::SolarSaleWriteError) -> 
             "SOLAR_PRODUCT_NOT_FOUND",
             "an active solar kit product is required",
         ),
+        sel_storage::postgres::SolarSaleWriteError::TaxProfileUnavailable => {
+            ApiError::unprocessable(
+                "SOLAR_TAX_PROFILE_UNAVAILABLE",
+                "exactly one approved solar VAT profile must apply before the sale can be issued",
+            )
+        }
         sel_storage::postgres::SolarSaleWriteError::PriceMismatch => ApiError::unprocessable(
             "SOLAR_PRICE_MISMATCH",
             "the sale principal must match the approved product price",
@@ -4662,6 +4672,20 @@ fn solar_sale_write_error(error: sel_storage::postgres::SolarSaleWriteError) -> 
         sel_storage::postgres::SolarSaleWriteError::StoredResponse(error) => {
             ApiError::internal(error)
         }
+    }
+}
+
+fn solar_quote_error(error: sel_storage::postgres::SolarQuoteError) -> ApiError {
+    match error {
+        sel_storage::postgres::SolarQuoteError::Database(error) => storage_error(error),
+        sel_storage::postgres::SolarQuoteError::TaxProfileUnavailable => ApiError::unprocessable(
+            "SOLAR_TAX_PROFILE_UNAVAILABLE",
+            "exactly one approved solar VAT profile must apply before a quote can be issued",
+        ),
+        sel_storage::postgres::SolarQuoteError::ProductAmbiguous => ApiError::unprocessable(
+            "SOLAR_PRODUCT_CONFIGURATION_AMBIGUOUS",
+            "SEL must resolve overlapping approved prices for this solar product",
+        ),
     }
 }
 

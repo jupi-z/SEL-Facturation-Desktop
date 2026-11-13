@@ -66,28 +66,30 @@ SALES = [{
     "receivable_id": "demo-receivable-solar-0001",
     "customer_id": "demo-customer-0001",
     "product_code": "KIT-DÉMO",
-    "principal": "120.00",
+    "subtotal": "120.00",
+    "tax_amount": "19.20",
+    "principal": "139.20",
     "currency": "USD",
     "installment_plan_id": None,
     "status": "CENTRAL_ACCEPTED",
 }]
 RECEIVABLES = [
     {"receivable_id": "demo-receivable-0001", "customer_id": "demo-customer-0001", "customer_code": "SEL-DÉMO-0001", "customer_name": "Client Alpha", "source_type": "INVOICE", "source_reference": "SEL-20261103-103000", "currency": "USD", "principal": "22.62", "paid": "3.00", "credited": "0.00", "balance": "19.62", "overdue_amount": "0.00", "status": "OPEN"},
-    {"receivable_id": "demo-receivable-solar-0001", "customer_id": "demo-customer-0001", "customer_code": "SEL-DÉMO-0001", "customer_name": "Client Alpha", "source_type": "SALE", "source_reference": "demo-sale-0001", "currency": "USD", "principal": "120.00", "paid": "0.00", "credited": "0.00", "balance": "120.00", "overdue_amount": "0.00", "status": "OPEN"},
+    {"receivable_id": "demo-receivable-solar-0001", "customer_id": "demo-customer-0001", "customer_code": "SEL-DÉMO-0001", "customer_name": "Client Alpha", "source_type": "SALE", "source_reference": "demo-sale-0001", "currency": "USD", "principal": "139.20", "paid": "0.00", "credited": "0.00", "balance": "139.20", "overdue_amount": "0.00", "status": "OPEN"},
     {"receivable_id": "demo-receivable-0002", "customer_id": "demo-customer-0002", "customer_code": "SEL-DÉMO-0002", "customer_name": "Client Beta", "source_type": "INVOICE", "source_reference": "SEL-20261103-104000", "currency": "USD", "principal": "8.00", "paid": "0.00", "credited": "0.00", "balance": "8.00", "overdue_amount": "0.00", "status": "OPEN"},
 ]
 SOLAR_PLAN = {
     "id": "demo-plan-0001",
     "receivable_id": "demo-receivable-solar-0001",
     "customer_id": "demo-customer-0001",
-    "principal": "120.00",
+    "principal": "139.20",
     "paid": "0.00",
-    "remaining": "120.00",
+    "remaining": "139.20",
     "overdue_amount": "0.00",
     "currency": "USD",
     "schedule": [
-        {"id": "demo-solar-schedule-0001", "sequence": 1, "due_date": "2026-12-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
-        {"id": "demo-solar-schedule-0002", "sequence": 2, "due_date": "2027-01-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
+        {"id": "demo-solar-schedule-0001", "sequence": 1, "due_date": "2026-12-01", "amount_due": "69.60", "paid": "0.00", "remaining": "69.60", "status": "UPCOMING"},
+        {"id": "demo-solar-schedule-0002", "sequence": 2, "due_date": "2027-01-01", "amount_due": "69.60", "paid": "0.00", "remaining": "69.60", "status": "UPCOMING"},
     ],
 }
 PRODUCTS = [{
@@ -261,9 +263,9 @@ def mock_invoke_script() -> str:
         else if (path.startsWith('/v1/payments')) body = fixtures.payments;
         else if (path.startsWith('/v1/solar/sales/') && path.endsWith('/document-data')) {{
           const longSchedule = window.__solarDocumentLongSchedule === true
-            ? Array.from({{length:36}},(_,index)=>({{sequence:index+1,due_date:`2027-${{String(Math.floor(index/12)+1).padStart(2,'0')}}-${{String((index%12)+1).padStart(2,'0')}}`,amount_due:'5.00',status:'UPCOMING'}}))
+            ? Array.from({{length:36}},(_,index)=>({{sequence:index+1,due_date:`2027-${{String(Math.floor(index/12)+1).padStart(2,'0')}}-${{String((index%12)+1).padStart(2,'0')}}`,amount_due:index===35?'3.75':'3.87',status:'UPCOMING'}}))
             : fixtures.solarPlan.schedule;
-          body = {{document_schema_version:1,document_type:'SOLAR_SALE_CONFIRMATION',document_reference:'SEL-SOLAR-DEMO-0001',qr_internal_reference:'SEL:SOLAR-SALE:demo-sale-0001',sale:{{sale_id:'demo-sale-0001',receivable_id:'demo-receivable-solar-0001',customer_id:'demo-customer-0001',principal:'120.00',currency:'USD',sold_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},lines:[{{product_reference:'KIT-DÉMO',quantity:'1',unit_price:'120.00',total:'120.00'}}],installment_plan:{{currency:'USD',schedule:longSchedule}},origin:'CENTRAL'}};
+          body = {{document_schema_version:1,document_type:'SOLAR_SALE_CONFIRMATION',document_reference:'SEL-SOLAR-DEMO-0001',qr_internal_reference:'SEL:SOLAR-SALE:demo-sale-0001',sale:{{sale_id:'demo-sale-0001',receivable_id:'demo-receivable-solar-0001',customer_id:'demo-customer-0001',subtotal:'120.00',tax_amount:'19.20',principal:'139.20',currency:'USD',sold_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},lines:[{{product_reference:'KIT-DÉMO',quantity:'1',unit_price:'120.00',subtotal:'120.00',tax_snapshot:{{rate:'0.16',amount:'19.20'}},tax_amount:'19.20',total:'139.20'}}],installment_plan:{{currency:'USD',schedule:longSchedule}},origin:'CENTRAL'}};
         }}
         else if (path.startsWith('/v1/solar/sales')) body = fixtures.sales;
         else if (path.startsWith('/v1/catalog/products')) body = fixtures.products;
@@ -849,7 +851,7 @@ async def capture_views() -> None:
                         notice = await page.locator(".notice").inner_text() if await page.locator(".notice").count() else "aucune erreur affichée"
                         raise AssertionError(f"Solar PDF preview did not open: {notice}") from error
                     await assert_pdf_rendered(page, "Solar sale")
-                    await assert_generated_pdf_contract(page, "Solar sale", 1, ("Facture de vente", "KIT-DÉMO", "120,00 USD"))
+                    await assert_generated_pdf_contract(page, "Solar sale", 1, ("Facture de vente", "KIT-DÉMO", "Sous-total HT", "TVA (16", "139,20 USD"))
                     await assert_print_layout(page, "Solar sale", 1)
                     await page.screenshot(path=str(OUTPUT / f"solar-pdf-preview-{SHOT_SUFFIX}.png"))
                     await page.get_by_role("button", name="Fermer l’aperçu").click()
@@ -858,9 +860,10 @@ async def capture_views() -> None:
                     await page.get_by_role("dialog", name="Facture de vente solaire").wait_for()
                     await assert_pdf_rendered(page, "Solar sale with 36 installments", expected_pages=None)
                     long_solar_pages = await page.locator(".document-pdf-page").count()
-                    long_solar_pdf = await assert_generated_pdf_contract(page, "Solar sale with 36 installments", long_solar_pages, ("Facture de vente", "KIT-DÉMO", "ÉCHÉANCES", "mars 2027"))
-                    if len(long_solar_pdf.pages) != 2 or "SYNTHÈSE FINANCIÈRE" not in (long_solar_pdf.pages[-1].extract_text() or "") or "Référence interne SEL" not in (long_solar_pdf.pages[-1].extract_text() or ""):
-                        raise AssertionError("Long solar schedule must keep its financial summary and internal QR reference together on the final page")
+                    long_solar_pdf = await assert_generated_pdf_contract(page, "Solar sale with 36 installments", long_solar_pages, ("Facture de vente", "KIT-DÉMO", "Sous-total HT", "TVA (16", "139,20 USD", "ÉCHÉANCES", "mars 2027"))
+                    last_solar_page = long_solar_pdf.pages[-1].extract_text() or ""
+                    if len(long_solar_pdf.pages) not in (2, 3) or "SYNTHÈSE FINANCIÈRE" not in last_solar_page or "Référence interne SEL" not in last_solar_page:
+                        raise AssertionError(f"Long solar document must place its financial summary and internal QR reference together on the final page (pages={len(long_solar_pdf.pages)}, final_page={last_solar_page!r})")
                     await assert_print_layout(page, "Solar sale with 36 installments", long_solar_pages)
                     await page.screenshot(path=str(OUTPUT / f"solar-pdf-multipage-{SHOT_SUFFIX}.png"))
                     await page.locator(".document-pdf-stage").evaluate("element => element.scrollTop = element.scrollHeight")

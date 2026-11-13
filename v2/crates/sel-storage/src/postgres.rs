@@ -227,10 +227,22 @@ pub enum SolarSaleWriteError {
     CustomerNotFound,
     #[error("active solar product was not found")]
     ProductNotFound,
+    #[error("exactly one approved solar VAT profile must apply on the sale date")]
+    TaxProfileUnavailable,
     #[error("solar sale principal does not match the approved product price")]
     PriceMismatch,
     #[error("stored idempotency response is invalid: {0}")]
     StoredResponse(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum SolarQuoteError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("exactly one approved solar VAT profile must apply for the quote date")]
+    TaxProfileUnavailable,
+    #[error("multiple approved solar products apply for the same SKU and date")]
+    ProductAmbiguous,
 }
 
 #[derive(Clone, Debug)]
@@ -2669,23 +2681,55 @@ impl CentralStore {
     pub async fn create_solar_quote(
         &self,
         input: &CreateSolarQuoteRequest,
-    ) -> Result<Option<SolarQuoteResponse>, sqlx::Error> {
-        let row = sqlx::query(
+    ) -> Result<Option<SolarQuoteResponse>, SolarQuoteError> {
+        let rows = sqlx::query(
             "SELECT price_reference FROM products
              WHERE sku = $1 AND product_type = 'SOLAR_KIT'
                AND currency = $2 AND active = TRUE AND status = 'APPROVED'
                AND effective_from <= CURRENT_DATE
-               AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)",
+               AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+             ORDER BY effective_from DESC, id LIMIT 2",
         )
         .bind(input.product_code.trim())
         .bind(&input.currency)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        let Some(row) = row else { return Ok(None) };
-        let principal: Decimal = row.try_get("price_reference")?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        if rows.len() != 1 {
+            return Err(SolarQuoteError::ProductAmbiguous);
+        }
+        let subtotal: Decimal = row.try_get("price_reference")?;
+        let taxes = sqlx::query(
+            "SELECT id, rate FROM tax_profile_versions
+             WHERE service_code = 'SOLAR_KIT' AND status = 'APPROVED'
+               AND effective_from <= CURRENT_DATE
+               AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+             ORDER BY effective_from DESC, jurisdiction, base, id LIMIT 2",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if taxes.len() != 1 {
+            return Err(SolarQuoteError::TaxProfileUnavailable);
+        }
+        let tax_rate: Decimal = taxes[0].try_get("rate")?;
+        if !matches!(
+            taxes[0].try_get::<String, _>("base")?.as_str(),
+            "SUBTOTAL" | "SERVICE"
+        ) {
+            return Err(SolarQuoteError::TaxProfileUnavailable);
+        }
+        let subtotal = subtotal.round_dp(2);
+        let tax_amount = (subtotal * tax_rate).round_dp(2);
+        let principal = subtotal + tax_amount;
         Ok(Some(SolarQuoteResponse {
             product_code: input.product_code.trim().to_owned(),
-            principal: principal.round_dp(2),
+            subtotal,
+            tax_rate,
+            tax_amount,
+            total: principal,
+            principal,
             currency: input.currency.clone(),
             terms_revision: input.terms_revision.clone(),
             status: "QUOTED_FROM_APPROVED_CATALOG".into(),
@@ -2995,7 +3039,7 @@ impl CentralStore {
         let source = source.trim();
         let change_reason = change_reason.trim();
         let max_rate = Decimal::new(99_999_999_999_999, 0);
-        if !matches!(service_code.as_str(), "ELECTRICITY" | "WATER")
+        if !matches!(service_code.as_str(), "ELECTRICITY" | "WATER" | "SOLAR_KIT")
             || jurisdiction.is_empty()
             || jurisdiction.len() > 64
             || base.is_empty()
@@ -3144,6 +3188,11 @@ impl CentralStore {
         }
         let operation = "catalog.reference.approve";
         let mut tx = self.pool.begin().await?;
+        if expected_type == "TAX_PROFILE" {
+            sqlx::query("SELECT pg_advisory_xact_lock(1249681746, 1)")
+                .execute(&mut *tx)
+                .await?;
+        }
         let lock_key = format!(
             "idempotency:{}:{}:{operation}:{idempotency_key}",
             self.organization_id, actor_id
@@ -3377,6 +3426,11 @@ impl CentralStore {
         }
         let operation = "catalog.reference.revoke";
         let mut tx = self.pool.begin().await?;
+        if expected_type == "TAX_PROFILE" {
+            sqlx::query("SELECT pg_advisory_xact_lock(1249681746, 1)")
+                .execute(&mut *tx)
+                .await?;
+        }
         let lock_key = format!(
             "idempotency:{}:{}:{operation}:{idempotency_key}",
             self.organization_id, actor_id
@@ -4594,7 +4648,10 @@ impl CentralStore {
                              ELSE r.source_id::text END AS source_reference,
                         COALESCE((SELECT string_agg(DISTINCT p.sku, ', ' ORDER BY p.sku)
                                   FROM sale_lines sl JOIN products p ON p.id = sl.product_id
-                                  WHERE sl.sale_id = r.source_id AND r.source_type = 'SALE'), '') AS source_description
+                                  WHERE sl.sale_id = r.source_id AND r.source_type = 'SALE'), '') AS source_description,
+                        COALESCE((SELECT sl.tax_snapshot FROM sale_lines sl
+                                   WHERE sl.sale_id = r.source_id AND r.source_type = 'SALE'
+                                   ORDER BY sl.id LIMIT 1), '{}'::jsonb) AS source_tax_snapshot
                  FROM receivables r
                  LEFT JOIN invoices i ON i.id = r.source_id AND r.source_type = 'INVOICE'
                  LEFT JOIN sales s ON s.id = r.source_id AND r.source_type = 'SALE'
@@ -4700,6 +4757,7 @@ impl CentralStore {
                 "source_type": row.try_get::<String, _>("source_type")?,
                 "source_reference": row.try_get::<String, _>("source_reference")?,
                 "source_description": row.try_get::<String, _>("source_description")?,
+                "tax_snapshot": row.try_get::<serde_json::Value, _>("source_tax_snapshot")?,
                 "currency": currency,
                 "principal": format!("{:.2}", principal.round_dp(2)),
                 "paid_before": format!("{:.2}", paid.round_dp(2)),
@@ -5759,11 +5817,19 @@ impl CentralStore {
             let quantity: Decimal = line.try_get("quantity")?;
             let unit_price: Decimal = line.try_get("unit_price")?;
             let total: Decimal = line.try_get("total")?;
+            let tax_snapshot: serde_json::Value = line.try_get("tax_snapshot")?;
+            let tax_amount = tax_snapshot["amount"]
+                .as_str()
+                .and_then(|value| value.parse::<Decimal>().ok())
+                .unwrap_or(Decimal::ZERO);
+            let subtotal = (unit_price * quantity).round_dp(2);
             Ok(json!({
                 "product_reference": line.try_get::<String, _>("product_reference")?,
                 "quantity": quantity.normalize().to_string(),
                 "unit_price": format!("{:.2}", unit_price.round_dp(2)),
-                "tax_snapshot": line.try_get::<serde_json::Value, _>("tax_snapshot")?,
+                "subtotal": format!("{:.2}", subtotal),
+                "tax_snapshot": tax_snapshot,
+                "tax_amount": format!("{:.2}", tax_amount),
                 "total": format!("{:.2}", total.round_dp(2))
             }))
         })
@@ -5830,6 +5896,8 @@ impl CentralStore {
                 "receivable_id": receivable_id,
                 "customer_id": sale.try_get::<Uuid, _>("customer_id")?,
                 "contract_id": sale.try_get::<Option<Uuid>, _>("contract_id")?,
+                "subtotal": lines.iter().filter_map(|line| line["subtotal"].as_str()?.parse::<Decimal>().ok()).sum::<Decimal>().round_dp(2).to_string(),
+                "tax_amount": lines.iter().filter_map(|line| line["tax_amount"].as_str()?.parse::<Decimal>().ok()).sum::<Decimal>().round_dp(2).to_string(),
                 "principal": principal.map(|value| format!("{:.2}", value.round_dp(2))),
                 "currency": sale.try_get::<String, _>("currency")?,
                 "sold_at": sold_at.to_rfc3339(),
@@ -5885,23 +5953,59 @@ impl CentralStore {
         if !customer_exists {
             return Err(SolarSaleWriteError::CustomerNotFound);
         }
-        let product_price = sqlx::query(
-            "SELECT price_reference FROM products
+        // Serialize solar-tax selection with administrative approval/revocation.
+        // This closes the phantom-row window that row locks alone cannot guard.
+        sqlx::query("SELECT pg_advisory_xact_lock(1249681746, 1)")
+            .execute(&mut *tx)
+            .await?;
+        let product_rows = sqlx::query(
+            "SELECT id, price_reference FROM products
              WHERE sku = $1 AND product_type = 'SOLAR_KIT' AND currency = $2
                AND active = TRUE AND status = 'APPROVED'
                AND effective_from <= CURRENT_DATE
-               AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)",
+               AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+             ORDER BY effective_from DESC, id LIMIT 2 FOR SHARE",
         )
         .bind(input.product_code.trim())
         .bind(&input.currency)
-        .fetch_optional(&mut *tx)
-        .await?
-        .map(|row| row.try_get::<Decimal, _>("price_reference"))
-        .transpose()?;
-        let Some(product_price) = product_price else {
+        .fetch_all(&mut *tx)
+        .await?;
+        let Some(product_row) = product_rows.first() else {
             return Err(SolarSaleWriteError::ProductNotFound);
         };
-        if input.principal.round_dp(2) != product_price.round_dp(2) {
+        if product_rows.len() != 1 {
+            return Err(SolarSaleWriteError::Database(sqlx::Error::Protocol(
+                "multiple approved solar products apply to this SKU and date".into(),
+            )));
+        }
+        let product_id: Uuid = product_row.try_get("id")?;
+        let subtotal = product_row
+            .try_get::<Decimal, _>("price_reference")?
+            .round_dp(2);
+        let tax_rows = sqlx::query(
+            "SELECT id, jurisdiction, base, rate, source, approval_ref
+             FROM tax_profile_versions
+             WHERE service_code = 'SOLAR_KIT' AND status = 'APPROVED'
+               AND effective_from <= CURRENT_DATE
+               AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+             ORDER BY effective_from DESC, jurisdiction, base, id LIMIT 2
+             FOR SHARE",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        if tax_rows.len() != 1 {
+            return Err(SolarSaleWriteError::TaxProfileUnavailable);
+        }
+        let tax_row = &tax_rows[0];
+        let tax_base: String = tax_row.try_get("base")?;
+        if !matches!(tax_base.as_str(), "SUBTOTAL" | "SERVICE") {
+            return Err(SolarSaleWriteError::TaxProfileUnavailable);
+        }
+        let tax_profile_id: Uuid = tax_row.try_get("id")?;
+        let tax_rate: Decimal = tax_row.try_get("rate")?;
+        let tax_amount = (subtotal * tax_rate).round_dp(2);
+        let total = subtotal + tax_amount;
+        if input.principal.round_dp(2) != total {
             return Err(SolarSaleWriteError::PriceMismatch);
         }
         let sold_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
@@ -5912,7 +6016,11 @@ impl CentralStore {
             sale_id,
             receivable_id,
             customer_id: input.customer_id,
-            principal: product_price.round_dp(2),
+            subtotal,
+            tax_rate,
+            tax_amount,
+            total,
+            principal: total,
             currency: input.currency.clone(),
             status: "CENTRAL_ACCEPTED".into(),
             product_code: Some(input.product_code.trim().to_owned()),
@@ -5930,26 +6038,27 @@ impl CentralStore {
         .bind(&document_reference)
         .execute(&mut *tx)
         .await?;
-        let product_id: Uuid = sqlx::query(
-            "SELECT id FROM products
-             WHERE sku = $1 AND product_type = 'SOLAR_KIT' AND currency = $2
-               AND active = TRUE AND status = 'APPROVED'
-               AND effective_from <= CURRENT_DATE
-               AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)",
-        )
-        .bind(input.product_code.trim())
-        .bind(&input.currency)
-        .fetch_one(&mut *tx)
-        .await?
-        .try_get("id")?;
+        let tax_snapshot = serde_json::to_value(sel_contracts::SolarTaxSnapshot {
+            schema_version: 1,
+            service_code: "SOLAR_KIT".into(),
+            tax_profile_id,
+            jurisdiction: tax_row.try_get("jurisdiction")?,
+            base: tax_base,
+            rate: tax_rate,
+            amount: tax_amount,
+            source: tax_row.try_get("source")?,
+            approval_ref: tax_row.try_get("approval_ref")?,
+        })?;
         sqlx::query(
             "INSERT INTO sale_lines
              (id, sale_id, product_id, quantity, unit_price, tax_snapshot, total)
-             VALUES ($1, $2, $3, 1, $4, '{}'::jsonb, $4)",
+             VALUES ($1, $2, $3, 1, $4, $5, $6)",
         )
         .bind(Uuid::new_v4())
         .bind(sale_id)
         .bind(product_id)
+        .bind(response.subtotal)
+        .bind(tax_snapshot)
         .bind(response.principal)
         .execute(&mut *tx)
         .await?;
