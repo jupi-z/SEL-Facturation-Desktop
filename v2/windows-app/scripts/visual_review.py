@@ -530,7 +530,13 @@ async def capture_views() -> None:
                     contract_review = page.get_by_role("alertdialog", name="Vérifier le contrat solaire")
                     await contract_review.wait_for()
                     contract_review_text = await contract_review.inner_text()
-                    if "demo-sale-0001" not in contract_review_text or "demo-receivable-solar-0001" not in contract_review_text or "Aucun intérêt ni frais supplémentaire" not in contract_review_text:
+                    if (
+                        "demo-sale-0001" not in contract_review_text
+                        or "créance existante" not in contract_review_text
+                        or "Échéancier" not in contract_review_text
+                        or "DEMO-SOLAR-TERMS" not in contract_review_text
+                        or "Aucun intérêt ni frais supplémentaire" not in contract_review_text
+                    ):
                         raise AssertionError("Solar contract review must show its existing debt, schedule policy and terms")
                     await page.screenshot(path=str(OUTPUT / f"solar-contract-confirmation-{SHOT_SUFFIX}.png"))
                     if await page.evaluate("window.__centralWriteLog.filter(entry => entry.path === '/v1/solar/contracts' && entry.method === 'POST').length") != 0:
