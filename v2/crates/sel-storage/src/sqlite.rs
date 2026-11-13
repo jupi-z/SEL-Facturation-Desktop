@@ -1938,6 +1938,7 @@ impl LocalStore {
         let allocation_rows = sqlx::query(
             "SELECT pa.receivable_id, pa.schedule_id, pa.allocated_amount, pa.currency,
                     CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number, r.source_id)
+                         WHEN r.source_type = 'SALE' THEN COALESCE((SELECT s.document_reference FROM sales s WHERE s.id = r.source_id), r.source_id)
                          ELSE r.source_id END AS source_reference
              FROM payment_allocations pa
              JOIN receivables r ON r.id = pa.receivable_id

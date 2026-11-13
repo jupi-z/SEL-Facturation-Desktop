@@ -1545,10 +1545,12 @@ components:
       type: object
       required: [document_schema_version, document_type, document_reference, qr_internal_reference, payment, customer, allocations, reversals, origin]
       properties:
-        document_schema_version: { type: integer, const: 1 }
+        document_schema_version: { type: integer, enum: [1, 2], description: Version 2 receipts include an immutable financial allocation and balance snapshot captured in the payment transaction. Version 1 is retained for historical payments. }
         document_type: { type: string, const: PAYMENT_RECEIPT }
         document_reference: { type: string, description: Stable internal reference derived from the payment UUID; not a tax identifier. }
         qr_internal_reference: { type: string, description: Internal SEL reference only; not an official tax QR. }
+        organization_name: { type: string }
+        issued_at: { type: string, format: date-time, description: Time the immutable version 2 receipt snapshot was recorded. }
         payment:
           type: object
           required: [payment_id, customer_id, amount_received, currency, method, paid_at, status]
@@ -1556,12 +1558,15 @@ components:
             payment_id: { type: string, format: uuid }
             customer_id: { type: string, format: uuid }
             amount_received: { type: string }
+            amount_allocated: { type: string, description: Present in receipt schema version 2; total assigned to receivables when the payment was recorded. }
+            amount_unallocated: { type: string, description: Present in receipt schema version 2; funds not assigned to receivables when the payment was recorded. }
             currency: { type: string, pattern: '^[A-Z]{3}$' }
             method: { type: string }
             paid_at: { type: string, format: date-time }
+            issued_at: { type: string, format: date-time }
             status: { type: string }
         customer:
-          description: Customer identity and contact fields reflect the customer profile at the time this data is read; payment and allocation facts remain stored financial records.
+          description: Version 2 freezes customer identity and contact fields in the receipt snapshot; version 1 reflects the profile at read time.
           type: object
           required: [customer_id, customer_code, legal_name, address, phone]
           properties:
@@ -1571,14 +1576,34 @@ components:
             address: { type: [string, 'null'] }
             phone: { type: [string, 'null'] }
         allocations:
+          description: Version 2 entries preserve source references and the receivable balance at the time of payment; version 1 entries contain only the original allocation facts.
           type: array
           items:
             type: object
             required: [receivable_id, schedule_id, amount, currency]
             properties:
               receivable_id: { type: string, format: uuid }
+              source_type: { type: string, enum: [INVOICE, SALE] }
+              source_reference: { type: string, description: SEL document reference of the source invoice or sale; UUID fallback is retained for legacy records without a reference. }
+              source_description: { type: string, description: Product reference for solar sales, empty for other sources. }
+              principal: { type: string, description: Version 2 receivable principal at payment time. }
+              paid_before: { type: string, description: Amount already paid before this payment. }
+              credited_before: { type: string, description: Credits already applied before this payment. }
+              balance_before: { type: string, description: Remaining balance before this payment. }
               schedule_id: { type: [string, 'null'], format: uuid }
               amount: { type: string }
+              balance_after: { type: string, description: Remaining balance immediately after this payment allocation. }
+              has_installment_plan: { type: boolean }
+              schedule_allocations:
+                type: array
+                description: Installments paid by this allocation, when the receivable has an installment plan.
+                items:
+                  type: object
+                  required: [sequence, due_date, amount]
+                  properties:
+                    sequence: { type: integer }
+                    due_date: { type: string, format: date }
+                    amount: { type: string }
               currency: { type: string, pattern: '^[A-Z]{3}$' }
         reversals:
           type: array

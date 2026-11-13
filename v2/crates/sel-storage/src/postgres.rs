@@ -3875,7 +3875,7 @@ impl CentralStore {
         payment_id: Uuid,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let payment = sqlx::query(
-            "SELECT p.id, p.document_reference, p.issued_at, p.customer_id, p.amount_received, p.currency, p.method,
+            "SELECT p.id, p.document_reference, p.issued_at, p.receipt_snapshot, p.customer_id, p.amount_received, p.currency, p.method,
                     p.paid_at, p.status, c.customer_code, c.legal_name, o.legal_name AS organization_name,
                     c.contact_fields::text AS contact_fields_json
              FROM payments p
@@ -3898,10 +3898,15 @@ impl CentralStore {
         let allocation_rows = sqlx::query(
             "SELECT pa.receivable_id, pa.schedule_id, pa.allocated_amount, pa.currency,
                     CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number::text, r.source_id::text)
-                         ELSE r.source_id::text END AS source_reference
+                         WHEN r.source_type = 'SALE' THEN COALESCE(s.document_reference, r.source_id::text)
+                         ELSE r.source_id::text END AS source_reference,
+                    COALESCE((SELECT string_agg(DISTINCT p.sku, ', ' ORDER BY p.sku)
+                              FROM sale_lines sl JOIN products p ON p.id = sl.product_id
+                              WHERE sl.sale_id = r.source_id AND r.source_type = 'SALE'), '') AS source_description
              FROM payment_allocations pa
              JOIN receivables r ON r.id = pa.receivable_id
              LEFT JOIN invoices i ON i.id = r.source_id AND r.source_type = 'INVOICE'
+             LEFT JOIN sales s ON s.id = r.source_id AND r.source_type = 'SALE'
              WHERE pa.payment_id = $1 ORDER BY pa.id",
         )
         .bind(payment_id)
@@ -3916,7 +3921,8 @@ impl CentralStore {
                     "schedule_id": row.try_get::<Option<Uuid>, _>("schedule_id")?,
                     "amount": format!("{:.2}", amount.round_dp(2)),
                     "currency": row.try_get::<String, _>("currency")?,
-                    "source_reference": row.try_get::<String, _>("source_reference")?
+                    "source_reference": row.try_get::<String, _>("source_reference")?,
+                    "source_description": row.try_get::<String, _>("source_description")?
                 }))
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
@@ -3945,33 +3951,43 @@ impl CentralStore {
         let paid_at: DateTime<Utc> = payment.try_get("paid_at")?;
         let issued_at: Option<DateTime<Utc>> = payment.try_get("issued_at")?;
         let document_reference: Option<String> = payment.try_get("document_reference")?;
-        Ok(Some(json!({
+        let organization_name: String = payment.try_get("organization_name")?;
+        let currency: String = payment.try_get("currency")?;
+        let method: String = payment.try_get("method")?;
+        let status: String = payment.try_get("status")?;
+        let customer_code: String = payment.try_get("customer_code")?;
+        let customer_name: String = payment.try_get("legal_name")?;
+        let snapshot: Option<serde_json::Value> = payment.try_get("receipt_snapshot")?;
+        let mut document = snapshot.unwrap_or_else(|| json!({
             "document_schema_version": 1,
             "document_type": "PAYMENT_RECEIPT",
             "document_reference": document_reference.unwrap_or_else(|| format!("SEL-PAY-{}", payment_id.simple().to_string().to_uppercase())),
             "qr_internal_reference": format!("SEL:PAYMENT:{payment_id}"),
-            "organization_name": payment.try_get::<String, _>("organization_name")?,
+            "organization_name": organization_name,
             "payment": {
                 "payment_id": payment_id,
                 "customer_id": customer_id,
                 "amount_received": format!("{:.2}", amount.round_dp(2)),
-                "currency": payment.try_get::<String, _>("currency")?,
-                "method": payment.try_get::<String, _>("method")?,
+                "currency": currency,
+                "method": method,
                 "paid_at": paid_at.to_rfc3339(),
                 "issued_at": issued_at.map(|value| value.to_rfc3339()),
-                "status": payment.try_get::<String, _>("status")?
+                "status": status
             },
             "customer": {
                 "customer_id": customer_id,
-                "customer_code": payment.try_get::<String, _>("customer_code")?,
-                "legal_name": payment.try_get::<String, _>("legal_name")?,
+                "customer_code": customer_code,
+                "legal_name": customer_name,
                 "address": contact_fields.get("address").cloned().unwrap_or(serde_json::Value::Null),
                 "phone": contact_fields.get("phone").cloned().unwrap_or(serde_json::Value::Null)
             },
-            "allocations": allocations,
-            "reversals": reversals,
-            "origin": "CENTRAL"
-        })))
+            "allocations": allocations
+        }));
+        if let Some(object) = document.as_object_mut() {
+            object.insert("reversals".to_owned(), serde_json::Value::Array(reversals));
+            object.insert("origin".to_owned(), json!("CENTRAL"));
+        }
+        Ok(Some(document))
     }
 
     pub async fn get_receivable_summary(
@@ -3979,7 +3995,10 @@ impl CentralStore {
         id: Uuid,
     ) -> Result<Option<serde_json::Value>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT r.id, r.customer_id, r.currency, r.principal_total, r.status,
+            "SELECT r.id, r.customer_id, r.currency, r.principal_total, r.status, r.source_type,
+                    CASE WHEN r.source_type = 'INVOICE' THEN COALESCE((SELECT i.invoice_number::text FROM invoices i WHERE i.id = r.source_id), r.source_id::text)
+                         WHEN r.source_type = 'SALE' THEN COALESCE((SELECT s.document_reference FROM sales s WHERE s.id = r.source_id), r.source_id::text)
+                         ELSE r.source_id::text END AS source_reference,
                     COALESCE((
                         SELECT SUM(
                             pa.allocated_amount * GREATEST(
@@ -4053,6 +4072,8 @@ impl CentralStore {
         Ok(Some(json!({
             "id": receivable_id,
             "customer_id": row.try_get::<Uuid, _>("customer_id")?,
+            "source_type": row.try_get::<String, _>("source_type")?,
+            "source_reference": row.try_get::<String, _>("source_reference")?,
             "currency": row.try_get::<String, _>("currency")?,
             "principal": format!("{principal:.2}"),
             "paid": format!("{paid:.2}"),
@@ -4074,6 +4095,7 @@ impl CentralStore {
             "SELECT r.id, r.customer_id, c.customer_code, c.legal_name,
                     r.source_type, r.currency, r.principal_total,
                     CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number, r.source_id::text)
+                         WHEN r.source_type = 'SALE' THEN COALESCE((SELECT s.document_reference FROM sales s WHERE s.id = r.source_id), r.source_id::text)
                          ELSE r.source_id::text END AS source_reference,
                     COALESCE((
                         SELECT SUM(pa.allocated_amount * GREATEST(
@@ -4563,13 +4585,22 @@ impl CentralStore {
         if allocated_total > input.received_amount {
             return Err(PaymentWriteError::AllocationExceedsReceipt);
         }
+        let mut receipt_allocations = Vec::with_capacity(grouped_allocations.len());
         for (receivable_id, allocated_amount) in &grouped_allocations {
             let row = sqlx::query(
-                "SELECT r.principal_total, r.currency, r.customer_id
+                "SELECT r.principal_total, r.currency, r.customer_id, r.source_type,
+                        CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number::text, r.source_id::text)
+                             WHEN r.source_type = 'SALE' THEN COALESCE(s.document_reference, r.source_id::text)
+                             ELSE r.source_id::text END AS source_reference,
+                        COALESCE((SELECT string_agg(DISTINCT p.sku, ', ' ORDER BY p.sku)
+                                  FROM sale_lines sl JOIN products p ON p.id = sl.product_id
+                                  WHERE sl.sale_id = r.source_id AND r.source_type = 'SALE'), '') AS source_description
                  FROM receivables r
+                 LEFT JOIN invoices i ON i.id = r.source_id AND r.source_type = 'INVOICE'
+                 LEFT JOIN sales s ON s.id = r.source_id AND r.source_type = 'SALE'
                  WHERE r.id = $1 AND r.customer_id = $2
                    AND r.customer_id IN (SELECT id FROM customers WHERE organization_id = $3)
-                 FOR UPDATE",
+                 FOR UPDATE OF r",
             )
             .bind(receivable_id)
             .bind(input.customer_id)
@@ -4609,9 +4640,8 @@ impl CentralStore {
             if paid + credited + allocated_amount > principal {
                 return Err(PaymentWriteError::Overallocated);
             }
-            if receivable_has_installment_plan(tx, *receivable_id).await?
-                && persisted_allocations.contains_key(&(*receivable_id, None))
-            {
+            let has_installment_plan = receivable_has_installment_plan(tx, *receivable_id).await?;
+            if has_installment_plan && persisted_allocations.contains_key(&(*receivable_id, None)) {
                 return Err(PaymentWriteError::InstallmentRequired);
             }
             for ((_allocation_receivable_id, schedule_id), _) in persisted_allocations
@@ -4637,15 +4667,100 @@ impl CentralStore {
                     }
                 }
             }
+            let balance_before = (principal - paid - credited).round_dp(2);
+            let balance_after = (balance_before - allocated_amount).round_dp(2);
+            let mut schedule_allocations = Vec::new();
+            for ((allocation_receivable_id, schedule_id), schedule_amount) in &persisted_allocations
+            {
+                if allocation_receivable_id != receivable_id {
+                    continue;
+                }
+                let Some(schedule_id) = schedule_id else {
+                    continue;
+                };
+                let schedule = sqlx::query(
+                    "SELECT s.sequence, s.due_date
+                     FROM installment_schedule s
+                     JOIN installment_plans ip ON ip.id = s.plan_id
+                     WHERE s.id = $1 AND ip.receivable_id = $2",
+                )
+                .bind(schedule_id)
+                .bind(receivable_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(PaymentWriteError::ContextInvalid)?;
+                schedule_allocations.push(json!({
+                    "sequence": schedule.try_get::<i32, _>("sequence")?,
+                    "due_date": schedule.try_get::<NaiveDate, _>("due_date")?.to_string(),
+                    "amount": format!("{:.2}", schedule_amount.round_dp(2))
+                }));
+            }
+            receipt_allocations.push(json!({
+                "receivable_id": receivable_id,
+                "source_type": row.try_get::<String, _>("source_type")?,
+                "source_reference": row.try_get::<String, _>("source_reference")?,
+                "source_description": row.try_get::<String, _>("source_description")?,
+                "currency": currency,
+                "principal": format!("{:.2}", principal.round_dp(2)),
+                "paid_before": format!("{:.2}", paid.round_dp(2)),
+                "credited_before": format!("{:.2}", credited.round_dp(2)),
+                "balance_before": format!("{balance_before:.2}"),
+                "amount": format!("{:.2}", allocated_amount.round_dp(2)),
+                "balance_after": format!("{balance_after:.2}"),
+                "has_installment_plan": has_installment_plan,
+                "schedule_allocations": schedule_allocations
+            }));
         }
         let issued_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
             .fetch_one(&mut *tx)
             .await?;
         let document_reference = issued_document_reference(issued_at, payment_id);
+        let customer = sqlx::query(
+            "SELECT c.customer_code, c.legal_name, c.contact_fields::text AS contact_fields_json,
+                    o.legal_name AS organization_name
+             FROM customers c JOIN organizations o ON o.id = c.organization_id
+             WHERE c.id = $1 AND c.organization_id = $2",
+        )
+        .bind(input.customer_id)
+        .bind(self.organization_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let contact_fields: serde_json::Value =
+            serde_json::from_str(&customer.try_get::<String, _>("contact_fields_json")?).map_err(
+                |error| sqlx::Error::Protocol(format!("invalid customer contact fields: {error}")),
+            )?;
+        let receipt_snapshot = json!({
+            "document_schema_version": 2,
+            "document_type": "PAYMENT_RECEIPT",
+            "document_reference": document_reference,
+            "qr_internal_reference": format!("SEL:PAYMENT:{payment_id}"),
+            "organization_name": customer.try_get::<String, _>("organization_name")?,
+            "issued_at": issued_at.to_rfc3339(),
+            "payment": {
+                "payment_id": payment_id,
+                "customer_id": input.customer_id,
+                "amount_received": format!("{:.2}", input.received_amount.round_dp(2)),
+                "amount_allocated": format!("{:.2}", allocated_total.round_dp(2)),
+                "amount_unallocated": format!("{:.2}", (input.received_amount - allocated_total).round_dp(2)),
+                "currency": input.currency,
+                "method": input.method,
+                "paid_at": input.occurred_at.to_rfc3339(),
+                "issued_at": issued_at.to_rfc3339(),
+                "status": "CENTRAL_ACCEPTED"
+            },
+            "customer": {
+                "customer_id": input.customer_id,
+                "customer_code": customer.try_get::<String, _>("customer_code")?,
+                "legal_name": customer.try_get::<String, _>("legal_name")?,
+                "address": contact_fields.get("address").cloned().unwrap_or(serde_json::Value::Null),
+                "phone": contact_fields.get("phone").cloned().unwrap_or(serde_json::Value::Null)
+            },
+            "allocations": receipt_allocations
+        });
         sqlx::query(
             "INSERT INTO payments
-             (id, customer_id, amount_received, currency, method, paid_at, issued_at, status, document_reference)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'CENTRAL_ACCEPTED', $8)",
+             (id, customer_id, amount_received, currency, method, paid_at, issued_at, status, document_reference, receipt_snapshot)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'CENTRAL_ACCEPTED', $8, $9)",
         )
         .bind(payment_id)
         .bind(input.customer_id)
@@ -4655,6 +4770,7 @@ impl CentralStore {
         .bind(input.occurred_at)
         .bind(issued_at)
         .bind(&document_reference)
+        .bind(&receipt_snapshot)
         .execute(&mut *tx)
         .await?;
         for ((receivable_id, schedule_id), allocated_amount) in persisted_allocations {
@@ -5375,6 +5491,7 @@ impl CentralStore {
         let rows = sqlx::query(
             "SELECT r.id, r.source_type, r.source_id, r.currency, r.principal_total,
                     CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number, r.source_id::text)
+                         WHEN r.source_type = 'SALE' THEN COALESCE((SELECT s.document_reference FROM sales s WHERE s.id = r.source_id), r.source_id::text)
                          ELSE r.source_id::text END AS source_reference,
                     COALESCE((
                         SELECT SUM(

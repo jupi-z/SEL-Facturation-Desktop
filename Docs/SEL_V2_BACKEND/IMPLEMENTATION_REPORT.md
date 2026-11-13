@@ -9,6 +9,33 @@ PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 Commit de référence à la rédaction du plan : `b051eb0c48aa7c1b10d8874c3715770195145077`. Vérifier HEAD distant avant toute nouvelle décision.
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, LiveUpdate, client Windows V2 et exploitation. Aucune fusion ou aucun déploiement n’est effectué par cette mise à jour documentaire.
 
+## Incrément reçu de paiement et parcours de dette — 13 novembre 2026
+
+Branche technique : `monarque/fix-receipt-debt-flow-20261113`, créée depuis `main@ce92aa2680eb3c5a6da943970baed46eb891195e`.
+
+État : **implémenté localement; validation PostgreSQL d’intégration encore requise avant fusion ou déploiement. Aucun changement de données ni déploiement en production n’a été effectué.**
+
+- Les nouveaux paiements enregistrent, dans la transaction PostgreSQL et le même commit que le paiement, un snapshot JSON versionné du destinataire, des références de facture/vente, de la créance, du montant déjà réglé, du montant affecté, du solde après encaissement et de la part non affectée. Une réimpression conserve donc le contexte financier à la date de l’encaissement.
+- Les références de créances solaires sont résolues en références documentaires SEL dans les reçus, le registre des créances et les relevés client. Les anciens paiements sans snapshot restent lisibles; leur solde historique manquant n’est pas reconstitué artificiellement.
+- Le reçu PDF présente l’obligation d’origine, son principal, le déjà réglé, les avoirs antérieurs, le versement affecté, le solde après paiement et les fonds non affectés; il affiche aussi l’échéance visée quand le règlement est affecté à un échéancier. Son tableau est propre aux reçus et distingue l’état « Paiement enregistré » de la facture. Les éventuels échéanciers restent ceux du contrat.
+- Le parcours Windows distingue maintenant une vente comptant, un versement partiel sans échéancier et une vente à paiement échelonné. Après confirmation du paiement, une page de succès fournit directement la référence SEL et l’action d’ouverture du reçu PDF. Les vues des créances et ventes privilégient les références lisibles aux UUID techniques.
+- Migration additive PostgreSQL `0023_payment_receipt_snapshots.sql`; aucune facture historique, dette, paiement, ni référence antérieure n’est modifié.
+
+Vérifications exécutées pour cet incrément :
+
+- `npm ci` : **PASS**, 0 vulnérabilité signalée par npm audit;
+- `npm run build` dans `v2/windows-app` : **PASS**, avertissement non bloquant de Vite sur la taille des bundles;
+- `cargo fmt --all` : **PASS**;
+- `cargo fmt --all -- --check` : **PASS**;
+- `cargo clippy --workspace --all-targets -- -D warnings` : **PASS**;
+- `cargo test --workspace` : **PASS** pour toutes les suites exécutables; les suites PostgreSQL exigeant `TEST_DATABASE_URL` sont ignorées, dont `utility_issue_is_atomic_idempotent_and_survives_restart`;
+- `cargo test -p sel-storage` : **PASS** pour les tests non-PostgreSQL; les tests PostgreSQL marqués `ignored` n’ont pas été exécutés;
+- `cargo test -p sel-api` : **PASS** pour les tests exécutables; les intégrations PostgreSQL sont ignorées sans le service requis;
+- compilation `cargo test -p sel-api --test postgres_commercial --no-run` : **PASS**;
+- test HTTP PostgreSQL `utility_issue_is_atomic_idempotent_and_survives_restart` enrichi pour vérifier la référence, les soldes snapshotés et leur stabilité après affectation ultérieure; un cas solaire contrôle également la référence SEL au lieu de l’UUID. **Exécution réelle non encore effectuée** : `TEST_DATABASE_URL` absent et daemon Docker local indisponible.
+
+Limites : le nouveau test d’intégration doit être exécuté contre le service PostgreSQL dédié de la CI avant toute livraison. Le build Vite ne remplace pas la recette PDF visuelle sur Windows. Ces éléments demeurent **NOT_TESTED/BLOCKED_EXTERNAL**; ne pas annoncer cet incrément comme validé ou déployé en production.
+
 ## Plan de finalisation et règles de travail
 
 - [Plan complet backend + frontend](PLAN_FINALISATION_BACKEND_FRONTEND.md) : phases, critères de sortie, difficulté et conditions de fusion autorisée.

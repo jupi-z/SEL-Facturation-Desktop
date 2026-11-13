@@ -198,7 +198,7 @@ export default function App() {
   const [view, setView] = useState<View>("dashboard");
   const [solarWorkspace, setSolarWorkspace] = useState<"sales" | "contracts">("sales");
   const [solarProductCode, setSolarProductCode] = useState("");
-  const [solarPaymentMode, setSolarPaymentMode] = useState<"CASH" | "INSTALLMENT">("CASH");
+  const [solarPaymentMode, setSolarPaymentMode] = useState<"CASH" | "PARTIAL" | "INSTALLMENT">("CASH");
   const [solarContractSalePrefill, setSolarContractSalePrefill] = useState("");
   const [paymentWorkspace, setPaymentWorkspace] = useState<"journal" | "create">("journal");
   const [invoiceWorkspace, setInvoiceWorkspace] = useState<"history" | "create">("history");
@@ -466,15 +466,15 @@ export default function App() {
     && applicableTariffs.revisions.length === 1
     ? applicableTariffs.revisions[0]
     : "";
-  async function submit(form: HTMLFormElement, path: string, payload: Row, success: string): Promise<boolean> {
+  async function submit(form: HTMLFormElement, path: string, payload: Row, success: string): Promise<Row | null> {
     try {
-      await centralRequest(path, "POST", payload);
+      const result = await centralRequest<Row>(path, "POST", payload);
       setDraftDirty(false);
       setNotice({ message: success });
       form.reset();
       await refresh();
-      return true;
-    } catch (error) { setNotice({ message: humanError(error), error: true }); return false; }
+      return result;
+    } catch (error) { setNotice({ message: humanError(error), error: true }); return null; }
   }
 
   async function createCustomer(event: FormEvent<HTMLFormElement>) {
@@ -742,11 +742,14 @@ export default function App() {
       setSolarSaleDraft(null);
       setSolarProductCode("");
       setSolarSaleOpen(false);
+      setSolarPaymentMode("CASH");
       await refresh();
-      if (paymentMode === "CASH" && customerId && receivableId) {
+      if ((paymentMode === "CASH" || paymentMode === "PARTIAL") && customerId && receivableId) {
         if (await navigateTo("payments", customerId)) {
-          setPaymentPrefill({ receivableId, scheduleId: "", amount: text(sale.principal ?? solarSaleDraft.principal, "") });
-          setNotice({ message: "Vente enregistrée. Sa créance est présélectionnée : saisissez le montant reçu et confirmez le règlement comptant." });
+          setPaymentPrefill({ receivableId, scheduleId: "", amount: paymentMode === "CASH" ? text(sale.principal ?? solarSaleDraft.principal, "") : "" });
+          setNotice({ message: paymentMode === "CASH"
+            ? "Vente enregistrée. Le montant total est prérempli : vérifiez l’encaissement avant confirmation."
+            : "Vente enregistrée. Saisissez le versement reçu; le solde restera ouvert sans échéancier. Vous pourrez créer un contrat plus tard si SEL l’approuve." });
         }
       } else if (paymentMode === "INSTALLMENT" && saleId) {
         setSolarContractSalePrefill(saleId);
@@ -1055,7 +1058,7 @@ export default function App() {
           </div>
         </>}
         {paymentWorkspace === "create" && <>
-          <PaymentForm customers={customers} sales={sales} payments={payments} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} initialAmount={paymentPrefill?.amount ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onReturnToJournal={returnToPaymentJournal} onSubmit={submit} />
+          <PaymentForm customers={customers} sales={sales} payments={payments} initialCustomerId={selectedCustomer} initialReceivableId={paymentPrefill?.receivableId ?? ""} initialScheduleId={paymentPrefill?.scheduleId ?? ""} initialAmount={paymentPrefill?.amount ?? ""} onPrefillConsumed={() => setPaymentPrefill(null)} onReturnToJournal={returnToPaymentJournal} onOpenReceipt={(paymentId) => void openDocument("payment", paymentId)} onSubmit={submit} />
         </>}
       </>}
 
@@ -1068,20 +1071,20 @@ export default function App() {
           <Metric label="Connexion" value={serverStatus?.status === "CENTRAL_CONNECTED" ? "Active" : "—"} note="Opérations centralisées" />
         </div>
         {solarWorkspace === "sales" ? <>
-        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); setSolarProductCode(""); setDraftDirty(false); }}>Fermer</Button>}><form data-preserve-draft className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
+        {solarSaleOpen && <Panel title="Nouvelle vente solaire" action={<Button onClick={() => { setSolarSaleOpen(false); setSolarQuote(null); setSolarSaleDraft(null); setSolarProductCode(""); setSolarPaymentMode("CASH"); setDraftDirty(false); }}>Fermer</Button>}><form data-preserve-draft className="form-grid" onSubmit={quoteSolar} onChange={() => { setSolarQuote(null); setSolarSaleDraft(null); }}>
           <label className="span-two">Abonné<select name="customer_id" required defaultValue=""><option value="" disabled>Sélectionner…</option>{customers.map((row) => <option key={text(row.customer_id ?? row.id)} value={text(row.customer_id ?? row.id)}>{text(row.customer_code)} — {text(row.legal_name)}</option>)}</select></label>
           <label>Kit solaire<select name="product_code" value={solarProductCode} onChange={(event) => setSolarProductCode(event.target.value)} required><option value="" disabled>Sélectionner un kit…</option>{solarProducts.map((product) => <option key={text(product.id)} value={text(product.sku)}>{text(product.sku)} — {text(product.label)} · {formatMoney(product.price_reference, product.currency)}</option>)}</select></label>
           <label>Devise du kit<input value={text(solarProducts.find((product) => text(product.sku) === solarProductCode)?.currency, PRIMARY_CURRENCY)} readOnly aria-label="Devise définie par le produit du catalogue" /></label>
-          <label>Mode de règlement<select value={solarPaymentMode} onChange={(event) => setSolarPaymentMode(event.target.value as "CASH" | "INSTALLMENT")}><option value="CASH">Comptant</option><option value="INSTALLMENT">Paiement échelonné</option></select></label>
+          <label>Modalité<select value={solarPaymentMode} onChange={(event) => setSolarPaymentMode(event.target.value as "CASH" | "PARTIAL" | "INSTALLMENT")}><option value="CASH">Comptant · montant total</option><option value="PARTIAL">Versement partiel · sans échéancier</option><option value="INSTALLMENT">Paiement échelonné · avec contrat</option></select></label>
           <label className="span-two">Référence des conditions de vente approuvées<input name="terms_revision" placeholder="Référence communiquée par SEL" required /></label>
-          <p className="help span-two">Le prix et la devise viennent du kit approuvé et sont revérifiés par Rust. Au comptant, l’étape suivante ouvre l’encaissement avec le montant prérempli. En paiement échelonné, l’étape suivante ouvre le contrat ; aucun échéancier n’est créé pour une vente comptant.</p>
+          <p className="help span-two">Le prix et la devise viennent du kit approuvé et sont revérifiés par Rust. Le comptant préremplit le montant total. Un versement partiel laisse le solde ouvert et ne crée pas d’échéancier. Le paiement échelonné ouvre la saisie du contrat et de ses échéances approuvées.</p>
           <div className="form-actions span-two"><Button primary type="submit">Vérifier le devis</Button></div>
         </form></Panel>}
-        {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Mode</span><strong>{solarPaymentMode === "CASH" ? "Comptant" : "Paiement échelonné"}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
+        {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Modalité</span><strong>{solarPaymentMode === "CASH" ? "Comptant · montant total" : solarPaymentMode === "PARTIAL" ? "Versement partiel · sans échéancier" : "Paiement échelonné · contrat"}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
         <Panel title="Catalogue approuvé">
           <Table headers={["SKU", "Produit", "Type", "Prix de référence", "État commercial"]} empty="Aucun kit approuvé et applicable n’est disponible dans le catalogue SEL." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), domainLabel(text(product.product_type, "SOLAR_KIT")), formatMoney(product.price_reference, product.currency), <span className="status-badge success">Approuvé · vendable</span>])} />
         </Panel>
-        <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_id)}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
+        <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_number, text(row.document_reference, text(row.sale_id)))}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
         </> :
         <SolarContractManager sales={sales} customers={customers} initialSaleId={solarContractSalePrefill} onInitialSaleConsumed={() => setSolarContractSalePrefill("")} onCreated={refresh} confirmAction={requestConfirmation} onRecordPayment={async (customerId, receivableId, scheduleId) => {
           if (await navigateTo("payments", customerId)) setPaymentPrefill({ receivableId, scheduleId });
@@ -1120,7 +1123,7 @@ export default function App() {
                 if (!selected || Number(selected.balance) <= 0) return;
                 if (await navigateTo("payments", text(selected.customer_id))) setPaymentPrefill({ receivableId: selectedReceivableId, scheduleId: "" });
               }}>› Enregistrer un règlement</Button>
-              {receivableDetail && receivableDetailId === selectedReceivableId && <dl className="receivable-detail"><dt>Référence</dt><dd>{text(receivableDetail.id, selectedReceivableId)}</dd><dt>Principal</dt><dd>{formatMoney(receivableDetail.principal, receivableDetail.currency)}</dd><dt>Réglé</dt><dd>{formatMoney(receivableDetail.paid, receivableDetail.currency)}</dd><dt>Crédité</dt><dd>{formatMoney(receivableDetail.credited, receivableDetail.currency)}</dd><dt>Solde</dt><dd>{formatMoney(receivableDetail.balance, receivableDetail.currency)}</dd><dt>En retard</dt><dd>{formatMoney(receivableDetail.overdue_amount, receivableDetail.currency)}</dd><dt>État</dt><dd><Status value={receivableDetail.status} /></dd></dl>}
+              {receivableDetail && receivableDetailId === selectedReceivableId && <dl className="receivable-detail"><dt>Document d’origine</dt><dd>{domainLabel(receivableDetail.source_type)} · {text(receivableDetail.source_reference, "Référence interne")}</dd><dt>Principal</dt><dd>{formatMoney(receivableDetail.principal, receivableDetail.currency)}</dd><dt>Réglé</dt><dd>{formatMoney(receivableDetail.paid, receivableDetail.currency)}</dd><dt>Crédité</dt><dd>{formatMoney(receivableDetail.credited, receivableDetail.currency)}</dd><dt>Solde actuel</dt><dd>{formatMoney(receivableDetail.balance, receivableDetail.currency)}</dd><dt>En retard</dt><dd>{formatMoney(receivableDetail.overdue_amount, receivableDetail.currency)}</dd><dt>État</dt><dd><Status value={receivableDetail.status} /></dd></dl>}
               <p className="receivable-prototype-note">Les données financières sont lues sur le serveur SEL. Aucune opération n’est créée depuis cet écran.</p>
             </div></Panel>
           </div>
@@ -1277,7 +1280,7 @@ function Preview({ data, onConfirm, title = "Prévisualisation calculée par Rus
   </Panel>;
 }
 
-function PaymentForm({ customers, sales, payments, initialCustomerId, initialReceivableId, initialScheduleId, initialAmount, onPrefillConsumed, onReturnToJournal, onSubmit }: { customers: Row[]; sales: Row[]; payments: Row[]; initialCustomerId: string; initialReceivableId: string; initialScheduleId: string; initialAmount: string; onPrefillConsumed: () => void; onReturnToJournal: () => Promise<void>; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<boolean> }) {
+function PaymentForm({ customers, sales, payments, initialCustomerId, initialReceivableId, initialScheduleId, initialAmount, onPrefillConsumed, onReturnToJournal, onOpenReceipt, onSubmit }: { customers: Row[]; sales: Row[]; payments: Row[]; initialCustomerId: string; initialReceivableId: string; initialScheduleId: string; initialAmount: string; onPrefillConsumed: () => void; onReturnToJournal: () => Promise<void>; onOpenReceipt: (paymentId: string) => void; onSubmit: (form: HTMLFormElement, path: string, payload: Row, success: string) => Promise<Row | null> }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [customerId, setCustomerId] = useState(initialCustomerId);
   const [allocationRows, setAllocationRows] = useState([{ key: "allocation-0", receivableId: initialReceivableId, amount: "", scheduleId: initialScheduleId }]);
@@ -1291,6 +1294,7 @@ function PaymentForm({ customers, sales, payments, initialCustomerId, initialRec
   const [paymentReview, setPaymentReview] = useState<Row | null>(null);
   const [allocationStep, setAllocationStep] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [paymentCompleted, setPaymentCompleted] = useState<Row | null>(null);
   const savingRef = useRef(false);
 
   useEffect(() => { setCustomerId(initialCustomerId); }, [initialCustomerId]);
@@ -1378,6 +1382,13 @@ function PaymentForm({ customers, sales, payments, initialCustomerId, initialRec
     try {
       const saved = await onSubmit(form, "/v1/payments", paymentReview, "Règlement enregistré par le serveur SEL.");
       if (saved) {
+        setPaymentCompleted({
+          ...saved,
+          customer_id: paymentReview.customer_id,
+          amount: paymentReview.received_amount,
+          currency: paymentReview.currency,
+          method: paymentReview.method,
+        });
         setPaymentReview(null);
         setAllocationStep(false);
         setCustomerId("");
@@ -1391,6 +1402,22 @@ function PaymentForm({ customers, sales, payments, initialCustomerId, initialRec
       setSaving(false);
     }
   }
+
+  if (paymentCompleted) return <>
+    <PageHeading eyebrow="SEL / PAIEMENTS / CONFIRMATION" title="Règlement enregistré" description="Le serveur SEL a confirmé l’encaissement. Le reçu est prêt à être consulté ou imprimé." action={<Button onClick={() => void onReturnToJournal()}>Journal de caisse</Button>} />
+    <Panel title="Confirmation de l’encaissement">
+      <div className="metrics compact-metrics">
+        <Metric label="Référence du reçu" value={text(paymentCompleted.payment_number, text(paymentCompleted.payment_id))} note="Référence SEL enregistrée" />
+        <Metric label="Montant reçu" value={formatMoney(paymentCompleted.amount, paymentCompleted.currency)} note={domainLabel(paymentCompleted.method)} />
+        <Metric label="État" value="Enregistré" note="Confirmé par le serveur SEL" />
+      </div>
+      <p className="help">Le reçu indique les affectations et le solde figés au moment de cet encaissement. La situation actuelle peut changer après d’autres opérations.</p>
+      <div className="form-actions">
+        <Button primary onClick={() => onOpenReceipt(text(paymentCompleted.payment_id))}>Ouvrir le reçu PDF</Button>
+        <Button onClick={() => setPaymentCompleted(null)}>Nouveau règlement</Button>
+      </div>
+    </Panel>
+  </>;
 
   return <><PageHeading eyebrow={paymentStep === "entry" ? "SEL / PAIEMENTS / ENCAISSEMENTS / NOUVEAU RÈGLEMENT" : paymentStep === "allocation" ? "SEL / PAIEMENTS / ENCAISSEMENTS / AFFECTATION" : "SEL / PAIEMENTS / ENCAISSEMENTS / CONFIRMATION"} title={paymentStep === "entry" ? "Enregistrer un paiement" : paymentStep === "allocation" ? "Affecter un paiement aux créances" : "Confirmer l’encaissement"} description={paymentStep === "entry" ? "Distinguer l’identité du payeur, le montant et le mode d’encaissement." : paymentStep === "allocation" ? "Répartir le versement entre les obligations du même abonné." : "Dernière vérification avant l’écriture financière."} action={<Button primary={paymentStep === "allocation"} disabled={paymentStep === "allocation" && (paymentBlocked || Boolean(paymentReview))} onClick={() => paymentStep === "allocation" ? formRef.current?.requestSubmit() : paymentReview ? setPaymentReview(null) : void onReturnToJournal()}>{paymentStep === "confirm" ? "Modifier la saisie" : paymentStep === "allocation" ? "Vérifier l’affectation" : "Retour au journal"}</Button>} />
   <div className="metrics payment-entry-metrics">
@@ -1834,7 +1861,7 @@ function SolarContractManager({ sales, customers, initialSaleId, onInitialSaleCo
       const scheduleSummary = schedule.map((entry, index) => `Échéance ${index + 1} : ${entry.due_date}, ${entry.amount} ${sale.currency}`).join(" ; ");
       const accepted = await confirmAction({
         title: "Vérifier le contrat solaire",
-        description: `Vente ${text(sale.sale_id)} · créance existante ${text(sale.receivable_id)} · principal ${formatMoney(sale.principal, sale.currency)}. Échéancier : ${scheduleSummary}. Conditions approuvées : ${approvedTermsRevision}. Aucun intérêt ni frais supplémentaire.`,
+        description: `Vente ${text(sale.sale_number, text(sale.document_reference, text(sale.sale_id)))} · créance existante · principal ${formatMoney(sale.principal, sale.currency)}. Échéancier : ${scheduleSummary}. Conditions approuvées : ${approvedTermsRevision}. Aucun intérêt ni frais supplémentaire.`,
         confirmLabel: "Créer le contrat et l’échéancier",
       });
       if (!accepted) return;
@@ -1860,7 +1887,7 @@ function SolarContractManager({ sales, customers, initialSaleId, onInitialSaleCo
   return <>
     <Panel title="Contrats et échéanciers solaires">
       {availableSales.length ? <form data-preserve-draft className="form-grid" onSubmit={(event) => void saveContract(event)}>
-        <label className="span-two">Vente à financer<select value={saleId} onChange={(event) => setSaleId(event.target.value)} required disabled={saving}><option value="">Sélectionner une vente…</option>{availableSales.map((sale) => <option key={text(sale.sale_id)} value={text(sale.sale_id)}>{customerLabel(sale.customer_id, customers)} · {text(sale.sale_id)} · {formatMoney(sale.principal, sale.currency)}</option>)}</select></label>
+        <label className="span-two">Vente à financer<select value={saleId} onChange={(event) => setSaleId(event.target.value)} required disabled={saving}><option value="">Sélectionner une vente…</option>{availableSales.map((sale) => <option key={text(sale.sale_id)} value={text(sale.sale_id)}>{customerLabel(sale.customer_id, customers)} · {text(sale.sale_number, text(sale.document_reference, text(sale.sale_id)))} · {formatMoney(sale.principal, sale.currency)}</option>)}</select></label>
         {schedule.map((entry, index) => <div className="schedule-entry span-two" key={index}>
           <label>Échéance {index + 1} · Date<input type="date" required value={entry.due_date} disabled={saving} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, due_date: event.target.value } : item))} /></label>
           <label>Montant dû<input type="number" min="0.01" step="0.01" required value={entry.amount} disabled={saving} onChange={(event) => setSchedule((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value } : item))} /></label>
@@ -1872,7 +1899,7 @@ function SolarContractManager({ sales, customers, initialSaleId, onInitialSaleCo
         <div className="form-actions span-two"><Button primary type="submit" disabled={saving || !saleId}>{saving ? "Vérification…" : "Vérifier le contrat"}</Button></div>
       </form> : <div className="empty-state">Aucune vente sans échéancier n’est disponible pour créer un contrat.</div>}
       {message && <p role="status" className="reading-message">{message}</p>}
-      {sales.some((sale) => sale.installment_plan_id) && <div className="table-scroll"><table><thead><tr><th>Abonné</th><th>Vente</th><th>Montant</th><th>Situation</th><th>Échéancier</th></tr></thead><tbody>{sales.filter((sale) => sale.installment_plan_id).map((sale) => <tr key={text(sale.sale_id)}><td>{customerLabel(sale.customer_id, customers)}</td><td><strong>{text(sale.sale_id)}</strong></td><td>{formatMoney(sale.principal, sale.currency)}</td><td><Status value={sale.status} /></td><td><button className="text-button" onClick={() => void viewPlan(text(sale.installment_plan_id))}>Consulter</button></td></tr>)}</tbody></table></div>}
+      {sales.some((sale) => sale.installment_plan_id) && <div className="table-scroll"><table><thead><tr><th>Abonné</th><th>Vente</th><th>Montant</th><th>Situation</th><th>Échéancier</th></tr></thead><tbody>{sales.filter((sale) => sale.installment_plan_id).map((sale) => <tr key={text(sale.sale_id)}><td>{customerLabel(sale.customer_id, customers)}</td><td><strong>{text(sale.sale_number, text(sale.document_reference, text(sale.sale_id)))}</strong></td><td>{formatMoney(sale.principal, sale.currency)}</td><td><Status value={sale.status} /></td><td><button className="text-button" onClick={() => void viewPlan(text(sale.installment_plan_id))}>Consulter</button></td></tr>)}</tbody></table></div>}
     </Panel>
     {plan && <Panel title="Échéancier consulté" action={nextOpenSchedule ? <Button primary onClick={() => onRecordPayment(text(plan.customer_id), text(plan.receivable_id), text(nextOpenSchedule.id))}>Enregistrer un versement</Button> : undefined}><div className="metrics compact-metrics"><Metric label="Principal" value={formatMoney(plan.principal, plan.currency)} note="Créance du contrat" /><Metric label="Payé" value={formatMoney(plan.paid, plan.currency)} note="Règlements affectés" /><Metric label="Restant" value={formatMoney(plan.remaining, plan.currency)} note="Solde de la créance" /><Metric label="En retard" value={formatMoney(plan.overdue_amount, plan.currency)} note="Échéances échues" /></div><Table headers={["N°", "Échéance", "Montant dû", "Payé", "Restant", "État"]} empty="Aucune échéance." data={planRows.map((item) => [text(item.sequence), text(item.due_date), formatMoney(item.amount_due, plan.currency), formatMoney(item.paid, plan.currency), formatMoney(item.remaining, plan.currency), <Status value={item.status} />])} /></Panel>}
   </>;

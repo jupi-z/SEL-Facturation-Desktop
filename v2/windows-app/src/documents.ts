@@ -69,6 +69,7 @@ function statusLabel(status: unknown, invoice = false): string {
   if (invoice && value === "CENTRAL_ACCEPTED") return "Facture émise";
   const labels: Record<string, string> = {
     CENTRAL_ACCEPTED: "Confirmé par le serveur",
+    PAYMENT_RECORDED: "Paiement enregistré",
     ISSUED: "Émis",
     UPCOMING: "À venir",
     OVERDUE: "En retard",
@@ -149,6 +150,71 @@ function detailsTable(headers: string[], rows: Content[][]): Content {
       paddingBottom: (row: number) => row === 0 ? 9 : 15,
     },
   } as Content;
+}
+
+function receiptAllocationsTable(allocations: Data[], currency: unknown): Content {
+  const body: Content[][] = [
+    ["OBLIGATION / DOCUMENT", "TOTAL", "DÉJÀ RÉGLÉ", "CE VERSEMENT", "RESTE DÛ"].map((text, index) => ({
+      text, style: "eyebrow", alignment: index === 0 ? "left" : "right", margin: [0, 2, 0, 2],
+    } as Content)),
+    ...allocations.map((allocation) => {
+      const kind = String(allocation.source_type ?? "").toUpperCase();
+      const kindLabel = kind === "SALE" ? "Vente solaire" : kind === "INVOICE" ? "Facture de services" : "Créance";
+      const description = value(allocation, "source_description", "");
+      const reference = value(allocation, "source_reference", "Référence interne");
+      const amount = money(allocation.amount, allocation.currency ?? currency);
+      const principal = allocation.principal === undefined || allocation.principal === null ? "—" : money(allocation.principal, allocation.currency ?? currency);
+      const paidBefore = allocation.paid_before === undefined || allocation.paid_before === null ? "—" : money(allocation.paid_before, allocation.currency ?? currency);
+      const creditedBefore = allocation.credited_before === undefined || allocation.credited_before === null ? "" : String(allocation.credited_before);
+      const schedules = list(allocation.schedule_allocations);
+      const balance = allocation.balance_after === undefined || allocation.balance_after === null
+        ? "À consulter au compte client"
+        : money(allocation.balance_after, allocation.currency ?? currency);
+      return [
+        { stack: [
+          { text: `${kindLabel}${description ? ` · ${description}` : ""}`, style: "body", bold: true },
+          { text: reference, style: "muted", margin: [0, 2, 0, 0] },
+          ...(creditedBefore && !["0", "0.0", "0.00"].includes(creditedBefore) ? [{ text: `Avoirs déjà appliqués : ${money(creditedBefore, allocation.currency ?? currency)}`, style: "muted", margin: [0, 3, 0, 0] } as Content] : []),
+          ...schedules.map((schedule) => ({ text: `Échéance ${value(schedule, "sequence")} · ${dateLabel(schedule.due_date)} · ${money(schedule.amount, allocation.currency ?? currency)}`, style: "muted", margin: [0, 3, 0, 0] } as Content)),
+        ] },
+        { text: principal, style: "body", alignment: "right" },
+        { text: paidBefore, style: "body", alignment: "right" },
+        { text: amount, style: "body", alignment: "right", bold: true },
+        { text: balance, style: "body", alignment: "right" },
+      ] as Content[];
+    }),
+  ];
+  return {
+    table: { headerRows: 1, widths: ["*", 64, 72, 79, 92], body },
+    layout: {
+      fillColor: (row: number) => row === 0 ? "#ecf2f9" : undefined,
+      hLineWidth: (index: number) => index === 0 || index === 1 ? 0 : 0.55,
+      hLineColor: () => "#d9e3f0",
+      vLineWidth: () => 0,
+      paddingLeft: (index: number) => index === 0 ? 9 : 5,
+      paddingRight: () => 5,
+      paddingTop: (row: number) => row === 0 ? 9 : 12,
+      paddingBottom: (row: number) => row === 0 ? 9 : 12,
+    },
+  } as Content;
+}
+
+function receiptSummary(received: string, allocated?: string, unallocated?: string): Content[] {
+  return [
+    separator(15, 14),
+    { text: "RÉCAPITULATIF DU RÈGLEMENT", style: "muted", alignment: "right", bold: true, margin: [0, 0, 0, 8] } as Content,
+    ...(allocated !== undefined ? [{ columns: [
+      { text: "Affecté aux créances", style: "body" }, { text: allocated, style: "body", alignment: "right", bold: true },
+    ], margin: [245, 0, 0, 6] } as Content] : []),
+    ...(unallocated !== undefined ? [{ columns: [
+      { text: "Reste non affecté", style: "body" }, { text: unallocated, style: "body", alignment: "right", bold: true },
+    ], margin: [245, 0, 0, 8] } as Content] : []),
+    { table: { widths: ["*"], body: [[{ stack: [
+      { text: "MONTANT REÇU", color: "#a5c4cb", bold: true, fontSize: 7, margin: [0, 0, 0, 8] },
+      { text: received, style: "total", alignment: "right" },
+    ], fillColor: "#012a5e", margin: [11, 10, 11, 10] }]] },
+    layout: { hLineWidth: () => 0, vLineWidth: () => 0 }, margin: [240, 7, 0, 0] } as Content,
+  ];
 }
 
 function recipientAndDocument(customer: Data, documentRows: string[]): Content {
@@ -270,30 +336,31 @@ function paymentDefinition(data: Data): TDocumentDefinitions {
   const allocations = list(data.allocations); const reversals = list(data.reversals);
   const reference = value(data, "document_reference");
   const amount = money(payment.amount_received, payment.currency);
-  const invoiceRefs = [...new Set(allocations.map((allocation) => value(allocation, "source_reference", value(allocation, "receivable_id"))))];
+  const methodLabels: Record<string, string> = { CASH: "Espèces", BANK: "Banque", MOBILE_MONEY: "Mobile Money", OTHER: "Autre" };
+  const method = String(payment.method ?? "");
+  const recorded = String(payment.status ?? "") === "CENTRAL_ACCEPTED";
+  const amountAllocated = payment.amount_allocated === undefined ? undefined : money(payment.amount_allocated, payment.currency);
+  const amountUnallocated = payment.amount_unallocated === undefined ? undefined : money(payment.amount_unallocated, payment.currency);
   const documentRows = [
     `Émission : ${dateLabel(payment.issued_at ?? payment.paid_at)}`,
-    ...(invoiceRefs.length ? [`Facture / créance liée : ${invoiceRefs.join(", ")}`] : []),
-    `Mode : ${value(payment, "method")}`,
+    `Date du règlement : ${dateLabel(payment.paid_at)}`,
+    `Mode : ${methodLabels[method] ?? value(payment, "method")}`,
   ];
-  const rows: Content[][] = [[
-    { text: "Paiement reçu", style: "body" }, { text: "1", style: "body", alignment: "center" },
-    { text: amount, style: "body", alignment: "center" }, { text: amount, style: "body", alignment: "center" },
-    { text: "—", style: "body", alignment: "center" }, { text: amount, style: "body", alignment: "center", bold: true },
-  ]];
   return {
-    pageSize: "A4", pageMargins: [45, 26, 45, 36], defaultStyle: { font: "Roboto", fontSize: 9, color: "#152c4b" }, styles: baseStyles(), footer,
+    pageSize: "A4", pageMargins: [45, 26, 45, 36], defaultStyle: { font: "Roboto", fontSize: 9, color: "#152c4b" }, styles: baseStyles(),
     background: () => ({ canvas: [{ type: "rect", x: 0, y: 0, w: 595, h: 6, color: "#012a5e" }] }),
     content: [
-      ...documentHeader(value(data, "organization_name", "Société d’Énergie du Lualaba"), reference, "Reçu de paiement", "Justificatif de règlement · Reçu interne", String(payment.status)),
+      ...documentHeader(value(data, "organization_name", "Société d’Énergie du Lualaba"), reference, "Reçu de paiement", "Justificatif interne de règlement", recorded ? "PAYMENT_RECORDED" : String(payment.status)),
       separator(17, 17), recipientAndDocument(customer, documentRows), separator(17, 17),
-      { text: "DÉTAIL DU RÈGLEMENT", style: "section", margin: [0, 0, 0, 13] },
-      detailsTable(["DÉSIGNATION", "QUANTITÉ", "PRIX U.", "BASE", "TAXES", "TOTAL"], rows),
-      ...(allocations.length ? [{ text: "Affectations", style: "eyebrow", margin: [0, 12, 0, 5] } as Content, ...allocations.map((allocation) => ({ text: `${value(allocation, "source_reference", value(allocation, "receivable_id"))}  ·  ${money(allocation.amount, allocation.currency)}`, style: "muted", margin: [0, 0, 0, 3] } as Content))] : []),
+      { text: "AFFECTATION AUX CRÉANCES", style: "section", margin: [0, 0, 0, 13] },
+      ...(allocations.length ? [receiptAllocationsTable(allocations, payment.currency)] : [{ text: "Aucun montant n’a été affecté à une créance sur ce reçu.", style: "muted" } as Content]),
       ...(reversals.length ? [{ text: "Contre-écritures", style: "eyebrow", margin: [0, 10, 0, 5] } as Content, ...reversals.map((reversal) => ({ text: `${value(reversal, "reason")}  ·  ${money(reversal.amount, payment.currency)}`, style: "muted", margin: [0, 0, 0, 3] } as Content))] : []),
-      ...financialSummary("Montant reçu", "Montant du règlement", amount, "", "", amount),
-      ...qrFooter(value(data, "qr_internal_reference"), "Reçu de règlement · Le solde reste consultable dans le compte client."),
+      ...receiptSummary(amount, amountAllocated, amountUnallocated),
+      ...qrFooter(value(data, "qr_internal_reference"), allocations.some((allocation) => allocation.balance_after !== undefined)
+        ? "Solde indiqué après ce versement, selon l’écriture enregistrée par SEL. Les échéances applicables restent celles du contrat."
+        : "Les soldes et échéances applicables sont consultables dans le compte client."),
     ],
+    footer: (currentPage, pageCount, pageSize) => footer(currentPage, pageCount, pageSize, "Reçu émis par la Société d’Énergie du Lualaba, SEL"),
   };
 }
 
