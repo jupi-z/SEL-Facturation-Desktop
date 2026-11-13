@@ -62,6 +62,7 @@ Le paiement partiel laisse un solde, **sans** créer de plan d'échéances si l'
 - `201` création serveur; `200` idempotent retry; `202` local « pending sync » **pas accepté central**; `409` conflit de révision / même période / règle métier; `422` tarif/taxe incomplet, monnaie incompatible, quantité invalide; `401/403` auth/autorisation; `503` réseau distant (local reste utilisable selon grant).
 - Définir `status`: `LOCAL_PENDING`, `CENTRAL_ACCEPTED`, `CONFLICT_REQUIRES_REVIEW`, `REJECTED`, avec transitions autorisées. **Ne jamais répondre « facture définitive synchronisée » en 202 local**.
 - `document-data` renvoie des données immuables, `document_schema_version`, `template_version`, `document_reference`, montants, taxe par service, référence QR interne, paiement et solde **au moment demandé** (la facture est immuable, la situation des paiements est une projection séparée), `origin` / statut sync; aucun binaire.
+- Pour les paiements, `PAYMENT_RECEIPT` passe en `document_schema_version: 2` : le commit PostgreSQL du paiement conserve un snapshot JSON des références lisibles, du principal, des règlements/avoirs antérieurs, de l’affectation, du solde après versement et des fonds non affectés. Les versions 1 historiques restent lisibles, sans reconstitution inventée de leur solde au jour du paiement.
 
 ## Preuves
 - OpenAPI validée par un parseur, schémas des erreurs, commandes exemples et tests contractuels.

@@ -9,6 +9,37 @@ PR : [#58](https://github.com/jupi-z/SEL-Facturation-Desktop/pull/58)
 Commit de référence à la rédaction du plan : `b051eb0c48aa7c1b10d8874c3715770195145077`. Vérifier HEAD distant avant toute nouvelle décision.
 Périmètre : backend Rust/API, PostgreSQL, SQLite locale, synchronisation, LiveUpdate, client Windows V2 et exploitation. Aucune fusion ou aucun déploiement n’est effectué par cette mise à jour documentaire.
 
+## Incrément reçu de paiement et parcours de dette — 13 novembre 2026
+
+Branche technique : `monarque/fix-receipt-debt-flow-20261113`, créée depuis `main@ce92aa2680eb3c5a6da943970baed46eb891195e`.
+
+État : **implémenté localement; validation PostgreSQL d’intégration encore requise avant fusion ou déploiement. Aucun changement de données ni déploiement en production n’a été effectué.**
+
+- Les nouveaux paiements enregistrent, dans la transaction PostgreSQL et le même commit que le paiement, un snapshot JSON versionné du destinataire, des références de facture/vente, de la créance, du montant déjà réglé, du montant affecté, du solde après encaissement et de la part non affectée. Une réimpression conserve donc le contexte financier à la date de l’encaissement.
+- Les références de créances solaires sont résolues en références documentaires SEL dans les reçus, le registre des créances et les relevés client. Les anciens paiements sans snapshot restent lisibles; leur solde historique manquant n’est pas reconstitué artificiellement.
+- Le reçu PDF présente l’obligation d’origine, son principal, le déjà réglé, les avoirs antérieurs, le versement affecté, le solde après paiement et les fonds non affectés; il affiche aussi l’échéance visée quand le règlement est affecté à un échéancier. Son tableau est propre aux reçus et distingue l’état « Paiement enregistré » de la facture. Les éventuels échéanciers restent ceux du contrat.
+- Le parcours Windows distingue maintenant une vente comptant, un versement partiel sans échéancier et une vente à paiement échelonné. Après confirmation du paiement, une page de succès fournit directement la référence SEL et l’action d’ouverture du reçu PDF. Les vues des créances et ventes privilégient les références lisibles aux UUID techniques.
+- Migration additive PostgreSQL `0023_payment_receipt_snapshots.sql`; aucune facture historique, dette, paiement, ni référence antérieure n’est modifié.
+
+Vérifications exécutées pour cet incrément :
+
+- `npm ci` : **PASS**, 0 vulnérabilité signalée par npm audit;
+- `npm run build` dans `v2/windows-app` : **PASS**, avertissement non bloquant de Vite sur la taille des bundles;
+- `python v2/windows-app/scripts/visual_review.py` : **PASS** sur fixtures de démonstration; génération/rendu PDF A4, reçu v2 avec principal 22,62 USD, versement 3,00 USD, solde 19,62 USD et mode « Espèces » vérifiés;
+- `cargo fmt --all` : **PASS**;
+- `cargo fmt --all -- --check` : **PASS**;
+- `cargo clippy --workspace --all-targets -- -D warnings` : **PASS**;
+- `cargo test --workspace` : **PASS** pour toutes les suites exécutables; les suites PostgreSQL exigeant `TEST_DATABASE_URL` sont ignorées, dont `utility_issue_is_atomic_idempotent_and_survives_restart`;
+- `cargo test -p sel-storage` : **PASS** pour les tests non-PostgreSQL; les tests PostgreSQL marqués `ignored` n’ont pas été exécutés;
+- `cargo test -p sel-api` : **PASS** pour les tests exécutables; les intégrations PostgreSQL sont ignorées sans le service requis;
+- compilation `cargo test -p sel-api --test postgres_commercial --no-run` : **PASS**;
+- `python -m pytest -q tests/test_v2_tauri_client.py` : **PASS — 70 tests** après actualisation des attentes du test solaire pour les trois modalités de paiement;
+- test HTTP PostgreSQL `utility_issue_is_atomic_idempotent_and_survives_restart` enrichi pour vérifier la référence, les soldes snapshotés et leur stabilité après affectation ultérieure; un cas solaire contrôle également la référence SEL au lieu de l’UUID. **Exécution réelle non encore effectuée** : `TEST_DATABASE_URL` absent et daemon Docker local indisponible.
+
+Les exécutions CI ont révélé des attentes de tests non synchronisées avec les parcours : les reçus émis par l’API devaient attendre le schéma v2, la vérification visuelle contrôlait un UUID interne au lieu de la dette/document lisible, et le script cherchait l’ancien libellé de retour au journal après confirmation. Les assertions attendent maintenant le snapshot v2, vérifient dette, échéancier, référence des conditions et absence de frais, et suivent le bouton « Journal de caisse » actuel. Le snapshot regroupe l’allocation par créance et fige les informations du règlement initial; une réaffectation ultérieure ne doit pas modifier le reçu réimprimé. Les anciens paiements sans snapshot gardent la voie de compatibilité v1, sans solde historique inventé. Tests de contrat Windows : **70 PASS** localement; compilation de l’intégration PostgreSQL : **PASS**. Sur le commit `1f453a8`, les quatre workflows PR ont réussi : backend/PostgreSQL [43415608703](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43415608703), Windows/Tauri et captures PDF [43415608801](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43415608801), régression [43415608628](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43415608628), paquet serveur [43415608630](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43415608630).
+
+Limites : les tests d’intégration PostgreSQL ont réussi sur le service de test de la CI, pas sur la base de production. La recette PDF automatique vérifie les fixtures et la pagination, mais n’est pas un essai sur le poste ou l’imprimante de SEL. Cette recette matérielle demeure **NOT_TESTED/BLOCKED_EXTERNAL**; aucun déploiement en production n’a été effectué.
+
 ## Plan de finalisation et règles de travail
 
 - [Plan complet backend + frontend](PLAN_FINALISATION_BACKEND_FRONTEND.md) : phases, critères de sortie, difficulté et conditions de fusion autorisée.
@@ -1333,3 +1364,11 @@ Audit financier de production, en lecture seule après déploiement, sans identi
 | Service central après déploiement | PASS — conteneurs API/PostgreSQL sains, endpoint readiness TLS HTTP 200 |
 | Écriture commerciale de validation en production | NOT_RUN — aucune facture, vente ou opération de caisse de test n'a été créée |
 | Reçu/scan QR sur appareil physique et recette Windows SEL | NOT_RUN — la CI construit et vérifie le paquet, mais aucun test physique sur poste/imprimante SEL n'a été effectué ici |
+
+### Déploiement contrôlé du candidat reçu/paiement — 13 novembre 2026
+
+À la demande explicite du propriétaire, le code du candidat PR #67 a été déployé sans fusionner la PR ni créer de release. Le commit applicatif identifié est `007ee3a1f6d2bbb70df232467dfb0bc1d64ca9a0`; l’image API active est `sha256:e56be84c2c871e935d96533cebc30daa3a35d9f859c3c0a68b8d2bad304d5e22`. La migration additive PostgreSQL `0023_payment_receipt_snapshots.sql` est appliquée; le registre SQLx indique `23` comme dernière migration réussie. L’API et PostgreSQL sont `healthy`, et `https://sel.shuleops.com/health/ready` répond `HTTP 200` avec `configured:true` après le déploiement.
+
+Avant le redémarrage, une sauvegarde fraîche a été créée : `/srv/sel-v2/backups/predeploy-20261113T115157Z-007ee3a.dump`, SHA-256 `e2f210f03104f3df7bba412a71998ac0e9d610ccf2c8116bcb538a03f7a29652`, 105319 octets, mode `600`. `pg_restore --list` a réussi, puis une restauration complète a été exécutée dans un conteneur PostgreSQL 16.4 isolé du réseau; elle a restauré 38 tables publiques et le conteneur temporaire a été supprimé. L’image précédente est conservée sous `sel-v2-sel-api:rollback-pre-007ee3a-20261113T1158` (`sha256:4690bb2234911b79d2a2ec7edd80bbc7454a5d282a28bd940148d643cf532185`). Le marqueur de déploiement indique maintenant `007ee3a…` et garde `6057b0e…` comme précédent. Compose a recréé les conteneurs API et PostgreSQL; le volume de données est resté disponible, les migrations ont abouti et les deux services sont sains. Aucune donnée commerciale n’a été créée, supprimée ou modifiée par un scénario de test.
+
+Les quatre contrôles CI du candidat ont réussi ([Rust/PostgreSQL](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43417239387), [Windows/Tauri et install/upgrade](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43417239404), [régressions](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43417239367), [paquet serveur](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43417239432)). L’artefact Windows `SEL-V2-Tauri-Windows-158` (ID `14033241643`) a été téléchargé et son ZIP a été vérifié par SHA-256 `3a4f50147701371cd45eac66777936156d1f5ee4fdb7e0185c5f9778030797fe`. L’installateur extrait est la version `0.4.5` x64; son empreinte figure dans le livrable local. Il n’est pas signé Authenticode. La CI a validé l’installation/mise à niveau isolée, mais l’installation physique chez SEL reste à tester par le propriétaire. Aucun merge dans `main` ni publication de release n’a été fait.

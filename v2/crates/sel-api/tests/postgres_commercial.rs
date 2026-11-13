@@ -237,6 +237,31 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     let payment = app.clone().oneshot(payment_request).await.unwrap();
     assert_eq!(payment.status(), StatusCode::CREATED);
     let payment = json_body(payment).await;
+    let receipt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/payments/{}/document-data",
+                    payment["payment_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.status(), StatusCode::OK);
+    let receipt = json_body(receipt).await;
+    assert_eq!(receipt["document_schema_version"], 2);
+    assert_eq!(receipt["payment"]["amount_allocated"], "2.00");
+    assert_eq!(receipt["payment"]["amount_unallocated"], "1.00");
+    assert_eq!(
+        receipt["allocations"][0]["source_reference"],
+        invoice["invoice_number"]
+    );
+    assert_eq!(receipt["allocations"][0]["balance_before"], "22.62");
+    assert_eq!(receipt["allocations"][0]["balance_after"], "20.62");
     let payment_retry = app
         .clone()
         .oneshot(
@@ -321,6 +346,26 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     let allocation_retry = app.clone().oneshot(allocation_builder()).await.unwrap();
     assert_eq!(allocation_retry.status(), StatusCode::OK);
     assert_eq!(json_body(allocation_retry).await, allocation);
+    let reprinted_receipt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/payments/{}/document-data",
+                    payment["payment_id"].as_str().unwrap()
+                ))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reprinted_receipt.status(), StatusCode::OK);
+    let reprinted_receipt = json_body(reprinted_receipt).await;
+    assert_eq!(
+        reprinted_receipt["allocations"][0]["balance_after"],
+        "20.62"
+    );
     let receivable = app
         .clone()
         .oneshot(
@@ -415,6 +460,71 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
     );
     assert_eq!(receivables_register["receivables"][0]["paid"], "3.00");
     assert_eq!(receivables_register["receivables"][0]["balance"], "19.62");
+
+    let solar_sale_id = Uuid::new_v4();
+    let solar_receivable_id = Uuid::new_v4();
+    let solar_payment_id = Uuid::new_v4();
+    let solar_reference = format!(
+        "SEL-20261102-100000-{}",
+        solar_sale_id.simple().to_string().to_uppercase()
+    );
+    let solar_customer_id = Uuid::parse_str(customer["id"].as_str().unwrap()).unwrap();
+    sqlx::query(
+        "INSERT INTO sales (id, customer_id, currency, sold_at, sale_type, status, document_reference)
+         VALUES ($1, $2, 'USD', now(), 'SOLAR_KIT', 'CENTRAL_ACCEPTED', $3)",
+    )
+    .bind(solar_sale_id)
+    .bind(solar_customer_id)
+    .bind(&solar_reference)
+    .execute(&store.pool)
+    .await
+    .expect("insert solar sale reference fixture");
+    sqlx::query(
+        "INSERT INTO receivables (id, source_type, source_id, customer_id, currency, principal_total, status)
+         VALUES ($1, 'SALE', $2, $3, 'USD', 100.00, 'OPEN')",
+    )
+    .bind(solar_receivable_id)
+    .bind(solar_sale_id)
+    .bind(solar_customer_id)
+    .execute(&store.pool)
+    .await
+    .expect("insert solar receivable fixture");
+    sqlx::query(
+        "INSERT INTO payments (id, customer_id, amount_received, currency, method, paid_at, status)
+         VALUES ($1, $2, 10.00, 'USD', 'CASH', now(), 'CENTRAL_ACCEPTED')",
+    )
+    .bind(solar_payment_id)
+    .bind(solar_customer_id)
+    .execute(&store.pool)
+    .await
+    .expect("insert solar payment fixture");
+    sqlx::query(
+        "INSERT INTO payment_allocations (id, payment_id, receivable_id, allocated_amount, currency)
+         VALUES ($1, $2, $3, 10.00, 'USD')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(solar_payment_id)
+    .bind(solar_receivable_id)
+    .execute(&store.pool)
+    .await
+    .expect("insert solar payment allocation fixture");
+    let solar_receipt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/payments/{solar_payment_id}/document-data"))
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(solar_receipt.status(), StatusCode::OK);
+    let solar_receipt = json_body(solar_receipt).await;
+    assert_eq!(
+        solar_receipt["allocations"][0]["source_reference"],
+        solar_reference
+    );
 
     let reversal_request = json!({
         "amount": "1.00",
@@ -614,7 +724,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .unwrap();
     assert_eq!(receipt.status(), StatusCode::OK);
     let receipt = json_body(receipt).await;
-    assert_eq!(receipt["document_schema_version"], 1);
+    assert_eq!(receipt["document_schema_version"], 2);
     assert_eq!(receipt["document_type"], "PAYMENT_RECEIPT");
     assert_eq!(receipt["payment"]["payment_id"], payment["payment_id"]);
     assert!(receipt["document_reference"]
@@ -628,7 +738,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         receipt["customer"]["legal_name"],
         "Commercial persistence fixture"
     );
-    assert_eq!(receipt["allocations"].as_array().unwrap().len(), 2);
+    assert_eq!(receipt["allocations"].as_array().unwrap().len(), 1);
     assert_eq!(receipt["reversals"].as_array().unwrap().len(), 2);
     let audit_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM audit_events WHERE event_type = 'PAYMENT_REVERSED' AND subject_id = $1",
