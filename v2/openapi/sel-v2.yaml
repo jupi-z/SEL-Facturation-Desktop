@@ -218,6 +218,34 @@ paths:
         '204': { description: Grant revoked }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+  /v1/admin/configuration/readiness:
+    get:
+      operationId: getAdminConfigurationReadiness
+      description: ADMIN only. Reports the same current approved settings that gate commercial readiness; it performs no writes.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Current commercial configuration requirements and readiness
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configured, effective_on, requirements]
+                properties:
+                  configured: { type: boolean }
+                  effective_on: { type: string, format: date }
+                  requirements:
+                    type: array
+                    items:
+                      type: object
+                      required: [key, label, ready, approved_current_count]
+                      properties:
+                        key: { type: string }
+                        label: { type: string }
+                        ready: { type: boolean }
+                        approved_current_count: { type: integer, minimum: 0 }
+        '403': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
   /v1/meta/capabilities:
     get:
       operationId: capabilities
@@ -665,6 +693,23 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/meters/{id}/replace:
+    post:
+      operationId: replaceMeter
+      description: Replaces an active physical meter atomically. The old meter is deactivated, never deleted, so its reading history and invoice links remain intact. The replacement keeps the service-defined unit. ADMIN, SUPERVISOR, or BILLING_AGENT only.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UuidPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceMeter' }
+      responses:
+        '201': { description: Previous meter retired and replacement created atomically, content: { application/json: { schema: { $ref: '#/components/schemas/MeterReplacement' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/meter-readings/{id}/corrections:
     post:
       operationId: correctMeterReading
@@ -734,6 +779,11 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/UuidPath' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VoidInvoiceRequest' }
       responses:
         '200': { description: Invoice void recorded }
         '403': { $ref: '#/components/responses/Problem' }
@@ -828,6 +878,19 @@ paths:
         '201': { description: Payment reversal recorded }
         '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+  /v1/receivables:
+    get:
+      operationId: listReceivables
+      description: Organization-scoped receivables register. Balances and overdue states are derived from the central financial ledger.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Current receivables and server-calculated register counters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReceivablesRegister' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
   /v1/receivables/{id}:
     get:
       operationId: getReceivable
@@ -1050,6 +1113,20 @@ components:
       properties:
         serial: { type: string, minLength: 1, maxLength: 128 }
         unit: { type: string, enum: [KWH, M3] }
+    ReplaceMeter:
+      type: object
+      additionalProperties: false
+      required: [serial, reason]
+      properties:
+        serial: { type: string, minLength: 1, maxLength: 128 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    MeterReplacement:
+      type: object
+      additionalProperties: false
+      required: [retired_meter, replacement_meter]
+      properties:
+        retired_meter: { $ref: '#/components/schemas/Meter' }
+        replacement_meter: { $ref: '#/components/schemas/Meter' }
     MeterReading:
       type: object
       required: [id, meter_id, period, previous, current, measured_quantity, source]
@@ -1090,10 +1167,13 @@ components:
         require_password_change: { type: boolean, default: false, description: Require the user to replace the temporary password before accessing business routes }
     UpdateAdminUserRequest:
       type: object
-      minProperties: 1
+      anyOf:
+        - required: [role]
+        - required: [status]
       properties:
         role: { type: string, enum: [ADMIN, BILLING_AGENT, CASHIER, SUPERVISOR, AUDITOR_READONLY] }
         status: { type: string, enum: [ACTIVE, REVOKED] }
+        reason: { type: string, minLength: 1, maxLength: 500, description: Optional audit reason; required by the Windows client for access changes. }
     CatalogProduct:
       type: object
       required: [id, sku, product_type, label, price_reference, currency, effective_from]
@@ -1243,6 +1323,7 @@ components:
         base: { type: string, minLength: 1, maxLength: 64 }
         rate: { type: string, pattern: '^[0-9]+(\\.[0-9]{1,6})?$' }
         source: { type: string, minLength: 1, maxLength: 160 }
+        change_reason: { type: string, maxLength: 500, description: Optional explanation for this tax profile revision; retained in the versioned catalog payload. }
         effective_from: { type: string, format: date }
         effective_to: { type: [string, 'null'], format: date }
     CreateFxRateDraftRequest:
@@ -1363,6 +1444,37 @@ components:
         tax: { type: string }
         total: { type: string }
         snapshot_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    ReceivablesRegister:
+      type: object
+      required: [receivables, metrics]
+      properties:
+        receivables:
+          type: array
+          items:
+            type: object
+            required: [receivable_id, customer_id, customer_code, customer_name, source_type, source_reference, currency, principal, paid, credited, balance, overdue_amount, status]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              customer_id: { type: string, format: uuid }
+              customer_code: { type: string }
+              customer_name: { type: string }
+              source_type: { type: string, enum: [INVOICE, SALE] }
+              source_reference: { type: string }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+              principal: { type: string }
+              paid: { type: string }
+              credited: { type: string }
+              balance: { type: string }
+              overdue_amount: { type: string }
+              status: { type: string, enum: [OPEN, OVERDUE, SETTLED] }
+        metrics:
+          type: object
+          required: [payment_count, receivable_count, open_installment_count, overdue_count]
+          properties:
+            payment_count: { type: integer, minimum: 0 }
+            receivable_count: { type: integer, minimum: 0 }
+            open_installment_count: { type: integer, minimum: 0 }
+            overdue_count: { type: integer, minimum: 0 }
     CustomerStatement:
       type: object
       required: [customer_id, receivables, invoices, payments]
@@ -1373,6 +1485,16 @@ components:
           items:
             type: object
             description: Current receivable summary from the local or central financial ledger.
+            required: [receivable_id, source_type, source_reference, currency, principal, paid, credited, balance]
+            properties:
+              receivable_id: { type: string, format: uuid }
+              source_type: { type: string, enum: [INVOICE, SALE] }
+              source_reference: { type: string, description: Immutable invoice number or sale identifier }
+              currency: { type: string, pattern: '^[A-Z]{3}$' }
+              principal: { type: string }
+              paid: { type: string }
+              credited: { type: string }
+              balance: { type: string }
         invoices:
           type: array
           items: { $ref: '#/components/schemas/UtilityBillingResponse' }
@@ -1490,6 +1612,11 @@ components:
       properties:
         amount: { type: string, description: Positive Decimal amount in the receivable currency }
         reason: { type: string, minLength: 1 }
+    VoidInvoiceRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
     CreateSolarSaleRequest:
       type: object
       required: [customer_id, product_code, principal, currency, terms_revision]

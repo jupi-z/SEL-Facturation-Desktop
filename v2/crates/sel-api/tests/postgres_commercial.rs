@@ -361,6 +361,15 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .unwrap();
     assert_eq!(statement.status(), StatusCode::OK);
     let statement = json_body(statement).await;
+    assert!(statement["receivables"]
+        .as_array()
+        .is_some_and(|receivables| {
+            receivables.iter().any(|entry| {
+                entry["receivable_id"] == invoice["receivable_id"]
+                    && entry["source_type"] == "INVOICE"
+                    && entry["source_reference"] == invoice["invoice_number"]
+            })
+        }));
     assert!(statement["invoices"].as_array().is_some_and(|invoices| {
         invoices
             .iter()
@@ -376,6 +385,36 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
                 })
         })
     }));
+
+    let receivables_register = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/receivables")
+                .header("authorization", "Bearer test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receivables_register.status(), StatusCode::OK);
+    let receivables_register = json_body(receivables_register).await;
+    assert_eq!(receivables_register["metrics"]["payment_count"], 1);
+    assert_eq!(receivables_register["metrics"]["receivable_count"], 1);
+    assert_eq!(
+        receivables_register["receivables"][0]["customer_id"],
+        customer["id"]
+    );
+    assert_eq!(
+        receivables_register["receivables"][0]["customer_code"],
+        customer["customer_code"]
+    );
+    assert_eq!(
+        receivables_register["receivables"][0]["source_reference"],
+        invoice["invoice_number"]
+    );
+    assert_eq!(receivables_register["receivables"][0]["paid"], "3.00");
+    assert_eq!(receivables_register["receivables"][0]["balance"], "19.62");
 
     let reversal_request = json!({
         "amount": "1.00",

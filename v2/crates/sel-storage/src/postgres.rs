@@ -11,12 +11,12 @@ use sel_contracts::{
     ActivateSolarContractRequest, CorrectMeterReading, CreateCustomer, CreateMeter,
     CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest, CreateSolarSaleRequest,
     CreditNoteRequest, CreditNoteSyncPayload, Customer, InvoiceIdentitySnapshot,
-    InvoiceVoidSyncPayload, Meter, MeterReading, PaymentAllocationSyncPayload,
-    PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest, ReversePaymentRequest,
-    ServiceAccount, ServiceAccountUpdateSyncPayload, SolarContractSyncPayload, SolarQuoteResponse,
-    SolarSaleResponse, SolarSaleSyncPayload, SyncEnvelope, SyncEventResult, UpdateCustomer,
-    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, UtilityInvoiceSyncPayload,
-    UtilityMeterReadingRefs,
+    InvoiceVoidSyncPayload, Meter, MeterReading, MeterReplacement, PaymentAllocationSyncPayload,
+    PaymentReversalSyncPayload, PaymentSyncPayload, RecordPaymentRequest, ReplaceMeter,
+    ReversePaymentRequest, ServiceAccount, ServiceAccountUpdateSyncPayload,
+    SolarContractSyncPayload, SolarQuoteResponse, SolarSaleResponse, SolarSaleSyncPayload,
+    SyncEnvelope, SyncEventResult, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
+    UtilityBillingResponse, UtilityInvoiceSyncPayload, UtilityMeterReadingRefs,
 };
 use sel_domain::{
     billing,
@@ -451,6 +451,8 @@ pub enum MeterWriteError {
     ServiceAccountRevisionConflict,
     #[error("meter was not found in this organization")]
     MeterNotFound,
+    #[error("only an active meter can be replaced")]
+    MeterNotActive,
     #[error("service code, connection status, or meter unit is invalid")]
     InvalidConfiguration,
     #[error("meter serial, period, or reading source is invalid")]
@@ -2972,6 +2974,7 @@ impl CentralStore {
         base: &str,
         rate: Decimal,
         source: &str,
+        change_reason: &str,
         effective_from: NaiveDate,
         effective_to: Option<NaiveDate>,
         actor_id: Uuid,
@@ -2979,9 +2982,18 @@ impl CentralStore {
         request_digest: &str,
     ) -> Result<CatalogWriteOutcome, ReferenceCatalogWriteError> {
         let service_code = service_code.trim().to_ascii_uppercase();
-        let jurisdiction = jurisdiction.trim().to_ascii_uppercase();
-        let base = base.trim().to_ascii_uppercase();
+        let jurisdiction = if jurisdiction.trim().is_empty() {
+            "SEL".to_owned()
+        } else {
+            jurisdiction.trim().to_ascii_uppercase()
+        };
+        let base = if base.trim().is_empty() {
+            "SERVICE".to_owned()
+        } else {
+            base.trim().to_ascii_uppercase()
+        };
         let source = source.trim();
+        let change_reason = change_reason.trim();
         let max_rate = Decimal::new(99_999_999_999_999, 0);
         if !matches!(service_code.as_str(), "ELECTRICITY" | "WATER")
             || jurisdiction.is_empty()
@@ -2990,6 +3002,7 @@ impl CentralStore {
             || base.len() > 64
             || source.is_empty()
             || source.len() > 160
+            || change_reason.chars().count() > 500
             || rate < Decimal::ZERO
             || rate > max_rate
             || rate.normalize().scale() > 6
@@ -3002,7 +3015,8 @@ impl CentralStore {
             "jurisdiction": jurisdiction,
             "base": base,
             "rate": rate.normalize().to_string(),
-            "source": source
+            "source": source,
+            "change_reason": change_reason
         });
         self.create_reference_draft(
             "TAX_PROFILE",
@@ -4048,6 +4062,125 @@ impl CentralStore {
             "overdue": overdue > Decimal::ZERO,
             "status": status
         })))
+    }
+
+    /// Organization-wide receivables register with balances and counters derived by PostgreSQL.
+    pub async fn list_receivables(&self) -> Result<serde_json::Value, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT r.id, r.customer_id, c.customer_code, c.legal_name,
+                    r.source_type, r.currency, r.principal_total,
+                    CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number, r.source_id::text)
+                         ELSE r.source_id::text END AS source_reference,
+                    COALESCE((
+                        SELECT SUM(pa.allocated_amount * GREATEST(
+                            p.amount_received - COALESCE(rev.reversed_amount, 0), 0
+                        ) / NULLIF(p.amount_received, 0))
+                        FROM payment_allocations pa
+                        JOIN payments p ON p.id = pa.payment_id
+                        LEFT JOIN (
+                            SELECT payment_id, SUM(amount) AS reversed_amount
+                            FROM payment_reversals GROUP BY payment_id
+                        ) rev ON rev.payment_id = p.id
+                        WHERE pa.receivable_id = r.id AND p.status = 'CENTRAL_ACCEPTED'
+                    ), 0) AS paid,
+                    COALESCE((SELECT SUM(cn.amount) FROM credit_notes cn WHERE cn.receivable_id = r.id), 0) AS credited,
+                    COALESCE((
+                        SELECT SUM(GREATEST(s.amount_due - COALESCE((
+                            SELECT SUM(pa.allocated_amount * GREATEST(
+                                p.amount_received - COALESCE(rev.reversed_amount, 0), 0
+                            ) / NULLIF(p.amount_received, 0))
+                            FROM payment_allocations pa
+                            JOIN payments p ON p.id = pa.payment_id
+                            LEFT JOIN (
+                                SELECT payment_id, SUM(amount) AS reversed_amount
+                                FROM payment_reversals GROUP BY payment_id
+                            ) rev ON rev.payment_id = p.id
+                            WHERE pa.schedule_id = s.id AND p.status = 'CENTRAL_ACCEPTED'
+                        ), 0), 0))
+                        FROM installment_plans ip
+                        JOIN installment_schedule s ON s.plan_id = ip.id
+                        WHERE ip.receivable_id = r.id AND s.due_date < CURRENT_DATE
+                    ), 0) AS overdue_amount,
+                    (SELECT COUNT(*) FROM installment_plans ip
+                     JOIN installment_schedule s ON s.plan_id = ip.id
+                     WHERE ip.receivable_id = r.id AND s.amount_due > COALESCE((
+                         SELECT SUM(pa.allocated_amount * GREATEST(
+                             p.amount_received - COALESCE(rev.reversed_amount, 0), 0
+                         ) / NULLIF(p.amount_received, 0))
+                         FROM payment_allocations pa
+                         JOIN payments p ON p.id = pa.payment_id
+                         LEFT JOIN (
+                             SELECT payment_id, SUM(amount) AS reversed_amount
+                             FROM payment_reversals GROUP BY payment_id
+                         ) rev ON rev.payment_id = p.id
+                         WHERE pa.schedule_id = s.id AND p.status = 'CENTRAL_ACCEPTED'
+                     ), 0)) AS open_installments
+             FROM receivables r
+             JOIN customers c ON c.id = r.customer_id
+             LEFT JOIN invoices i ON i.id = r.source_id AND r.source_type = 'INVOICE'
+             WHERE c.organization_id = $1 AND r.status <> 'VOID'
+             ORDER BY c.customer_code, r.source_type, r.source_id, r.id",
+        )
+        .bind(self.organization_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let mut receivables = Vec::with_capacity(rows.len());
+        let mut open_installments = 0_i64;
+        let mut overdue_count = 0_i64;
+        for row in &rows {
+            let principal = row.try_get::<Decimal, _>("principal_total")?.round_dp(2);
+            let paid = row.try_get::<Decimal, _>("paid")?.round_dp(2);
+            let credited = row.try_get::<Decimal, _>("credited")?.round_dp(2);
+            let balance = (principal - paid - credited).round_dp(2);
+            let overdue = row.try_get::<Decimal, _>("overdue_amount")?.round_dp(2);
+            let status = if balance <= Decimal::ZERO {
+                "SETTLED"
+            } else if overdue > Decimal::ZERO {
+                overdue_count += 1;
+                "OVERDUE"
+            } else {
+                "OPEN"
+            };
+            open_installments += row.try_get::<i64, _>("open_installments")?;
+            receivables.push(json!({
+                "receivable_id": row.try_get::<Uuid, _>("id")?,
+                "customer_id": row.try_get::<Uuid, _>("customer_id")?,
+                "customer_code": row.try_get::<String, _>("customer_code")?,
+                "customer_name": row.try_get::<String, _>("legal_name")?,
+                "source_type": row.try_get::<String, _>("source_type")?,
+                "source_reference": row.try_get::<String, _>("source_reference")?,
+                "currency": row.try_get::<String, _>("currency")?,
+                "principal": format!("{principal:.2}"),
+                "paid": format!("{paid:.2}"),
+                "credited": format!("{credited:.2}"),
+                "balance": format!("{balance:.2}"),
+                "overdue_amount": format!("{overdue:.2}"),
+                "status": status
+            }));
+        }
+        let payment_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM payments p
+             JOIN customers c ON c.id = p.customer_id
+             WHERE c.organization_id = $1 AND p.status = 'CENTRAL_ACCEPTED'",
+        )
+        .bind(self.organization_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(json!({
+            "receivables": receivables,
+            "metrics": {
+                "payment_count": payment_count,
+                "receivable_count": receivables.len(),
+                "open_installment_count": open_installments,
+                "overdue_count": overdue_count
+            }
+        }))
     }
 
     pub async fn get_installment_plan(
@@ -5240,7 +5373,9 @@ impl CentralStore {
             return Ok(None);
         }
         let rows = sqlx::query(
-            "SELECT r.id, r.currency, r.principal_total,
+            "SELECT r.id, r.source_type, r.source_id, r.currency, r.principal_total,
+                    CASE WHEN r.source_type = 'INVOICE' THEN COALESCE(i.invoice_number, r.source_id::text)
+                         ELSE r.source_id::text END AS source_reference,
                     COALESCE((
                         SELECT SUM(
                             pa.allocated_amount * GREATEST(
@@ -5260,8 +5395,9 @@ impl CentralStore {
                     ), 0) AS paid,
                     COALESCE((SELECT SUM(amount) FROM credit_notes WHERE receivable_id = r.id), 0) AS credited
              FROM receivables r
+             LEFT JOIN invoices i ON i.id = r.source_id AND r.source_type = 'INVOICE'
              WHERE r.customer_id = $1
-             GROUP BY r.id, r.currency, r.principal_total
+             GROUP BY r.id, r.source_type, r.source_id, r.currency, r.principal_total, i.invoice_number
              ORDER BY r.id",
         )
         .bind(customer_id)
@@ -5280,6 +5416,8 @@ impl CentralStore {
                 let balance = (principal - paid - credited).round_dp(2);
                 Ok(json!({
                     "receivable_id": row.try_get::<Uuid, _>("id")?,
+                    "source_type": row.try_get::<String, _>("source_type")?,
+                    "source_reference": row.try_get::<String, _>("source_reference")?,
                     "currency": row.try_get::<String, _>("currency")?,
                     "principal": format!("{principal:.2}"),
                     "paid": format!("{paid:.2}"),
@@ -7884,6 +8022,122 @@ impl CentralStore {
             serial: serial.to_owned(),
             unit: input.unit.clone(),
             active: true,
+        })
+    }
+
+    pub async fn replace_meter(
+        &self,
+        meter_id: Uuid,
+        input: &ReplaceMeter,
+        actor_id: Option<Uuid>,
+    ) -> Result<MeterReplacement, MeterWriteError> {
+        let serial = input.serial.trim();
+        let reason = input.reason.trim();
+        if serial.is_empty()
+            || serial.chars().count() > 128
+            || reason.is_empty()
+            || reason.chars().count() > 500
+        {
+            return Err(MeterWriteError::InvalidInput);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let existing = sqlx::query(
+            "SELECT m.service_account_id, m.serial, m.unit, m.active
+             FROM meters m JOIN service_accounts sa ON sa.id = m.service_account_id
+             JOIN customers c ON c.id = sa.customer_id
+             WHERE m.id = $1 AND c.organization_id = $2
+             FOR UPDATE OF m",
+        )
+        .bind(meter_id)
+        .bind(self.organization_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(MeterWriteError::MeterNotFound)?;
+        let service_account_id: Uuid = existing.try_get("service_account_id")?;
+        let old_serial: String = existing.try_get("serial")?;
+        let unit: String = existing.try_get("unit")?;
+        let active: bool = existing.try_get("active")?;
+        if !active {
+            return Err(MeterWriteError::MeterNotActive);
+        }
+
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM meters WHERE service_account_id = $1 AND serial = $2)",
+        )
+        .bind(service_account_id)
+        .bind(serial)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            return Err(MeterWriteError::InvalidInput);
+        }
+
+        let replacement_id = Uuid::new_v4();
+        let retired = Meter {
+            id: meter_id,
+            service_account_id,
+            serial: old_serial.clone(),
+            unit: unit.clone(),
+            active: false,
+        };
+        let replacement = Meter {
+            id: replacement_id,
+            service_account_id,
+            serial: serial.to_owned(),
+            unit,
+            active: true,
+        };
+
+        sqlx::query("UPDATE meters SET active = FALSE WHERE id = $1 AND active = TRUE")
+            .bind(meter_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO meters (id, service_account_id, serial, unit, active)
+             VALUES ($1, $2, $3, $4, TRUE)",
+        )
+        .bind(replacement_id)
+        .bind(service_account_id)
+        .bind(serial)
+        .bind(&replacement.unit)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            if error
+                .as_database_error()
+                .is_some_and(|database| database.is_unique_violation())
+            {
+                MeterWriteError::InvalidInput
+            } else {
+                MeterWriteError::Database(error)
+            }
+        })?;
+
+        sqlx::query(
+            "INSERT INTO central_changes (organization_id, entity, entity_id, revision, change_json)
+             VALUES ($1, 'meters', $2, 2, $3), ($1, 'meters', $4, 1, $5)",
+        )
+        .bind(self.organization_id)
+        .bind(meter_id)
+        .bind(json!(retired))
+        .bind(replacement_id)
+        .bind(json!(replacement))
+        .execute(&mut *tx)
+        .await?;
+        audit_meter_mutation(
+            &mut tx,
+            actor_id,
+            "METER_REPLACED",
+            meter_id,
+            json!({"old_serial": old_serial, "replacement_meter_id": replacement_id, "replacement_serial": serial, "reason": reason}),
+        )
+        .await?;
+        tx.commit().await?;
+
+        Ok(MeterReplacement {
+            retired_meter: retired,
+            replacement_meter: replacement,
         })
     }
 

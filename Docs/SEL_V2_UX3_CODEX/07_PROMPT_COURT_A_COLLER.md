@@ -1,0 +1,3 @@
+# Prompt court — à coller dans Codex
+
+Dans le dépôt `jupi-z/SEL-Facturation-Desktop`, récupère la branche `monarque/sel-v2-ux3-codex-handoff-20261106`. Lis intégralement `Docs/SEL_V2_UX3_CODEX/README.md` et exécute `Docs/SEL_V2_UX3_CODEX/CODEX_MASTER_PROMPT.md` avec les documents 01–06. Vérifie HEAD/PR/CI et ouvre ta propre branche d'implémentation. Intègre le prototype Figma SEL V2 (pages 16–17) : navigation, parcours de bout en bout et CRUD sûr fondé sur les API Rust réelles. Préserve l'existant, ajoute les tests, valide la compilation et prépare une PR technique non fusionnée, avec rapport GO/NO-GO. Aucune donnée réelle, fusion, release ni déploiement sans nouvelle autorisation.

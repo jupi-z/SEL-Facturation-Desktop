@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type HttpMethod = "GET" | "POST" | "PATCH";
-export type CentralResponse<T> = { status: number; body: T };
+export type CentralResponse<T> = { status: number; body: T; next_cursor?: string | null };
 
 async function writeIdempotencyKey(method: HttpMethod, path: string, body: unknown): Promise<string | null> {
   if (method === "GET") return null;
@@ -37,36 +37,58 @@ function reportCentralHttpFailure(status: number): void {
   }
 }
 
-function centralHttpError(status: number, body: unknown, path: string, authority: string): Error {
+function centralHttpError(status: number, body: unknown, _path: string, authority: string): Error {
   const problem = body && typeof body === "object"
     ? body as { message?: unknown; error?: { message?: unknown }; detail?: unknown; code?: unknown; title?: unknown }
     : {};
   const code = typeof problem.code === "string"
     ? problem.code
     : typeof problem.title === "string" ? problem.title : "";
-  const detail = typeof problem.detail === "string"
-    ? problem.detail
-    : typeof problem.error?.message === "string" ? problem.error.message
-      : typeof problem.message === "string" ? problem.message : "";
+  const businessMessages: Record<string, string> = {
+    LAST_ADMINISTRATOR: "Impossible de désactiver ou rétrograder le dernier administrateur actif.",
+    SELF_MODIFICATION_DENIED: "Un administrateur ne peut pas modifier son propre rôle ou statut.",
+    USER_IDENTITY_EXISTS: "Cet identifiant SEL est déjà utilisé ou invalide.",
+    CUSTOMER_REVISION_CONFLICT: "Cette fiche a été modifiée entre-temps. Rechargez-la et vérifiez les changements avant de réessayer.",
+    CUSTOMER_CODE_EXISTS: "Ce code abonné est déjà attribué.",
+    INVOICE_PERIOD_EXISTS: "Une facture existe déjà pour cet abonné et cette période.",
+    METER_READING_NOT_BILLABLE: "Les relevés ont changé ou sont déjà facturés. Actualisez les relevés avant de prévisualiser.",
+    RECEIVABLE_OVERALLOCATED: "Le paiement dépasserait le solde restant de la créance.",
+    PAYMENT_NOT_REVERSIBLE: "Ce paiement n’est pas dans un état permettant une contrepassation.",
+    PAYMENT_REVERSAL_OVERALLOCATED: "Le montant dépasse la partie du paiement encore réversible.",
+    TARIFF_PERIOD_OVERLAP: "Un tarif approuvé couvre déjà une partie de cette période. Vérifiez les dates d’effet.",
+    SOLAR_PRODUCT_PERIOD_OVERLAP: "Une version approuvée de ce produit couvre déjà une partie de cette période.",
+    TARIFF_NOT_DRAFT: "Ce tarif n’est plus un brouillon. Actualisez le catalogue avant de continuer.",
+    SOLAR_PRODUCT_NOT_DRAFT: "Ce produit n’est plus un brouillon. Actualisez le catalogue avant de continuer.",
+    IDEMPOTENCY_PAYLOAD_MISMATCH: "La demande reprend une référence déjà utilisée avec des données différentes. Actualisez avant de réessayer.",
+    PAYMENT_CONTEXT_INVALID: "Le client ou la devise du paiement ne correspond pas à la créance.",
+    PAYMENT_ALLOCATION_EXCEEDS_RECEIPT: "Le total affecté dépasse le montant reçu.",
+  };
+  if (code && businessMessages[code]) return new Error(businessMessages[code]);
 
   if (status === 403) {
     const reason = code === "PERMISSION_DENIED"
       ? "Le rôle de ce compte n’autorise pas cette opération."
       : code === "PASSWORD_CHANGE_REQUIRED"
         ? "Changez le mot de passe temporaire avant de continuer."
-        : detail || "Le serveur a refusé l’accès à cette ressource.";
-    return new Error(`${authority} — accès refusé (HTTP 403${code ? ` · ${code}` : ""}) sur ${path}. ${reason}`);
+        : "Le serveur SEL a refusé cette opération. Vérifiez le rôle du compte ou demandez à un administrateur.";
+    return new Error(reason);
   }
 
-  return new Error(detail || `${authority} a répondu HTTP ${status} pour ${path}.`);
+  if (status === 401) return new Error("La session SEL a expiré ou les identifiants ne sont pas valides. Reconnectez-vous.");
+  if (status === 404) return new Error("L’élément demandé n’existe plus ou n’est pas accessible. Actualisez la liste.");
+  if (status === 409) return new Error("Le serveur a détecté un changement ou un conflit. Actualisez les données avant de réessayer.");
+  if (status === 422) return new Error("Certaines données ne sont pas acceptées par les règles SEL. Vérifiez les champs et les paramètres approuvés.");
+  if (status === 429) return new Error("Trop de demandes ont été envoyées. Patientez un instant puis réessayez.");
+  if (status >= 500) return new Error("Le service SEL rencontre un problème temporaire. Aucune confirmation n’a été reçue ; vérifiez l’historique avant de relancer l’opération.");
+  return new Error(`${authority} n’a pas accepté la demande (HTTP ${status}).`);
 }
 
-export async function centralRequest<T>(
+export async function centralRequestPage<T>(
   path: string,
   method: HttpMethod = "GET",
   body?: unknown,
   ifMatch?: number,
-): Promise<T> {
+): Promise<CentralResponse<T>> {
   let response: CentralResponse<T>;
   const idempotencyKey = await writeIdempotencyKey(method, path, body);
   try {
@@ -85,7 +107,16 @@ export async function centralRequest<T>(
     throw centralHttpError(response.status, response.body, path, "Le serveur SEL");
   }
   await clearIdempotencyKey(method, path, body);
-  return response.body;
+  return response;
+}
+
+export async function centralRequest<T>(
+  path: string,
+  method: HttpMethod = "GET",
+  body?: unknown,
+  ifMatch?: number,
+): Promise<T> {
+  return (await centralRequestPage<T>(path, method, body, ifMatch)).body;
 }
 
 export function centralStatus<T>(): Promise<T> {

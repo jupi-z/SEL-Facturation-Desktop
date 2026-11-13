@@ -124,6 +124,23 @@ async fn admin_directory_creates_lists_and_suspends_users_without_destructive_de
         .unwrap();
     assert_eq!(store.admin_list_users().await.unwrap().len(), 2);
 
+    let invalid_change = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/v1/admin/users/{user_id}"))
+                .header("authorization", format!("Bearer {admin_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"status":"REVOKED","reason":"   "}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_change.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
     let changed = app
         .clone()
         .oneshot(
@@ -133,7 +150,7 @@ async fn admin_directory_creates_lists_and_suspends_users_without_destructive_de
                 .header("authorization", format!("Bearer {admin_token}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"role":"CASHIER","status":"REVOKED"}).to_string(),
+                    json!({"role":"CASHIER","status":"REVOKED","reason":"Fin d’affectation (fixture)"}).to_string(),
                 ))
                 .unwrap(),
         )
@@ -141,6 +158,16 @@ async fn admin_directory_creates_lists_and_suspends_users_without_destructive_de
         .unwrap();
     assert_eq!(changed.status(), StatusCode::OK);
     assert_eq!(body(changed).await["status"], "REVOKED");
+    let audit_reason: Value = sqlx::query_scalar(
+        "SELECT redacted_metadata FROM audit_events
+         WHERE subject_id = $1 AND event_type = 'USER_ACCESS_UPDATED'
+         ORDER BY occurred_at DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_reason["reason"], "Fin d’affectation (fixture)");
     assert_eq!(
         store
             .authenticate_access_token(user_token)

@@ -132,6 +132,7 @@ impl CentralStore {
         user_id: Uuid,
         role: Option<&str>,
         status: Option<&str>,
+        reason: Option<&str>,
     ) -> Result<Value, E> {
         if role.is_some_and(|value| !valid_role(value))
             || status.is_some_and(|value| !matches!(value, "ACTIVE" | "REVOKED"))
@@ -200,9 +201,17 @@ impl CentralStore {
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
-        audit(&mut tx, actor_id, user_id, "USER_ACCESS_UPDATED", json!({
-            "role": next_role, "status": next_status, "sessions_revoked": true, "offline_grants_revoked": true
-        })).await?;
+        audit(
+            &mut tx,
+            actor_id,
+            user_id,
+            "USER_ACCESS_UPDATED",
+            json!({
+                "role": next_role, "status": next_status, "reason": reason.map(str::trim),
+                "sessions_revoked": true, "offline_grants_revoked": true
+            }),
+        )
+        .await?;
         tx.commit().await?;
         Ok(json!({"id": user_id, "role": next_role, "status": next_status}))
     }

@@ -17,10 +17,10 @@ use sel_contracts::{
     utility_snapshot_sha256, CatalogSnapshot, CatalogSnapshotPayload, CorrectMeterReading,
     CreateCustomer, CreateMeter, CreateMeterReading, CreateServiceAccount, CreateSolarQuoteRequest,
     CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData, InvoiceIdentitySnapshot,
-    InvoiceLineResponse, Meter, MeterReading, PaymentAllocationRequest, ProblemDetails,
-    RecordPaymentRequest, ReversePaymentRequest, SolarQuoteResponse, SolarSaleResponse,
-    SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer, UpdateServiceAccount,
-    UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    InvoiceLineResponse, Meter, MeterReading, MeterReplacement, PaymentAllocationRequest,
+    ProblemDetails, RecordPaymentRequest, ReplaceMeter, ReversePaymentRequest, SolarQuoteResponse,
+    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
+    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -102,6 +102,7 @@ pub struct RenewOfflineGrantRequest {
 pub struct UpdateAdminUserRequest {
     pub role: Option<String>,
     pub status: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -151,6 +152,8 @@ pub struct CreateTaxProfileDraftRequest {
     pub base: String,
     pub rate: Decimal,
     pub source: String,
+    #[serde(default)]
+    pub change_reason: String,
     pub effective_from: chrono::NaiveDate,
     pub effective_to: Option<chrono::NaiveDate>,
 }
@@ -230,6 +233,8 @@ pub struct InvoiceRecord {
 pub struct ReceivableRecord {
     pub id: Uuid,
     pub customer_id: Uuid,
+    pub source_type: String,
+    pub source_reference: String,
     pub currency: String,
     pub principal: Decimal,
 }
@@ -304,6 +309,10 @@ pub fn router(state: AppState) -> Router {
             get(admin_list_users).post(admin_create_user),
         )
         .route("/v1/admin/audit-events", get(admin_list_audit_events))
+        .route(
+            "/v1/admin/configuration/readiness",
+            get(admin_configuration_readiness),
+        )
         .route("/v1/admin/users/:id", patch(admin_update_user))
         .route("/v1/admin/devices", get(admin_list_devices))
         .route(
@@ -402,6 +411,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/meters/:id/readings",
             get(list_meter_readings).post(create_meter_reading),
         )
+        .route("/v1/meters/:id/replace", post(replace_meter))
         .route(
             "/v1/meter-readings/:id/corrections",
             post(correct_meter_reading),
@@ -419,6 +429,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/payments/:id/allocate", post(allocate_payment))
         .route("/v1/payments/:id/reverse", post(reverse_payment))
+        .route("/v1/receivables", get(list_receivables))
         .route("/v1/receivables/:id", get(get_receivable))
         .route("/v1/installment-plans/:id", get(get_installment_plan))
         .route("/v1/receivables/:id/credit", post(create_credit_note))
@@ -556,6 +567,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 | "/v1/admin/devices"
                 | "/v1/admin/offline-grants"
                 | "/v1/admin/audit-events"
+                | "/v1/admin/configuration/readiness"
         ) || matches!(
             path,
             "/v1/admin/catalog/tariffs"
@@ -581,6 +593,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                     | "/v1/meters/:id/readings"
                     | "/v1/invoices"
                     | "/v1/payments"
+                    | "/v1/receivables"
                     | "/v1/solar/sales"
                     | "/v1/sync/pull"
                     | "/v1/sync/status"
@@ -655,6 +668,7 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
                 | "/v1/solar/contracts"
         ) || path_matches(path, "/v1/customers/:id/service-accounts")
             || path_matches(path, "/v1/service-accounts/:id/meters")
+            || path_matches(path, "/v1/meters/:id/replace")
             || path_matches(path, "/v1/meters/:id/readings")
             || path_matches(path, "/v1/solar/contracts/:id/activate")
         {
@@ -730,26 +744,14 @@ async fn health_ready(State(state): State<AppState>) -> Json<serde_json::Value> 
             store.admin_reference_versions("COMMUNICATION_CHARGE").await,
         ) {
             (Ok(tariffs), Ok(tax_profiles), Ok(communication_charges)) => {
-                let today = Utc::now().date_naive();
-                let today_string = today.format("%Y-%m-%d").to_string();
-                utility_catalog_is_configured(&tariffs, &tax_profiles, today)
-                    && communication_charges
-                        .iter()
-                        .filter(|row| {
-                            row["payload"]["currency"] == "USD"
-                                && row["status"] == "APPROVED"
-                                && row["approval_ref"]
-                                    .as_str()
-                                    .is_some_and(|reference| !reference.trim().is_empty())
-                                && row["effective_from"]
-                                    .as_str()
-                                    .is_some_and(|from| from <= today_string.as_str())
-                                && row["effective_to"]
-                                    .as_str()
-                                    .is_none_or(|to| to >= today_string.as_str())
-                        })
-                        .count()
-                        == 1
+                configuration_requirements(
+                    &tariffs,
+                    &tax_profiles,
+                    &communication_charges,
+                    Utc::now().date_naive(),
+                )
+                .iter()
+                .all(|requirement| requirement["ready"] == true)
             }
             _ => false,
         }
@@ -759,6 +761,132 @@ async fn health_ready(State(state): State<AppState>) -> Json<serde_json::Value> 
     Json(json!({"status":"ready","service":"sel-api","configured":configured}))
 }
 
+async fn admin_configuration_readiness(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    require_admin(principal)?;
+    let store = central_store(&state)?;
+    let tariffs = store.admin_catalog_tariffs().await.map_err(storage_error)?;
+    let taxes = store
+        .admin_reference_versions("TAX_PROFILE")
+        .await
+        .map_err(storage_error)?;
+    let communication = store
+        .admin_reference_versions("COMMUNICATION_CHARGE")
+        .await
+        .map_err(storage_error)?;
+    let effective_on = Utc::now().date_naive();
+    let requirements = configuration_requirements(&tariffs, &taxes, &communication, effective_on);
+    let configured = requirements.iter().all(|item| item["ready"] == true);
+    Ok(Json(json!({
+        "configured": configured,
+        "effective_on": effective_on,
+        "requirements": requirements
+    })))
+}
+
+fn configuration_requirements(
+    tariffs: &[serde_json::Value],
+    tax_profiles: &[serde_json::Value],
+    communication_charges: &[serde_json::Value],
+    effective_on: NaiveDate,
+) -> Vec<serde_json::Value> {
+    fn effective(row: &serde_json::Value, date: NaiveDate) -> bool {
+        let date = date.format("%Y-%m-%d").to_string();
+        let from = row["effective_from"].as_str().unwrap_or_default();
+        let to = row["effective_to"].as_str();
+        from <= date.as_str() && to.is_none_or(|to| to >= date.as_str())
+    }
+
+    fn approved(row: &serde_json::Value, date: NaiveDate) -> bool {
+        row["status"] == "APPROVED"
+            && row["approved_by"].as_str().is_some_and(|id| !id.is_empty())
+            && row["approval_ref"]
+                .as_str()
+                .is_some_and(|reference| !reference.trim().is_empty())
+            && effective(row, date)
+    }
+
+    let mut requirements = Vec::with_capacity(7);
+    for (key, label, service, category, unit) in [
+        (
+            "electricity_residential",
+            "Tarif électricité résidentiel",
+            "ELECTRICITY",
+            "RESIDENTIAL",
+            "KWH",
+        ),
+        (
+            "electricity_commercial",
+            "Tarif électricité commercial",
+            "ELECTRICITY",
+            "COMMERCIAL",
+            "KWH",
+        ),
+        (
+            "water_residential",
+            "Tarif eau résidentiel",
+            "WATER",
+            "RESIDENTIAL",
+            "M3",
+        ),
+        (
+            "water_commercial",
+            "Tarif eau commercial",
+            "WATER",
+            "COMMERCIAL",
+            "M3",
+        ),
+    ] {
+        let count = tariffs
+            .iter()
+            .filter(|row| {
+                row["service_code"] == service
+                    && row["customer_category"] == category
+                    && row["unit"] == unit
+                    && row["currency"] == "USD"
+                    && approved(row, effective_on)
+            })
+            .count();
+        requirements.push(
+            json!({"key":key,"label":label,"ready":count == 1,"approved_current_count":count}),
+        );
+    }
+    for (service, label) in [
+        ("ELECTRICITY", "Profil TVA électricité"),
+        ("WATER", "Profil TVA eau"),
+    ] {
+        let count = tax_profiles
+            .iter()
+            .filter(|row| row["payload"]["service_code"] == service && approved(row, effective_on))
+            .count();
+        requirements.push(json!({"key":format!("tax_{service}"),"label":label,"ready":count == 1,"approved_current_count":count}));
+    }
+    let date = effective_on.format("%Y-%m-%d").to_string();
+    let communication_count = communication_charges
+        .iter()
+        .filter(|row| {
+            row["payload"]["currency"] == "USD"
+                && row["status"] == "APPROVED"
+                && row["approval_ref"]
+                    .as_str()
+                    .is_some_and(|reference| !reference.trim().is_empty())
+                && row["effective_from"]
+                    .as_str()
+                    .is_some_and(|from| from <= date.as_str())
+                && row["effective_to"]
+                    .as_str()
+                    .is_none_or(|to| to >= date.as_str())
+        })
+        .count();
+    requirements.push(json!({"key":"communication_charge","label":"Ligne de communication","ready":communication_count == 1,"approved_current_count":communication_count}));
+    requirements
+}
+
+#[cfg(test)]
 fn utility_catalog_is_configured(
     tariffs: &[serde_json::Value],
     tax_profiles: &[serde_json::Value],
@@ -969,6 +1097,7 @@ async fn create_tax_profile_draft(
                 &input.base,
                 input.rate,
                 &input.source,
+                &input.change_reason,
                 input.effective_from,
                 input.effective_to,
                 principal.user_id,
@@ -1705,6 +1834,16 @@ async fn admin_update_user(
             "status must be ACTIVE or REVOKED",
         ));
     }
+    if input
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.trim().is_empty() || reason.chars().count() > 500)
+    {
+        return Err(ApiError::unprocessable(
+            "USER_CHANGE_REASON_INVALID",
+            "reason must contain between 1 and 500 characters",
+        ));
+    }
     if input.role.is_none() && input.status.is_none() {
         return Err(ApiError::unprocessable(
             "USER_UPDATE_EMPTY",
@@ -1717,6 +1856,7 @@ async fn admin_update_user(
             user_id,
             input.role.as_deref(),
             input.status.as_deref(),
+            input.reason.as_deref(),
         )
         .await
         .map(Json)
@@ -2566,6 +2706,31 @@ async fn list_meters(
         .map_err(meter_write_error)
 }
 
+async fn replace_meter(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meter_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<ReplaceMeter>,
+) -> Result<(StatusCode, Json<MeterReplacement>), ApiError> {
+    require_auth(&headers)?;
+    let store = state.central.as_ref().ok_or_else(|| {
+        ApiError::unavailable(
+            "PERSISTENT_STORAGE_REQUIRED",
+            "central PostgreSQL storage is required",
+        )
+    })?;
+    store
+        .replace_meter(
+            meter_id,
+            &input,
+            principal.map(|Extension(AuthenticatedPrincipal(principal))| principal.user_id),
+        )
+        .await
+        .map(|replacement| (StatusCode::CREATED, Json(replacement)))
+        .map_err(meter_write_error)
+}
+
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 struct MeterReadingQuery {
     period: Option<String>,
@@ -2723,6 +2888,11 @@ async fn issue_utility(
         ReceivableRecord {
             id: receivable_id,
             customer_id: resolved_input.customer_id,
+            source_type: "INVOICE".to_owned(),
+            source_reference: committed
+                .invoice_number
+                .clone()
+                .unwrap_or_else(|| invoice_id.to_string()),
             currency: resolved_input.currency.clone(),
             principal: committed.total,
         },
@@ -3480,6 +3650,61 @@ async fn get_receivable(
     ))
 }
 
+async fn list_receivables(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_auth(&headers)?;
+    if let Some(store) = &state.central {
+        return store
+            .list_receivables()
+            .await
+            .map(Json)
+            .map_err(storage_error);
+    }
+
+    let customers = state.customers.read().await;
+    let receivables = state.receivables.read().await;
+    let payments = state.payments.read().await;
+    let entries = receivables
+        .values()
+        .map(|receivable| {
+            let paid: Decimal = payments
+                .values()
+                .flat_map(|payment| payment.allocations.iter())
+                .filter(|allocation| allocation.receivable_id == receivable.id)
+                .map(|allocation| allocation.amount)
+                .sum();
+            let balance = (receivable.principal - paid).round_dp(2);
+            let customer = customers.get(&receivable.customer_id);
+            json!({
+                "receivable_id": receivable.id,
+                "customer_id": receivable.customer_id,
+                "customer_code": customer.map(|item| item.customer_code.as_str()).unwrap_or(""),
+                "customer_name": customer.map(|item| item.legal_name.as_str()).unwrap_or(""),
+                "source_type": receivable.source_type,
+                "source_reference": receivable.source_reference,
+                "currency": receivable.currency,
+                "principal": format!("{:.2}", receivable.principal.round_dp(2)),
+                "paid": format!("{:.2}", paid.round_dp(2)),
+                "credited": "0.00",
+                "balance": format!("{balance:.2}"),
+                "overdue_amount": "0.00",
+                "status": if balance <= Decimal::ZERO { "SETTLED" } else { "OPEN" }
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "receivables": entries,
+        "metrics": {
+            "payment_count": payments.len(),
+            "receivable_count": entries.len(),
+            "open_installment_count": 0,
+            "overdue_count": 0
+        }
+    })))
+}
+
 async fn get_statement(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3505,7 +3730,7 @@ async fn get_statement(
     let payments = state.payments.read().await;
     let entries = receivables.into_iter().map(|receivable| {
         let paid: Decimal = payments.values().flat_map(|payment| payment.allocations.iter()).filter(|allocation| allocation.receivable_id == receivable.id).map(|allocation| allocation.amount).sum();
-        json!({"receivable_id":receivable.id,"currency":receivable.currency,"principal":receivable.principal,"paid":paid,"balance":receivable.principal-paid})
+        json!({"receivable_id":receivable.id,"source_type":receivable.source_type,"source_reference":receivable.source_reference,"currency":receivable.currency,"principal":receivable.principal,"paid":paid,"balance":receivable.principal-paid})
     }).collect::<Vec<_>>();
     Ok(Json(
         json!({"customer_id":customer_id,"receivables":entries}),
@@ -3686,6 +3911,8 @@ async fn create_solar_sale(
         ReceivableRecord {
             id: receivable_id,
             customer_id: input.customer_id,
+            source_type: "SALE".to_owned(),
+            source_reference: sale_id.to_string(),
             currency: input.currency,
             principal: input.principal,
         },
@@ -4138,6 +4365,9 @@ fn meter_write_error(error: sel_storage::postgres::MeterWriteError) -> ApiError 
             "service account was changed by another actor",
         ),
         MeterWriteError::MeterNotFound => ApiError::not_found("METER_NOT_FOUND", "meter not found"),
+        MeterWriteError::MeterNotActive => {
+            ApiError::conflict("METER_NOT_ACTIVE", "only an active meter can be replaced")
+        }
         MeterWriteError::DuplicateReading => ApiError::conflict(
             "METER_READING_EXISTS",
             "a reading already exists for this period",
@@ -4556,7 +4786,7 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{role_allows_request, utility_catalog_is_configured};
+    use super::{configuration_requirements, role_allows_request, utility_catalog_is_configured};
     use axum::http::Method;
     use chrono::NaiveDate;
     use serde_json::json;
@@ -4678,6 +4908,18 @@ mod tests {
             &format!("/v1/admin/catalog/tariffs/{tariff_id}/approve"),
             "BILLING_AGENT"
         ));
+        assert!(role_allows_request(
+            &Method::GET,
+            "/v1/admin/configuration/readiness",
+            "ADMIN"
+        ));
+        for role in ["BILLING_AGENT", "CASHIER", "SUPERVISOR", "AUDITOR_READONLY"] {
+            assert!(!role_allows_request(
+                &Method::GET,
+                "/v1/admin/configuration/readiness",
+                role
+            ));
+        }
     }
 
     #[test]
@@ -4710,6 +4952,21 @@ mod tests {
             &Method::POST,
             &format!("/v1/service-accounts/{service_account_id}/meters"),
             "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/meters/{meter_id}/replace"),
+            "BILLING_AGENT"
+        ));
+        assert!(role_allows_request(
+            &Method::POST,
+            &format!("/v1/meters/{meter_id}/replace"),
+            "SUPERVISOR"
+        ));
+        assert!(!role_allows_request(
+            &Method::POST,
+            &format!("/v1/meters/{meter_id}/replace"),
+            "CASHIER"
         ));
         assert!(role_allows_request(
             &Method::GET,
@@ -4788,6 +5045,7 @@ mod tests {
             format!("/v1/invoices/{id}"),
             format!("/v1/invoices/{id}/document-data"),
             "/v1/payments".to_owned(),
+            "/v1/receivables".to_owned(),
             format!("/v1/payments/{id}/document-data"),
             format!("/v1/receivables/{id}"),
             format!("/v1/installment-plans/{id}"),
@@ -4992,5 +5250,73 @@ mod tests {
             &duplicate_tax,
             today
         ));
+    }
+
+    #[test]
+    fn admin_readiness_names_missing_and_duplicate_commercial_configuration() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        let requirements = configuration_requirements(&[], &[], &[], today);
+        assert_eq!(requirements.len(), 7);
+        assert!(requirements.iter().all(|item| item["ready"] == false));
+
+        let tariff = json!({
+            "service_code":"WATER", "customer_category":"RESIDENTIAL", "unit":"M3",
+            "currency":"USD", "effective_from":"2026-01-01", "effective_to":null,
+            "approval_ref":"SEL-APPROVAL", "approved_by":"admin", "status":"APPROVED"
+        });
+        let taxes = [json!({
+            "payload":{"service_code":"WATER"}, "effective_from":"2026-01-01",
+            "effective_to":null, "approval_ref":"SEL-TAX", "approved_by":"admin", "status":"APPROVED"
+        })];
+        let communication = [json!({
+            "payload":{"currency":"USD"}, "effective_from":"2026-01-01", "effective_to":null,
+            "approval_ref":"SEL-COMM", "status":"APPROVED"
+        })];
+        let partial = configuration_requirements(
+            std::slice::from_ref(&tariff),
+            &taxes,
+            &communication,
+            today,
+        );
+        assert!(partial
+            .iter()
+            .find(|item| item["key"] == "water_residential")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
+        assert!(partial
+            .iter()
+            .find(|item| item["key"] == "tax_WATER")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
+        assert!(partial
+            .iter()
+            .find(|item| item["key"] == "communication_charge")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
+        assert!(!partial
+            .iter()
+            .find(|item| item["key"] == "electricity_residential")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
+
+        let duplicate =
+            configuration_requirements(&[tariff.clone(), tariff], &taxes, &communication, today);
+        assert_eq!(
+            duplicate
+                .iter()
+                .find(|item| item["key"] == "water_residential")
+                .unwrap()["approved_current_count"],
+            2
+        );
+        assert!(!duplicate
+            .iter()
+            .find(|item| item["key"] == "water_residential")
+            .unwrap()["ready"]
+            .as_bool()
+            .unwrap());
     }
 }

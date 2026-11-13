@@ -1,0 +1,336 @@
+# Rapport d’exécution UX3 — état au 11 novembre 2026
+
+> Rapport d’étape, non rapport de clôture. Les statuts reflètent les preuves exécutées; la recette complète et la validation Figma de toutes les frames ne sont pas terminées.
+
+## Progression vérifiée — 10 novembre 2026
+
+### Mise à jour — 11 novembre 2026
+
+- A05 est maintenant `COMPLETED` sur le commit `3674f6ad972b2ab2c912a95b0521d793e13feeee`. Les quatre workflows correspondants sont `SUCCESS` : [client Windows/Tauri](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42816284610), [backend](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42816284555), [paquet serveur](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42816284652), [régression V1](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42816284569). La recette reste synthétique; aucun poste SEL réel ni tarif de production n’a été modifié.
+- A06 est en cours : le taux est saisi sous forme de pourcentage dans l’interface et converti en fraction avant l’appel Rust (`16` → `0.16`). Le champ « Motif du changement » est conservé dans le payload JSON versionné; il est facultatif dans le contrat API pour compatibilité ascendante, mais requis dans le formulaire UX3. Les valeurs vides de juridiction et d’assiette prennent respectivement `SEL` et `SERVICE` côté repository PostgreSQL.
+- A06 ajoute le rendu des versions fiscales depuis leur payload, la migration d’aucune donnée historique, et la documentation OpenAPI du motif. Tests locaux déjà exécutés : `python -m pytest tests/test_v2_tauri_client.py -q` PASS — 68 tests; `npm run build` PASS (avertissement existant sur les chunks PDF/fonts); `cargo fmt --all -- --check` PASS; `cargo check -p sel-api -p sel-storage` PASS; `git diff --check` PASS.
+- La première recette Playwright A06 a échoué uniquement sur un sélecteur de test encore nommé « Profils fiscaux » après renommage. Ce sélecteur a été corrigé; la deuxième recette visuelle 1440×900 est en cours. L’URL PostgreSQL de test n’est pas configurée localement; l’intégration HTTP/PostgreSQL est prévue dans les workflows CI.
+
+### A01–A03 — Administration / utilisateurs
+
+- A01 (répertoire) et A02 (création de compte) sont alignés sur leurs frames Figma et présents sur la branche de continuation. Le commit `3d266704708f46973e139676a02fa1018fd495e0` a passé les quatre workflows GitHub, y compris la recette de paquet Windows MSI/NSIS et le test d’installation/mise à niveau isolé : [CI Windows](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42803112179), [CI backend](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42803112572), [paquet serveur](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42803112181), [régression V1](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42803112309).
+- A03 ajoute le champ « Motif du changement » pour les changements de rôle et de statut. Le client refuse la mutation sans motif et envoie celui-ci avec le PATCH; le stockage l’ajoute à l’événement d’audit PostgreSQL dans la même transaction que la modification. L’API conserve le caractère facultatif du champ pour les clients antérieurs, mais rejette une valeur blanche ou de plus de 500 caractères.
+- Le test HTTP/PostgreSQL vérifie le rejet d’un motif vide, applique une modification avec motif, puis vérifie sa conservation dans `audit_events.redacted_metadata`. Il compile localement; son exécution contre PostgreSQL reste à établir dans la CI du commit A03.
+- Recette visuelle synthétique de l’écran A03 réussie à 1440×900 et 1280×720; les captures sont conservées dans `evidence/a03-2026-11-10/`. La capture ne contient pas de message d’erreur résiduel et le champ motif reprend le style des autres contrôles.
+- Vérifications locales A03 : `npm run build` PASS (avertissement de taille des chunks PDF/fonts existant); `python -m pytest tests/test_v2_tauri_client.py -q` PASS — 66 tests; `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` PASS; `cargo clippy --manifest-path v2/Cargo.toml -p sel-api -p sel-storage --all-targets -- -D warnings` PASS; `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` PASS — 12 tests; `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` PASS — 1 test; `cargo test --manifest-path v2/Cargo.toml -p sel-api --test postgres_admin_directory --no-run` PASS — compilation seulement.
+- Statut : A01–A03 `COMPLETED` pour code, tests locaux, recette visuelle synthétique et CI. Le commit A03 `68110ad973b1e867c573cc65e5561e5d44c91113` a passé les quatre workflows, y compris PostgreSQL et le build/upgrade Windows : [Windows](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42806012853), [serveur](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42806012890), [régression V1](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42806012878), [backend/PostgreSQL](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42806013060). Ces écrans n’ont pas été validés sur un poste SEL réel. Aucune opération de production n’a été faite.
+
+### A04 — Catalogue des tarifs et navigation des référentiels
+
+- Comparaison avec le frame Figma `178:413` : l’écran cible présente le catalogue tarifaire comme sujet principal, un panneau latéral « Actions suivantes » vers TVA, taux de change et catalogue solaire, ainsi qu’une action distincte « Préparer une révision ».
+- L’ancienne interface affichait simultanément cinq formulaires et cinq tableaux, ce qui diluait le catalogue et ne suivait pas la hiérarchie Figma. Le client présente maintenant un référentiel à la fois, avec navigation latérale vers tarifs, TVA, devises, kits solaires et ligne de communication. Le formulaire de révision ne s’ouvre qu’après l’action explicite; une confirmation protège la saisie lors d’une fermeture ou d’un changement de référentiel.
+- Les API et les règles d’approbation Rust restent inchangées. Les révisions restent des brouillons non applicables jusqu’à approbation SEL et référence de décision. Aucun tarif n’est modifié par ce changement d’interface.
+- À 1280×720, la première revue a révélé que les commandes d’approbation/révocation pouvaient être rognées par la largeur du panneau principal. Le panneau « Actions suivantes » passe maintenant sous le catalogue jusqu’à 1360 px; à 1440×900 il reste latéral comme dans Figma. Le tableau conserve alors les champs et boutons d’action entièrement visibles.
+- Recette Playwright synthétique complète réussie aux viewports 1440×900 et 1280×720, code de sortie 0 : affichage A04, navigation vers TVA/devises/kits/ligne de communication, retour au catalogue, approbation/révocation simulées, création de brouillon, refus sans perte de saisie, annulation d’une navigation avec brouillon puis abandon explicite. Captures finales : `evidence/a04-2026-11-10/1440/admin-tariffs-catalog-a04-1440x900.png` et `evidence/a04-2026-11-10/1280/admin-tariffs-catalog-a04-1280x720.png`.
+- Vérifications locales A04 : `python -m pytest tests/test_v2_tauri_client.py -q` PASS — 66 tests; `npm run build` PASS avec avertissement non bloquant de chunks PDF/fonts >500 kB; `git diff --check` PASS. Aucun backend ni environnement de production utilisé.
+- CI A04 au commit `96817ecf39232a7bc7eb582737f0b1105e64b47c` : PASS — client Windows/Tauri [42812571552](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42812571552), backend [42812571511](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42812571511), paquet serveur [42812571634](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42812571634), régression historique [42812571880](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42812571880).
+- Statut : A04 `COMPLETED` pour code, validations locales, recette synthétique visuelle et CI. A04 n’est pas une validation sur poste SEL réel et ne clôt pas UX3.
+
+### A05 — Revue et approbation tarifaire
+
+- Comparaison avec le frame Figma `178:547` : l’approbation quitte les champs intégrés à la ligne du tableau et ouvre une page de revue distincte avec service, catégorie, prix/unité, date d’effet, état, référence de décision et version remplacée facultative.
+- L’action « Examiner la révision » ne produit aucune écriture. La référence SEL est saisie dans la revue; « Confirmer l’approbation » ouvre ensuite la confirmation explicite existante, puis appelle seulement l’API Rust centrale `POST /v1/admin/catalog/tariffs/{id}/approve`. Annuler la navigation ou la boîte de confirmation conserve la saisie; le brouillon tarifaire original reste inchangé.
+- Le panneau latéral de revue présente uniquement le retour au catalogue et l’historique des versions. La liste des référentiels n’est plus répétée à cette étape. Le contenu s’empile sous 1360 px; le parcours est testé aux deux tailles.
+- Recette Playwright synthétique complète réussie à 1440×900 et 1280×720, code de sortie 0 : ouverture de la revue, présence du prix/devise/unité, annulation de la navigation sans perte, absence d’appel API avant confirmation, annulation de confirmation avec saisie conservée, puis un seul POST d’approbation après validation.
+- Captures : `evidence/a05-2026-11-10/1440/admin-catalog-approval-1440x900.png` et `evidence/a05-2026-11-10/1280/admin-catalog-approval-1280x720.png`.
+- Vérifications locales A05 après les derniers ajustements : `python -m pytest tests/test_v2_tauri_client.py -q` PASS — 67 tests; `npm run build` PASS avec l’avertissement existant de chunks PDF/fonts >500 kB; `git diff --check` PASS. Aucune mutation sur API ou production.
+- Statut : A05 `COMPLETED` pour code, tests locaux, recette synthétique et CI. L’écran et ses scénarios reposent sur des données synthétiques, sans approbation réelle de tarif ni validation sur poste SEL.
+
+### A06 — Paramètres fiscaux / TVA
+
+- Référence Figma : frame `178:665`, « Paramètres de TVA ». Le formulaire comprend prestation, taux en pourcentage, date d’effet, référence de décision et motif; la juridiction et l’assiette peuvent conserver les valeurs usuelles SEL/SERVICE.
+- Le serveur Rust reste autoritaire : aucun calcul fiscal n’est ajouté au frontend. Le taux affiché en pourcentage est converti en valeur décimale attendue par l’API. Le motif est inclus dans le payload versionné du brouillon pour assurer sa traçabilité; les anciennes requêtes sans motif restent acceptées.
+- Le tableau de versions lit maintenant les propriétés imbriquées du payload, notamment prestation, juridiction et taux. Le taux est affiché en pourcentage. Les révisions restent des brouillons et ne sont pas utilisables en facturation avant approbation SEL.
+- Statut : `IN_PROGRESS` — implémentation et tests locaux passent; la recette visuelle corrigée, l’exécution PostgreSQL par CI et les quatre workflows sur le commit A06 restent à confirmer. Aucun accès ni changement de production.
+
+### F01 — Journal de caisse et séparation de la saisie
+
+- Comparaison directe avec le frame Figma `178:1194` de la page `16 · SEL V2 — Prototype intégral & CRUD`.
+- Le journal des règlements et la création d’un paiement sont maintenant deux espaces distincts. Le journal présente les règlements, confirmations, conflits/refus et reçus disponibles à partir des seules réponses centrales, avec le tableau des opérations et les actions suivantes.
+- Les raccourcis vers la création ouvrent le formulaire existant sans déplacer les règles financières hors de Rust. Le reçu est ouvert depuis un règlement retourné par le serveur; aucun reçu n’est proposé pour un formulaire non enregistré.
+- Un scénario navigateur crée un paiement synthétique après revue et confirmation, retourne au journal puis vérifie l’aperçu du reçu. Aucune écriture n’a été envoyée à la production.
+- Captures : `evidence/payment-journal-f01-2026-11-07-1440x900.png` et `evidence/payment-journal-f01-2026-11-07-1280x720.png`.
+
+| Contrôle F01 | Résultat |
+|---|---|
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/React compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 65 tests |
+| Recette navigateur 1440×900 et 1280×720 | PASS — séparation journal/saisie, paiement simulé confirmé, affichage du reçu PDF, aucun débordement horizontal |
+| Captures inspectées visuellement | PASS — les deux résolutions examinées |
+| Nature de la recette | API et données synthétiques; aucun paiement réel enregistré |
+| CI GitHub de l’incrément | À vérifier après publication du commit |
+
+F01 est implémenté et validé dans l’application de test. Le flux contre PostgreSQL réel, la permission réelle, l’imprimante SEL et le poste cible restent à valider.
+
+### F02–F04 — Saisie, affectation et confirmation d’un paiement
+
+- F02 sépare la saisie de l’encaissement (abonné, date, montant, devise, mode) et affiche des indicateurs provenant des réponses API. Le bouton d’étape ne crée aucun paiement.
+- F03 récapitule la saisie et permet de répartir le paiement entre des créances/échéances; le serveur Rust reste responsable de la validation des montants et soldes.
+- F04 présente une dernière revue et ne déclenche l’écriture qu’avec « Confirmer et enregistrer ». Les champs de référence et les sommes ne sont pas calculés par l’interface.
+- Tests ciblés : 66 tests `tests/test_v2_tauri_client.py` passent; `npm run build`, `cargo fmt --all -- --check` et `git diff --check` passent. Le build conserve un avertissement non bloquant sur les gros chunks PDF/fonts.
+- L’action d’en-tête F03 est maintenant désactivée tant que la répartition n’est pas valide, afin d’éviter une action apparemment disponible mais bloquée par le formulaire.
+- Captures inspectées et conservées sous `evidence/` : `payment-entry-f02-2026-11-10-{1440x900,1280x720}.png`, `payment-allocation-f03-2026-11-10-{1440x900,1280x720}.png` et `payment-confirmation-f04-2026-11-10-{1440x900,1280x720}.png`.
+- Aucune transaction réelle n’a été créée; le flux de navigateur utilise des réponses API synthétiques. PostgreSQL de production, droits réels, reçu/imprimante et poste SEL restent non testés.
+- La recette CI précédente du backend a échoué sur le test de période tarifaire : la date effective du test chevauchait le tarif de communication semé pour la date courante. Le test emploie maintenant le lendemain de la date courante; la réussite sera établie uniquement par une nouvelle CI sur le commit poussé.
+
+F02–F04 sont implémentés. La recette complète navigateur a réussi à 1440×900 et 1280×720 avec API synthétique. Un premier passage 1280×720 avait échoué au chargement du worker PDF du reçu; deux exécutions complètes ultérieures ont réussi sans changement du code PDF. Ce défaut intermittent reste à surveiller. La CI backend du correctif reste à exécuter sur le prochain commit.
+
+### F08 — Registre global des créances
+
+- La vue exigeait auparavant de choisir un abonné et ne permettait pas le suivi global prévu dans Figma. L’API n’exposait qu’un détail individuel et un relevé client.
+- Ajout de `GET /v1/receivables`, autorisé aux rôles de lecture, limité à l’organisation du `CentralStore`, avec une lecture PostgreSQL `REPEATABLE READ READ ONLY`. Les soldes sont dérivés des paiements acceptés, contre-passations et avoirs; les montants échus proviennent des échéances et allocations centrales. Les statistiques sont retournées par l’API et React ne recalcule aucun montant.
+- L’écran présente les quatre indicateurs de Figma, le registre `Abonné / Origine / Solde / État`, le détail en lecture seule via la route existante et l’action de règlement qui préremplit l’abonné et la créance. Le formulaire bloque toujours le passage à l’affectation tant que le montant reçu requis n’est pas saisi; aucun paiement n’est confirmé dans ce parcours de vérification.
+- Contrat ajouté dans `v2/openapi/sel-v2.yaml`; tests du contrat et de la matrice RBAC complétés. Test API/PostgreSQL ajouté au parcours commercial, mais le service PostgreSQL local n’est pas disponible dans cette session (Docker arrêté, aucune écoute locale et `TEST_DATABASE_URL` absent); l’intégration réelle demeure donc non exécutée ici.
+- Recette navigateur F08 exécutée avec fixtures synthétiques à 1440×900 et 1280×720; la navigation de caisse F01–F04 a également été rejouée avec le nouveau garde de validation. Captures : `evidence/f08-2026-11-10/receivables-register-f08-{1440x900,1280x720}.png`, `receivables-detail-f08-{1440x900,1280x720}.png`, `receivables-payment-prefill-f08-{1440x900,1280x720}.png`.
+- Vérifications locales : `npm run build` PASS (avertissement de taille des chunks PDF/fonts); `python -m pytest tests/test_v2_tauri_client.py -q` PASS, 66 tests; `cargo test -p sel-api --lib` PASS, 12 tests; `cargo test -p sel-contracts --test openapi_contract` PASS, 1 test; `cargo fmt --all -- --check` PASS après formatage.
+- `cargo test -p sel-api --test postgres_commercial` compile PASS, mais ses deux tests PostgreSQL sont marqués ignorés en l’absence de `TEST_DATABASE_URL`. La validation PostgreSQL réelle et l’isolation multi-organisation restent à établir dans CI ou avec une base de test disponible.
+
+F08 est implémenté dans l’API et le client et validé en recette visuelle synthétique. Il n’est pas validé contre une base PostgreSQL réelle, ni en production; aucune donnée réelle n’a été lue ou modifiée.
+
+### F07 — Historique des factures
+
+- Comparaison directe avec le frame Figma `178:1951` de la page `16 · SEL V2 — Prototype intégral & CRUD`.
+- L’historique est maintenant une vue distincte de la saisie : quatre indicateurs calculés depuis la liste du serveur, recherche, tableau des factures et panneau « Actions suivantes ». La création s’ouvre avec « Nouvelle facture » et les raccourcis métier ; le moteur Rust et les routes centrales restent les seules autorités métier.
+- Le parcours de prévisualisation conserve le formulaire monté et ses valeurs lorsqu’on revient à la saisie. Après émission confirmée par le serveur, le client revient à l’historique.
+- Captures du parcours synthétique : `evidence/invoice-history-f07-2026-11-07-1440x900.png` et `evidence/invoice-history-f07-2026-11-07-1280x720.png`.
+
+| Contrôle F07 | Résultat |
+|---|---|
+| `npm run build` (`v2/windows-app`) | PASS — React/TypeScript compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 63 tests |
+| `python v2/windows-app/scripts/visual_review.py`, 1440×900 et 1280×720 | PASS — navigation, indicateurs, séparation historique/saisie, prévisualisation, conservation du brouillon et documents PDF synthétiques |
+| `git diff --check` | PASS |
+| Réponse financière de la recette | Fixtures synthétiques seulement; aucun appel ni changement sur la production |
+| CI du commit F07 | À vérifier après publication du commit |
+
+F07 est implémenté et validé dans l’application de test; cette preuve ne valide ni l’impression sur l’équipement SEL ni les données du serveur de production.
+
+### F06 — Vérification avant émission
+
+- Comparaison directe au frame Figma `178:1832` : l’étape s’intitule maintenant « Vérifier une facture » et présente le dossier, la période, le nombre de lignes et le TTC calculé par Rust, puis le tableau détaillé et un panneau d’actions.
+- Les commandes sont séparées : corriger la saisie, revenir à l’historique (avec confirmation d’abandon si le brouillon a changé) ou confirmer l’émission. Après confirmation, un verrou UI empêche les clics/requêtes répétés pendant l’enregistrement central.
+- Le brouillon de saisie reste monté pendant l’aperçu afin que « Corriger la saisie » restaure les valeurs sans perte.
+- Captures synthétiques : `evidence/invoice-verification-f06-2026-11-07-1440x900.png` et `evidence/invoice-verification-f06-2026-11-07-1280x720.png`.
+
+| Contrôle F06 | Résultat |
+|---|---|
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/React compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 63 tests |
+| Recette navigateur 1440×900 et 1280×720 | PASS — aperçu, retour à la saisie sans perte, confirmation d’abandon au retour historique, émission simulée et exactement un POST sous double déclenchement |
+| `git diff --check` | PASS |
+| Nature de la recette | API et montants synthétiques; aucune facture réelle créée |
+| CI couvrant F06 | À vérifier après publication du commit |
+
+F06 est implémenté et validé sur l’application synthétique. L’émission réelle, l’autorisation utilisateur contre PostgreSQL de production et la validation sur poste SEL ne sont pas couvertes par ce scénario.
+
+### F05 — Émission de facture combinée
+
+- Comparaison directe au frame Figma `178:1704` : le formulaire est présenté sous « Émettre une facture combinée », avec l’accès à l’historique et un panneau « Actions suivantes ».
+- Le formulaire métier déjà relié au moteur Rust est conservé. L’action de prévisualisation reste bloquée tant que le catalogue ne fournit pas le barème applicable; les tarifs, taxes et montants ne sont pas calculés dans l’interface.
+- Aucun KPI fictif n’a été ajouté à l’écran de saisie : les métriques placeholders de la maquette ne représentent pas des données utiles pour préparer une nouvelle facture.
+- Captures synthétiques : `evidence/invoice-issue-f05-2026-11-07-1440x900.png` et `evidence/invoice-issue-f05-2026-11-07-1280x720.png`.
+
+| Contrôle F05 | Résultat |
+|---|---|
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/React compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 64 tests |
+| Recette navigateur 1440×900 et 1280×720 | PASS — ouverture F05 depuis F07, saisie, preview F06, conservation du brouillon, sortie avec confirmation, génération PDF locale et une seule requête d’émission dans le test synthétique |
+| `git diff --check` | PASS |
+| Nature de la recette | API et données simulées; aucune facture réelle émise |
+| CI couvrant F05 | À vérifier après publication du commit |
+
+F05 est implémenté et validé avec le scénario synthétique. Les tarifs de production, les permissions réelles, l’émission PostgreSQL, l’imprimante et le poste SEL doivent encore être vérifiés hors de ce test.
+
+### Isolation des données financières entre abonnés
+
+- Reproduction Playwright : après ouverture du dossier A, passage par Relevés, sélection du dossier B et ouverture immédiate pendant que l’API de B est volontairement suspendue, le relevé A restait visible dans le dossier B.
+- Correction : chaque état de relevé porte maintenant l’identifiant de son abonné; le rendu n’expose un relevé que si cet identifiant correspond à l’abonné sélectionné. Le chargement et l’erreur sont affichés distinctement et les anciennes données sont écartées.
+- La même protection s’applique au panneau des créances. Aucun endpoint, calcul financier ou état de production n’a été modifié.
+- Captures synthétiques : `evidence/customer-statement-switch-2026-11-07-1440x900.png` et `evidence/customer-statement-switch-2026-11-07-1280x720.png`.
+
+| Contrôle de cet incrément | Résultat |
+|---|---|
+| Reproduction avant correction | FAIL attendu — la facture synthétique de A restait visible pendant le chargement de B |
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 62 tests |
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/React compilés; avertissement non bloquant sur les chunks PDF/fonts |
+| `python v2/windows-app/scripts/visual_review.py`, 1440×900 et 1280×720 | PASS — bascule A→B avec réponse B retardée, absence du document de A, arrivée du document de B; reste de la recette synthétique exécuté |
+| `git diff --check` | PASS |
+| CI GitHub du parent `224f97261c6718b8d848af00094b0ebe59dc045c` | PASS — backend [42307206930](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206930), serveur [42307206491](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206491), régression V1 [42307206533](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206533), Tauri Windows/installeurs/upgrade [42307206466](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206466) |
+| CI couvrant ce correctif précis | À relancer après push du commit de cet incrément |
+
+La recette visuelle utilise des fixtures synthétiques et ne constitue pas une validation sur les données SEL ni sur le poste cible.
+
+### Administration A01 / A02 / A03
+
+- A01 sépare le répertoire, la recherche, les indicateurs et les actions suivantes; les modifications de compte sont déplacées dans une fiche de sécurité dédiée.
+- A02 présente la création d’un utilisateur dans un écran distinct. Une identité déjà utilisée déclenche un conflit API `USER_IDENTITY_EXISTS`, traduit en français, sans exposer le détail brut ni la route centrale.
+- A03 regroupe rôle, état et réinitialisation du mot de passe. Le compte de la session courante ne peut pas changer son propre rôle ni désactiver son propre compte. Ces contrôles sont désactivés dans le DOM et visuellement distincts des actions disponibles.
+- Le refus d’auto-modification continue d’être couvert par le test unitaire de traduction de l’erreur centrale; la recette navigateur vérifie désormais le verrouillage préventif et teste à la place un conflit de doublon réaliste.
+- Les confirmations métier sont vérifiées au clavier : focus initial dans la boîte, Tabulation/Shift+Tab bouclés dans la boîte, Échap ferme sans écrire et rend le focus au déclencheur.
+- Les erreurs de navigation préservent le brouillon et demandent une confirmation avant abandon. Les captures visuelles montrent la page entière.
+
+### Preuves locales
+
+| Contrôle | Résultat au 7 novembre |
+|---|---|
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 62 tests |
+| `npm run build` (`v2/windows-app`) | PASS — build React/TypeScript; avertissement non bloquant sur les gros chunks PDF/fonts |
+| `python v2/windows-app/scripts/visual_review.py`, fenêtre 1440×900 | PASS — parcours synthétiques complets, conflits doublon, verrouillage des droits propres et apparence calculée des boutons désactivés |
+| Même recette, fenêtre 1280×720 | PASS — mêmes parcours; aucune surlargeur horizontale détectée |
+| Confirmation clavier, 1440×900 et 1280×720 | PASS — focus initial, Tab/Shift+Tab, Échap, aucune requête d’archivage et focus restauré |
+| PostgreSQL réel SEL, production, imprimante et poste utilisateur | NOT_RUN — aucun accès ni test réel dans ce lot |
+
+Captures reproductibles dans `evidence/` : `admin-user-directory-2026-11-07-1440x900.png`, `admin-duplicate-user-conflict-2026-11-07-1440x900.png`, `admin-self-access-locked-2026-11-07-1440x900.png`, `customer-archive-keyboard-focus-2026-11-07-1440x900.png`, et leurs versions 1280×720. Les anciennes captures nommées `admin-self-role-conflict-*` documentent un scénario de test antérieur et ne représentent plus le parcours actuel.
+
+### État CI au SHA poussé `224f97261c6718b8d848af00094b0ebe59dc045c`
+
+- PASS : backend — [42307206930](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206930).
+- PASS : paquet serveur — [42307206491](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206491).
+- PASS : régression V1 — [42307206533](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206533).
+- PASS : client Tauri Windows, compilation MSI/NSIS et test isolé installation/mise à niveau — [42307206466](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42307206466).
+
+### État de livraison
+
+- Ces changements restent sur la branche UX3 et la PR #60, sans fusion dans `main`, publication ni déploiement.
+- Les statuts CI ci-dessus couvrent le SHA `224f972`; les modifications d’isolation décrites ci-dessus attendent encore leur propre CI après push.
+- Le découpage A01–A03 améliore cette zone seulement. L’ensemble UX3 reste PARTIAL et la comparaison des 85 frames, les recettes des autres parcours et les limites API métier restent à traiter.
+
+## 1. Références d’exécution
+
+- Dépôt : `jupi-z/SEL-Facturation-Desktop`
+- Branche : `monarque/sel-v2-ux3-implementation-20261106`
+- Base intégrée : `main@0e29e7712e3b0b167ac8729d2a2e78e3ae612cd6`
+- Derniers commits UX3 : `d74166df21a0b3f7a07ab917aef8a1a9bda615d7` (H00 / responsive), `d9ca03ad7296066483295e9c7536e1472b2bb2b8` (confirmations administration), `d6d20a3829d6a0f85a7cc43b9c7e2e6d15971e6f` (preuve admin), `342f456913ce645a1fc91c8fa4ce223b8a7d423e` (approbation/révocation référentiels), `3c8f71ccf6a02c503c337a95ab10a76eabdb3935` (confirmation création abonné), `4dec135768a35e3b90bbd000dca0e87e18269a64` (confirmation édition abonné), `1958fe3cc4fd1d8a1dd48397250edbbd27ee515f` (confirmations services et compteurs), `5689f652ca193eab5474c216eb7622c7409338d8` (preuves navigateur complémentaires), `e2135e6330db819fe019cf8ec0d9fc77da4d3dbb` (revue du contrat solaire), `a488937aa100325e590c0785aa742db962e02085` (rapport solaire), `9a791f3caa859a5bd7a12f54d433f666d3b0885f` (navigation solaire dédiée selon O09), `2764eb68c743b0ca0c32fd244d42d65885db0a58` (paiement prérempli depuis O10), `ce464c4382e2dcca4835074596704b40eacc6afd` (confirmation des créations de brouillon tarifaire et réinitialisation du mot de passe utilisateur), `8b20ed6823573abb0e9108f278e2f3d8bab448b2` (rapport administration), `4cb8793` (erreurs API centralisées en français et recette du refus d’auto-modification de rôle).
+- PR #60 : https://github.com/jupi-z/SEL-Facturation-Desktop/pull/60 — ouverte, non fusionnée, base `main`.
+- Figma page 16 (`177:1481`, « 16 · SEL V2 — Prototype intégral & CRUD ») : noms et structure des 76 écrans principaux et 9 overlays (85 frames au total) inventoriés; contextes haute fidélité consultés pour H00, A02, C01, F02, F05, O06, O09 (`178:3249`) et O10 (`178:3378`). O09 a un espace contrats distinct; O10 prévoit une action d’encaissement et affiche les valeurs du serveur. Le client relie maintenant le suivi du contrat au journal de caisse en transmettant l’abonné, la créance existante et la prochaine échéance ouverte. La comparaison visuelle complète de toutes les frames reste à faire.
+- Figma page 17 : les trois frames de documentation recensées; contexte haute fidélité lu pour `191:76` (écarts API et décisions). Les exigences sont croisées au dossier UX3 du dépôt.
+- Environnement local : Windows 11 Professionnel, Python 3.12.10, Node 24.21.0, Rust 1.99.1, Cargo 1.99.1. Le test natif Tauri local a compilé sous MSVC.
+- PostgreSQL local : aucun `TEST_DATABASE_URL`; les tests transactionnels sont exécutés par le workflow GitHub avec son PostgreSQL isolé.
+
+## 2. Invariants protégés
+
+| Invariant | Preuve | État |
+|---|---|---|
+| Facture combinée, ligne eau visible à 0 m³ | tests Rust de facturation et parcours visuel synthétique | DONE |
+| Calculs financiers et soldes issus du serveur Rust | aperçu et reçus UI utilisent les valeurs API; tests API Rust/CI | DONE pour les parcours exercés |
+| PDF généré localement, sans route de stockage serveur | test OpenAPI `openapi_document_is_valid_yaml_and_declares_no_pdf_route`; revue du rendu PDF local | DONE |
+| Snapshots, références et écritures historiques non altérés | changements append-only des fonctions financières; aucune migration UX de données | DONE pour ce lot |
+| Sessions, RBAC et whitelist Tauri conservés | 12 tests `sel-api`, 5 tests natifs Tauri; CI backend verte | DONE pour les routes testées |
+| Pas d’opération métier hors connexion dans ce client | architecture connectée et indication serveur dans l’application | DONE |
+| Pas de suppression physique financière | UI présente annulation/contrepassation/avoir audités | DONE pour les actions exposées |
+| Migrations/SafeUpdate non exécutés sur données réelles | aucun accès production ni commande de migration | DONE — production intacte |
+
+## 3. Parcours implémentés
+
+| Domaine / frames | Implémentation et API | Preuves | État |
+|---|---|---|---|
+| H00 et navigation six domaines | Accueil, raccourcis, session centrale, contexte/retour; tableau de bord rapproché de la frame H00 | captures 1440×900; recette browser 34 captures; le correctif enlève le tableau hors-maquette au bas de l’accueil | PARTIAL — H00 traité, toutes les frames non comparées |
+| C01–C06, C30–C31 abonnés | création, recherche, dossier, modification, archivage/réactivation; création et édition relues avant écriture; état initial `ACTIVE` annoncé comme fixé par l’API | Playwright synthétique : annulation sans POST/PATCH, saisie conservée, confirmation avec un seul appel; captures `evidence/customer-create-confirmation-1440x900.png`, `evidence/customer-edit-confirmation-1280x720.png` | PARTIAL — état initial non configurable par le contrat API; conflit 409 réel à valider de bout en bout |
+| O01–O03, C07–C10, C32 services/compteurs | services avec ou sans compteur; rattachement, ajout et remplacement non destructif relus avant écriture; édition du raccordement relue avant PATCH | revue Playwright à 1440×900 et 1280×720; annulation sans requête et saisie préservée; captures `evidence/service-account-confirmation-1280x720.png`, `evidence/meter-create-confirmation-1280x720.png`, `evidence/service-account-edit-confirmation-1280x720.png`; test HTTP/PostgreSQL de remplacement inclus dans CI backend | PARTIAL — détails Figma à contrôler sur chaque écran |
+| O04–O05, C11–C12, C33 relevés | saisie, aperçu, historique et correction append-only | visual review; tests API backend en CI | PARTIAL |
+| F05–F07, C13–C14 facture | émission, vérification et historique rapprochés des frames Figma; confirmation explicite, conservation du brouillon, document-data local, annulation avec motif | 65 tests client; captures F05/F06/F07 1440×900 et 1280×720; recette PDF et émission synthétiques | PARTIAL — API réelle, imprimante cible et validation sur poste SEL restent à faire |
+| F01–F04, C15–C17, C34 paiements | journal, saisie, affectation et confirmation séparés; revue avant POST, verrou anti-double clic, reçu, contrepassation | 66 tests Python; captures F01–F04; recettes complètes 1440×900 et 1280×720 avec API synthétique | PARTIAL — recette HTTP réelle contre PostgreSQL, revue Figma complète, permissions et poste SEL requis |
+| F08, C18–C19, C35 créances | `GET /v1/receivables` organisationnel; indicateurs serveur; détail central; raccourci de paiement prérempli; avoir existant via API | OpenAPI + RBAC: `cargo test -p sel-contracts --test openapi_contract`, `cargo test -p sel-api --lib`; recette Playwright synthétique 1440×900 et 1280×720; captures `evidence/f08-2026-11-10/` | PARTIAL — PostgreSQL réel/CI, scénario d’isolation multi-organisation et permissions sur base de test à exécuter |
+| O06–O10, C20–C22, C28 solaire | catalogue/ventes et contrats/échéanciers ont des onglets séparés; transitions avec brouillon protégées; suivi expose les métriques renvoyées par le serveur et son CTA mène à l’encaissement prérempli avec client/créance/prochaine échéance; contrat revu avant POST | Playwright synthétique à 1440×900 et 1280×720 : refus de navigation conserve le brouillon, validation l’abandonne; un seul POST contrat après acceptation; la transition O10 sélectionne l’abonné, la créance et l’échéance sans créer de paiement; captures `evidence/solar-contract-workspace-1440x900.png`, `evidence/solar-payment-prefill-1280x720.png` | PARTIAL — annulation vente et avenant/résiliation contrat non exposés; autres détails O06–O10 à comparer |
+| A01–A09, C23–C25, C29 administration | répertoire, création et sécurité séparés; rôles/statuts verrouillés pour le compte courant; création, changement de rôle/statut, réinitialisation et mutations de référentiels relus avant écriture; erreurs 403/409/422 localisées sans URL API | recette Playwright synthétique : conflit identité doublon, droits propres désactivés, apparence disabled, dialogue clavier avec focus trap/Échap/restauration; preuves datées `admin-user-directory-*`, `admin-duplicate-user-conflict-*`, `admin-self-access-locked-*`, `customer-archive-keyboard-focus-*`, approbation et brouillon | PARTIAL — revue de toutes les frames d’administration et recette des erreurs réelles contre PostgreSQL restent à faire |
+| E01–E11, C26–C27 états | états auth/erreurs, confirmation intégrée, validation et reprise | tests UI et script browser | PARTIAL — recette exhaustive 401/403/409/422/503 encore requise |
+
+## 4. Lacunes API et décisions
+
+| Code | État actuel | Décision sûre | Statut |
+|---|---|---|---|
+| B1 compteur | `POST /v1/meters/{id}/replace` est implémentée et protégée; ancien compteur conservé, nouveau créé transactionnellement | aucune suppression physique | DONE techniquement; tests CI à garder verts |
+| B2 vente solaire | pas d’API de rectification/annulation reliant vente, créance, paiements et audit | ne pas inventer d’écriture comptable; définir contrat métier Rust puis tester avant d’activer une action UI | BLOCKED_API |
+| B3 contrat actif | pas d’avenant/résiliation avec politique de traitement des sommes reçues | exiger une décision métier sur principal, paiements et échéances; aucun recalcul côté client | BLOCKED_API |
+| B4 brouillons admin | création, approbation et révocation existent; modification/abandon explicite d’un brouillon serveur non garanti | utiliser une nouvelle version rectificative; ne pas détourner DELETE | PARTIAL / BLOCKED_API si édition ou abandon serveur requis |
+
+## 5. Tests et preuves observés
+
+| Commande / scénario | Résultat réel |
+|---|---|
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 61 tests au code `4cb8793`, y compris navigation solaire confirmée/refusée, préremplissage O10, revue des brouillons tarifaires, réinitialisations et traduction des erreurs centrales |
+| `npm run build` (`v2/windows-app`) | PASS au code applicatif `4cb8793`; avertissement non bloquant pour les chunks PDF/fonts volumineux |
+| `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` | PASS |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 12 tests |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test |
+| `cargo test --manifest-path v2/windows-app/src-tauri/Cargo.toml --lib` | PASS — 5 tests whitelist/session Tauri |
+| `cargo test --manifest-path v2/Cargo.toml --workspace` local | FAIL d’environnement de build, LNK1207/PDB incompatible à l’édition de liens de `postgres_catalog_api`; aucune assertion rapportée en échec |
+| Workflows GitHub sur `d74166d` | PASS — backend, serveur package, régression V1, build MSI/NSIS et installation/upgrade isolé avec profil préservé. Cette preuve ne couvre pas les modifications d’administration ultérieures. https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573787 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573819 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573823 · https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/42283573796 |
+| Workflows GitHub au SHA `37d1305b93829e1f50e9d950b1f0c214e115f2af` | PASS — backend, paquet serveur, régression V1, client Tauri Windows avec test d’installation/mise à niveau isolé. Ce run couvre le commit poussé; les tests clavier ajoutés après ce SHA devront repasser la CI à leur prochain push. |
+| `python v2/windows-app/scripts/visual_review.py` à 1440×900 | PASS au code UI `4cb8793` — parcours synthétiques, refus de modification du rôle propre expliqué en français, brouillon de tarif et écrans solaires; aucun test sur serveur SEL réel |
+| `python v2/windows-app/scripts/visual_review.py` à 1280×720 | PASS au code UI `4cb8793` — mêmes parcours aux dimensions réduites; captures du refus 409 et de la confirmation de brouillon |
+| PostgreSQL local / HTTP contre base réelle | NOT_RUN localement; CI PostgreSQL dédiée PASS au commit cité |
+| Impression sur imprimante SEL et installation poste cible | NOT_RUN — aucun poste/imprimante cible utilisé dans cette étape |
+| Données réelles / backend production | NON TOUCHÉ — aucune connexion, migration, écriture ou configuration de production |
+
+## 6. Diff et risques
+
+- Changements UX3 : `v2/windows-app/src/App.tsx`, `App.css`, `api.ts`, `src-tauri/src/lib.rs`, tests Python, script Playwright, OpenAPI/API Rust pour les lacunes nécessaires et preuves visuelles. Les créations et modifications d’abonné, rattachements et mutations compteur, contrats solaires, créations d’utilisateur, changements de rôle/statut, approbations et révocations demandent une revue explicite; les secrets restent masqués et les saisies sont conservées si une revue est annulée. L’API crée tout nouvel abonné à l’état `ACTIVE`; l’UI le signale et ne propose pas un choix d’état absent du contrat.
+- Migrations : la branche intègre les migrations de `main` déjà publiées dans le code; aucune migration exécutée sur un environnement réel.
+- Le dernier changement visuel supprime le tableau d’activité supplémentaire du dashboard, pour respecter la frame H00 et éviter un panneau coupé en bas de fenêtre. Les historiques restent dans leurs écrans.
+- Risques résiduels : comparaison exhaustive des 76 écrans non effectuée; mise à l’échelle Windows 125/150 % et recette sur le poste SEL restent à valider; les opérations B2/B3/B4 n'ont pas de contrat métier suffisant.
+- Retour arrière : revert des commits UX3 ciblés sur la branche; aucune réécriture de données n’est introduite.
+- Actions non prises en charge : ne pas afficher/activer annulation d’une vente solaire ni avenant/résiliation du contrat tant que les APIs ne sont pas définies et prouvées.
+
+## 7. Verdict d’étape
+
+| Domaine | État | À faire |
+|---|---|---|
+| UX / navigation | PARTIAL | comparer les écrans restants aux frames; vérifier retours, clavier et erreurs |
+| CRUD / corrections | PARTIAL | parcours API réel de bout en bout; contrats B2/B3; décisions B4 |
+| Backend / API | PASS pour les routes touchées au commit CI | garder CI backend verte sur le nouveau HEAD |
+| Finance / documents | PARTIAL | recette structurée des paiements/créances, génération et impression physique |
+| Build Windows | PARTIAL | CI MSI/NSIS et test d’installation/mise à niveau isolé PASS au SHA `37d1305`; test sur poste matériel SEL encore requis |
+| Poste matériel SEL | NOT_TESTED | installer et exécuter sur poste représentatif; ne pas assimiler Playwright à un test matériel |
+| Production | NO-GO / NON TOUCHÉE | hors périmètre de cette PR; aucune bascule production demandée ou faite |
+
+**Décision :** PR #60 reste ouverte et non fusionnée. Aucun installateur, release ou déploiement n’est publié par ce lot. La mission UX3 n’est pas terminée tant que les comparaisons de frames et les validations restantes ne sont pas clôturées.
+
+### Mise à jour prioritaire — administration commerciale et A06 (11 novembre 2026)
+
+**Constat vérifiable dans le code :** `/health/ready` indique seulement `configured: false` et ne donne pas le motif. Le blocage exige exactement une version approuvée, USD et en vigueur pour chacun des quatre tarifs (électricité/eau × résidentiel/commercial), exactement un profil TVA approuvé/en vigueur pour chacun des deux services, et exactement une ligne de communication USD approuvée/en vigueur. Une entrée absente, expirée, non approuvée ou en doublon bloque donc la préparation commerciale. C’est une règle du code serveur, pas une inspection des valeurs actuellement enregistrées en production.
+
+**Correctifs préparés sur la branche de continuation :**
+
+- Nouvelle route de lecture seule `GET /v1/admin/configuration/readiness`, réservée au rôle ADMIN, qui retourne les sept critères, leurs libellés, le nombre de versions approuvées/en vigueur et la date de contrôle. Elle réutilise le même prédicat que l’état de préparation serveur; aucune donnée n’est modifiée.
+- L’administration a une navigation secondaire fixe : utilisateurs/accès, tarifs, TVA, change, catalogue solaire, ligne de communication et journal d’audit. Les catégories tarifaires sont des choix « Résidentiel/Commercial » au lieu d’un code à taper.
+- Si une lecture administrative échoue, la section correspondante est vidée au lieu de laisser visibles des données anciennes comme si elles étaient fraîches. Le message indique précisément les rubriques qui n’ont pas été chargées.
+- A06 distingue la source/document fiscal de la référence d’approbation (demandée à l’activation), affiche le taux en %, persiste le motif dans la version, et garde les valeurs par défaut SEL/SERVICE dans le repository PostgreSQL. Le brouillon n’active pas lui-même un profil.
+- Un test HTTP/PostgreSQL est ajouté au parcours de gestion des versions fiscales pour vérifier la route de diagnostic et ses critères. Il compile localement, mais son exécution nécessite une base PostgreSQL de test.
+
+**Preuves exécutées dans cette session :**
+
+| Contrôle | Résultat |
+|---|---|
+| `python -m pytest tests/test_v2_tauri_client.py -q` | PASS — 69 tests |
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript et bundle Windows compilés; avertissement existant de taille des chunks PDF/fonts |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-api --lib` | PASS — 13 tests, dont les règles manque/doublon et RBAC de la route de diagnostic |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-contracts --test openapi_contract` | PASS — 1 test |
+| `cargo clippy --manifest-path v2/Cargo.toml -p sel-api -p sel-storage --all-targets -- -D warnings` | PASS |
+| `cargo test --manifest-path v2/Cargo.toml -p sel-api --test postgres_catalog_api --no-run` | PASS — compilation du test d’intégration seulement |
+| `python v2/windows-app/scripts/visual_review.py`, 1440×900 et 1280×720 | PASS — code de sortie 0; parcours synthétique d’administration et écrans A06 |
+| `git diff --check`, `cargo fmt --manifest-path v2/Cargo.toml --all -- --check` | PASS après formatage |
+
+Captures de la revue : `evidence/admin-2026-11-11/1440/admin-full-1440x900.png`, `admin-tax-profile-a06-1440x900.png`, `admin-user-security-a03-1440x900.png`, `admin-catalog-approval-1440x900.png`, et équivalents sous `evidence/admin-2026-11-11/1280/`.
+
+**Validation CI sur le commit `117c1776cb01a6d101a477fe308f943746209bfe` :** les quatre workflows de la PR #60 sont PASS (`build-tauri-windows`, `rust`, `test-build`, `validate-package`). Le workflow Rust a exécuté les tests avec PostgreSQL; le test d’intégration du diagnostic de configuration est réussi après correction de sa fixture. Le workflow Windows a aussi terminé le build des paquets et la vérification isolée d’installation/mise à niveau. Ces résultats valident le code du candidat dans CI, pas l’installation sur le poste SEL ni la configuration réelle de production.
+
+**Non exécuté / limites :** `TEST_DATABASE_URL` et `DATABASE_URL` ne sont pas configurés localement et Docker Desktop n’est pas démarré; les tests PostgreSQL ne sont donc pas exécutés sur cette machine. Aucune lecture ni écriture de la base SEL de production n’a été effectuée : il n’est pas vérifié quels critères manquent réellement en production. L’interface de diagnostic donnera ces détails une fois le correctif déployé et appelée avec une session ADMIN; elle ne crée/approuve aucun tarif ou paramètre à la place de SEL. La validation humaine sur un poste Windows SEL reste à faire.
+
+**Statuts d’étape :** A06 `COMPLETED` pour le code, les validations automatisées et la vérification de readiness après déploiement. Urgence Administration `DEPLOYED / ACCEPTANCE_PENDING` — l’API et le client candidat sont livrés; les opérations commerciales réelles n’ont pas été simulées dans la base SEL et restent à vérifier par l’agent sur le poste après installation.
+
+### Déploiement administration UX3 — 11 novembre 2026
+
+- Candidat produit depuis le commit `18ca46ccc0850683d45685b392da94c72a8573da` de la PR #60. Les quatre workflows GitHub de ce SHA sont `PASS` : Windows/Tauri, Rust/PostgreSQL, client/build et paquet serveur.
+- Le premier paquet de construction distant a échoué au healthcheck car l’archivage Windows avait converti les migrations SQL de LF en CRLF; SQLx a correctement refusé le mismatch de checksum. Le conteneur précédent a été restauré aussitôt; aucune perte de données. La construction corrigée emploie les blobs Git sans conversion et a démarré avec succès contre une restauration PostgreSQL isolée.
+- Sauvegarde PostgreSQL pré-déploiement restaurée avec succès dans un conteneur temporaire PostgreSQL 16.4 isolé. Copie conservée chiffrée avec clé protégée par DPAPI sous `C:\Users\MonarQue\AppData\Local\SEL-Production-Backups`; les copies en clair temporaires et le conteneur de test ont été supprimés.
+- Production : image API `sha256:7d6ddf30c5fdc59845b594e29dce889321def92cddf5e2c42711519d96ff0d99`; marqueur `/srv/sel-v2/DEPLOYMENT_COMMIT` = `18ca46ccc0850683d45685b392da94c72a8573da`. Seul `sel-api` a été recréé. PostgreSQL est resté sain; la migration `22` est présente et réussie. Vérifications après déploiement : `https://sel.shuleops.com/health/ready` → HTTP 200, `configured:true`; le diagnostic admin sans jeton → HTTP 401, conforme à l’exigence de session.
+- Vérification de catalogue en lecture seule : le catalogue solaire de production contient `0` produit (0 actif, 0 approuvé). Les écrans et API CRUD sont déployés, mais aucune vente de kit ne peut être saisie tant qu’un administrateur n’a pas créé et approuvé les références/prix réels fournis par SEL. Aucun prix ou produit fictif n’a été créé.
+- Installeur Windows NSIS 0.4.5 produit par l’action Windows et testé par son scénario CI d’installation/mise à niveau : `SEL-V2-Setup-0.4.5-UX3-18ca46c.exe`, SHA-256 `3650675F9C2EB381404EFC1A7FA18DDBBEAD8513445ED255E2B6878F31634EAE`. Le paquet est non signé par certificat Authenticode.
+- Limite de recette : aucun paiement, facture ou contrat solaire fictif n’a été créé dans la base de production. Les parcours financiers et d’administration sont couverts par les tests CI PostgreSQL/UI; les opérations CRUD réelles avec le compte SEL doivent être validées par l’agent après installation. Le canal `update.sel.shuleops.com` répond toujours 404 et n’est pas inclus dans cette livraison.
+- La PR #60 reste ouverte et non fusionnée; `main` n’a pas été modifiée.

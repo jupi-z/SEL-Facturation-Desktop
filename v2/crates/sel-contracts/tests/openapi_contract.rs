@@ -9,12 +9,42 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         .unwrap();
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices/{id}/document-data")));
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/invoices")));
+    let void_invoice = paths
+        .get(serde_yaml::Value::from("/v1/invoices/{id}/void"))
+        .and_then(|path| path.get("post"))
+        .expect("audited invoice void route is documented");
+    assert_eq!(
+        void_invoice
+            .get("requestBody")
+            .and_then(|body| body.get("content"))
+            .and_then(|content| content.get("application/json"))
+            .and_then(|json| json.get("schema"))
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("#/components/schemas/VoidInvoiceRequest")
+    );
     let payment_list = paths
         .get(serde_yaml::Value::from("/v1/payments"))
         .and_then(|path| path.get("get"))
         .expect("central payment journal route is documented");
     assert!(payment_list.get("security").is_some());
     assert!(paths.contains_key(serde_yaml::Value::from("/v1/payments/{id}/document-data")));
+    let receivables_register = paths
+        .get(serde_yaml::Value::from("/v1/receivables"))
+        .and_then(|path| path.get("get"))
+        .expect("organization receivables register route is documented");
+    assert!(receivables_register.get("security").is_some());
+    assert_eq!(
+        receivables_register
+            .get("responses")
+            .and_then(|responses| responses.get("200"))
+            .and_then(|response| response.get("content"))
+            .and_then(|content| content.get("application/json"))
+            .and_then(|json| json.get("schema"))
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("#/components/schemas/ReceivablesRegister")
+    );
     let statement_operation = paths
         .get(serde_yaml::Value::from("/v1/customers/{id}/statement"))
         .and_then(|path| path.get("get"))
@@ -150,6 +180,7 @@ fn openapi_document_is_valid_yaml_and_declares_no_pdf_route() {
         "CatalogSnapshotPayload",
         "TariffDraft",
         "CustomerStatement",
+        "ReceivablesRegister",
         "CustomerStatementPayment",
         "PaymentListItem",
         "PaymentReceiptData",

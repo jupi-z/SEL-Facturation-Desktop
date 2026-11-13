@@ -227,4 +227,55 @@ async fn meter_readings_are_persisted_scoped_and_corrected_append_only_over_http
     assert_eq!(persisted.len(), 2);
     assert_eq!(persisted[0].id, original.id);
     assert_eq!(persisted[1].id, corrected.id);
+
+    let replacement_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/meters/{meter_id}/replace"))
+                .header("authorization", "Bearer test")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"serial":"WATER-2","reason":"Compteur remplacé après panne"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        replacement_response.status(),
+        axum::http::StatusCode::CREATED
+    );
+    let replacement = response_json(replacement_response).await;
+    assert_eq!(replacement["retired_meter"]["id"], meter_id);
+    assert_eq!(replacement["retired_meter"]["active"], false);
+    assert_eq!(replacement["replacement_meter"]["serial"], "WATER-2");
+    assert_eq!(replacement["replacement_meter"]["unit"], "M3");
+    assert_eq!(replacement["replacement_meter"]["active"], true);
+
+    let retained_history = reopened
+        .list_meter_readings(meter_id.parse().unwrap(), Some("2026-10"))
+        .await
+        .expect("old meter history remains available after replacement");
+    assert_eq!(retained_history.len(), 2);
+    assert_eq!(retained_history[0].id, original.id);
+    assert_eq!(retained_history[1].id, corrected.id);
+
+    let repeated_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/meters/{meter_id}/replace"))
+                .header("authorization", "Bearer test")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"serial":"WATER-3","reason":"Nouvelle tentative"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeated_response.status(), axum::http::StatusCode::CONFLICT);
 }
