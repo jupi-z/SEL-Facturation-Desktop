@@ -12,6 +12,8 @@ use sqlx::Row;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+const SOLAR_TAX_FIXTURE_ID: &str = "00000000-0000-4000-8000-000000000024";
+
 async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
 }
@@ -43,9 +45,12 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
          VALUES ($1, 'SOLAR_KIT', 'FIXTURE', 'SUBTOTAL', 0.16,
-                 'SEL-approved standard VAT fixture', CURRENT_DATE, 'APPROVED')",
+                 'SEL-approved standard VAT fixture', CURRENT_DATE, 'APPROVED')
+         ON CONFLICT (id) DO UPDATE SET
+             status = 'APPROVED', effective_from = CURRENT_DATE, effective_to = NULL,
+             rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'FIXTURE'",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::parse_str(SOLAR_TAX_FIXTURE_ID).unwrap())
     .execute(&store.pool)
     .await
     .unwrap();
@@ -429,9 +434,12 @@ async fn concurrent_solar_contract_activation_creates_one_schedule_and_one_confl
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
          VALUES ($1, 'SOLAR_KIT', 'FIXTURE', 'SUBTOTAL', 0.16,
-                 'SEL-approved standard VAT fixture', CURRENT_DATE, 'APPROVED')",
+                 'SEL-approved standard VAT fixture', CURRENT_DATE, 'APPROVED')
+         ON CONFLICT (id) DO UPDATE SET
+             status = 'APPROVED', effective_from = CURRENT_DATE, effective_to = NULL,
+             rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'FIXTURE'",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::parse_str(SOLAR_TAX_FIXTURE_ID).unwrap())
     .execute(&first.pool)
     .await
     .unwrap();
