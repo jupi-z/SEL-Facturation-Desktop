@@ -25,6 +25,7 @@ Vérifications exécutées pour cet incrément :
 
 - `npm ci` : **PASS**, 0 vulnérabilité signalée par npm audit;
 - `npm run build` dans `v2/windows-app` : **PASS**, avertissement non bloquant de Vite sur la taille des bundles;
+- `python v2/windows-app/scripts/visual_review.py` : **PASS** sur fixtures de démonstration; génération/rendu PDF A4, reçu v2 avec principal 22,62 USD, versement 3,00 USD, solde 19,62 USD et mode « Espèces » vérifiés;
 - `cargo fmt --all` : **PASS**;
 - `cargo fmt --all -- --check` : **PASS**;
 - `cargo clippy --workspace --all-targets -- -D warnings` : **PASS**;
@@ -37,7 +38,7 @@ Vérifications exécutées pour cet incrément :
 
 Les exécutions CI ont révélé des attentes de tests non synchronisées avec les parcours : les reçus émis par l’API devaient attendre le schéma v2, la vérification visuelle contrôlait un UUID interne au lieu de la dette/document lisible, et le script cherchait l’ancien libellé de retour au journal après confirmation. Les assertions attendent maintenant le snapshot v2, vérifient dette, échéancier, référence des conditions et absence de frais, et suivent le bouton « Journal de caisse » actuel. Le snapshot regroupe l’allocation par créance et fige les informations du règlement initial; une réaffectation ultérieure ne doit pas modifier le reçu réimprimé. Les anciens paiements sans snapshot gardent la voie de compatibilité v1, sans solde historique inventé. Tests de contrat Windows : **70 PASS** localement; compilation de l’intégration PostgreSQL : **PASS**. La nouvelle CI complète doit encore confirmer ces corrections.
 
-Limites : le nouveau test d’intégration doit être exécuté contre le service PostgreSQL dédié de la CI avant toute livraison. Le build Vite ne remplace pas la recette PDF visuelle sur Windows. Ces éléments demeurent **NOT_TESTED/BLOCKED_EXTERNAL**; ne pas annoncer cet incrément comme validé ou déployé en production.
+Limites : le nouveau test d’intégration doit être exécuté contre le service PostgreSQL dédié de la CI avant toute livraison (la CI est en cours de relance). La recette PDF automatique vérifie les fixtures et la pagination, mais n’est pas un essai sur le poste ou l’imprimante de SEL. Cette recette matérielle demeure **NOT_TESTED/BLOCKED_EXTERNAL**; aucun déploiement en production n’a été effectué.
 
 ## Plan de finalisation et règles de travail
 
