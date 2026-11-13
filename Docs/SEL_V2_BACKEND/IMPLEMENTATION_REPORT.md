@@ -1400,7 +1400,7 @@ L’application du taux exact dépend du profil approuvé qui sera actif à la d
 | `npm run build` (`v2/windows-app`) | PASS — TypeScript et Vite; bundles PDF volumineux, sans erreur de build |
 | `python v2/windows-app/scripts/visual_review.py` | PASS — parcours visuel et PDF sur fixtures synthétiques; sortie isolée sous `artifacts/solar-tax-debt-documents-20261113/` |
 | PostgreSQL véritable et migration `0024` | BLOCKED_EXTERNAL — Docker Desktop daemon indisponible, aucune instance PostgreSQL locale, `TEST_DATABASE_URL` absent |
-| CI GitHub | Premier run `43428863146` a révélé une colonne non sélectionnée et des fixtures de profil TVA concurrentes; corrections poussées, rerun en cours |
+| CI GitHub | Les runs `43428863146` et `43429884161` ont révélé la colonne de base, l’isolation des fixtures concurrentes et l’échelle décimale du taux; corrections poussées, nouveau rerun requis |
 | Production, données SEL, déploiement ou publication | NOT_TOUCHED — aucun accès en écriture utilisé |
 
 **Limites avant livraison :** la migration `0024` n’est pas encore passée en CI sur PostgreSQL; un profil `SOLAR_KIT` devra être configuré et explicitement approuvé avant l’émission d’une nouvelle vente; le parcours doit ensuite être validé contre PostgreSQL de test et sur un poste Windows représentatif. Le PDF analysé n’est pas modifié et aucune vente historique n’est recalculée. Cette branche de correction n’a pas été poussée en production.

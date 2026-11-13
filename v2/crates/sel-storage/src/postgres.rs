@@ -2713,7 +2713,7 @@ impl CentralStore {
         if taxes.len() != 1 {
             return Err(SolarQuoteError::TaxProfileUnavailable);
         }
-        let tax_rate: Decimal = taxes[0].try_get("rate")?;
+        let tax_rate: Decimal = taxes[0].try_get::<Decimal, _>("rate")?.normalize();
         if !matches!(
             taxes[0].try_get::<String, _>("base")?.as_str(),
             "SUBTOTAL" | "SERVICE"
@@ -6002,7 +6002,7 @@ impl CentralStore {
             return Err(SolarSaleWriteError::TaxProfileUnavailable);
         }
         let tax_profile_id: Uuid = tax_row.try_get("id")?;
-        let tax_rate: Decimal = tax_row.try_get("rate")?;
+        let tax_rate: Decimal = tax_row.try_get::<Decimal, _>("rate")?.normalize();
         let tax_amount = (subtotal * tax_rate).round_dp(2);
         let total = subtotal + tax_amount;
         if input.principal.round_dp(2) != total {
