@@ -425,6 +425,16 @@ async fn concurrent_solar_contract_activation_creates_one_schedule_and_one_confl
     .execute(&first.pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO tax_profile_versions
+         (id, service_code, jurisdiction, base, rate, source, effective_from, status)
+         VALUES ($1, 'SOLAR_KIT', 'FIXTURE', 'SUBTOTAL', 0.16,
+                 'SEL-approved standard VAT fixture', CURRENT_DATE, 'APPROVED')",
+    )
+    .bind(Uuid::new_v4())
+    .execute(&first.pool)
+    .await
+    .unwrap();
     let customer = first
         .create_customer(&CreateCustomer {
             customer_code: format!("SOL-RACE-{}", &organization_id.to_string()[..8]),
@@ -440,7 +450,7 @@ async fn concurrent_solar_contract_activation_creates_one_schedule_and_one_confl
             &CreateSolarSaleRequest {
                 customer_id: customer.id,
                 product_code,
-                principal: "1000.00".parse().unwrap(),
+                principal: "1160.00".parse().unwrap(),
                 currency: "USD".into(),
                 terms_revision: "race-v1".into(),
             },
@@ -459,7 +469,7 @@ async fn concurrent_solar_contract_activation_creates_one_schedule_and_one_confl
         schedule: vec![InstallmentRequest {
             sequence: 1,
             due_date: NaiveDate::from_ymd_opt(2026, 12, 1).unwrap(),
-            amount: "1000.00".parse().unwrap(),
+            amount: "1160.00".parse().unwrap(),
         }],
         currency: "USD".into(),
         approved_terms_revision: "race-v1".into(),

@@ -2702,7 +2702,7 @@ impl CentralStore {
         }
         let subtotal: Decimal = row.try_get("price_reference")?;
         let taxes = sqlx::query(
-            "SELECT id, rate FROM tax_profile_versions
+            "SELECT id, base, rate FROM tax_profile_versions
              WHERE service_code = 'SOLAR_KIT' AND status = 'APPROVED'
                AND effective_from <= CURRENT_DATE
                AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
