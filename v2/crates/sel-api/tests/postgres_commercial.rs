@@ -724,7 +724,7 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .unwrap();
     assert_eq!(receipt.status(), StatusCode::OK);
     let receipt = json_body(receipt).await;
-    assert_eq!(receipt["document_schema_version"], 2);
+    assert_eq!(receipt["document_schema_version"], 1);
     assert_eq!(receipt["document_type"], "PAYMENT_RECEIPT");
     assert_eq!(receipt["payment"]["payment_id"], payment["payment_id"]);
     assert!(receipt["document_reference"]
