@@ -32,7 +32,10 @@ Vérifications exécutées pour cet incrément :
 - `cargo test -p sel-storage` : **PASS** pour les tests non-PostgreSQL; les tests PostgreSQL marqués `ignored` n’ont pas été exécutés;
 - `cargo test -p sel-api` : **PASS** pour les tests exécutables; les intégrations PostgreSQL sont ignorées sans le service requis;
 - compilation `cargo test -p sel-api --test postgres_commercial --no-run` : **PASS**;
+- `python -m pytest -q tests/test_v2_tauri_client.py` : **PASS — 70 tests** après actualisation des attentes du test solaire pour les trois modalités de paiement;
 - test HTTP PostgreSQL `utility_issue_is_atomic_idempotent_and_survives_restart` enrichi pour vérifier la référence, les soldes snapshotés et leur stabilité après affectation ultérieure; un cas solaire contrôle également la référence SEL au lieu de l’UUID. **Exécution réelle non encore effectuée** : `TEST_DATABASE_URL` absent et daemon Docker local indisponible.
+
+La première CI Windows a échoué parce que ce test attendait encore le libellé et le parcours solaires précédents. Le test a été réaligné sur l'interface actuelle et les modalités explicites, puis les 70 tests de contrat ont réussi en local. Une nouvelle exécution CI sur le commit suivant est requise avant toute déclaration de validation distante.
 
 Limites : le nouveau test d’intégration doit être exécuté contre le service PostgreSQL dédié de la CI avant toute livraison. Le build Vite ne remplace pas la recette PDF visuelle sur Windows. Ces éléments demeurent **NOT_TESTED/BLOCKED_EXTERNAL**; ne pas annoncer cet incrément comme validé ou déployé en production.
 
