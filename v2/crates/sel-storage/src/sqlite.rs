@@ -116,8 +116,20 @@ pub enum LocalSolarSaleError {
     InvalidProductPrice(String),
     #[error("solar sale principal does not match the approved product price")]
     PriceMismatch,
+    #[error("exactly one active approved solar VAT profile is required")]
+    TaxProfileUnavailable,
     #[error("invalid solar sale JSON: {0}")]
     InvalidPayload(String),
+}
+
+#[derive(Debug, Error)]
+pub enum LocalSolarQuoteError {
+    #[error("database operation failed: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("solar product price is ambiguous for the current date")]
+    ProductAmbiguous,
+    #[error("exactly one active approved solar VAT profile is required")]
+    TaxProfileUnavailable,
 }
 
 #[derive(Debug, Error)]
@@ -977,23 +989,51 @@ impl LocalStore {
         if customer_exists.is_none() {
             return Err(LocalSolarSaleError::CustomerNotFound);
         }
-        let product_price_text: Option<String> = sqlx::query_scalar(
+        let product_rows = sqlx::query(
             "SELECT price_reference FROM products
              WHERE sku = $1 AND product_type = 'SOLAR_KIT' AND currency = $2
                AND active = 1 AND status = 'APPROVED'
                AND effective_from <= date('now')
-               AND (effective_to IS NULL OR effective_to >= date('now'))",
+               AND (effective_to IS NULL OR effective_to >= date('now'))
+             ORDER BY effective_from DESC, id LIMIT 2",
         )
         .bind(input.product_code.trim())
         .bind(&input.currency)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        let Some(product_price_text) = product_price_text else {
+        let Some(product_row) = product_rows.first() else {
             return Err(LocalSolarSaleError::ProductNotFound);
         };
-        let product_price = Decimal::from_str(&product_price_text)
+        if product_rows.len() != 1 {
+            return Err(LocalSolarSaleError::ProductNotFound);
+        }
+        let subtotal = Decimal::from_str(&product_row.try_get::<String, _>("price_reference")?)
             .map_err(|error| LocalSolarSaleError::InvalidProductPrice(error.to_string()))?;
-        if input.principal.round_dp(2) != product_price.round_dp(2) {
+        let tax_rows = sqlx::query(
+            "SELECT id, jurisdiction, base, rate, source, approval_ref
+             FROM tax_profile_versions
+             WHERE service_code = 'SOLAR_KIT' AND status = 'APPROVED'
+               AND effective_from <= date('now')
+               AND (effective_to IS NULL OR effective_to >= date('now'))
+             ORDER BY effective_from DESC, jurisdiction, base, id LIMIT 2",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if tax_rows.len() != 1 {
+            return Err(LocalSolarSaleError::TaxProfileUnavailable);
+        }
+        let tax_row = &tax_rows[0];
+        let tax_base: String = tax_row.try_get("base")?;
+        if !matches!(tax_base.as_str(), "SUBTOTAL" | "SERVICE") {
+            return Err(LocalSolarSaleError::TaxProfileUnavailable);
+        }
+        let tax_rate = Decimal::from_str(&tax_row.try_get::<String, _>("rate")?)
+            .map_err(|error| LocalSolarSaleError::InvalidProductPrice(error.to_string()))?
+            .normalize();
+        let subtotal = subtotal.round_dp(2);
+        let tax_amount = (subtotal * tax_rate).round_dp(2);
+        let total = subtotal + tax_amount;
+        if input.principal.round_dp(2) != total {
             return Err(LocalSolarSaleError::PriceMismatch);
         }
         let sale_id = Uuid::new_v4();
@@ -1002,11 +1042,11 @@ impl LocalStore {
             sale_id,
             receivable_id,
             customer_id: input.customer_id,
-            subtotal: product_price.round_dp(2),
-            tax_rate: Decimal::ZERO,
-            tax_amount: Decimal::ZERO,
-            total: product_price.round_dp(2),
-            principal: product_price.round_dp(2),
+            subtotal,
+            tax_rate,
+            tax_amount,
+            total,
+            principal: total,
             currency: input.currency.clone(),
             status: "LOCAL_PENDING".into(),
             product_code: Some(input.product_code.trim().to_owned()),
@@ -1018,6 +1058,19 @@ impl LocalStore {
         })
         .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?;
         let event = local_event(self, Uuid::new_v4(), sale_id, "SOLAR_SALE_CREATED", payload)?;
+        let tax_snapshot = serde_json::to_string(&sel_contracts::SolarTaxSnapshot {
+            schema_version: 1,
+            service_code: "SOLAR_KIT".into(),
+            tax_profile_id: Uuid::parse_str(&tax_row.try_get::<String, _>("id")?)
+                .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?,
+            jurisdiction: tax_row.try_get("jurisdiction")?,
+            base: tax_base,
+            rate: tax_rate,
+            amount: tax_amount,
+            source: tax_row.try_get("source")?,
+            approval_ref: tax_row.try_get("approval_ref")?,
+        })
+        .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?;
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO sales
@@ -1040,12 +1093,13 @@ impl LocalStore {
         sqlx::query(
             "INSERT INTO sale_lines
              (id, sale_id, product_ref, quantity, unit_price, tax_snapshot_json, total)
-             VALUES ($1, $2, $3, '1', $4, '{}', $5)",
+             VALUES ($1, $2, $3, '1', $4, $5, $6)",
         )
         .bind(line_id.to_string())
         .bind(sale_id.to_string())
         .bind(input.product_code.trim())
-        .bind(response.principal.to_string())
+        .bind(subtotal.to_string())
+        .bind(tax_snapshot)
         .bind(response.principal.to_string())
         .execute(&mut *tx)
         .await?;
@@ -1069,31 +1123,59 @@ impl LocalStore {
     pub async fn create_solar_quote(
         &self,
         input: &CreateSolarQuoteRequest,
-    ) -> Result<Option<SolarQuoteResponse>, sqlx::Error> {
-        let price_text: Option<String> = sqlx::query_scalar(
+    ) -> Result<Option<SolarQuoteResponse>, LocalSolarQuoteError> {
+        let product_rows = sqlx::query(
             "SELECT price_reference FROM products
              WHERE sku = $1 AND product_type = 'SOLAR_KIT'
                AND currency = $2 AND active = 1 AND status = 'APPROVED'
                AND effective_from <= date('now')
-               AND (effective_to IS NULL OR effective_to >= date('now'))",
+               AND (effective_to IS NULL OR effective_to >= date('now'))
+             ORDER BY effective_from DESC, id LIMIT 2",
         )
         .bind(input.product_code.trim())
         .bind(&input.currency)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        let Some(price_text) = price_text else {
+        let Some(product_row) = product_rows.first() else {
             return Ok(None);
         };
-        let principal = Decimal::from_str(&price_text).map_err(|error| {
-            sqlx::Error::Protocol(format!("invalid solar product price: {error}"))
-        })?;
+        if product_rows.len() != 1 {
+            return Err(LocalSolarQuoteError::ProductAmbiguous);
+        }
+        let subtotal = Decimal::from_str(&product_row.try_get::<String, _>("price_reference")?)
+            .map_err(|error| {
+                sqlx::Error::Protocol(format!("invalid solar product price: {error}"))
+            })?;
+        let taxes = sqlx::query(
+            "SELECT rate, base FROM tax_profile_versions
+             WHERE service_code = 'SOLAR_KIT' AND status = 'APPROVED'
+               AND effective_from <= date('now')
+               AND (effective_to IS NULL OR effective_to >= date('now'))
+             ORDER BY effective_from DESC, jurisdiction, base, id LIMIT 2",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if taxes.len() != 1
+            || !matches!(
+                taxes[0].try_get::<String, _>("base")?.as_str(),
+                "SUBTOTAL" | "SERVICE"
+            )
+        {
+            return Err(LocalSolarQuoteError::TaxProfileUnavailable);
+        }
+        let tax_rate = Decimal::from_str(&taxes[0].try_get::<String, _>("rate")?)
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid solar VAT rate: {error}")))?
+            .normalize();
+        let subtotal = subtotal.round_dp(2);
+        let tax_amount = (subtotal * tax_rate).round_dp(2);
+        let total = subtotal + tax_amount;
         Ok(Some(SolarQuoteResponse {
             product_code: input.product_code.trim().to_owned(),
-            subtotal: principal.round_dp(2),
-            tax_rate: Decimal::ZERO,
-            tax_amount: Decimal::ZERO,
-            total: principal.round_dp(2),
-            principal: principal.round_dp(2),
+            subtotal,
+            tax_rate,
+            tax_amount,
+            total,
+            principal: total,
             currency: input.currency.clone(),
             terms_revision: input.terms_revision.clone(),
             status: "QUOTED_FROM_APPROVED_CATALOG".into(),
@@ -2093,16 +2175,42 @@ impl LocalStore {
             .into_iter()
             .map(|line| {
                 let tax_snapshot: String = line.try_get("tax_snapshot_json")?;
+                let unit_price = Decimal::from_str(&line.try_get::<String, _>("unit_price")?)
+                    .map_err(|error| {
+                        sqlx::Error::Protocol(format!("invalid solar unit price: {error}"))
+                    })?;
+                let quantity = Decimal::from_str(&line.try_get::<String, _>("quantity")?).map_err(
+                    |error| sqlx::Error::Protocol(format!("invalid solar quantity: {error}")),
+                )?;
+                let tax_snapshot = serde_json::from_str::<serde_json::Value>(&tax_snapshot)
+                    .map_err(|error| {
+                        sqlx::Error::Protocol(format!("invalid solar tax snapshot: {error}"))
+                    })?;
+                let tax_amount = tax_snapshot["amount"]
+                    .as_str()
+                    .and_then(|value| Decimal::from_str(value).ok())
+                    .unwrap_or(Decimal::ZERO);
                 Ok(json!({
                     "product_reference": line.try_get::<String, _>("product_ref")?,
-                    "quantity": line.try_get::<String, _>("quantity")?,
-                    "unit_price": line.try_get::<String, _>("unit_price")?,
-                    "tax_snapshot": serde_json::from_str::<serde_json::Value>(&tax_snapshot)
-                        .map_err(|error| sqlx::Error::Protocol(format!("invalid solar tax snapshot: {error}")))?,
+                    "quantity": quantity.normalize().to_string(),
+                    "unit_price": format!("{:.2}", unit_price.round_dp(2)),
+                    "subtotal": format!("{:.2}", (unit_price * quantity).round_dp(2)),
+                    "tax_amount": format!("{:.2}", tax_amount.round_dp(2)),
+                    "tax_snapshot": tax_snapshot,
                     "total": line.try_get::<String, _>("total")?
                 }))
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        let subtotal = lines
+            .iter()
+            .filter_map(|line| line["subtotal"].as_str()?.parse::<Decimal>().ok())
+            .sum::<Decimal>()
+            .round_dp(2);
+        let tax_amount = lines
+            .iter()
+            .filter_map(|line| line["tax_amount"].as_str()?.parse::<Decimal>().ok())
+            .sum::<Decimal>()
+            .round_dp(2);
         let receivable_id: Option<String> = sale.try_get("receivable_id")?;
         let plan_id: Option<String> = if let Some(receivable_id) = receivable_id.as_deref() {
             sqlx::query_scalar("SELECT id FROM installment_plans WHERE receivable_id = $1")
@@ -2146,6 +2254,8 @@ impl LocalStore {
                 "receivable_id": receivable_id,
                 "customer_id": customer_id,
                 "contract_id": sale.try_get::<Option<String>, _>("contract_id")?,
+                "subtotal": format!("{:.2}", subtotal),
+                "tax_amount": format!("{:.2}", tax_amount),
                 "principal": format!("{:.2}", decimal_text(&sale, "principal_total")?.round_dp(2)),
                 "currency": sale.try_get::<String, _>("currency")?,
                 "sold_at": sale.try_get::<String, _>("sold_at")?,

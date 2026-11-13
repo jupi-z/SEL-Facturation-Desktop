@@ -80,6 +80,16 @@ async fn seed_local_catalog(store: &LocalStore, effective_from: chrono::NaiveDat
     .await
     .unwrap();
     sqlx::query(
+        "INSERT INTO tax_profile_versions
+         (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref)
+         VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', $2, 'APPROVED', 'convergence-v1')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(effective_from.to_string())
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO products
          (id, sku, product_type, label, price_reference, currency, active)
          VALUES ($1, 'KIT-CONVERGENCE-1', 'SOLAR_KIT', 'Convergence kit', '120.00', 'USD', 1)
@@ -114,6 +124,16 @@ async fn seed_central_catalog(store: &CentralStore, effective_from: chrono::Naiv
     .bind(Uuid::new_v4())
     .bind(Uuid::new_v4())
     .bind(effective_from)
+    .bind(effective_from)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tax_profile_versions
+         (id, service_code, jurisdiction, base, rate, source, effective_from, status)
+         VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', $2, 'APPROVED')",
+    )
+    .bind(Uuid::new_v4())
     .bind(effective_from)
     .execute(&store.pool)
     .await
@@ -713,7 +733,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .create_solar_sale_offline(&sel_contracts::CreateSolarSaleRequest {
             customer_id: customer.id,
             product_code: "KIT-CONVERGENCE-1".into(),
-            principal: "120.00".parse().unwrap(),
+            principal: "139.20".parse().unwrap(),
             currency: "USD".into(),
             terms_revision: "solar-convergence-v1".into(),
         })
@@ -729,12 +749,12 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
                     sel_contracts::InstallmentRequest {
                         sequence: 1,
                         due_date: "2026-12-01".parse().unwrap(),
-                        amount: "70.00".parse().unwrap(),
+                        amount: "81.20".parse().unwrap(),
                     },
                     sel_contracts::InstallmentRequest {
                         sequence: 2,
                         due_date: "2027-01-01".parse().unwrap(),
-                        amount: "50.00".parse().unwrap(),
+                        amount: "58.00".parse().unwrap(),
                     },
                 ],
                 currency: "USD".into(),
@@ -865,7 +885,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
             .unwrap()
             .unwrap();
         assert_eq!(solar_balance["paid"], "70.00");
-        assert_eq!(solar_balance["balance"], "50.00");
+        assert_eq!(solar_balance["balance"], "69.20");
     }
     let central_solar_balance = central
         .get_receivable_summary(sale.receivable_id)
@@ -873,7 +893,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .unwrap()
         .unwrap();
     assert_eq!(central_solar_balance["paid"], "70.00");
-    assert_eq!(central_solar_balance["balance"], "50.00");
+    assert_eq!(central_solar_balance["balance"], "69.20");
     server.abort();
     let _ = server.await;
     std::env::remove_var("SEL_API_AUTH_TOKEN");

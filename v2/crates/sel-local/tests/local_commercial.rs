@@ -677,6 +677,15 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
     .execute(&store.pool)
     .await
     .expect("seed local solar product");
+    sqlx::query(
+        "INSERT INTO tax_profile_versions
+         (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref)
+         VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', '0.16', 'SEL-approved fixture', date('now'), 'APPROVED', 'solar-local-v1')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .execute(&store.pool)
+    .await
+    .expect("seed local solar VAT profile");
     let (customer, _) = store
         .create_customer(&CreateCustomer {
             customer_code: "SOLAR-LOCAL-1".into(),
@@ -710,7 +719,11 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
     assert_eq!(quote.status(), StatusCode::OK);
     let quote_body = json_body(quote).await;
     assert_eq!(quote_body["product_code"], "KIT-LOCAL-1");
-    assert_eq!(quote_body["principal"], "120.00");
+    assert_eq!(quote_body["subtotal"], "120.00");
+    assert_eq!(quote_body["tax_rate"], "0.16");
+    assert_eq!(quote_body["tax_amount"], "19.20");
+    assert_eq!(quote_body["total"], "139.20");
+    assert_eq!(quote_body["principal"], "139.20");
     assert_eq!(quote_body["status"], "QUOTED_FROM_APPROVED_CATALOG");
     let rejected_sale = app
         .clone()
@@ -745,7 +758,7 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
                     serde_json::to_vec(&json!({
                         "customer_id": customer.id,
                         "product_code": "KIT-LOCAL-1",
-                        "principal": "120.00",
+                        "principal": "139.20",
                         "currency": "USD",
                         "terms_revision": "solar-local-v1"
                     }))
@@ -773,7 +786,7 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| { entry["sale_id"] == sale["sale_id"] && entry["principal"] == "120.00" }));
+        .any(|entry| { entry["sale_id"] == sale["sale_id"] && entry["principal"] == "139.20" }));
     let contract = app
         .clone()
         .oneshot(
@@ -786,8 +799,8 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
                         "sale_id": sale["sale_id"],
                         "receivable_id": sale["receivable_id"],
                         "schedule": [
-                            {"sequence":1,"due_date":"2026-12-01","amount":"60.00"},
-                            {"sequence":2,"due_date":"2027-01-01","amount":"60.00"}
+                            {"sequence":1,"due_date":"2026-12-01","amount":"69.60"},
+                            {"sequence":2,"due_date":"2027-01-01","amount":"69.60"}
                         ],
                         "currency":"USD",
                         "approved_terms_revision":"solar-local-v1"
@@ -843,7 +856,11 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
     assert_eq!(sale_document_status, StatusCode::OK, "{sale_document}");
     assert_eq!(sale_document["document_type"], "SOLAR_SALE_CONFIRMATION");
     assert_eq!(sale_document["sale"]["sale_id"], sale["sale_id"]);
-    assert_eq!(sale_document["sale"]["principal"], "120.00");
+    assert_eq!(sale_document["sale"]["subtotal"], "120.00");
+    assert_eq!(sale_document["sale"]["tax_amount"], "19.20");
+    assert_eq!(sale_document["sale"]["principal"], "139.20");
+    assert_eq!(sale_document["lines"][0]["tax_snapshot"]["rate"], "0.16");
+    assert_eq!(sale_document["lines"][0]["total"], "139.20");
     assert_eq!(
         sale_document["lines"][0]["product_reference"],
         "KIT-LOCAL-1"
@@ -868,9 +885,9 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
         .unwrap();
     assert_eq!(plan.status(), StatusCode::OK);
     let plan_body = json_body(plan).await;
-    assert_eq!(plan_body["principal"], "120.00");
+    assert_eq!(plan_body["principal"], "139.20");
     assert_eq!(plan_body["paid"], "0.00");
-    assert_eq!(plan_body["remaining"], "120.00");
+    assert_eq!(plan_body["remaining"], "139.20");
     assert_eq!(plan_body["schedule"].as_array().unwrap().len(), 2);
     assert_eq!(plan_body["schedule"][0]["status"], "OPEN");
     let counts: (i64, i64, i64) = sqlx::query_as(
