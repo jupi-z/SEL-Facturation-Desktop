@@ -298,9 +298,14 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
     assert 'headers={["SKU", "Produit", "Type", "Prix de référence", "État commercial"]}' in solar_view
     assert 'Approuvé · vendable' in solar_view
     assert 'value={text(solarProducts.find((product) => text(product.sku) === solarProductCode)?.currency, PRIMARY_CURRENCY)} readOnly' in solar_view
-    assert 'label>Mode de règlement<select value={solarPaymentMode}' in solar_view
+    assert 'label>Modalité<select value={solarPaymentMode}' in solar_view
+    assert 'Comptant · montant total' in solar_view
+    assert 'Versement partiel · sans échéancier' in solar_view
+    assert 'Paiement échelonné · avec contrat' in solar_view
+    assert 'Un versement partiel laisse le solde ouvert et ne crée pas d’échéancier.' in app
     assert 'currency: text(selectedProduct.currency, PRIMARY_CURRENCY)' in app
-    assert 'aucun échéancier n’est créé pour une vente comptant.' in app
+    assert 'Vente enregistrée. Le montant total est prérempli' in app
+    assert 'le solde restera ouvert sans échéancier.' in app
     assert 'stock' not in solar_view.lower()
     assert "solarSaleOpen &&" in app
     assert ".solar-metrics { grid-template-columns: repeat(4, minmax(0, 1fr));" in css
