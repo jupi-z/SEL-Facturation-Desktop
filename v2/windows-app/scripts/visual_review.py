@@ -66,28 +66,30 @@ SALES = [{
     "receivable_id": "demo-receivable-solar-0001",
     "customer_id": "demo-customer-0001",
     "product_code": "KIT-DÉMO",
-    "principal": "120.00",
+    "subtotal": "120.00",
+    "tax_amount": "19.20",
+    "principal": "139.20",
     "currency": "USD",
     "installment_plan_id": None,
     "status": "CENTRAL_ACCEPTED",
 }]
 RECEIVABLES = [
     {"receivable_id": "demo-receivable-0001", "customer_id": "demo-customer-0001", "customer_code": "SEL-DÉMO-0001", "customer_name": "Client Alpha", "source_type": "INVOICE", "source_reference": "SEL-20261103-103000", "currency": "USD", "principal": "22.62", "paid": "3.00", "credited": "0.00", "balance": "19.62", "overdue_amount": "0.00", "status": "OPEN"},
-    {"receivable_id": "demo-receivable-solar-0001", "customer_id": "demo-customer-0001", "customer_code": "SEL-DÉMO-0001", "customer_name": "Client Alpha", "source_type": "SALE", "source_reference": "demo-sale-0001", "currency": "USD", "principal": "120.00", "paid": "0.00", "credited": "0.00", "balance": "120.00", "overdue_amount": "0.00", "status": "OPEN"},
+    {"receivable_id": "demo-receivable-solar-0001", "customer_id": "demo-customer-0001", "customer_code": "SEL-DÉMO-0001", "customer_name": "Client Alpha", "source_type": "SALE", "source_reference": "demo-sale-0001", "currency": "USD", "principal": "139.20", "paid": "0.00", "credited": "0.00", "balance": "139.20", "overdue_amount": "0.00", "status": "OPEN"},
     {"receivable_id": "demo-receivable-0002", "customer_id": "demo-customer-0002", "customer_code": "SEL-DÉMO-0002", "customer_name": "Client Beta", "source_type": "INVOICE", "source_reference": "SEL-20261103-104000", "currency": "USD", "principal": "8.00", "paid": "0.00", "credited": "0.00", "balance": "8.00", "overdue_amount": "0.00", "status": "OPEN"},
 ]
 SOLAR_PLAN = {
     "id": "demo-plan-0001",
     "receivable_id": "demo-receivable-solar-0001",
     "customer_id": "demo-customer-0001",
-    "principal": "120.00",
+    "principal": "139.20",
     "paid": "0.00",
-    "remaining": "120.00",
+    "remaining": "139.20",
     "overdue_amount": "0.00",
     "currency": "USD",
     "schedule": [
-        {"id": "demo-solar-schedule-0001", "sequence": 1, "due_date": "2026-12-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
-        {"id": "demo-solar-schedule-0002", "sequence": 2, "due_date": "2027-01-01", "amount_due": "60.00", "paid": "0.00", "remaining": "60.00", "status": "UPCOMING"},
+        {"id": "demo-solar-schedule-0001", "sequence": 1, "due_date": "2026-12-01", "amount_due": "69.60", "paid": "0.00", "remaining": "69.60", "status": "UPCOMING"},
+        {"id": "demo-solar-schedule-0002", "sequence": 2, "due_date": "2027-01-01", "amount_due": "69.60", "paid": "0.00", "remaining": "69.60", "status": "UPCOMING"},
     ],
 }
 PRODUCTS = [{
@@ -183,10 +185,10 @@ def mock_invoke_script() -> str:
           else if (adminPath === '/v1/admin/catalog/tariffs') adminBody = [{{tariff_id:'demo-tariff-draft',service_code:'WATER',customer_category:'DEMO',unit:'M3',unit_price:'0.30',currency:'USD',effective_from:'2026-01-01',status:'DRAFT'}},{{tariff_id:'demo-tariff-approved',service_code:'ELECTRICITY',customer_category:'DEMO',unit:'KWH',unit_price:'0.095',currency:'USD',effective_from:'2026-01-01',approval_ref:'DEMO-APPROVED',status:'APPROVED'}}];
           else if (adminPath.endsWith('/tariffs')) adminBody = [{{service_code:'ELECTRICITY',customer_category:'DEMO',unit_price:'0.095',currency:'USD',status:'APPROVED'}}];
           else if (adminPath.endsWith('/products')) adminBody = fixtures.products.map(product => ({{...product,status:'APPROVED'}}));
-          else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{id:'demo-tax-approved',reference_type:'TAX_PROFILE',payload:{{service_code:'WATER',jurisdiction:'SEL',base:'SERVICE',rate:'0.16',source:'DEMO-SEL-APPROVED'}},effective_from:'2026-01-01',status:'APPROVED'}}];
+          else if (adminPath.endsWith('/tax-profiles')) adminBody = [{{id:'demo-tax-approved',reference_type:'TAX_PROFILE',payload:{{service_code:'VAT',jurisdiction:'SEL',base:'SUBTOTAL',rate:'0.16',source:'DEMO-SEL-APPROVED'}},effective_from:'2026-01-01',status:'APPROVED'}}];
           else if (adminPath.endsWith('/fx-rates')) adminBody = [{{from_currency:'USD',to_currency:'CDF',value:'DEMO',effective_from:'2026-01-01',status:'APPROVED'}}];
           else if (adminPath === '/v1/admin/catalog/communication-charge') adminBody = [{{id:'demo-communication-charge',reference_type:'COMMUNICATION_CHARGE',natural_key:'SEL-COMMUNICATION',payload:{{label:'Ligne de communication — fixture',amount:'10.00',currency:'USD'}},effective_from:'2026-01-01',approval_ref:'DEMO-APPROVED',status:'APPROVED'}}];
-          else if (adminPath === '/v1/admin/configuration/readiness') adminBody = {{configured:false,effective_on:'2026-11-11',requirements:[{{key:'electricity_residential',label:'Tarif électricité résidentiel',ready:false,approved_current_count:0}},{{key:'electricity_commercial',label:'Tarif électricité commercial',ready:true,approved_current_count:1}},{{key:'water_residential',label:'Tarif eau résidentiel',ready:true,approved_current_count:1}},{{key:'water_commercial',label:'Tarif eau commercial',ready:false,approved_current_count:2}},{{key:'tax_ELECTRICITY',label:'Profil TVA électricité',ready:true,approved_current_count:1}},{{key:'tax_WATER',label:'Profil TVA eau',ready:true,approved_current_count:1}},{{key:'communication_charge',label:'Ligne de communication',ready:false,approved_current_count:0}}]}};
+          else if (adminPath === '/v1/admin/configuration/readiness') adminBody = {{configured:false,effective_on:'2026-11-11',requirements:[{{key:'electricity_residential',label:'Tarif électricité résidentiel',ready:false,approved_current_count:0}},{{key:'electricity_commercial',label:'Tarif électricité commercial',ready:true,approved_current_count:1}},{{key:'water_residential',label:'Tarif eau résidentiel',ready:true,approved_current_count:1}},{{key:'water_commercial',label:'Tarif eau commercial',ready:false,approved_current_count:2}},{{key:'vat_policy',label:'Règle centrale de TVA',ready:true,approved_current_count:1}},{{key:'communication_charge',label:'Ligne de communication',ready:false,approved_current_count:0}}]}};
           return {{status:200,body:adminBody}};
         }}
         if (command !== 'central_request') throw new Error('Unexpected visual smoke command: ' + command);
@@ -261,9 +263,9 @@ def mock_invoke_script() -> str:
         else if (path.startsWith('/v1/payments')) body = fixtures.payments;
         else if (path.startsWith('/v1/solar/sales/') && path.endsWith('/document-data')) {{
           const longSchedule = window.__solarDocumentLongSchedule === true
-            ? Array.from({{length:36}},(_,index)=>({{sequence:index+1,due_date:`2027-${{String(Math.floor(index/12)+1).padStart(2,'0')}}-${{String((index%12)+1).padStart(2,'0')}}`,amount_due:'5.00',status:'UPCOMING'}}))
+            ? Array.from({{length:36}},(_,index)=>({{sequence:index+1,due_date:`2027-${{String(Math.floor(index/12)+1).padStart(2,'0')}}-${{String((index%12)+1).padStart(2,'0')}}`,amount_due:index===35?'3.75':'3.87',status:'UPCOMING'}}))
             : fixtures.solarPlan.schedule;
-          body = {{document_schema_version:1,document_type:'SOLAR_SALE_CONFIRMATION',document_reference:'SEL-SOLAR-DEMO-0001',qr_internal_reference:'SEL:SOLAR-SALE:demo-sale-0001',sale:{{sale_id:'demo-sale-0001',receivable_id:'demo-receivable-solar-0001',customer_id:'demo-customer-0001',principal:'120.00',currency:'USD',sold_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},lines:[{{product_reference:'KIT-DÉMO',quantity:'1',unit_price:'120.00',total:'120.00'}}],installment_plan:{{currency:'USD',schedule:longSchedule}},origin:'CENTRAL'}};
+          body = {{document_schema_version:1,document_type:'SOLAR_SALE_CONFIRMATION',document_reference:'SEL-SOLAR-DEMO-0001',qr_internal_reference:'SEL:SOLAR-SALE:demo-sale-0001',sale:{{sale_id:'demo-sale-0001',receivable_id:'demo-receivable-solar-0001',customer_id:'demo-customer-0001',subtotal:'120.00',tax_amount:'19.20',principal:'139.20',currency:'USD',sold_at:'2026-11-04T08:00:00Z',status:'CENTRAL_ACCEPTED'}},customer:{{customer_code:'SEL-DÉMO-0001',legal_name:'Client Alpha',address:'Quartier Manika, Kolwezi'}},lines:[{{product_reference:'KIT-DÉMO',quantity:'1',unit_price:'120.00',subtotal:'120.00',tax_snapshot:{{rate:'0.16',amount:'19.20'}},tax_amount:'19.20',total:'139.20'}}],installment_plan:{{currency:'USD',schedule:longSchedule}},origin:'CENTRAL'}};
         }}
         else if (path.startsWith('/v1/solar/sales')) body = fixtures.sales;
         else if (path.startsWith('/v1/catalog/products')) body = fixtures.products;
@@ -849,7 +851,7 @@ async def capture_views() -> None:
                         notice = await page.locator(".notice").inner_text() if await page.locator(".notice").count() else "aucune erreur affichée"
                         raise AssertionError(f"Solar PDF preview did not open: {notice}") from error
                     await assert_pdf_rendered(page, "Solar sale")
-                    await assert_generated_pdf_contract(page, "Solar sale", 1, ("Facture de vente", "KIT-DÉMO", "120,00 USD"))
+                    await assert_generated_pdf_contract(page, "Solar sale", 1, ("Facture de vente", "KIT-DÉMO", "Sous-total HT", "TVA (16", "139,20 USD"))
                     await assert_print_layout(page, "Solar sale", 1)
                     await page.screenshot(path=str(OUTPUT / f"solar-pdf-preview-{SHOT_SUFFIX}.png"))
                     await page.get_by_role("button", name="Fermer l’aperçu").click()
@@ -858,9 +860,10 @@ async def capture_views() -> None:
                     await page.get_by_role("dialog", name="Facture de vente solaire").wait_for()
                     await assert_pdf_rendered(page, "Solar sale with 36 installments", expected_pages=None)
                     long_solar_pages = await page.locator(".document-pdf-page").count()
-                    long_solar_pdf = await assert_generated_pdf_contract(page, "Solar sale with 36 installments", long_solar_pages, ("Facture de vente", "KIT-DÉMO", "ÉCHÉANCES", "mars 2027"))
-                    if len(long_solar_pdf.pages) != 2 or "SYNTHÈSE FINANCIÈRE" not in (long_solar_pdf.pages[-1].extract_text() or "") or "Référence interne SEL" not in (long_solar_pdf.pages[-1].extract_text() or ""):
-                        raise AssertionError("Long solar schedule must keep its financial summary and internal QR reference together on the final page")
+                    long_solar_pdf = await assert_generated_pdf_contract(page, "Solar sale with 36 installments", long_solar_pages, ("Facture de vente", "KIT-DÉMO", "Sous-total HT", "TVA (16", "139,20 USD", "ÉCHÉANCES", "mars 2027"))
+                    last_solar_page = long_solar_pdf.pages[-1].extract_text() or ""
+                    if len(long_solar_pdf.pages) not in (2, 3) or "SYNTHÈSE FINANCIÈRE" not in last_solar_page or "Référence interne SEL" not in last_solar_page:
+                        raise AssertionError(f"Long solar document must place its financial summary and internal QR reference together on the final page (pages={len(long_solar_pdf.pages)}, final_page={last_solar_page!r})")
                     await assert_print_layout(page, "Solar sale with 36 installments", long_solar_pages)
                     await page.screenshot(path=str(OUTPUT / f"solar-pdf-multipage-{SHOT_SUFFIX}.png"))
                     await page.locator(".document-pdf-stage").evaluate("element => element.scrollTop = element.scrollHeight")
@@ -1021,7 +1024,7 @@ async def capture_views() -> None:
                     await page.screenshot(path=str(OUTPUT / f"admin-tariffs-catalog-a04-{SHOT_SUFFIX}.png"))
                     tariff_panel = page.locator(".admin-reference-layout > .panel").first
                     for catalog_label, catalog_heading in [
-                        ("TVA", "Paramètres de TVA"),
+                        ("TVA", "Règle centrale de TVA"),
                         ("Taux de change", "Taux de change"),
                         ("Kits solaires", "Catalogue solaire"),
                         ("Ligne de communication", "Ligne de communication"),
@@ -1051,11 +1054,14 @@ async def capture_views() -> None:
                     await admin_nav.get_by_role("button", name="Tarifs eau et électricité", exact=True).click()
                     await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
                     await admin_nav.get_by_role("button", name="TVA", exact=True).click()
-                    await page.get_by_role("heading", name="Paramètres de TVA").first.wait_for()
+                    await page.get_by_role("heading", name="Règle centrale de TVA").first.wait_for()
                     tax_form = page.locator("form.admin-catalog-form").first
                     await page.get_by_role("button", name="Ajouter un profil fiscal").click()
                     tax_form = page.locator("form.admin-catalog-form").first
-                    await tax_form.locator('select[name="service_code"]').select_option("WATER")
+                    if await tax_form.locator('input[name="base"]').input_value() != "SUBTOTAL":
+                        raise AssertionError("The central VAT form must default to the subtotal tax base")
+                    if await tax_form.locator('select[name="service_code"]').input_value() != "VAT":
+                        raise AssertionError("The single selectable VAT rule must default to VAT")
                     await tax_form.locator('input[name="rate_percent"]').fill("16")
                     await tax_form.locator('input[name="source"]').fill("DEMO-TAX-APPROVAL")
                     await tax_form.locator('textarea[name="change_reason"]').fill("Révision fiscale de démonstration")
@@ -1063,15 +1069,15 @@ async def capture_views() -> None:
                     await page.evaluate("window.scrollTo(0, 0)")
                     await page.screenshot(path=str(OUTPUT / f"admin-tax-profile-a06-{SHOT_SUFFIX}.png"))
                     await tax_form.locator('button[type="submit"]').click()
-                    tax_review = page.get_by_role("alertdialog", name="Vérifier · Paramètres de TVA")
+                    tax_review = page.get_by_role("alertdialog", name="Vérifier · Règle centrale de TVA")
                     await tax_review.wait_for()
                     await tax_review.get_by_role("button", name="Créer le brouillon").click()
                     await page.wait_for_function("window.__adminWriteLog.some(entry => entry.path === '/v1/admin/catalog/tax-profiles' && entry.method === 'POST')")
                     tax_body = await page.evaluate("window.__adminWriteLog.find(entry => entry.path === '/v1/admin/catalog/tax-profiles' && entry.method === 'POST').body")
                     if tax_body.get("rate") != "0.16" or tax_body.get("change_reason") != "Révision fiscale de démonstration":
                         raise AssertionError("Tax rate must be normalized to the Rust fraction and change reason persisted")
-                    if tax_body.get("jurisdiction") != "" or tax_body.get("base") != "":
-                        raise AssertionError("Blank jurisdiction and tax base must reach the Rust SEL defaults")
+                    if tax_body.get("service_code") != "VAT" or tax_body.get("base") != "SUBTOTAL":
+                        raise AssertionError("Every new tax draft must use the one central VAT rule on the subtotal")
                     await admin_nav.get_by_role("button", name="Tarifs eau et électricité", exact=True).click()
                     await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
                     await admin_nav.get_by_role("button", name="Kits solaires", exact=True).wait_for()
@@ -1154,7 +1160,7 @@ async def capture_views() -> None:
                         raise AssertionError("Canceling catalog navigation must preserve the tariff draft")
                     await admin_nav.get_by_role("button", name="TVA", exact=True).click()
                     await page.get_by_role("alertdialog", name="Abandonner les modifications ?").get_by_role("button", name="Abandonner et continuer").click()
-                    await page.get_by_role("heading", name="Paramètres de TVA").first.wait_for()
+                    await page.get_by_role("heading", name="Règle centrale de TVA").first.wait_for()
                     await admin_nav.get_by_role("button", name="Tarifs eau et électricité", exact=True).click()
                     await page.get_by_role("heading", name="Tarifs eau et électricité").wait_for()
                 dimensions = await page.evaluate("({viewport: document.documentElement.clientWidth, content: document.documentElement.scrollWidth})")

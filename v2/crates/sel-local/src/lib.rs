@@ -15,7 +15,7 @@ use sel_contracts::{
     UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
-use sel_storage::{LocalMeterError, LocalSolarSaleError, LocalStore};
+use sel_storage::{LocalMeterError, LocalSolarQuoteError, LocalSolarSaleError, LocalStore};
 use sel_sync::payload_digest;
 use serde_json::json;
 use std::{net::SocketAddr, sync::Arc};
@@ -857,14 +857,13 @@ async fn calculate_utility_response(
                 "approved electricity tariff is unavailable".into(),
             )
         })?,
-        electricity_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
+        vat_rate: tariffs.vat_rate.ok_or_else(|| {
             (
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "approved electricity tax profile is unavailable".into(),
+                "approved central VAT policy is unavailable".into(),
             )
         })?,
         water_tariff: tariffs.water_unit_price,
-        water_tax_rate: tariffs.water_tax_rate,
         communication_charge: store
             .load_communication_charge(
                 &input.currency,
@@ -883,12 +882,6 @@ async fn calculate_utility_response(
                         .into(),
                 )
             })?,
-        communication_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "approved communication tax profile is unavailable".into(),
-            )
-        })?,
         currency: input.currency.clone(),
     })
     .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
@@ -1246,7 +1239,13 @@ async fn create_solar_quote(
         .store
         .create_solar_quote(&input)
         .await
-        .map_err(internal_error)?
+        .map_err(|error| match error {
+            LocalSolarQuoteError::Database(error) => internal_error(error),
+            LocalSolarQuoteError::ProductAmbiguous
+            | LocalSolarQuoteError::TaxProfileUnavailable => {
+                (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
+            }
+        })?
         .map(Json)
         .ok_or_else(|| {
             (
@@ -1328,7 +1327,8 @@ fn local_solar_sale_error(error: LocalSolarSaleError) -> (StatusCode, String) {
         LocalSolarSaleError::CustomerNotFound => StatusCode::NOT_FOUND,
         LocalSolarSaleError::InvalidAmount
         | LocalSolarSaleError::ProductNotFound
-        | LocalSolarSaleError::PriceMismatch => StatusCode::UNPROCESSABLE_ENTITY,
+        | LocalSolarSaleError::PriceMismatch
+        | LocalSolarSaleError::TaxProfileUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
         LocalSolarSaleError::Database(_)
         | LocalSolarSaleError::InvalidProductPrice(_)
         | LocalSolarSaleError::InvalidPayload(_) => StatusCode::INTERNAL_SERVER_ERROR,

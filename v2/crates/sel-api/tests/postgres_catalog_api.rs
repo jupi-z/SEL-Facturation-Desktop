@@ -58,13 +58,15 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
     .await
     .expect("insert tariff fixtures");
 
-    let approved_tax = Uuid::new_v4();
+    let approved_tax = Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap();
     let revoked_tax = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'WATER', 'SEL', 'ENERGY', 0.16, 'fixture', '2026-01-01', 'APPROVED'),
-                ($2, 'WATER', 'SEL', 'ENERGY', 0.99, 'fixture', '2026-01-01', 'REVOKED')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'fixture', '2026-01-01', 'APPROVED'),
+                ($2, 'VAT', 'SEL', 'SUBTOTAL', 0.99, 'fixture', '2026-01-01', 'REVOKED')
+         ON CONFLICT (id) DO UPDATE SET status = 'APPROVED', effective_from = '2026-01-01',
+             effective_to = NULL, rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'",
     )
     .bind(approved_tax)
     .bind(revoked_tax)
@@ -90,11 +92,11 @@ async fn catalog_routes_expose_only_active_and_approved_reference_data() {
         "INSERT INTO catalog_reference_versions
          (id, reference_type, natural_key, payload, effective_from, status, approval_ref)
          VALUES
-         ($1, 'TAX_PROFILE', 'WATER|SEL|ENERGY',
-          jsonb_build_object('service_code','WATER','jurisdiction','SEL','base','ENERGY','rate','0.16','source','fixture'),
+         ($1, 'TAX_PROFILE', 'VAT|SEL|SUBTOTAL',
+          jsonb_build_object('service_code','VAT','jurisdiction','SEL','base','SUBTOTAL','rate','0.16','source','fixture'),
           '2026-01-01', 'APPROVED', 'SEL-TAX-FIXTURE'),
-         ($2, 'TAX_PROFILE', 'WATER|SEL|ENERGY',
-          jsonb_build_object('service_code','WATER','jurisdiction','SEL','base','ENERGY','rate','0.99','source','fixture'),
+         ($2, 'TAX_PROFILE', 'VAT|SEL|SUBTOTAL',
+          jsonb_build_object('service_code','VAT','jurisdiction','SEL','base','SUBTOTAL','rate','0.99','source','fixture'),
           '2026-01-01', 'REVOKED', NULL),
          ($3, 'FX_RATE', 'USD|CDF',
           jsonb_build_object('from_currency','USD','to_currency','CDF','value','2360','source','fixture'),
@@ -839,14 +841,16 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
         .unwrap()
         .to_owned();
     let today = chrono::Utc::now().date_naive();
+    let tax_history_start = chrono::NaiveDate::from_ymd_opt(1900, 1, 1).unwrap();
+    let tax_history_end = chrono::NaiveDate::from_ymd_opt(1999, 12, 31).unwrap();
     let key_suffix = Uuid::new_v4().simple().to_string();
     let tax_key = format!("TAX-SEL-{key_suffix}");
     let tax_create_path = "/v1/admin/catalog/tax-profiles";
     let tax_request = json!({
-        "service_code": "WATER", "jurisdiction": format!("SEL-{key_suffix}"),
-        "base": "SERVICE", "rate": "0.16", "source": "SEL-approved schedule",
+        "service_code": "VAT", "jurisdiction": "SEL",
+        "base": "SUBTOTAL", "rate": "0.16", "source": "SEL-approved schedule",
         "change_reason": "Align with approved SEL fiscal profile",
-        "effective_from": today.to_string(), "effective_to": null
+        "effective_from": tax_history_start.to_string(), "effective_to": tax_history_end.to_string()
     });
     let tax_draft_response = post_json(
         &app,
@@ -878,7 +882,7 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
         Some(&token),
         Some(&default_tax_key),
         json!({
-            "service_code": "ELECTRICITY", "jurisdiction": "", "base": "",
+            "service_code": "VAT", "jurisdiction": "", "base": "",
             "rate": "0.16", "source": "SEL default-value contract test",
             "effective_from": today.to_string(), "effective_to": null
         }),
@@ -897,7 +901,7 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
         .find(|row| row["id"] == default_tax_id)
         .expect("defaulted tax draft appears in admin version history");
     assert_eq!(stored_default_tax["payload"]["jurisdiction"], "SEL");
-    assert_eq!(stored_default_tax["payload"]["base"], "SERVICE");
+    assert_eq!(stored_default_tax["payload"]["base"], "SUBTOTAL");
     let replay = post_json(
         &app,
         tax_create_path,
@@ -934,17 +938,18 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["id"] == tax_id)
+            .any(|row| row["id"] == tax_id),
+        "the approved SEL central VAT policy is exposed to commercial clients"
     );
 
     let readiness = get_json_authenticated(&app, "/v1/admin/configuration/readiness", &token).await;
     assert_eq!(readiness["configured"], false);
-    assert_eq!(readiness["requirements"].as_array().unwrap().len(), 7);
+    assert_eq!(readiness["requirements"].as_array().unwrap().len(), 6);
     assert!(readiness["requirements"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|item| item["key"] == "tax_WATER" && item["ready"] == true));
+        .any(|item| item["key"] == "vat_policy" && item["ready"] == false));
     assert!(readiness["requirements"]
         .as_array()
         .unwrap()

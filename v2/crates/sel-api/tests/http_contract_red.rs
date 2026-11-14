@@ -12,9 +12,8 @@ async fn utility_invoice_always_returns_electricity_and_zero_water_as_json() {
     state
         .configure_tariffs(TariffBook {
             electricity_unit_price: Some("0.095".parse().unwrap()),
-            electricity_tax_rate: Some("0.16".parse().unwrap()),
+            vat_rate: Some("0.16".parse().unwrap()),
             water_unit_price: None,
-            water_tax_rate: None,
             communication_charge: Some("10".parse().unwrap()),
             revision: Some("fixture-approved-v1".into()),
         })

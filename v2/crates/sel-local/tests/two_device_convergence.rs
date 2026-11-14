@@ -69,13 +69,10 @@ async fn seed_local_catalog(store: &LocalStore, effective_from: chrono::NaiveDat
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', $3, 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', $4, 'APPROVED')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', '0.16', 'convergence-fixture', $2, 'APPROVED')",
     )
-    .bind(Uuid::new_v4().to_string())
-    .bind(Uuid::new_v4().to_string())
-    .bind(effective_from.to_string())
-    .bind(effective_from.to_string())
+    .bind("00000000-0000-4000-8000-000000000024")
+    .bind(Utc::now().date_naive().to_string())
     .execute(&store.pool)
     .await
     .unwrap();
@@ -108,13 +105,10 @@ async fn seed_central_catalog(store: &CentralStore, effective_from: chrono::Naiv
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', $3, 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', $4, 'APPROVED')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'convergence-fixture', $2, 'APPROVED')",
     )
-    .bind(Uuid::new_v4())
-    .bind(Uuid::new_v4())
-    .bind(effective_from)
-    .bind(effective_from)
+    .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
+    .bind(Utc::now().date_naive())
     .execute(&store.pool)
     .await
     .unwrap();
@@ -713,12 +707,12 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .create_solar_sale_offline(&sel_contracts::CreateSolarSaleRequest {
             customer_id: customer.id,
             product_code: "KIT-CONVERGENCE-1".into(),
-            principal: "120.00".parse().unwrap(),
+            principal: "139.20".parse().unwrap(),
             currency: "USD".into(),
             terms_revision: "solar-convergence-v1".into(),
         })
         .await
-        .unwrap();
+        .expect("create solar sale using the single approved central VAT fixture");
     let (contract, _) = first
         .activate_solar_contract_offline(
             Uuid::new_v4(),
@@ -729,12 +723,12 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
                     sel_contracts::InstallmentRequest {
                         sequence: 1,
                         due_date: "2026-12-01".parse().unwrap(),
-                        amount: "70.00".parse().unwrap(),
+                        amount: "81.20".parse().unwrap(),
                     },
                     sel_contracts::InstallmentRequest {
                         sequence: 2,
                         due_date: "2027-01-01".parse().unwrap(),
-                        amount: "50.00".parse().unwrap(),
+                        amount: "58.00".parse().unwrap(),
                     },
                 ],
                 currency: "USD".into(),
@@ -752,6 +746,72 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     assert_eq!(solar_sync.accepted, 2);
     let solar_pull = sync_once(&second, &endpoint, &token).await.unwrap();
     assert_eq!(solar_pull.pulled, 2);
+    let central_solar_line: (String, serde_json::Value, String) = sqlx::query_as(
+        "SELECT sl.unit_price::text, sl.tax_snapshot, sl.total::text
+         FROM sale_lines sl
+         JOIN products p ON p.id = sl.product_id
+         WHERE sl.sale_id = $1 AND p.sku = 'KIT-CONVERGENCE-1'",
+    )
+    .bind(sale.sale_id)
+    .fetch_one(&central_for_verify.pool)
+    .await
+    .unwrap();
+    let first_solar_line: (String, String, String) = sqlx::query_as(
+        "SELECT unit_price, tax_snapshot_json, total FROM sale_lines
+         WHERE sale_id = $1 AND product_ref = 'KIT-CONVERGENCE-1'",
+    )
+    .bind(sale.sale_id.to_string())
+    .fetch_one(&first.pool)
+    .await
+    .unwrap();
+    let second_solar_line: (String, String, String) = sqlx::query_as(
+        "SELECT unit_price, tax_snapshot_json, total FROM sale_lines
+         WHERE sale_id = $1 AND product_ref = 'KIT-CONVERGENCE-1'",
+    )
+    .bind(sale.sale_id.to_string())
+    .fetch_one(&second.pool)
+    .await
+    .unwrap();
+    let first_snapshot: serde_json::Value = serde_json::from_str(&first_solar_line.1).unwrap();
+    let second_snapshot: serde_json::Value = serde_json::from_str(&second_solar_line.1).unwrap();
+    assert_eq!(
+        central_solar_line
+            .0
+            .parse::<rust_decimal::Decimal>()
+            .unwrap(),
+        "120.00".parse().unwrap()
+    );
+    assert_eq!(
+        central_solar_line
+            .2
+            .parse::<rust_decimal::Decimal>()
+            .unwrap(),
+        "139.20".parse().unwrap()
+    );
+    assert_eq!(
+        first_solar_line.0.parse::<rust_decimal::Decimal>().unwrap(),
+        central_solar_line.0.parse().unwrap()
+    );
+    assert_eq!(
+        first_solar_line.2.parse::<rust_decimal::Decimal>().unwrap(),
+        central_solar_line.2.parse().unwrap()
+    );
+    assert_eq!(
+        second_solar_line
+            .0
+            .parse::<rust_decimal::Decimal>()
+            .unwrap(),
+        central_solar_line.0.parse().unwrap()
+    );
+    assert_eq!(
+        second_solar_line
+            .2
+            .parse::<rust_decimal::Decimal>()
+            .unwrap(),
+        central_solar_line.2.parse().unwrap()
+    );
+    assert_eq!(first_snapshot, central_solar_line.1);
+    assert_eq!(second_snapshot, central_solar_line.1);
     for store in [&first, &second] {
         let counts: (i64, i64) = sqlx::query_as(
             "SELECT
@@ -865,7 +925,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
             .unwrap()
             .unwrap();
         assert_eq!(solar_balance["paid"], "70.00");
-        assert_eq!(solar_balance["balance"], "50.00");
+        assert_eq!(solar_balance["balance"], "69.20");
     }
     let central_solar_balance = central
         .get_receivable_summary(sale.receivable_id)
@@ -873,7 +933,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
         .unwrap()
         .unwrap();
     assert_eq!(central_solar_balance["paid"], "70.00");
-    assert_eq!(central_solar_balance["balance"], "50.00");
+    assert_eq!(central_solar_balance["balance"], "69.20");
     server.abort();
     let _ = server.await;
     std::env::remove_var("SEL_API_AUTH_TOKEN");

@@ -1080,9 +1080,9 @@ export default function App() {
           <p className="help span-two">Le prix et la devise viennent du kit approuvé et sont revérifiés par Rust. Le comptant préremplit le montant total. Un versement partiel laisse le solde ouvert et ne crée pas d’échéancier. Le paiement échelonné ouvre la saisie du contrat et de ses échéances approuvées.</p>
           <div className="form-actions span-two"><Button primary type="submit">Vérifier le devis</Button></div>
         </form></Panel>}
-        {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Montant approuvé</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Modalité</span><strong>{solarPaymentMode === "CASH" ? "Comptant · montant total" : solarPaymentMode === "PARTIAL" ? "Versement partiel · sans échéancier" : "Paiement échelonné · contrat"}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
+        {solarQuote && <Panel title="Devis vérifié par Rust"><div className="quote-summary"><div><span>Produit</span><strong>{text(solarQuote.product_code)}</strong></div><div><span>Sous-total HT</span><strong>{formatMoney(solarQuote.subtotal, solarQuote.currency)}</strong></div><div><span>TVA · {new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 2 }).format(Number(solarQuote.tax_rate))}</span><strong>{formatMoney(solarQuote.tax_amount, solarQuote.currency)}</strong></div><div><span>Total TTC à payer</span><strong>{formatMoney(solarQuote.principal, solarQuote.currency)}</strong></div><div><span>Modalité</span><strong>{solarPaymentMode === "CASH" ? "Comptant · montant total" : solarPaymentMode === "PARTIAL" ? "Versement partiel · sans échéancier" : "Paiement échelonné · contrat"}</strong></div><div><span>Conditions</span><strong>{text(solarQuote.terms_revision)}</strong></div></div><p className="help">La créance et les échéances associées portent sur le total TTC. Rust calcule et valide les montants.</p><div className="form-actions"><Button primary onClick={() => void confirmSolarSale()}>Confirmer et créer la vente</Button></div></Panel>}
         <Panel title="Catalogue approuvé">
-          <Table headers={["SKU", "Produit", "Type", "Prix de référence", "État commercial"]} empty="Aucun kit approuvé et applicable n’est disponible dans le catalogue SEL." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), domainLabel(text(product.product_type, "SOLAR_KIT")), formatMoney(product.price_reference, product.currency), <span className="status-badge success">Approuvé · vendable</span>])} />
+          <Table headers={["SKU", "Produit", "Type", "Prix catalogue HT", "État commercial"]} empty="Aucun kit approuvé et applicable n’est disponible dans le catalogue SEL." data={solarProducts.map((product) => [<strong>{text(product.sku)}</strong>, text(product.label), domainLabel(text(product.product_type, "SOLAR_KIT")), formatMoney(product.price_reference, product.currency), <span className="status-badge success">Approuvé · vendable</span>])} />
         </Panel>
         <Panel title="Historique des ventes"><Table headers={["Référence", "Abonné", "Produit", "Principal", "État", "Document"]} empty="Aucune vente solaire retournée par le serveur." data={sales.map((row) => [<strong>{text(row.sale_number, text(row.document_reference, text(row.sale_id)))}</strong>, customerLabel(row.customer_id, customers), text(row.product_code), formatMoney(row.principal, row.currency), <Status value={row.status} />, <Button disabled={documentBusy} onClick={() => void openDocument("solar", row.sale_id)}>Confirmation PDF</Button>])} /></Panel>
         </> :
@@ -1926,14 +1926,13 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
   ], columns: ["service_code", "customer_category", "unit_price", "status"] },
   products: { title: "Catalogue solaire", fields: [
     { name: "sku", label: "Référence produit" }, { name: "label", label: "Désignation" },
-    { name: "price_reference", label: "Prix de référence", type: "number", step: "any" },
+    { name: "price_reference", label: "Prix catalogue HT", type: "number", step: "any" },
     { name: "currency", label: "Devise", options: CURRENCY_OPTIONS, defaultValue: PRIMARY_CURRENCY }, { name: "effective_from", label: "Début d’effet", type: "date" },
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["sku", "label", "price_reference", "currency", "effective_from", "status"] },
-  "tax-profiles": { title: "Paramètres de TVA", fields: [
-    { name: "service_code", label: "Prestation concernée", options: [{ value: "ELECTRICITY", label: "Électricité" }, { value: "WATER", label: "Eau" }] },
-    { name: "jurisdiction", label: "Juridiction fiscale", required: false, placeholder: "SEL par défaut" },
-    { name: "base", label: "Assiette fiscale", required: false, placeholder: "SERVICE par défaut" },
+  "tax-profiles": { title: "Règle centrale de TVA", fields: [
+    { name: "service_code", label: "Application", options: [{ value: "VAT", label: "Toutes les prestations taxables" }], defaultValue: "VAT" },
+    { name: "base", label: "Assiette fiscale", required: false, defaultValue: "SUBTOTAL", placeholder: "Sous-total taxable" },
     { name: "rate_percent", label: "Taux de TVA (%)", type: "number", step: "0.01", min: "0", max: "100" },
     { name: "source", label: "Document ou source fiscale" },
     { name: "change_reason", label: "Motif du changement", multiline: true },
@@ -1967,11 +1966,11 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
   const addingLabel = kind === "products" ? "Ajouter un kit" : kind === "tax-profiles" ? "Ajouter un profil fiscal" : "Ajouter une version";
   const formTitle = kind === "products" ? "Nouveau kit solaire" : kind === "tax-profiles" ? "Nouveau profil de TVA" : `Nouvelle version · ${definition.title}`;
   const actionHelp = kind === "products"
-    ? "Le kit devient vendable après approbation SEL. Un changement de prix crée une nouvelle version ; les ventes passées gardent leur prix. Pour changer la devise, créez une nouvelle référence produit."
+    ? "Saisissez le prix catalogue hors TVA. Le devis Rust ajoute le profil TVA approuvé et le total TTC devient l’unique créance. Le kit devient vendable après approbation SEL ; les ventes passées gardent leurs montants et leur instantané fiscal."
     : kind === "communication-charge"
       ? "Cette ligne figure sur chaque facture eau + électricité et entre dans l’assiette de la TVA. Toute nouvelle valeur doit être approuvée par SEL."
       : kind === "tax-profiles"
-        ? "Indiquez la source et la date d’effet. Le serveur conserve les versions précédentes et applique uniquement le profil approuvé correspondant à la période."
+        ? "La TVA se configure une seule fois ici et s’applique aux prestations taxables, y compris les ventes solaires et la ligne de communication. Aucun taux séparé n’est saisi par prestation. Le serveur conserve les versions précédentes et applique la règle approuvée à la date de l’opération."
         : kind === "fx-rates"
           ? "Le taux est versionné avec sa source et sa date d’effet. USD est la devise principale ; n’enregistrez que des taux approuvés par SEL."
           : "La nouvelle version reste inactive jusqu’à son approbation SEL. Les opérations déjà émises gardent leur instantané d’origine.";
@@ -2045,7 +2044,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
         ? <select name={field.name} defaultValue={field.defaultValue ?? ""} required={field.required !== false} disabled={busy || creating}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
         : field.multiline
           ? <textarea name={field.name} rows={3} maxLength={500} required={field.required !== false} disabled={busy || creating} />
-          : <input name={field.name} type={field.type ?? "text"} step={field.step} min={field.min} max={field.max} placeholder={field.placeholder} required={field.required !== false} disabled={busy || creating} />}</label>)}
+          : <input name={field.name} type={field.type ?? "text"} step={field.step} min={field.min} max={field.max} defaultValue={field.defaultValue} placeholder={field.placeholder} required={field.required !== false} disabled={busy || creating} />}</label>)}
       <div className="form-actions span-two"><Button type="button" disabled={busy || creating} onClick={() => void toggleDraft()}>Annuler</Button><Button primary type="submit" disabled={busy || creating}>{creating ? "Vérification…" : kind === "products" ? "Enregistrer le kit" : "Créer le brouillon"}</Button></div>
       <p className="help span-two">{actionHelp}</p>
     </form>}

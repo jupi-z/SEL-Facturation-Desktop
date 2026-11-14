@@ -619,10 +619,8 @@ async fn utility_preview_returns_both_services_without_persisting_financial_data
     .expect("seed approved communication charge");
     sqlx::query(
         "INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED')",
     )
-    .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
     .execute(&store.pool)
     .await
@@ -725,10 +723,8 @@ async fn utility_invoice_uses_and_binds_the_selected_meter_readings() {
     .unwrap();
     sqlx::query(
         "INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED')",
     )
-    .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
     .execute(&store.pool)
     .await

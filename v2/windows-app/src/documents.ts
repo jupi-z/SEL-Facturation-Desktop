@@ -166,6 +166,11 @@ function receiptAllocationsTable(allocations: Data[], currency: unknown): Conten
       const principal = allocation.principal === undefined || allocation.principal === null ? "—" : money(allocation.principal, allocation.currency ?? currency);
       const paidBefore = allocation.paid_before === undefined || allocation.paid_before === null ? "—" : money(allocation.paid_before, allocation.currency ?? currency);
       const creditedBefore = allocation.credited_before === undefined || allocation.credited_before === null ? "" : String(allocation.credited_before);
+      const taxSnapshot = object(allocation.tax_snapshot);
+      const solarVat = String(taxSnapshot.service_code ?? "").toUpperCase() === "SOLAR_KIT"
+        && taxSnapshot.rate !== undefined && taxSnapshot.amount !== undefined
+        ? `TVA incluse au total · ${new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 2 }).format(Number(taxSnapshot.rate))} · ${money(taxSnapshot.amount, allocation.currency ?? currency)}`
+        : "";
       const schedules = list(allocation.schedule_allocations);
       const balance = allocation.balance_after === undefined || allocation.balance_after === null
         ? "À consulter au compte client"
@@ -174,6 +179,7 @@ function receiptAllocationsTable(allocations: Data[], currency: unknown): Conten
         { stack: [
           { text: `${kindLabel}${description ? ` · ${description}` : ""}`, style: "body", bold: true },
           { text: reference, style: "muted", margin: [0, 2, 0, 0] },
+          ...(solarVat ? [{ text: solarVat, style: "muted", margin: [0, 3, 0, 0] } as Content] : []),
           ...(creditedBefore && !["0", "0.0", "0.00"].includes(creditedBefore) ? [{ text: `Avoirs déjà appliqués : ${money(creditedBefore, allocation.currency ?? currency)}`, style: "muted", margin: [0, 3, 0, 0] } as Content] : []),
           ...schedules.map((schedule) => ({ text: `Échéance ${value(schedule, "sequence")} · ${dateLabel(schedule.due_date)} · ${money(schedule.amount, allocation.currency ?? currency)}`, style: "muted", margin: [0, 3, 0, 0] } as Content)),
         ] },
@@ -375,12 +381,15 @@ function solarDefinition(data: Data): TDocumentDefinitions {
     ...(sale.contract_id ? [`Réf. contrat : ${value(sale, "contract_id")}`] : []),
     ...(schedule.length ? [`Échéances : ${schedule.length}`] : ["Mode : vente au comptant"]),
   ];
+  const taxRate = lines[0]?.tax_snapshot && object(lines[0].tax_snapshot).rate !== undefined
+    ? new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 2 }).format(Number(object(lines[0].tax_snapshot).rate))
+    : "TVA";
   const rows: Content[][] = lines.map((line) => [
     { text: value(line, "product_reference"), style: "body" },
     { text: value(line, "quantity"), style: "body", alignment: "center" },
     { text: money(line.unit_price, sale.currency), style: "body", alignment: "center" },
-    { text: money(line.total, sale.currency), style: "body", alignment: "center" },
-    { text: "—", style: "body", alignment: "center" },
+    { text: money(line.subtotal, sale.currency), style: "body", alignment: "center" },
+    { text: money(line.tax_amount, sale.currency), style: "body", alignment: "center" },
     { text: money(line.total, sale.currency), style: "body", alignment: "center", bold: true },
   ]);
   return {
@@ -396,10 +405,20 @@ function solarDefinition(data: Data): TDocumentDefinitions {
         { ...(schedule.length > 18 ? { pageBreak: "before" as const } : {}), table: { headerRows: 1, keepWithHeaderRows: 1, dontBreakRows: true, widths: [42, "*", 100, 104], body: [
           [{ text: "N°", style: "eyebrow" }, { text: "ÉCHÉANCE", style: "eyebrow" }, { text: "MONTANT", style: "eyebrow", alignment: "right" }, { text: "ÉTAT", style: "eyebrow", alignment: "right" }],
           ...schedule.map((item) => [value(item, "sequence"), dateLabel(item.due_date), { text: money(item.amount_due, sale.currency), alignment: "right" }, { text: statusLabel(item.status), alignment: "right" }]),
-        ] }, layout: "lightHorizontalLines" } as Content,
+        ] }, layout: {
+          hLineWidth: (index: number) => index === 0 ? 0 : 0.5,
+          hLineColor: () => "#d9e3f0",
+          vLineWidth: () => 0,
+          paddingLeft: () => 6,
+          paddingRight: () => 6,
+          paddingTop: () => 3,
+          paddingBottom: () => 3,
+        } } as Content,
       ] : []),
-      ...financialSummary("Total de la vente", "Montant de la vente", total, "", "", total),
-      ...qrFooter(value(data, "qr_internal_reference"), "Document généré par SEL à partir des données du serveur."),
+      { unbreakable: true, stack: [
+        ...financialSummary("Total TTC de la vente", "Sous-total HT", money(sale.subtotal, sale.currency), `TVA (${taxRate})`, money(sale.tax_amount, sale.currency), total),
+        ...qrFooter(value(data, "qr_internal_reference"), "Document généré par SEL à partir des données du serveur."),
+      ] } as Content,
     ],
   };
 }

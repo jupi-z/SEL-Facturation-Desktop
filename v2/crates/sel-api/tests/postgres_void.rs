@@ -54,9 +54,9 @@ async fn invoice_void_is_audited_and_idempotent() {
     .execute(&store.pool)
     .await
     .expect("insert actor");
-    // Integration test binaries share the disposable CI database. Use a
-    // historical effective period so unrelated tariff/tax fixtures created
-    // by earlier tests cannot make the legacy tax lookup ambiguous.
+    // Integration test binaries share the disposable CI database. This test
+    // runs in an isolated schema and uses the same central VAT profile as
+    // every production billing path.
     sqlx::query(
         "INSERT INTO tariff_versions
          (id, service_code, customer_category, unit, unit_price, currency,
@@ -72,8 +72,8 @@ async fn invoice_void_is_audited_and_idempotent() {
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, effective_to, status)
-         VALUES ($1, 'ELECTRICITY', 'FIXTURE', 'SUBTOTAL', 0.16, 'fixture',
-                 '2000-01-01', '2000-12-31', 'APPROVED')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'fixture',
+                 '2000-01-01', NULL, 'APPROVED')",
     )
     .bind(Uuid::new_v4())
     .execute(&store.pool)

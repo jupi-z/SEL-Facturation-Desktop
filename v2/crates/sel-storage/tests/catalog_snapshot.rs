@@ -21,8 +21,8 @@ fn snapshot(product_status: &str) -> CatalogSnapshot {
         })],
         tax_profiles: vec![json!({
             "id": "11000000-0000-4000-8000-000000000002", "reference_type": "TAX_PROFILE",
-            "natural_key": "WATER|SEL|SERVICE", "payload": {"service_code":"WATER",
-                "jurisdiction":"SEL", "base":"SERVICE", "rate":"0.16", "source":"SEL"},
+            "natural_key": "VAT|SEL|SUBTOTAL", "payload": {"service_code":"VAT",
+                "jurisdiction":"SEL", "base":"SUBTOTAL", "rate":"0.16", "source":"SEL"},
             "effective_from": "2026-01-01", "effective_to": null, "approval_ref": "SEL-TAX-1",
             "approved_by": null, "status": "APPROVED"
         })],
@@ -99,7 +99,7 @@ async fn catalog_snapshot_is_authenticated_atomic_and_idempotent() {
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'WATER', 'OTHER-SEL-JURISDICTION', 'SERVICE', '0.18', 'fixture', '2026-01-01', 'APPROVED')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', '0.18', 'fixture', '2026-01-01', 'APPROVED')",
     )
     .bind(Uuid::new_v4().to_string())
     .execute(&store.pool)

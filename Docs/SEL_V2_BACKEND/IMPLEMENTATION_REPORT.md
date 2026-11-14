@@ -1372,3 +1372,97 @@ Audit financier de production, en lecture seule après déploiement, sans identi
 Avant le redémarrage, une sauvegarde fraîche a été créée : `/srv/sel-v2/backups/predeploy-20261113T115157Z-007ee3a.dump`, SHA-256 `e2f210f03104f3df7bba412a71998ac0e9d610ccf2c8116bcb538a03f7a29652`, 105319 octets, mode `600`. `pg_restore --list` a réussi, puis une restauration complète a été exécutée dans un conteneur PostgreSQL 16.4 isolé du réseau; elle a restauré 38 tables publiques et le conteneur temporaire a été supprimé. L’image précédente est conservée sous `sel-v2-sel-api:rollback-pre-007ee3a-20261113T1158` (`sha256:4690bb2234911b79d2a2ec7edd80bbc7454a5d282a28bd940148d643cf532185`). Le marqueur de déploiement indique maintenant `007ee3a…` et garde `6057b0e…` comme précédent. Compose a recréé les conteneurs API et PostgreSQL; le volume de données est resté disponible, les migrations ont abouti et les deux services sont sains. Aucune donnée commerciale n’a été créée, supprimée ou modifiée par un scénario de test.
 
 Les quatre contrôles CI du candidat ont réussi ([Rust/PostgreSQL](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43417239387), [Windows/Tauri et install/upgrade](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43417239404), [régressions](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43417239367), [paquet serveur](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43417239432)). L’artefact Windows `SEL-V2-Tauri-Windows-158` (ID `14033241643`) a été téléchargé et son ZIP a été vérifié par SHA-256 `3a4f50147701371cd45eac66777936156d1f5ee4fdb7e0185c5f9778030797fe`. L’installateur extrait est la version `0.4.5` x64; son empreinte figure dans le livrable local. Il n’est pas signé Authenticode. La CI a validé l’installation/mise à niveau isolée, mais l’installation physique chez SEL reste à tester par le propriétaire. Aucun merge dans `main` ni publication de release n’a été fait.
+
+### TVA solaire et documents de dette/paiement — 13 novembre 2026
+
+L’analyse du PDF remis sous un nom de reçu montre que son contenu est une **facture de vente solaire** : le document affichait le prix du kit comme total, une taxe « — », sans versement ni solde. Le problème était en amont du modèle PDF : le devis Rust prenait le prix catalogue pour le principal, la ligne de vente avait un instantané fiscal vide et la créance était créée au même montant HT. Le reçu de paiement est un document séparé; il doit rester la preuve datée d’un règlement et afficher l’obligation TTC, les versements déjà enregistrés, le règlement courant et le solde après affectation.
+
+Le flux central traite désormais `price_reference` du kit comme prix catalogue HT, sélectionne exactement un profil TVA `SOLAR_KIT` approuvé et applicable, calcule la taxe en Rust et refuse le devis/la vente s’il n’existe pas exactement un profil. Le montant TTC est enregistré dans l’instantané fiscal de la ligne et devient le **seul principal** de la créance. L’activation d’un échéancier doit toujours totaliser ce même principal TTC; elle ne crée pas de seconde dette. Le devis et l’administration exposent maintenant explicitement HT, TVA et TTC. Le chemin SQLite historique conservé pour le worker de synchronisation applique le même profil, garde le snapshot et envoie un montant TTC; si la configuration centrale a changé entre-temps, l’événement reste rejeté de façon explicite au lieu de sous-facturer silencieusement. Les documents PDF locaux affichent les mêmes éléments depuis les snapshots structurés; le reçu inclut l’instantané de TVA solaire et son tableau donne principal TTC, déjà réglé, versement et solde. Aucun PDF n’est ajouté côté serveur. Les factures/ventes déjà émises ne sont pas recalculées rétroactivement.
+
+La migration PostgreSQL additive `0024_solar_vat_profiles.sql` autorise `SOLAR_KIT` dans le catalogue fiscal versionné, sans modifier les ventes ou lignes existantes. L’administrateur peut choisir « Vente de kit solaire », enregistrer un profil versionné, puis le faire approuver par SEL. Les prix catalogue sont désormais libellés HT dans l’écran d’administration. Les ventes verrouillent les lignes du kit et du profil fiscal; un verrou transactionnel commun sérialise leur validation avec l’approbation ou la révocation d’un profil, afin de prévenir les changements de configuration concurrents pendant l’émission.
+
+L’application du taux exact dépend du profil approuvé qui sera actif à la date de vente. Le code ne devine pas un taux solaire à partir d’un autre service. La DGI décrit 16 % comme taux courant pour la plupart des biens et services consommés localement et décrit les mentions HT, taux/montant de TVA et TTC de la facture normalisée; ces sources ne prouvent ni le régime d’assujettissement individuel de SEL ni l’homologation DGI de cette application. La version présente applique le profil configuré par SEL et ne revendique aucune certification fiscale.
+
+| Module | Code développé | Validé par tests | Utilisable dans l’application | Poste réel | Déployé |
+|---|---|---|---|---|---|
+| Devis et émission solaire | `sel-storage/src/postgres.rs`, `sel-contracts/src/lib.rs`, API quote/sale | Compilation du test d’intégration; test PostgreSQL d’exécution non lancé | Oui, après migration et profil `SOLAR_KIT` approuvé | NOT_TESTED | Non |
+| Créance, contrat et échéancier | Principal TTC porté par la créance unique et le plan | Assertions ajoutées au scénario PostgreSQL; exécution bloquée faute de PostgreSQL local | Oui, après profil TVA | NOT_TESTED | Non |
+| Paiement solaire et reçu | Snapshot TVA joint à l’allocation; soldes calculés à partir du principal TTC | Assertions ajoutées pour 300 USD réglés, 860 USD restant sur 1 160 USD | Oui, lorsque la nouvelle API et le client sont assemblés | NOT_TESTED | Non |
+| Documents solaires A4 | `windows-app/src/documents.ts`, `scripts/visual_review.py` | PASS — facture HT/TVA/TTC et contrat long avec récapitulatif/QR sur la page finale | Oui, côté poste client; reçu séparé du document de vente | Non testé sur matériel SEL | Non |
+| Profil TVA solaire administrable | migration `0024`, API/catalogue et écran d’administration | Compilation Rust et build Windows; migration non appliquée à une base de test | Oui après mise à jour serveur et approbation d’un profil | NOT_TESTED | Non |
+
+| Vérification exécutée dans cette branche | Résultat |
+|---|---|
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS — aucune alerte Clippy |
+| `cargo test -p sel-api --test postgres_solar --no-run` | PASS — le test compile; son exécution exige PostgreSQL |
+| `cargo test --workspace` | PASS — suite complète exécutable réussie; tests PostgreSQL annotés `ignore` non exécutés, voir blocage externe ci-dessous |
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript et Vite; bundles PDF volumineux, sans erreur de build |
+| `python v2/windows-app/scripts/visual_review.py` | PASS — parcours visuel et PDF sur fixtures synthétiques; sortie isolée sous `artifacts/solar-tax-debt-documents-20261113/` |
+| PostgreSQL véritable et migration `0024` | BLOCKED_EXTERNAL — Docker Desktop daemon indisponible, aucune instance PostgreSQL locale, `TEST_DATABASE_URL` absent |
+| CI GitHub | Les runs `43428863146` à `43431467982` ont aussi exercé le worker SQLite et révélé son ancien calcul sans TVA; ce chemin est corrigé et couvert localement, nouveau rerun requis |
+| Production, données SEL, déploiement ou publication | NOT_TOUCHED — aucun accès en écriture utilisé |
+
+**Limites avant livraison :** la migration `0024` n’est pas encore passée en CI sur PostgreSQL; un profil `SOLAR_KIT` devra être configuré et explicitement approuvé avant l’émission d’une nouvelle vente; le parcours doit ensuite être validé contre PostgreSQL de test et sur un poste Windows représentatif. Le PDF analysé n’est pas modifié et aucune vente historique n’est recalculée. Cette branche de correction n’a pas été poussée en production.
+
+#### Vérification de convergence et de non-régression — 14 novembre 2026
+
+Le scénario multi-postes a d’abord détecté deux défauts de fixture : le poste SQLite et PostgreSQL utilisaient des UUID de profil TVA différents, puis un test PostgreSQL historique partageait le schéma public et n’avait pas de profil `SOLAR_KIT`. Les fixtures utilisent maintenant le même identifiant/référence pour le catalogue synchronisé et un schéma PostgreSQL isolé pour le test de synchronisation solaire. Aucun contrôle n’a été désactivé.
+
+La projection de `SOLAR_SALE_CREATED` transporte désormais le snapshot fiscal central complet jusqu’à SQLite. La réconciliation compare le prix HT, le TTC et le snapshot fiscal au lieu de comparer le prix unitaire HT au principal TTC. Les anciennes projections sans champs fiscaux restent compatibles par repli vers leur principal historique. Le test multi-postes vérifie explicitement les montants et snapshots identiques sur PostgreSQL et les deux SQLite.
+
+| Vérification sur le commit applicatif `0a8d080` | Résultat |
+|---|---|
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| `cargo test --workspace` | PASS localement; tests PostgreSQL ignorés faute de Docker/`TEST_DATABASE_URL` local |
+| `cargo test -p sel-local --test two_device_convergence --no-run` | PASS — scénario d’intégration compilé localement |
+| Tous les tests PostgreSQL ignorés localement, dont `postgres_sync_financial` | PASS dans GitHub Actions, run [43608570486](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43608570486), avec PostgreSQL de test |
+| `two_sqlite_devices_converge_through_real_postgres_and_http` | PASS dans le même run : client, facture utilitaire, paiements, vente solaire HT 120 / TVA 19,20 / créance TTC 139,20, contrat 81,20 + 58,00, conflit de paiements concurrents et égalité des lignes/snapshots entre les trois bases |
+| `solar_sync_creates_one_receivable_and_one_installment_plan` | PASS dans le même run : principal TTC 1 160, une créance, un plan et deux échéances totalisant exactement le principal |
+| Production, migration `0024`, données et comptes SEL | NOT_TOUCHED — aucun accès en écriture ni déploiement |
+
+Le code est poussé sur la branche de PR #68, commit `0a8d080e7b90b8ab16933066a8bce63514db34c4`; la PR reste ouverte et non fusionnée. La migration additive `0024` et l’approbation d’un profil TVA `SOLAR_KIT` restent des prérequis d’exploitation. Les tests Windows physiques, l’installation côté SEL et le déploiement ne sont pas couverts par cette validation.
+
+### TVA centralisée et correction comptable de la vente solaire — 14 novembre 2026
+
+Le calcul monétaire de TVA est maintenant dans `sel-domain::tax::calculate_vat`, partagé par la facturation eau/électricité, la ligne de communication, les devis/ventes solaires et le cache SQLite. Les nouveaux profils fiscaux acceptent uniquement le code `VAT` avec assiette `SUBTOTAL`; le client Windows présente une seule règle centrale au lieu d'un champ par prestation. Les factures déjà émises conservent leur instantané fiscal et ne sont pas recalculées. Les anciens profils par prestation ne sont plus utilisés pour les nouveaux calculs et ne sont pas supprimés de l'historique.
+
+Une route administrateur transactionnelle de correction solaire est ajoutée : elle contre-écrit les paiements admissibles, crédite l'ancienne créance, émet une vente de remplacement avec TVA centrale, crée un contrat/échéance unique, rattache à nouveau le montant effectivement payé et journalise la correction avec idempotence dans la même transaction PostgreSQL. Le test d'intégration HTTP vérifie le cas de la vente hors TVA à 24 819,77 USD et du paiement déjà reçu de 5 000 USD : TVA 3 971,16 USD, TTC 28 790,93 USD, nouveau solde 23 790,93 USD, ancienne créance créditée et répétition sans doublon. Il n'écrit que dans une base de test.
+
+| Vérification sur le worktree `monarque/fix-solar-sale-tax-and-debt-documents-20261113` | Résultat |
+|---|---|
+| `cargo fmt --all -- --check` | PASS |
+| `cargo test --workspace` | PASS — tests exécutables réussis; tests nécessitant PostgreSQL sont ignorés localement faute de service de test |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/Vite compilés; avertissement non bloquant sur des bundles PDF supérieurs à 500 kB |
+| `git diff --check` | PASS |
+| Test HTTP PostgreSQL de correction solaire | NOT_TESTED localement — Docker daemon absent, aucun service PostgreSQL local et `TEST_DATABASE_URL` non configuré; il doit réussir en CI avec PostgreSQL avant mise en production |
+| Build/installation Windows sur poste SEL | NOT_TESTED — le build web Windows réussit, mais aucun nouvel installateur ni test sur poste cible n'a été produit ici |
+| Mise à jour ou correction des données en production | NOT_TOUCHED — aucune écriture, migration ou redémarrage de production dans cette tranche |
+
+**Blocage avant production :** ne pas appliquer la migration `0025` ni corriger la vente `SEL-20261111-230207-EDF079945F19493CBE6BE39FE39F9B17` avant que la CI exécute avec succès le test PostgreSQL transactionnel, qu'une sauvegarde fraîche soit vérifiée/restaurée hors production et que l'image serveur candidate soit assemblée. Le taux communiqué par le propriétaire est 16 %; son application comme politique centrale versionnée doit être provisionnée et auditée dans PostgreSQL selon la date d'effet approuvée. La migration `0024` historique conserve les codes par prestation pour lecture des snapshots anciens; la migration `0025` ajoute `VAT` sans modifier ces données.
+
+### Mise à jour après validations et déploiement — 14 novembre 2026
+
+La règle de TVA est effectivement centralisée : le calcul monétaire passe par `sel-domain::tax::calculate_vat`; un seul profil actif `VAT / SEL / SUBTOTAL` alimente les factures d’eau/électricité, la ligne de communication et les ventes solaires. Le profil configuré en production est à 16 %, effectif le 14 novembre 2026. Sa référence d’approbation est `SEL-OWNER-CONFIRMATION-2026-11-14` et sa source consigne la confirmation du propriétaire. Cette référence interne ne prétend pas être une référence légale ou une certification fiscale de l’État. Les profils historiques par prestation restent conservés, sans être utilisés pour les nouveaux calculs.
+
+| Élément | Résultat vérifié |
+|---|---|
+| Commit applicatif déployé | `facf09e3c6efa8bd5ec7e86980d74655b520e9b4`, image `sha256:9c3cf04f1e88ce14db3b6604d7c10ec7756a18de02d49dc3d9f37c5148415ac3` |
+| CI backend / PostgreSQL | PASS — run [43622263214](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43622263214) |
+| CI paquet serveur | PASS — run [43622307249](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43622307249) |
+| CI Windows, revue visuelle, build et test d’upgrade | PASS — run [43622310411](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43622310411) |
+| Migration PostgreSQL | PASS — version 25 appliquée; migration additive; volume PostgreSQL conservé |
+| Sauvegarde réelle avant migration | PASS — `/srv/sel-v2/backups/sel-before-central-vat-20261114T180316Z.dump`, mode `0600`, SHA-256 `555d940c8a10bd1e63ef6b865614b4f2d67396a58b266ded18917c7cc497b3c9` |
+| Restauration de cette sauvegarde | PASS — restaurée dans un conteneur PostgreSQL temporaire isolé; 38 tables vérifiées, conteneur temporaire supprimé |
+| Santé après déploiement | PASS — API et PostgreSQL `healthy`; `https://sel.shuleops.com/health/ready` répond `configured:true` |
+| Règle centrale de TVA en production | PASS — une règle approuvée `VAT / SEL / SUBTOTAL`, 0,16, effective `2026-11-14`; disponibilité confirmée dans le diagnostic admin |
+| Correction de la vente `SEL-20261111-230207-EDF079945F19493CBE6BE39FE39F9B17` | PASS — ancienne vente conservée en VOID et ancienne créance créditée 24 819,77 USD; vente de remplacement `SEL-20261114-202711-9635D72D7675496DBDDBE2CDEDAD1945` avec base 24 819,77 USD, TVA 3 971,16 USD, TTC 28 790,93 USD |
+| Paiement et échéance après correction | PASS — 5 000 USD repris sur la nouvelle créance; solde 23 790,93 USD; une échéance unique de 28 790,93 USD au `2026-11-21`; aucun intérêt ni frais ajouté |
+| Idempotence | PASS — répétition de la même correction retourne le même `correction_id`, sans créer vente, échéance ou paiement supplémentaire |
+| Installateur Windows candidat | PASS — artefact non signé de la CI, branche de travail, run `43622310411`; NSIS `SEL Facturation_0.4.5_x64-setup.exe` SHA-256 `56FF77D96C3C413B788DD8004628284456CB6B91AD29A44BA58C38203A93A5B3`; MSI `SEL Facturation_0.4.5_x64_en-US.msi` SHA-256 `9E2B1C9A0DAE38BF07E2D467C1A37CFC431E47489DA8D115A5383FB74DDEA22D` |
+| Fusion/publication | NOT_DONE — aucune fusion dans `main`, aucune release GitHub publiée |
+| Recette sur un poste physique SEL | NOT_TESTED — la CI Windows a validé les captures, compilation, installation et mise à niveau isolées; elle ne remplace pas l’acceptation sur le poste de Clarisse/SEL |
+
+Les installateurs sont disponibles dans `artifacts/SEL-V2-central-VAT-facf09e/`. Le backend et les données de production sont à jour sur le commit ci-dessus. La nouvelle règle TVA est une source centrale unique; les anciennes lignes fiscales sont conservées uniquement pour préserver l’historique et les snapshots déjà émis.

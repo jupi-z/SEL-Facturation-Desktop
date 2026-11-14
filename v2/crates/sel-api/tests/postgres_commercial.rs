@@ -57,8 +57,8 @@ async fn utility_issue_is_atomic_idempotent_and_survives_restart() {
         .execute(&store.pool)
         .await
         .expect("electricity tariff");
-    sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status) VALUES ($1, 'ELECTRICITY', 'FIXTURE', 'SUBTOTAL', 0.16, 'fixture', '2026-01-01', 'APPROVED')")
-        .bind(Uuid::new_v4())
+    sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status) VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'fixture', '2026-01-01', 'APPROVED') ON CONFLICT (id) DO UPDATE SET status = 'APPROVED', effective_from = '2026-01-01', effective_to = NULL, rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'")
+        .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
         .execute(&store.pool)
         .await
         .expect("electricity tax");

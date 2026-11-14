@@ -7,11 +7,9 @@ fn zero_water_is_always_visible_without_inventing_a_tariff() {
         electricity_kwh: Decimal::new(100, 0),
         water_m3: WaterInput::ZeroConfirmed,
         electricity_unit_price: Decimal::new(95, 3),
-        electricity_tax_rate: Decimal::new(16, 2),
+        vat_rate: Decimal::new(16, 2),
         water_tariff: None,
-        water_tax_rate: None,
         communication_charge: Decimal::new(10, 0),
-        communication_tax_rate: Decimal::new(16, 2),
         currency: "USD".into(),
     })
     .expect("valid zero-water utility invoice");
@@ -35,11 +33,9 @@ fn communication_fee_is_mandatory_and_part_of_the_vat_base() {
         electricity_kwh: Decimal::new(100, 0),
         water_m3: WaterInput::Positive(Decimal::ONE),
         electricity_unit_price: Decimal::new(95, 3),
-        electricity_tax_rate: Decimal::new(16, 2),
+        vat_rate: Decimal::new(16, 2),
         water_tariff: Some(Decimal::new(30, 2)),
-        water_tax_rate: Some(Decimal::new(16, 2)),
         communication_charge: Decimal::new(10, 0),
-        communication_tax_rate: Decimal::new(16, 2),
         currency: "USD".into(),
     })
     .expect("valid combined invoice");
@@ -57,11 +53,9 @@ fn communication_fee_cannot_be_negative() {
         electricity_kwh: Decimal::ZERO,
         water_m3: WaterInput::ZeroConfirmed,
         electricity_unit_price: Decimal::ZERO,
-        electricity_tax_rate: Decimal::new(16, 2),
+        vat_rate: Decimal::new(16, 2),
         water_tariff: None,
-        water_tax_rate: None,
         communication_charge: Decimal::new(-1, 0),
-        communication_tax_rate: Decimal::new(16, 2),
         currency: "USD".into(),
     })
     .unwrap_err();
@@ -78,11 +72,9 @@ fn invoice_vat_is_rounded_once_on_the_combined_taxable_base() {
         electricity_kwh: Decimal::new(3, 2),
         water_m3: WaterInput::Positive(Decimal::new(1, 1)),
         electricity_unit_price: Decimal::ONE,
-        electricity_tax_rate: Decimal::new(16, 2),
+        vat_rate: Decimal::new(16, 2),
         water_tariff: Some(Decimal::new(30, 2)),
-        water_tax_rate: Some(Decimal::new(16, 2)),
         communication_charge: Decimal::new(10, 0),
-        communication_tax_rate: Decimal::new(16, 2),
         currency: "USD".into(),
     })
     .expect("valid combined taxable base");

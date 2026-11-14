@@ -320,15 +320,12 @@ async fn utility_invoice_sync_persists_required_lines_including_zero_water() {
             .await
             .unwrap();
     }
-    for service in ["ELECTRICITY", "WATER"] {
-        sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status) VALUES ($1, $2, 'TEST', 'ENERGY', 0.16, 'UTILITY-TEST-1', $3, 'APPROVED')")
-            .bind(Uuid::new_v4())
-            .bind(service)
-            .bind(effective_from)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-    }
+    sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref) VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'UTILITY-TEST-1', $2, 'APPROVED', 'UTILITY-TEST-1') ON CONFLICT (id) DO UPDATE SET status = 'APPROVED', effective_from = EXCLUDED.effective_from, effective_to = NULL, rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'")
+        .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
+        .bind(effective_from)
+        .execute(&store.pool)
+        .await
+        .unwrap();
     let request = UtilityBillingRequest {
         customer_id,
         billing_period: "2026-10".into(),
@@ -476,9 +473,7 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
     let actor_id = Uuid::new_v4();
     let grant_id = Uuid::new_v4();
     let customer_id = Uuid::new_v4();
-    let store = CentralStore::connect(&database_url, organization_id)
-        .await
-        .unwrap();
+    let (store, schema) = isolated_central_store(&database_url, organization_id).await;
     migrate_postgres(&store.pool).await.unwrap();
     store
         .ensure_organization("solar sync fixture")
@@ -518,10 +513,15 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
         .execute(&store.pool)
         .await
         .unwrap();
+    sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref) VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'central-vat-sync-v1', CURRENT_DATE, 'APPROVED', 'central-vat-sync-v1') ON CONFLICT (id) DO UPDATE SET status = 'APPROVED', effective_from = CURRENT_DATE, effective_to = NULL, rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'")
+        .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
+        .execute(&store.pool)
+        .await
+        .unwrap();
     let sale_request = CreateSolarSaleRequest {
         customer_id,
         product_code,
-        principal: Decimal::new(1000, 0),
+        principal: Decimal::new(1160, 0),
         currency: "USD".into(),
         terms_revision: "solar-sync-v1".into(),
     };
@@ -574,7 +574,7 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
             InstallmentRequest {
                 sequence: 2,
                 due_date: NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
-                amount: Decimal::new(600, 0),
+                amount: Decimal::new(760, 0),
             },
         ],
         currency: "USD".into(),
@@ -621,4 +621,33 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
     assert_eq!(counts.get::<i64, _>("receivables"), 1);
     assert_eq!(counts.get::<i64, _>("plans"), 1);
     assert_eq!(counts.get::<i64, _>("installments"), 2);
+    let principal: Decimal =
+        sqlx::query_scalar("SELECT principal_total FROM receivables WHERE id = $1")
+            .bind(receivable_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(principal, Decimal::new(1160, 0));
+    let (subtotal, total, tax_amount): (Decimal, Decimal, Decimal) = sqlx::query_as(
+        "SELECT sl.unit_price, sl.total, (sl.tax_snapshot ->> 'amount')::numeric
+         FROM sale_lines sl WHERE sl.sale_id = $1",
+    )
+    .bind(sale_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(subtotal, Decimal::new(1000, 0));
+    assert_eq!(tax_amount, Decimal::new(160, 0));
+    assert_eq!(total, principal);
+    store.pool.close().await;
+    let cleanup_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&cleanup_pool)
+        .await
+        .unwrap();
+    cleanup_pool.close().await;
 }

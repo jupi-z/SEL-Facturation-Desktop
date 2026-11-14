@@ -773,6 +773,16 @@ pub struct CreateSolarSaleRequest {
     pub terms_revision: String,
 }
 
+/// Audited replacement of a solar sale whose immutable financial snapshot is
+/// incorrect. The original rows remain in the ledger and are balanced by
+/// reversal/credit entries inside one central transaction.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SolarSaleCorrectionRequest {
+    pub due_date: NaiveDate,
+    pub approved_terms_revision: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CreateSolarQuoteRequest {
     pub product_code: String,
@@ -783,6 +793,14 @@ pub struct CreateSolarQuoteRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SolarQuoteResponse {
     pub product_code: String,
+    #[serde(default)]
+    pub subtotal: Decimal,
+    #[serde(default)]
+    pub tax_rate: Decimal,
+    #[serde(default)]
+    pub tax_amount: Decimal,
+    #[serde(default)]
+    pub total: Decimal,
     pub principal: Decimal,
     pub currency: String,
     pub terms_revision: String,
@@ -790,15 +808,38 @@ pub struct SolarQuoteResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SolarTaxSnapshot {
+    pub schema_version: u32,
+    pub service_code: String,
+    pub tax_profile_id: Uuid,
+    pub jurisdiction: String,
+    pub base: String,
+    pub rate: Decimal,
+    pub amount: Decimal,
+    pub source: String,
+    pub approval_ref: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SolarSaleResponse {
     pub sale_id: Uuid,
     pub receivable_id: Uuid,
     pub customer_id: Uuid,
+    #[serde(default)]
+    pub subtotal: Decimal,
+    #[serde(default)]
+    pub tax_rate: Decimal,
+    #[serde(default)]
+    pub tax_amount: Decimal,
+    #[serde(default)]
+    pub total: Decimal,
     pub principal: Decimal,
     pub currency: String,
     pub status: String,
     #[serde(default)]
     pub product_code: Option<String>,
+    #[serde(default)]
+    pub tax_snapshot: Option<SolarTaxSnapshot>,
 }
 
 /// Stable local/central identifier for one solar installment row.
