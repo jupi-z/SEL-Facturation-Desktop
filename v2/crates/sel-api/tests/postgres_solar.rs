@@ -235,8 +235,8 @@ async fn solar_sale_correction_is_atomic_idempotent_and_transfers_the_paid_amoun
         schedule
             .try_get::<rust_decimal::Decimal, _>("amount_due")
             .unwrap()
-            .to_string(),
-        "28790.93"
+            .normalize(),
+        rust_decimal::Decimal::new(2_879_093, 2)
     );
     let correction_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM solar_sale_corrections WHERE old_sale_id = $1")
