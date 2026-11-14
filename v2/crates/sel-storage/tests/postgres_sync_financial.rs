@@ -518,10 +518,15 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
         .execute(&store.pool)
         .await
         .unwrap();
+    sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref) VALUES ($1, 'SOLAR_KIT', 'TEST', 'SUBTOTAL', 0.16, 'solar-sync-v1', CURRENT_DATE, 'APPROVED', 'solar-sync-v1')")
+        .bind(Uuid::new_v4())
+        .execute(&store.pool)
+        .await
+        .unwrap();
     let sale_request = CreateSolarSaleRequest {
         customer_id,
         product_code,
-        principal: Decimal::new(1000, 0),
+        principal: Decimal::new(1160, 0),
         currency: "USD".into(),
         terms_revision: "solar-sync-v1".into(),
     };
@@ -574,7 +579,7 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
             InstallmentRequest {
                 sequence: 2,
                 due_date: NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
-                amount: Decimal::new(600, 0),
+                amount: Decimal::new(760, 0),
             },
         ],
         currency: "USD".into(),
@@ -621,4 +626,22 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
     assert_eq!(counts.get::<i64, _>("receivables"), 1);
     assert_eq!(counts.get::<i64, _>("plans"), 1);
     assert_eq!(counts.get::<i64, _>("installments"), 2);
+    let principal: Decimal =
+        sqlx::query_scalar("SELECT principal_total FROM receivables WHERE id = $1")
+            .bind(receivable_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(principal, Decimal::new(1160, 0));
+    let (subtotal, total, tax_amount): (Decimal, Decimal, Decimal) = sqlx::query_as(
+        "SELECT sl.unit_price, sl.total, (sl.tax_snapshot ->> 'amount')::numeric
+         FROM sale_lines sl WHERE sl.sale_id = $1",
+    )
+    .bind(sale_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(subtotal, Decimal::new(1000, 0));
+    assert_eq!(tax_amount, Decimal::new(160, 0));
+    assert_eq!(total, principal);
 }
