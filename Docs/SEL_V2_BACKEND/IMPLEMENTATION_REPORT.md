@@ -1404,3 +1404,22 @@ L’application du taux exact dépend du profil approuvé qui sera actif à la d
 | Production, données SEL, déploiement ou publication | NOT_TOUCHED — aucun accès en écriture utilisé |
 
 **Limites avant livraison :** la migration `0024` n’est pas encore passée en CI sur PostgreSQL; un profil `SOLAR_KIT` devra être configuré et explicitement approuvé avant l’émission d’une nouvelle vente; le parcours doit ensuite être validé contre PostgreSQL de test et sur un poste Windows représentatif. Le PDF analysé n’est pas modifié et aucune vente historique n’est recalculée. Cette branche de correction n’a pas été poussée en production.
+
+#### Vérification de convergence et de non-régression — 14 novembre 2026
+
+Le scénario multi-postes a d’abord détecté deux défauts de fixture : le poste SQLite et PostgreSQL utilisaient des UUID de profil TVA différents, puis un test PostgreSQL historique partageait le schéma public et n’avait pas de profil `SOLAR_KIT`. Les fixtures utilisent maintenant le même identifiant/référence pour le catalogue synchronisé et un schéma PostgreSQL isolé pour le test de synchronisation solaire. Aucun contrôle n’a été désactivé.
+
+La projection de `SOLAR_SALE_CREATED` transporte désormais le snapshot fiscal central complet jusqu’à SQLite. La réconciliation compare le prix HT, le TTC et le snapshot fiscal au lieu de comparer le prix unitaire HT au principal TTC. Les anciennes projections sans champs fiscaux restent compatibles par repli vers leur principal historique. Le test multi-postes vérifie explicitement les montants et snapshots identiques sur PostgreSQL et les deux SQLite.
+
+| Vérification sur le commit applicatif `0a8d080` | Résultat |
+|---|---|
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| `cargo test --workspace` | PASS localement; tests PostgreSQL ignorés faute de Docker/`TEST_DATABASE_URL` local |
+| `cargo test -p sel-local --test two_device_convergence --no-run` | PASS — scénario d’intégration compilé localement |
+| Tous les tests PostgreSQL ignorés localement, dont `postgres_sync_financial` | PASS dans GitHub Actions, run [43608570486](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43608570486), avec PostgreSQL de test |
+| `two_sqlite_devices_converge_through_real_postgres_and_http` | PASS dans le même run : client, facture utilitaire, paiements, vente solaire HT 120 / TVA 19,20 / créance TTC 139,20, contrat 81,20 + 58,00, conflit de paiements concurrents et égalité des lignes/snapshots entre les trois bases |
+| `solar_sync_creates_one_receivable_and_one_installment_plan` | PASS dans le même run : principal TTC 1 160, une créance, un plan et deux échéances totalisant exactement le principal |
+| Production, migration `0024`, données et comptes SEL | NOT_TOUCHED — aucun accès en écriture ni déploiement |
+
+Le code est poussé sur la branche de PR #68, commit `0a8d080e7b90b8ab16933066a8bce63514db34c4`; la PR reste ouverte et non fusionnée. La migration additive `0024` et l’approbation d’un profil TVA `SOLAR_KIT` restent des prérequis d’exploitation. Les tests Windows physiques, l’installation côté SEL et le déploiement ne sont pas couverts par cette validation.
