@@ -72,7 +72,7 @@ async fn seed_local_catalog(store: &LocalStore, effective_from: chrono::NaiveDat
          VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', '0.16', 'convergence-fixture', $2, 'APPROVED')",
     )
     .bind("00000000-0000-4000-8000-000000000024")
-    .bind(effective_from.to_string())
+    .bind(Utc::now().date_naive().to_string())
     .execute(&store.pool)
     .await
     .unwrap();
@@ -108,7 +108,7 @@ async fn seed_central_catalog(store: &CentralStore, effective_from: chrono::Naiv
          VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'convergence-fixture', $2, 'APPROVED')",
     )
     .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
-    .bind(effective_from)
+    .bind(Utc::now().date_naive())
     .execute(&store.pool)
     .await
     .unwrap();

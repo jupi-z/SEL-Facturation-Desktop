@@ -2044,7 +2044,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
         ? <select name={field.name} defaultValue={field.defaultValue ?? ""} required={field.required !== false} disabled={busy || creating}><option value="" disabled>Sélectionner…</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
         : field.multiline
           ? <textarea name={field.name} rows={3} maxLength={500} required={field.required !== false} disabled={busy || creating} />
-          : <input name={field.name} type={field.type ?? "text"} step={field.step} min={field.min} max={field.max} placeholder={field.placeholder} required={field.required !== false} disabled={busy || creating} />}</label>)}
+          : <input name={field.name} type={field.type ?? "text"} step={field.step} min={field.min} max={field.max} defaultValue={field.defaultValue} placeholder={field.placeholder} required={field.required !== false} disabled={busy || creating} />}</label>)}
       <div className="form-actions span-two"><Button type="button" disabled={busy || creating} onClick={() => void toggleDraft()}>Annuler</Button><Button primary type="submit" disabled={busy || creating}>{creating ? "Vérification…" : kind === "products" ? "Enregistrer le kit" : "Créer le brouillon"}</Button></div>
       <p className="help span-two">{actionHelp}</p>
     </form>}

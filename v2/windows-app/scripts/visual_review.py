@@ -1058,6 +1058,8 @@ async def capture_views() -> None:
                     tax_form = page.locator("form.admin-catalog-form").first
                     await page.get_by_role("button", name="Ajouter un profil fiscal").click()
                     tax_form = page.locator("form.admin-catalog-form").first
+                    if await tax_form.locator('input[name="base"]').input_value() != "SUBTOTAL":
+                        raise AssertionError("The central VAT form must default to the subtotal tax base")
                     if await tax_form.locator('select[name="service_code"]').input_value() != "VAT":
                         raise AssertionError("The single selectable VAT rule must default to VAT")
                     await tax_form.locator('input[name="rate_percent"]').fill("16")
