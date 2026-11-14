@@ -84,7 +84,7 @@ async fn seed_local_catalog(store: &LocalStore, effective_from: chrono::NaiveDat
          (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref)
          VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', CURRENT_DATE, 'APPROVED', 'convergence-v1')",
     )
-    .bind(Uuid::new_v4().to_string())
+    .bind("00000000-0000-4000-8000-000000000024")
     .execute(&store.pool)
     .await
     .unwrap();
@@ -129,10 +129,10 @@ async fn seed_central_catalog(store: &CentralStore, effective_from: chrono::Naiv
     .unwrap();
     sqlx::query(
         "INSERT INTO tax_profile_versions
-         (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', CURRENT_DATE, 'APPROVED')",
+         (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref)
+         VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', CURRENT_DATE, 'APPROVED', 'convergence-v1')",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
     .execute(&store.pool)
     .await
     .unwrap();
