@@ -295,7 +295,7 @@ def test_solar_catalog_is_the_primary_page_and_sale_entry_is_actionable() -> Non
     assert 'title: "Abandonner la saisie solaire ?"' in app
     assert "Créer une vente" in app
     assert 'className="metrics solar-metrics"' in app
-    assert 'headers={["SKU", "Produit", "Type", "Prix de référence", "État commercial"]}' in solar_view
+    assert 'headers={["SKU", "Produit", "Type", "Prix catalogue HT", "État commercial"]}' in solar_view
     assert 'Approuvé · vendable' in solar_view
     assert 'value={text(solarProducts.find((product) => text(product.sku) === solarProductCode)?.currency, PRIMARY_CURRENCY)} readOnly' in solar_view
     assert 'label>Modalité<select value={solarPaymentMode}' in solar_view
@@ -522,7 +522,7 @@ def test_tax_profile_editor_matches_ux3_and_keeps_reason_in_versioned_api_payloa
     storage = (ROOT / "v2" / "crates" / "sel-storage" / "src" / "postgres.rs").read_text(encoding="utf-8")
     openapi = (ROOT / "v2" / "openapi" / "sel-v2.yaml").read_text(encoding="utf-8")
 
-    assert 'title: "Paramètres de TVA"' in app
+    assert 'title: "Règle centrale de TVA"' in app
     assert 'label: "Taux de TVA (%)"' in app
     assert 'label: "Document ou source fiscale"' in app
     assert 'name: "change_reason", label: "Motif du changement", multiline: true' in app
