@@ -6008,6 +6008,17 @@ impl CentralStore {
         if input.principal.round_dp(2) != total {
             return Err(SolarSaleWriteError::PriceMismatch);
         }
+        let tax_snapshot = sel_contracts::SolarTaxSnapshot {
+            schema_version: 1,
+            service_code: "SOLAR_KIT".into(),
+            tax_profile_id,
+            jurisdiction: tax_row.try_get("jurisdiction")?,
+            base: tax_base,
+            rate: tax_rate,
+            amount: tax_amount,
+            source: tax_row.try_get("source")?,
+            approval_ref: tax_row.try_get("approval_ref")?,
+        };
         let sold_at: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
             .fetch_one(&mut *tx)
             .await?;
@@ -6024,6 +6035,7 @@ impl CentralStore {
             currency: input.currency.clone(),
             status: "CENTRAL_ACCEPTED".into(),
             product_code: Some(input.product_code.trim().to_owned()),
+            tax_snapshot: Some(tax_snapshot.clone()),
         };
         let snapshot = serde_json::to_value(&response)?;
         sqlx::query(
@@ -6038,17 +6050,7 @@ impl CentralStore {
         .bind(&document_reference)
         .execute(&mut *tx)
         .await?;
-        let tax_snapshot = serde_json::to_value(sel_contracts::SolarTaxSnapshot {
-            schema_version: 1,
-            service_code: "SOLAR_KIT".into(),
-            tax_profile_id,
-            jurisdiction: tax_row.try_get("jurisdiction")?,
-            base: tax_base,
-            rate: tax_rate,
-            amount: tax_amount,
-            source: tax_row.try_get("source")?,
-            approval_ref: tax_row.try_get("approval_ref")?,
-        })?;
+        let tax_snapshot = serde_json::to_value(tax_snapshot)?;
         sqlx::query(
             "INSERT INTO sale_lines
              (id, sale_id, product_id, quantity, unit_price, tax_snapshot, total)

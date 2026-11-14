@@ -828,6 +828,8 @@ pub struct SolarSaleResponse {
     pub status: String,
     #[serde(default)]
     pub product_code: Option<String>,
+    #[serde(default)]
+    pub tax_snapshot: Option<SolarTaxSnapshot>,
 }
 
 /// Stable local/central identifier for one solar installment row.

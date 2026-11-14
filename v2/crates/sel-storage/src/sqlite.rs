@@ -1036,6 +1036,18 @@ impl LocalStore {
         if input.principal.round_dp(2) != total {
             return Err(LocalSolarSaleError::PriceMismatch);
         }
+        let tax_snapshot = sel_contracts::SolarTaxSnapshot {
+            schema_version: 1,
+            service_code: "SOLAR_KIT".into(),
+            tax_profile_id: Uuid::parse_str(&tax_row.try_get::<String, _>("id")?)
+                .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?,
+            jurisdiction: tax_row.try_get("jurisdiction")?,
+            base: tax_base,
+            rate: tax_rate,
+            amount: tax_amount,
+            source: tax_row.try_get("source")?,
+            approval_ref: tax_row.try_get("approval_ref")?,
+        };
         let sale_id = Uuid::new_v4();
         let receivable_id = Uuid::new_v4();
         let response = SolarSaleResponse {
@@ -1050,6 +1062,7 @@ impl LocalStore {
             currency: input.currency.clone(),
             status: "LOCAL_PENDING".into(),
             product_code: Some(input.product_code.trim().to_owned()),
+            tax_snapshot: Some(tax_snapshot.clone()),
         };
         let payload = serde_json::to_value(SolarSaleSyncPayload {
             request: input.clone(),
@@ -1058,19 +1071,8 @@ impl LocalStore {
         })
         .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?;
         let event = local_event(self, Uuid::new_v4(), sale_id, "SOLAR_SALE_CREATED", payload)?;
-        let tax_snapshot = serde_json::to_string(&sel_contracts::SolarTaxSnapshot {
-            schema_version: 1,
-            service_code: "SOLAR_KIT".into(),
-            tax_profile_id: Uuid::parse_str(&tax_row.try_get::<String, _>("id")?)
-                .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?,
-            jurisdiction: tax_row.try_get("jurisdiction")?,
-            base: tax_base,
-            rate: tax_rate,
-            amount: tax_amount,
-            source: tax_row.try_get("source")?,
-            approval_ref: tax_row.try_get("approval_ref")?,
-        })
-        .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?;
+        let tax_snapshot = serde_json::to_string(&tax_snapshot)
+            .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?;
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO sales
@@ -4944,8 +4946,29 @@ async fn apply_solar_sale_change(
     }
 
     if let Some(product_code) = response.product_code.as_deref() {
+        let line_subtotal = if response.subtotal > Decimal::ZERO {
+            response.subtotal
+        } else {
+            response.principal
+        };
+        let line_total = if response.total > Decimal::ZERO {
+            response.total
+        } else {
+            response.principal
+        };
+        let expected_tax_snapshot = response
+            .tax_snapshot
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| sqlx::Error::Protocol(format!("invalid solar tax snapshot: {error}")))?
+            .unwrap_or_else(|| json!({}));
+        let expected_tax_snapshot_text =
+            serde_json::to_string(&expected_tax_snapshot).map_err(|error| {
+                sqlx::Error::Protocol(format!("invalid solar tax snapshot: {error}"))
+            })?;
         if let Some(existing) = sqlx::query(
-            "SELECT quantity, unit_price, total FROM sale_lines
+            "SELECT quantity, unit_price, tax_snapshot_json, total FROM sale_lines
              WHERE sale_id = $1 AND product_ref = $2",
         )
         .bind(entity_id)
@@ -4955,14 +4978,20 @@ async fn apply_solar_sale_change(
         {
             let quantity: String = existing.try_get("quantity")?;
             let unit_price: String = existing.try_get("unit_price")?;
+            let tax_snapshot: String = existing.try_get("tax_snapshot_json")?;
             let total: String = existing.try_get("total")?;
+            let tax_snapshot_value = serde_json::from_str::<serde_json::Value>(&tax_snapshot)
+                .map_err(|error| {
+                    sqlx::Error::Protocol(format!("invalid stored solar tax snapshot: {error}"))
+                })?;
             if quantity != "1"
                 || Decimal::from_str(&unit_price)
                     .map_err(|error| sqlx::Error::Protocol(error.to_string()))?
-                    != response.principal
+                    != line_subtotal
                 || Decimal::from_str(&total)
                     .map_err(|error| sqlx::Error::Protocol(error.to_string()))?
-                    != response.principal
+                    != line_total
+                || tax_snapshot_value != expected_tax_snapshot
             {
                 return Err(sqlx::Error::Protocol(
                     "conflicting local solar sale line projection".into(),
@@ -4976,13 +5005,14 @@ async fn apply_solar_sale_change(
             sqlx::query(
                 "INSERT INTO sale_lines
                  (id, sale_id, product_ref, quantity, unit_price, tax_snapshot_json, total)
-                 VALUES ($1, $2, $3, '1', $4, '{}', $5)",
+                 VALUES ($1, $2, $3, '1', $4, $5, $6)",
             )
             .bind(line_id.to_string())
             .bind(entity_id)
             .bind(product_code)
-            .bind(response.principal.to_string())
-            .bind(response.principal.to_string())
+            .bind(line_subtotal.to_string())
+            .bind(expected_tax_snapshot_text)
+            .bind(line_total.to_string())
             .execute(&mut **tx)
             .await?;
         }

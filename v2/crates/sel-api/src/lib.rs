@@ -3904,6 +3904,7 @@ async fn create_solar_sale(
         currency: input.currency.clone(),
         status: "CENTRAL_ACCEPTED".into(),
         product_code: Some(input.product_code.clone()),
+        tax_snapshot: None,
     };
     state
         .solar_sales

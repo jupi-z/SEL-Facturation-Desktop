@@ -770,6 +770,72 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
     assert_eq!(solar_sync.accepted, 2);
     let solar_pull = sync_once(&second, &endpoint, &token).await.unwrap();
     assert_eq!(solar_pull.pulled, 2);
+    let central_solar_line: (String, serde_json::Value, String) = sqlx::query_as(
+        "SELECT sl.unit_price::text, sl.tax_snapshot, sl.total::text
+         FROM sale_lines sl
+         JOIN products p ON p.id = sl.product_id
+         WHERE sl.sale_id = $1 AND p.sku = 'KIT-CONVERGENCE-1'",
+    )
+    .bind(sale.sale_id)
+    .fetch_one(&central_for_verify.pool)
+    .await
+    .unwrap();
+    let first_solar_line: (String, String, String) = sqlx::query_as(
+        "SELECT unit_price, tax_snapshot_json, total FROM sale_lines
+         WHERE sale_id = $1 AND product_ref = 'KIT-CONVERGENCE-1'",
+    )
+    .bind(sale.sale_id.to_string())
+    .fetch_one(&first.pool)
+    .await
+    .unwrap();
+    let second_solar_line: (String, String, String) = sqlx::query_as(
+        "SELECT unit_price, tax_snapshot_json, total FROM sale_lines
+         WHERE sale_id = $1 AND product_ref = 'KIT-CONVERGENCE-1'",
+    )
+    .bind(sale.sale_id.to_string())
+    .fetch_one(&second.pool)
+    .await
+    .unwrap();
+    let first_snapshot: serde_json::Value = serde_json::from_str(&first_solar_line.1).unwrap();
+    let second_snapshot: serde_json::Value = serde_json::from_str(&second_solar_line.1).unwrap();
+    assert_eq!(
+        central_solar_line
+            .0
+            .parse::<rust_decimal::Decimal>()
+            .unwrap(),
+        "120.00".parse().unwrap()
+    );
+    assert_eq!(
+        central_solar_line
+            .2
+            .parse::<rust_decimal::Decimal>()
+            .unwrap(),
+        "139.20".parse().unwrap()
+    );
+    assert_eq!(
+        first_solar_line.0.parse::<rust_decimal::Decimal>().unwrap(),
+        central_solar_line.0.parse().unwrap()
+    );
+    assert_eq!(
+        first_solar_line.2.parse::<rust_decimal::Decimal>().unwrap(),
+        central_solar_line.2.parse().unwrap()
+    );
+    assert_eq!(
+        second_solar_line
+            .0
+            .parse::<rust_decimal::Decimal>()
+            .unwrap(),
+        central_solar_line.0.parse().unwrap()
+    );
+    assert_eq!(
+        second_solar_line
+            .2
+            .parse::<rust_decimal::Decimal>()
+            .unwrap(),
+        central_solar_line.2.parse().unwrap()
+    );
+    assert_eq!(first_snapshot, central_solar_line.1);
+    assert_eq!(second_snapshot, central_solar_line.1);
     for store in [&first, &second] {
         let counts: (i64, i64) = sqlx::query_as(
             "SELECT
