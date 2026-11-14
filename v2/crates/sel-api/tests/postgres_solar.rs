@@ -5,6 +5,7 @@ use http_body_util::BodyExt;
 use sel_api::{router, AppState};
 use sel_contracts::{
     ActivateSolarContractRequest, CreateCustomer, CreateSolarSaleRequest, InstallmentRequest,
+    SolarSaleCorrectionRequest,
 };
 use sel_storage::{migrate_postgres, CentralStore};
 use serde_json::json;
@@ -16,6 +17,234 @@ const SOLAR_TAX_FIXTURE_ID: &str = "00000000-0000-4000-8000-000000000024";
 
 async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit TEST_DATABASE_URL PostgreSQL integration service"]
+async fn solar_sale_correction_is_atomic_idempotent_and_transfers_the_paid_amount() {
+    let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+    let organization_id = Uuid::new_v4();
+    let store = CentralStore::connect(&database_url, organization_id)
+        .await
+        .unwrap();
+    migrate_postgres(&store.pool).await.unwrap();
+    store
+        .ensure_organization("SEL solar correction fixture")
+        .await
+        .unwrap();
+    store
+        .bootstrap_initial_admin("solar-correction-admin@test", "SolarCorrectionPass8")
+        .await
+        .unwrap();
+    let login = store
+        .login_user("solar-correction-admin@test", "SolarCorrectionPass8")
+        .await
+        .unwrap();
+    let token = login["access_token"].as_str().unwrap();
+    let app = router(AppState::with_production_central_store(store.clone()));
+
+    let customer_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/customers")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "customer_code": format!("SOLAR-CORR-{}", Uuid::new_v4()),
+                        "legal_name": "Solar correction fixture"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(customer_response.status(), StatusCode::CREATED);
+    let customer = json_body(customer_response).await;
+    let customer_id = Uuid::parse_str(customer["id"].as_str().unwrap()).unwrap();
+
+    let product_id = Uuid::new_v4();
+    let sku = format!("KIT-CORR-{}", Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO products
+         (id, sku, product_type, label, price_reference, currency, active,
+          effective_from, status, approval_ref)
+         VALUES ($1, $2, 'SOLAR_KIT', 'SEL solar kit correction', 24819.77,
+                 'USD', TRUE, CURRENT_DATE, 'APPROVED', 'SEL-KIT-APPROVED')",
+    )
+    .bind(product_id)
+    .bind(&sku)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    let vat_id = Uuid::parse_str(SOLAR_TAX_FIXTURE_ID).unwrap();
+    sqlx::query(
+        "INSERT INTO tax_profile_versions
+         (id, service_code, jurisdiction, base, rate, source, effective_from,
+          status, approval_ref)
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16,
+                 'SEL confirmed tax configuration fixture', CURRENT_DATE,
+                 'APPROVED', 'SEL-VAT-16-TEST')
+         ON CONFLICT (id) DO UPDATE SET
+             status = 'APPROVED', effective_from = CURRENT_DATE, effective_to = NULL,
+             rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'",
+    )
+    .bind(vat_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+
+    // Mimic the historical pre-VAT sale exactly: immutable sale line and one
+    // receivable at catalogue HT, plus the accepted $5,000 receipt.
+    let old_sale_id = Uuid::new_v4();
+    let old_receivable_id = Uuid::new_v4();
+    let old_payment_id = Uuid::new_v4();
+    let old_reference = format!("SEL-CORRECTION-{}", Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO sales
+         (id, customer_id, currency, sold_at, sale_type, status, document_reference)
+         VALUES ($1, $2, 'USD', now() - INTERVAL '3 days', 'SOLAR_KIT',
+                 'CENTRAL_ACCEPTED', $3)",
+    )
+    .bind(old_sale_id)
+    .bind(customer_id)
+    .bind(&old_reference)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO sale_lines (id, sale_id, product_id, quantity, unit_price, tax_snapshot, total)
+         VALUES ($1, $2, $3, 1, 24819.77, '{}'::jsonb, 24819.77)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(old_sale_id)
+    .bind(product_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO receivables
+         (id, source_type, source_id, customer_id, currency, principal_total, status)
+         VALUES ($1, 'SALE', $2, $3, 'USD', 24819.77, 'OPEN')",
+    )
+    .bind(old_receivable_id)
+    .bind(old_sale_id)
+    .bind(customer_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO payments
+         (id, customer_id, amount_received, currency, method, paid_at, status)
+         VALUES ($1, $2, 5000, 'USD', 'CASH', now() - INTERVAL '3 days', 'CENTRAL_ACCEPTED')",
+    )
+    .bind(old_payment_id)
+    .bind(customer_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO payment_allocations
+         (id, payment_id, receivable_id, allocated_amount, currency)
+         VALUES ($1, $2, $3, 5000, 'USD')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(old_payment_id)
+    .bind(old_receivable_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+
+    let due_date = chrono::Utc::now().date_naive() + chrono::Duration::days(7);
+    let correction = SolarSaleCorrectionRequest {
+        due_date,
+        approved_terms_revision: "SEL-SOLAR-TERMS-2026-11".into(),
+        reason: "Correction de la vente solaire avant TVA et transfert du paiement reçu".into(),
+    };
+    let correction_body = serde_json::to_vec(&correction).unwrap();
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/solar/sales/{old_sale_id}/correct"))
+            .header("authorization", format!("Bearer {token}"))
+            .header("Idempotency-Key", "solar-correction-fixture-001")
+            .header("content-type", "application/json")
+            .body(Body::from(correction_body.clone()))
+            .unwrap()
+    };
+    let response = app.clone().oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let result = json_body(response).await;
+    assert_eq!(result["replacement_sale"]["subtotal"], "24819.77");
+    assert_eq!(result["replacement_sale"]["tax_amount"], "3971.16");
+    assert_eq!(result["replacement_sale"]["total"], "28790.93");
+    assert_eq!(result["rebooked_payments"].as_array().unwrap().len(), 1);
+
+    let replay = app.clone().oneshot(request()).await.unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(json_body(replay).await, result);
+
+    let balances = store
+        .customer_statement(customer_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let receivables = balances["receivables"].as_array().unwrap();
+    assert_eq!(receivables.len(), 2);
+    assert!(receivables.iter().any(|row| {
+        row["receivable_id"] == old_receivable_id.to_string()
+            && row["balance"] == "0.00"
+            && row["credited"] == "24819.77"
+    }));
+    assert!(receivables.iter().any(|row| {
+        row["receivable_id"] == result["replacement_sale"]["receivable_id"]
+            && row["principal"] == "28790.93"
+            && row["paid"] == "5000.00"
+            && row["balance"] == "23790.93"
+    }));
+    let original = sqlx::query("SELECT status FROM sales WHERE id = $1")
+        .bind(old_sale_id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(original.try_get::<String, _>("status").unwrap(), "VOID");
+    let schedule = sqlx::query(
+        "SELECT s.due_date, s.amount_due, ip.principal_amount
+         FROM installment_schedule s JOIN installment_plans ip ON ip.id = s.plan_id
+         WHERE ip.receivable_id = $1",
+    )
+    .bind(
+        Uuid::parse_str(
+            result["replacement_sale"]["receivable_id"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap(),
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        schedule.try_get::<NaiveDate, _>("due_date").unwrap(),
+        due_date
+    );
+    assert_eq!(
+        schedule
+            .try_get::<rust_decimal::Decimal, _>("amount_due")
+            .unwrap()
+            .to_string(),
+        "28790.93"
+    );
+    let correction_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM solar_sale_corrections WHERE old_sale_id = $1")
+            .bind(old_sale_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(correction_count, 1);
 }
 
 #[tokio::test]
@@ -44,11 +273,11 @@ async fn solar_sale_and_installment_contract_are_atomic_and_idempotent() {
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'SOLAR_KIT', 'FIXTURE', 'SUBTOTAL', 0.16,
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16,
                  'SEL-approved standard VAT fixture', CURRENT_DATE, 'APPROVED')
          ON CONFLICT (id) DO UPDATE SET
              status = 'APPROVED', effective_from = CURRENT_DATE, effective_to = NULL,
-             rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'FIXTURE'",
+             rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'",
     )
     .bind(Uuid::parse_str(SOLAR_TAX_FIXTURE_ID).unwrap())
     .execute(&store.pool)
@@ -433,11 +662,11 @@ async fn concurrent_solar_contract_activation_creates_one_schedule_and_one_confl
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'SOLAR_KIT', 'FIXTURE', 'SUBTOTAL', 0.16,
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16,
                  'SEL-approved standard VAT fixture', CURRENT_DATE, 'APPROVED')
          ON CONFLICT (id) DO UPDATE SET
              status = 'APPROVED', effective_from = CURRENT_DATE, effective_to = NULL,
-             rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'FIXTURE'",
+             rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'",
     )
     .bind(Uuid::parse_str(SOLAR_TAX_FIXTURE_ID).unwrap())
     .execute(&first.pool)

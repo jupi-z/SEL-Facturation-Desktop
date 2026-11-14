@@ -19,8 +19,9 @@ use sel_contracts::{
     CreateSolarSaleRequest, CreditNoteRequest, Customer, DocumentData, InvoiceIdentitySnapshot,
     InvoiceLineResponse, Meter, MeterReading, MeterReplacement, PaymentAllocationRequest,
     ProblemDetails, RecordPaymentRequest, ReplaceMeter, ReversePaymentRequest, SolarQuoteResponse,
-    SolarSaleResponse, SyncPullResponse, SyncPushRequest, SyncPushResponse, UpdateCustomer,
-    UpdateServiceAccount, UtilityBillingRequest, UtilityBillingResponse, VoidInvoiceRequest,
+    SolarSaleCorrectionRequest, SolarSaleResponse, SyncPullResponse, SyncPushRequest,
+    SyncPushResponse, UpdateCustomer, UpdateServiceAccount, UtilityBillingRequest,
+    UtilityBillingResponse, VoidInvoiceRequest,
 };
 use sel_domain::billing;
 use sel_domain::solar;
@@ -215,9 +216,8 @@ struct AuthenticatedDevice(Uuid);
 #[derive(Clone, Default)]
 pub struct TariffBook {
     pub electricity_unit_price: Option<Decimal>,
-    pub electricity_tax_rate: Option<Decimal>,
+    pub vat_rate: Option<Decimal>,
     pub water_unit_price: Option<Decimal>,
-    pub water_tax_rate: Option<Decimal>,
     pub communication_charge: Option<Decimal>,
     pub revision: Option<String>,
 }
@@ -451,6 +451,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/solar/sales/:id/document-data",
             get(get_solar_sale_document_data),
         )
+        .route("/v1/solar/sales/:id/correct", post(correct_solar_sale))
         .route("/v1/solar/quotes", post(create_solar_quote))
         .route("/v1/solar/contracts", post(create_solar_contract))
         .route(
@@ -636,6 +637,9 @@ fn role_allows_request(method: &axum::http::Method, path: &str, role: &str) -> b
             return is_admin || is_supervisor;
         }
         if path_matches(path, "/v1/admin/devices/:id/provision") {
+            return is_admin;
+        }
+        if path_matches(path, "/v1/solar/sales/:id/correct") {
             return is_admin;
         }
         if path == "/v1/admin/catalog/tariffs"
@@ -855,16 +859,15 @@ fn configuration_requirements(
             json!({"key":key,"label":label,"ready":count == 1,"approved_current_count":count}),
         );
     }
-    for (service, label) in [
-        ("ELECTRICITY", "Profil TVA électricité"),
-        ("WATER", "Profil TVA eau"),
-    ] {
-        let count = tax_profiles
-            .iter()
-            .filter(|row| row["payload"]["service_code"] == service && approved(row, effective_on))
-            .count();
-        requirements.push(json!({"key":format!("tax_{service}"),"label":label,"ready":count == 1,"approved_current_count":count}));
-    }
+    let central_vat_count = tax_profiles
+        .iter()
+        .filter(|row| {
+            row["payload"]["service_code"] == "VAT"
+                && row["payload"]["base"] == "SUBTOTAL"
+                && approved(row, effective_on)
+        })
+        .count();
+    requirements.push(json!({"key":"vat_policy","label":"Règle centrale de TVA","ready":central_vat_count == 1,"approved_current_count":central_vat_count}));
     let date = effective_on.format("%Y-%m-%d").to_string();
     let communication_count = communication_charges
         .iter()
@@ -927,13 +930,15 @@ fn utility_catalog_is_configured(
             .count()
             == 1
     });
-    let taxes_complete = ["ELECTRICITY", "WATER"].iter().all(|service| {
-        tax_profiles
-            .iter()
-            .filter(|row| row["payload"]["service_code"] == *service && approved(row, effective_on))
-            .count()
-            == 1
-    });
+    let taxes_complete = tax_profiles
+        .iter()
+        .filter(|row| {
+            row["payload"]["service_code"] == "VAT"
+                && row["payload"]["base"] == "SUBTOTAL"
+                && approved(row, effective_on)
+        })
+        .count()
+        == 1;
 
     tariffs_complete && taxes_complete
 }
@@ -992,13 +997,16 @@ async fn admin_tax_profiles(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_auth(&headers)?;
-    let versions = match &state.central {
+    let mut versions = match &state.central {
         Some(store) => store
             .admin_reference_versions("TAX_PROFILE")
             .await
             .map_err(storage_error)?,
         None => Vec::new(),
     };
+    versions.retain(|row| {
+        row["payload"]["service_code"] == "VAT" && row["payload"]["jurisdiction"] == "SEL"
+    });
     Ok(Json(serde_json::Value::Array(versions)))
 }
 
@@ -2969,9 +2977,8 @@ async fn calculate_utility(
         let resolved_revision = snapshot.revision.clone();
         TariffBook {
             electricity_unit_price: snapshot.electricity_unit_price,
-            electricity_tax_rate: snapshot.electricity_tax_rate,
+            vat_rate: snapshot.vat_rate,
             water_unit_price: snapshot.water_unit_price,
-            water_tax_rate: snapshot.water_tax_rate,
             communication_charge: Some(
                 store
                     .load_communication_charge(&input.currency, Utc::now().date_naive())
@@ -3023,24 +3030,15 @@ async fn calculate_utility(
                 format!("Aucun tarif d’électricité approuvé ne couvre la catégorie de l’abonné, la devise {} et la période {}. Vérifiez le catalogue SEL et ses dates d’effet.", input.currency, input.billing_period),
             )
         })?,
-        electricity_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
-            ApiError::unprocessable(
-                "ELECTRICITY_TAX_MISSING",
-                "Aucun profil de TVA approuvé n’est applicable à l’électricité pour cette période.",
-            )
-        })?,
+        vat_rate: tariffs.vat_rate.ok_or_else(|| ApiError::unprocessable(
+            "VAT_POLICY_MISSING",
+            "Aucune règle centrale de TVA approuvée n’est applicable à cette période.",
+        ))?,
         water_tariff: tariffs.water_unit_price,
-        water_tax_rate: tariffs.water_tax_rate,
         communication_charge: tariffs.communication_charge.ok_or_else(|| {
             ApiError::unprocessable(
                 "COMMUNICATION_CHARGE_MISSING",
                 "Aucune ligne de communication approuvée n’est applicable à cette devise et à cette date.",
-            )
-        })?,
-        communication_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
-            ApiError::unprocessable(
-                "COMMUNICATION_TAX_MISSING",
-                "Le profil de TVA approuvé requis pour la ligne de communication est absent.",
             )
         })?,
         currency: input.currency.clone(),
@@ -3955,6 +3953,89 @@ async fn get_solar_sale_document_data(
         .map_err(storage_error)?
         .map(Json)
         .ok_or_else(|| ApiError::not_found("SOLAR_SALE_NOT_FOUND", "solar sale not found"))
+}
+
+async fn correct_solar_sale(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(sale_id): Path<Uuid>,
+    principal: Option<Extension<AuthenticatedPrincipal>>,
+    Json(input): Json<SolarSaleCorrectionRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    require_auth(&headers)?;
+    let principal = require_admin(principal)?;
+    let idempotency_key = require_idempotency(&headers)?;
+    let digest = digest_json(&input)?;
+    let correction_id = Uuid::new_v4();
+    let store = central_store(&state)?;
+    match store
+        .correct_solar_sale(
+            sale_id,
+            &input,
+            principal.user_id,
+            correction_id,
+            idempotency_key,
+            &digest,
+        )
+        .await
+        .map_err(|error| match error {
+            sel_storage::postgres::SolarSaleCorrectionError::Database(error) => {
+                storage_error(error)
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::StoredResponse(error) => {
+                ApiError::internal(error)
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::IdempotencyPayloadMismatch => {
+                ApiError::conflict(
+                    "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                    "idempotency key was reused with another payload",
+                )
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::ActorNotAuthorized => {
+                ApiError::forbidden("PERMISSION_DENIED", "an active administrator is required")
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::SaleNotCorrectable => {
+                ApiError::conflict(
+                    "SOLAR_SALE_NOT_CORRECTABLE",
+                    "sale is not eligible for this correction or was already corrected",
+                )
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::SaleLineNotCorrectable => {
+                ApiError::conflict(
+                    "SOLAR_SALE_LINES_NOT_CORRECTABLE",
+                    "sale does not contain exactly one transferable solar product line",
+                )
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::PaymentHistoryNotCorrectable => {
+                ApiError::conflict(
+                    "SOLAR_PAYMENT_HISTORY_NOT_CORRECTABLE",
+                    "payments are split, reversed, externally referenced or otherwise need manual accounting review",
+                )
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::CorrectionDetailsRequired => {
+                ApiError::unprocessable(
+                    "SOLAR_CORRECTION_DETAILS_REQUIRED",
+                    "a future due date, approved terms revision and correction reason are required",
+                )
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::ApprovedSolarPricingUnavailable => {
+                ApiError::unprocessable(
+                    "SOLAR_APPROVED_PRICING_UNAVAILABLE",
+                    "one approved solar product and one central VAT policy must apply today",
+                )
+            }
+            sel_storage::postgres::SolarSaleCorrectionError::AccountingOperation(detail) => {
+                ApiError::conflict("SOLAR_CORRECTION_REJECTED", detail)
+            }
+        })?
+    {
+        sel_storage::postgres::SolarSaleCorrectionOutcome::Created(body) => {
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        sel_storage::postgres::SolarSaleCorrectionOutcome::Replay(body) => {
+            Ok((StatusCode::OK, Json(body)))
+        }
+    }
 }
 
 async fn create_solar_quote(
@@ -5246,8 +5327,7 @@ mod tests {
             json!({"service_code":"WATER","customer_category":"COMMERCIAL","unit":"M3","currency":"USD","effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
         ];
         let taxes = vec![
-            json!({"payload":{"service_code":"ELECTRICITY"},"effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
-            json!({"payload":{"service_code":"WATER"},"effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
+            json!({"payload":{"service_code":"VAT","base":"SUBTOTAL"},"effective_from":"2026-08-01","effective_to":null,"approval_ref":"SEL-CONFIRMATION-2026-11-05","approved_by":"admin","status":"APPROVED"}),
         ];
 
         assert!(utility_catalog_is_configured(&tariffs, &taxes, today));
@@ -5261,7 +5341,7 @@ mod tests {
         ));
 
         let mut incomplete_taxes = taxes.clone();
-        incomplete_taxes[1]["status"] = json!("DRAFT");
+        incomplete_taxes[0]["status"] = json!("DRAFT");
         assert!(!utility_catalog_is_configured(
             &tariffs,
             &incomplete_taxes,
@@ -5269,7 +5349,7 @@ mod tests {
         ));
 
         let mut duplicate_tax = taxes;
-        duplicate_tax.push(json!({"payload":{"service_code":"WATER"},"effective_from":"2026-08-01","effective_to":null,"approval_ref":"DUPLICATE","approved_by":"admin","status":"APPROVED"}));
+        duplicate_tax.push(json!({"payload":{"service_code":"VAT","base":"SUBTOTAL"},"effective_from":"2026-08-01","effective_to":null,"approval_ref":"DUPLICATE","approved_by":"admin","status":"APPROVED"}));
         assert!(!utility_catalog_is_configured(
             &tariffs,
             &duplicate_tax,
@@ -5281,7 +5361,7 @@ mod tests {
     fn admin_readiness_names_missing_and_duplicate_commercial_configuration() {
         let today = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
         let requirements = configuration_requirements(&[], &[], &[], today);
-        assert_eq!(requirements.len(), 7);
+        assert_eq!(requirements.len(), 6);
         assert!(requirements.iter().all(|item| item["ready"] == false));
 
         let tariff = json!({
@@ -5290,7 +5370,7 @@ mod tests {
             "approval_ref":"SEL-APPROVAL", "approved_by":"admin", "status":"APPROVED"
         });
         let taxes = [json!({
-            "payload":{"service_code":"WATER"}, "effective_from":"2026-01-01",
+            "payload":{"service_code":"VAT","base":"SUBTOTAL"}, "effective_from":"2026-01-01",
             "effective_to":null, "approval_ref":"SEL-TAX", "approved_by":"admin", "status":"APPROVED"
         })];
         let communication = [json!({
@@ -5311,7 +5391,7 @@ mod tests {
             .unwrap());
         assert!(partial
             .iter()
-            .find(|item| item["key"] == "tax_WATER")
+            .find(|item| item["key"] == "vat_policy")
             .unwrap()["ready"]
             .as_bool()
             .unwrap());

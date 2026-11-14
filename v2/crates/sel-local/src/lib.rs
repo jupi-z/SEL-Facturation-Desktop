@@ -857,14 +857,13 @@ async fn calculate_utility_response(
                 "approved electricity tariff is unavailable".into(),
             )
         })?,
-        electricity_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
+        vat_rate: tariffs.vat_rate.ok_or_else(|| {
             (
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "approved electricity tax profile is unavailable".into(),
+                "approved central VAT policy is unavailable".into(),
             )
         })?,
         water_tariff: tariffs.water_unit_price,
-        water_tax_rate: tariffs.water_tax_rate,
         communication_charge: store
             .load_communication_charge(
                 &input.currency,
@@ -883,12 +882,6 @@ async fn calculate_utility_response(
                         .into(),
                 )
             })?,
-        communication_tax_rate: tariffs.electricity_tax_rate.ok_or_else(|| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "approved communication tax profile is unavailable".into(),
-            )
-        })?,
         currency: input.currency.clone(),
     })
     .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;

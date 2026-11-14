@@ -1423,3 +1423,22 @@ La projection de `SOLAR_SALE_CREATED` transporte désormais le snapshot fiscal c
 | Production, migration `0024`, données et comptes SEL | NOT_TOUCHED — aucun accès en écriture ni déploiement |
 
 Le code est poussé sur la branche de PR #68, commit `0a8d080e7b90b8ab16933066a8bce63514db34c4`; la PR reste ouverte et non fusionnée. La migration additive `0024` et l’approbation d’un profil TVA `SOLAR_KIT` restent des prérequis d’exploitation. Les tests Windows physiques, l’installation côté SEL et le déploiement ne sont pas couverts par cette validation.
+
+### TVA centralisée et correction comptable de la vente solaire — 14 novembre 2026
+
+Le calcul monétaire de TVA est maintenant dans `sel-domain::tax::calculate_vat`, partagé par la facturation eau/électricité, la ligne de communication, les devis/ventes solaires et le cache SQLite. Les nouveaux profils fiscaux acceptent uniquement le code `VAT` avec assiette `SUBTOTAL`; le client Windows présente une seule règle centrale au lieu d'un champ par prestation. Les factures déjà émises conservent leur instantané fiscal et ne sont pas recalculées. Les anciens profils par prestation ne sont plus utilisés pour les nouveaux calculs et ne sont pas supprimés de l'historique.
+
+Une route administrateur transactionnelle de correction solaire est ajoutée : elle contre-écrit les paiements admissibles, crédite l'ancienne créance, émet une vente de remplacement avec TVA centrale, crée un contrat/échéance unique, rattache à nouveau le montant effectivement payé et journalise la correction avec idempotence dans la même transaction PostgreSQL. Le test d'intégration HTTP vérifie le cas de la vente hors TVA à 24 819,77 USD et du paiement déjà reçu de 5 000 USD : TVA 3 971,16 USD, TTC 28 790,93 USD, nouveau solde 23 790,93 USD, ancienne créance créditée et répétition sans doublon. Il n'écrit que dans une base de test.
+
+| Vérification sur le worktree `monarque/fix-solar-sale-tax-and-debt-documents-20261113` | Résultat |
+|---|---|
+| `cargo fmt --all -- --check` | PASS |
+| `cargo test --workspace` | PASS — tests exécutables réussis; tests nécessitant PostgreSQL sont ignorés localement faute de service de test |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| `npm run build` (`v2/windows-app`) | PASS — TypeScript/Vite compilés; avertissement non bloquant sur des bundles PDF supérieurs à 500 kB |
+| `git diff --check` | PASS |
+| Test HTTP PostgreSQL de correction solaire | NOT_TESTED localement — Docker daemon absent, aucun service PostgreSQL local et `TEST_DATABASE_URL` non configuré; il doit réussir en CI avec PostgreSQL avant mise en production |
+| Build/installation Windows sur poste SEL | NOT_TESTED — le build web Windows réussit, mais aucun nouvel installateur ni test sur poste cible n'a été produit ici |
+| Mise à jour ou correction des données en production | NOT_TOUCHED — aucune écriture, migration ou redémarrage de production dans cette tranche |
+
+**Blocage avant production :** ne pas appliquer la migration `0025` ni corriger la vente `SEL-20261111-230207-EDF079945F19493CBE6BE39FE39F9B17` avant que la CI exécute avec succès le test PostgreSQL transactionnel, qu'une sauvegarde fraîche soit vérifiée/restaurée hors production et que l'image serveur candidate soit assemblée. Le taux communiqué par le propriétaire est 16 %; son application comme politique centrale versionnée doit être provisionnée et auditée dans PostgreSQL selon la date d'effet approuvée. La migration `0024` historique conserve les codes par prestation pour lecture des snapshots anciens; la migration `0025` ajoute `VAT` sans modifier ces données.

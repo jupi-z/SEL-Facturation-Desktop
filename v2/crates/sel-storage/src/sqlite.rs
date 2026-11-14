@@ -167,9 +167,8 @@ pub enum LocalMeterError {
 #[derive(Clone, Debug, Default)]
 pub struct LocalTariffSnapshot {
     pub electricity_unit_price: Option<Decimal>,
-    pub electricity_tax_rate: Option<Decimal>,
+    pub vat_rate: Option<Decimal>,
     pub water_unit_price: Option<Decimal>,
-    pub water_tax_rate: Option<Decimal>,
 }
 
 impl LocalStore {
@@ -701,19 +700,18 @@ impl LocalStore {
                 "multiple applicable electricity tariffs exist for this category".into(),
             ));
         }
-        let electricity_taxes = sqlx::query(
+        let vat_profiles = sqlx::query(
             "SELECT rate FROM tax_profile_versions
-             WHERE service_code = 'ELECTRICITY' AND status = 'APPROVED'
+             WHERE service_code = 'VAT' AND jurisdiction = 'SEL' AND status = 'APPROVED'
                AND effective_from <= $1 AND (effective_to IS NULL OR effective_to >= $1)
-             ORDER BY effective_from DESC, jurisdiction, base LIMIT 2",
+             ORDER BY effective_from DESC, jurisdiction, id LIMIT 2",
         )
         .bind(&date)
         .fetch_all(&self.pool)
         .await?;
-        if electricity_taxes.len() > 1 {
+        if vat_profiles.len() > 1 {
             return Err(sqlx::Error::Protocol(
-                "multiple applicable electricity tax profiles require an explicit SEL tax mapping"
-                    .into(),
+                "multiple central VAT policies apply to the period".into(),
             ));
         }
         let water = sqlx::query(
@@ -734,25 +732,10 @@ impl LocalStore {
                 "multiple applicable water tariffs exist for this category".into(),
             ));
         }
-        let water_taxes = sqlx::query(
-            "SELECT rate FROM tax_profile_versions
-             WHERE service_code = 'WATER' AND status = 'APPROVED'
-               AND effective_from <= $1 AND (effective_to IS NULL OR effective_to >= $1)
-             ORDER BY effective_from DESC, jurisdiction, base LIMIT 2",
-        )
-        .bind(&date)
-        .fetch_all(&self.pool)
-        .await?;
-        if water_taxes.len() > 1 {
-            return Err(sqlx::Error::Protocol(
-                "multiple applicable water tax profiles require an explicit SEL tax mapping".into(),
-            ));
-        }
         Ok(LocalTariffSnapshot {
             electricity_unit_price: sqlite_decimal_column(electricity.first(), "unit_price")?,
-            electricity_tax_rate: sqlite_decimal_column(electricity_taxes.first(), "rate")?,
+            vat_rate: sqlite_decimal_column(vat_profiles.first(), "rate")?,
             water_unit_price: sqlite_decimal_column(water.first(), "unit_price")?,
-            water_tax_rate: sqlite_decimal_column(water_taxes.first(), "rate")?,
         })
     }
 
@@ -1012,7 +995,7 @@ impl LocalStore {
         let tax_rows = sqlx::query(
             "SELECT id, jurisdiction, base, rate, source, approval_ref
              FROM tax_profile_versions
-             WHERE service_code = 'SOLAR_KIT' AND status = 'APPROVED'
+             WHERE service_code = 'VAT' AND jurisdiction = 'SEL' AND status = 'APPROVED'
                AND effective_from <= date('now')
                AND (effective_to IS NULL OR effective_to >= date('now'))
              ORDER BY effective_from DESC, jurisdiction, base, id LIMIT 2",
@@ -1024,21 +1007,21 @@ impl LocalStore {
         }
         let tax_row = &tax_rows[0];
         let tax_base: String = tax_row.try_get("base")?;
-        if !matches!(tax_base.as_str(), "SUBTOTAL" | "SERVICE") {
+        if tax_base != "SUBTOTAL" {
             return Err(LocalSolarSaleError::TaxProfileUnavailable);
         }
         let tax_rate = Decimal::from_str(&tax_row.try_get::<String, _>("rate")?)
             .map_err(|error| LocalSolarSaleError::InvalidProductPrice(error.to_string()))?
             .normalize();
         let subtotal = subtotal.round_dp(2);
-        let tax_amount = (subtotal * tax_rate).round_dp(2);
+        let tax_amount = sel_domain::tax::calculate_vat(subtotal, tax_rate);
         let total = subtotal + tax_amount;
         if input.principal.round_dp(2) != total {
             return Err(LocalSolarSaleError::PriceMismatch);
         }
         let tax_snapshot = sel_contracts::SolarTaxSnapshot {
             schema_version: 1,
-            service_code: "SOLAR_KIT".into(),
+            service_code: "VAT".into(),
             tax_profile_id: Uuid::parse_str(&tax_row.try_get::<String, _>("id")?)
                 .map_err(|error| LocalSolarSaleError::InvalidPayload(error.to_string()))?,
             jurisdiction: tax_row.try_get("jurisdiction")?,
@@ -1150,7 +1133,7 @@ impl LocalStore {
             })?;
         let taxes = sqlx::query(
             "SELECT rate, base FROM tax_profile_versions
-             WHERE service_code = 'SOLAR_KIT' AND status = 'APPROVED'
+             WHERE service_code = 'VAT' AND jurisdiction = 'SEL' AND status = 'APPROVED'
                AND effective_from <= date('now')
                AND (effective_to IS NULL OR effective_to >= date('now'))
              ORDER BY effective_from DESC, jurisdiction, base, id LIMIT 2",
@@ -1158,10 +1141,7 @@ impl LocalStore {
         .fetch_all(&self.pool)
         .await?;
         if taxes.len() != 1
-            || !matches!(
-                taxes[0].try_get::<String, _>("base")?.as_str(),
-                "SUBTOTAL" | "SERVICE"
-            )
+            || !matches!(taxes[0].try_get::<String, _>("base")?.as_str(), "SUBTOTAL")
         {
             return Err(LocalSolarQuoteError::TaxProfileUnavailable);
         }
@@ -1169,7 +1149,7 @@ impl LocalStore {
             .map_err(|error| sqlx::Error::Protocol(format!("invalid solar VAT rate: {error}")))?
             .normalize();
         let subtotal = subtotal.round_dp(2);
-        let tax_amount = (subtotal * tax_rate).round_dp(2);
+        let tax_amount = sel_domain::tax::calculate_vat(subtotal, tax_rate);
         let total = subtotal + tax_amount;
         Ok(Some(SolarQuoteResponse {
             product_code: input.product_code.trim().to_owned(),

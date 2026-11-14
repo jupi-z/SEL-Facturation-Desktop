@@ -1930,10 +1930,9 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
     { name: "currency", label: "Devise", options: CURRENCY_OPTIONS, defaultValue: PRIMARY_CURRENCY }, { name: "effective_from", label: "Début d’effet", type: "date" },
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["sku", "label", "price_reference", "currency", "effective_from", "status"] },
-  "tax-profiles": { title: "Paramètres de TVA", fields: [
-    { name: "service_code", label: "Prestation concernée", options: [{ value: "ELECTRICITY", label: "Électricité" }, { value: "WATER", label: "Eau" }, { value: "SOLAR_KIT", label: "Vente de kit solaire" }] },
-    { name: "jurisdiction", label: "Juridiction fiscale", required: false, placeholder: "SEL par défaut" },
-    { name: "base", label: "Assiette fiscale", required: false, placeholder: "SERVICE par défaut" },
+  "tax-profiles": { title: "Règle centrale de TVA", fields: [
+    { name: "service_code", label: "Application", options: [{ value: "VAT", label: "Toutes les prestations taxables" }] },
+    { name: "base", label: "Assiette fiscale", required: false, defaultValue: "SUBTOTAL", placeholder: "Sous-total taxable" },
     { name: "rate_percent", label: "Taux de TVA (%)", type: "number", step: "0.01", min: "0", max: "100" },
     { name: "source", label: "Document ou source fiscale" },
     { name: "change_reason", label: "Motif du changement", multiline: true },
@@ -1971,7 +1970,7 @@ function AdminCatalogPanel({ kind, items, busy, onCreate, onApprove, onRevoke, c
     : kind === "communication-charge"
       ? "Cette ligne figure sur chaque facture eau + électricité et entre dans l’assiette de la TVA. Toute nouvelle valeur doit être approuvée par SEL."
       : kind === "tax-profiles"
-        ? "Indiquez la source et la date d’effet. Le serveur conserve les versions précédentes et applique uniquement le profil approuvé correspondant à la période."
+        ? "La TVA se configure une seule fois ici et s’applique aux prestations taxables, y compris les ventes solaires et la ligne de communication. Aucun taux séparé n’est saisi par prestation. Le serveur conserve les versions précédentes et applique la règle approuvée à la date de l’opération."
         : kind === "fx-rates"
           ? "Le taux est versionné avec sa source et sa date d’effet. USD est la devise principale ; n’enregistrez que des taux approuvés par SEL."
           : "La nouvelle version reste inactive jusqu’à son approbation SEL. Les opérations déjà émises gardent leur instantané d’origine.";

@@ -320,15 +320,12 @@ async fn utility_invoice_sync_persists_required_lines_including_zero_water() {
             .await
             .unwrap();
     }
-    for service in ["ELECTRICITY", "WATER"] {
-        sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status) VALUES ($1, $2, 'TEST', 'ENERGY', 0.16, 'UTILITY-TEST-1', $3, 'APPROVED')")
-            .bind(Uuid::new_v4())
-            .bind(service)
-            .bind(effective_from)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-    }
+    sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref) VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'UTILITY-TEST-1', $2, 'APPROVED', 'UTILITY-TEST-1') ON CONFLICT (id) DO UPDATE SET status = 'APPROVED', effective_from = EXCLUDED.effective_from, effective_to = NULL, rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'")
+        .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
+        .bind(effective_from)
+        .execute(&store.pool)
+        .await
+        .unwrap();
     let request = UtilityBillingRequest {
         customer_id,
         billing_period: "2026-10".into(),
@@ -516,8 +513,8 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
         .execute(&store.pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref) VALUES ($1, 'SOLAR_KIT', 'TEST', 'SUBTOTAL', 0.16, 'solar-sync-v1', CURRENT_DATE, 'APPROVED', 'solar-sync-v1')")
-        .bind(Uuid::new_v4())
+    sqlx::query("INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref) VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'central-vat-sync-v1', CURRENT_DATE, 'APPROVED', 'central-vat-sync-v1') ON CONFLICT (id) DO UPDATE SET status = 'APPROVED', effective_from = CURRENT_DATE, effective_to = NULL, rate = 0.16, base = 'SUBTOTAL', jurisdiction = 'SEL'")
+        .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
         .execute(&store.pool)
         .await
         .unwrap();

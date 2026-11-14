@@ -37,10 +37,8 @@ async fn local_commercial_operations_are_persisted_and_offline_pending() {
     .expect("seed local tariffs");
     sqlx::query(
         "INSERT INTO tax_profile_versions (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', '0.16', 'fixture', '2026-01-01', 'APPROVED')",
     )
-    .bind(Uuid::new_v4().to_string())
     .bind(Uuid::new_v4().to_string())
     .execute(&store.pool)
     .await
@@ -680,7 +678,7 @@ async fn local_solar_sale_and_contract_are_persisted_offline() {
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref)
-         VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', '0.16', 'SEL-approved fixture', date('now'), 'APPROVED', 'solar-local-v1')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', '0.16', 'SEL-approved fixture', date('now'), 'APPROVED', 'solar-local-v1')",
     )
     .bind(Uuid::new_v4().to_string())
     .execute(&store.pool)

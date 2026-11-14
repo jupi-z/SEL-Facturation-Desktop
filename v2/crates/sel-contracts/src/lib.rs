@@ -773,6 +773,16 @@ pub struct CreateSolarSaleRequest {
     pub terms_revision: String,
 }
 
+/// Audited replacement of a solar sale whose immutable financial snapshot is
+/// incorrect. The original rows remain in the ledger and are balanced by
+/// reversal/credit entries inside one central transaction.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SolarSaleCorrectionRequest {
+    pub due_date: NaiveDate,
+    pub approved_terms_revision: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CreateSolarQuoteRequest {
     pub product_code: String,
