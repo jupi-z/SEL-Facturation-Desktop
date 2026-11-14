@@ -902,6 +902,19 @@ async fn tax_and_fx_versions_require_approval_and_preserve_effective_history() {
         .expect("defaulted tax draft appears in admin version history");
     assert_eq!(stored_default_tax["payload"]["jurisdiction"], "SEL");
     assert_eq!(stored_default_tax["payload"]["base"], "SUBTOTAL");
+    let default_approval = post_json(
+        &app,
+        &format!("{tax_create_path}/{default_tax_id}/approve"),
+        Some(&token),
+        Some(&format!("approve-default-tax-{key_suffix}")),
+        json!({
+            "approval_ref": format!("SEL-TAX-DEFAULT-APPROVAL-{key_suffix}"),
+            "supersedes_id": null
+        }),
+    )
+    .await;
+    assert_eq!(default_approval.status(), axum::http::StatusCode::OK);
+    assert_eq!(json_body(default_approval).await["status"], "APPROVED");
     let replay = post_json(
         &app,
         tax_create_path,
