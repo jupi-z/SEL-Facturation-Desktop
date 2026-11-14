@@ -69,22 +69,10 @@ async fn seed_local_catalog(store: &LocalStore, effective_from: chrono::NaiveDat
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', $3, 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', $4, 'APPROVED')",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(Uuid::new_v4().to_string())
-    .bind(effective_from.to_string())
-    .bind(effective_from.to_string())
-    .execute(&store.pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO tax_profile_versions
-         (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref)
-         VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', '0.16', 'convergence-fixture', CURRENT_DATE, 'APPROVED', 'convergence-v1')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', '0.16', 'convergence-fixture', $2, 'APPROVED')",
     )
     .bind("00000000-0000-4000-8000-000000000024")
+    .bind(effective_from.to_string())
     .execute(&store.pool)
     .await
     .unwrap();
@@ -117,22 +105,10 @@ async fn seed_central_catalog(store: &CentralStore, effective_from: chrono::Naiv
     sqlx::query(
         "INSERT INTO tax_profile_versions
          (id, service_code, jurisdiction, base, rate, source, effective_from, status)
-         VALUES ($1, 'ELECTRICITY', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', $3, 'APPROVED'),
-                ($2, 'WATER', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', $4, 'APPROVED')",
-    )
-    .bind(Uuid::new_v4())
-    .bind(Uuid::new_v4())
-    .bind(effective_from)
-    .bind(effective_from)
-    .execute(&store.pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO tax_profile_versions
-         (id, service_code, jurisdiction, base, rate, source, effective_from, status, approval_ref)
-         VALUES ($1, 'SOLAR_KIT', 'LOCAL', 'SUBTOTAL', 0.16, 'convergence-fixture', CURRENT_DATE, 'APPROVED', 'convergence-v1')",
+         VALUES ($1, 'VAT', 'SEL', 'SUBTOTAL', 0.16, 'convergence-fixture', $2, 'APPROVED')",
     )
     .bind(Uuid::parse_str("00000000-0000-4000-8000-000000000024").unwrap())
+    .bind(effective_from)
     .execute(&store.pool)
     .await
     .unwrap();
