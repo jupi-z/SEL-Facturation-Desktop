@@ -523,6 +523,7 @@ def test_tax_profile_editor_matches_ux3_and_keeps_reason_in_versioned_api_payloa
     openapi = (ROOT / "v2" / "openapi" / "sel-v2.yaml").read_text(encoding="utf-8")
 
     assert 'title: "Règle centrale de TVA"' in app
+    assert 'defaultValue: "VAT"' in app
     assert 'label: "Taux de TVA (%)"' in app
     assert 'label: "Document ou source fiscale"' in app
     assert 'name: "change_reason", label: "Motif du changement", multiline: true' in app

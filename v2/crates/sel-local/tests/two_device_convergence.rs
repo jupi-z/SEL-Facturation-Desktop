@@ -712,7 +712,7 @@ async fn two_sqlite_devices_converge_through_real_postgres_and_http() {
             terms_revision: "solar-convergence-v1".into(),
         })
         .await
-        .unwrap();
+        .expect("create solar sale using the single approved central VAT fixture");
     let (contract, _) = first
         .activate_solar_contract_offline(
             Uuid::new_v4(),

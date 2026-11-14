@@ -1931,7 +1931,7 @@ const adminCatalogDefinitions: Record<AdminCatalog, { title: string; fields: Adm
     { name: "effective_to", label: "Fin d’effet (facultative)", type: "date", required: false },
   ], columns: ["sku", "label", "price_reference", "currency", "effective_from", "status"] },
   "tax-profiles": { title: "Règle centrale de TVA", fields: [
-    { name: "service_code", label: "Application", options: [{ value: "VAT", label: "Toutes les prestations taxables" }] },
+    { name: "service_code", label: "Application", options: [{ value: "VAT", label: "Toutes les prestations taxables" }], defaultValue: "VAT" },
     { name: "base", label: "Assiette fiscale", required: false, defaultValue: "SUBTOTAL", placeholder: "Sous-total taxable" },
     { name: "rate_percent", label: "Taux de TVA (%)", type: "number", step: "0.01", min: "0", max: "100" },
     { name: "source", label: "Document ou source fiscale" },
