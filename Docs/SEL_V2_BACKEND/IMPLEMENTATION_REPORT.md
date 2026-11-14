@@ -1442,3 +1442,27 @@ Une route administrateur transactionnelle de correction solaire est ajoutée : e
 | Mise à jour ou correction des données en production | NOT_TOUCHED — aucune écriture, migration ou redémarrage de production dans cette tranche |
 
 **Blocage avant production :** ne pas appliquer la migration `0025` ni corriger la vente `SEL-20261111-230207-EDF079945F19493CBE6BE39FE39F9B17` avant que la CI exécute avec succès le test PostgreSQL transactionnel, qu'une sauvegarde fraîche soit vérifiée/restaurée hors production et que l'image serveur candidate soit assemblée. Le taux communiqué par le propriétaire est 16 %; son application comme politique centrale versionnée doit être provisionnée et auditée dans PostgreSQL selon la date d'effet approuvée. La migration `0024` historique conserve les codes par prestation pour lecture des snapshots anciens; la migration `0025` ajoute `VAT` sans modifier ces données.
+
+### Mise à jour après validations et déploiement — 14 novembre 2026
+
+La règle de TVA est effectivement centralisée : le calcul monétaire passe par `sel-domain::tax::calculate_vat`; un seul profil actif `VAT / SEL / SUBTOTAL` alimente les factures d’eau/électricité, la ligne de communication et les ventes solaires. Le profil configuré en production est à 16 %, effectif le 14 novembre 2026. Sa référence d’approbation est `SEL-OWNER-CONFIRMATION-2026-11-14` et sa source consigne la confirmation du propriétaire. Cette référence interne ne prétend pas être une référence légale ou une certification fiscale de l’État. Les profils historiques par prestation restent conservés, sans être utilisés pour les nouveaux calculs.
+
+| Élément | Résultat vérifié |
+|---|---|
+| Commit applicatif déployé | `facf09e3c6efa8bd5ec7e86980d74655b520e9b4`, image `sha256:9c3cf04f1e88ce14db3b6604d7c10ec7756a18de02d49dc3d9f37c5148415ac3` |
+| CI backend / PostgreSQL | PASS — run [43622263214](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43622263214) |
+| CI paquet serveur | PASS — run [43622307249](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43622307249) |
+| CI Windows, revue visuelle, build et test d’upgrade | PASS — run [43622310411](https://github.com/jupi-z/SEL-Facturation-Desktop/actions/runs/43622310411) |
+| Migration PostgreSQL | PASS — version 25 appliquée; migration additive; volume PostgreSQL conservé |
+| Sauvegarde réelle avant migration | PASS — `/srv/sel-v2/backups/sel-before-central-vat-20261114T180316Z.dump`, mode `0600`, SHA-256 `555d940c8a10bd1e63ef6b865614b4f2d67396a58b266ded18917c7cc497b3c9` |
+| Restauration de cette sauvegarde | PASS — restaurée dans un conteneur PostgreSQL temporaire isolé; 38 tables vérifiées, conteneur temporaire supprimé |
+| Santé après déploiement | PASS — API et PostgreSQL `healthy`; `https://sel.shuleops.com/health/ready` répond `configured:true` |
+| Règle centrale de TVA en production | PASS — une règle approuvée `VAT / SEL / SUBTOTAL`, 0,16, effective `2026-11-14`; disponibilité confirmée dans le diagnostic admin |
+| Correction de la vente `SEL-20261111-230207-EDF079945F19493CBE6BE39FE39F9B17` | PASS — ancienne vente conservée en VOID et ancienne créance créditée 24 819,77 USD; vente de remplacement `SEL-20261114-202711-9635D72D7675496DBDDBE2CDEDAD1945` avec base 24 819,77 USD, TVA 3 971,16 USD, TTC 28 790,93 USD |
+| Paiement et échéance après correction | PASS — 5 000 USD repris sur la nouvelle créance; solde 23 790,93 USD; une échéance unique de 28 790,93 USD au `2026-11-21`; aucun intérêt ni frais ajouté |
+| Idempotence | PASS — répétition de la même correction retourne le même `correction_id`, sans créer vente, échéance ou paiement supplémentaire |
+| Installateur Windows candidat | PASS — artefact non signé de la CI, branche de travail, run `43622310411`; NSIS `SEL Facturation_0.4.5_x64-setup.exe` SHA-256 `56FF77D96C3C413B788DD8004628284456CB6B91AD29A44BA58C38203A93A5B3`; MSI `SEL Facturation_0.4.5_x64_en-US.msi` SHA-256 `9E2B1C9A0DAE38BF07E2D467C1A37CFC431E47489DA8D115A5383FB74DDEA22D` |
+| Fusion/publication | NOT_DONE — aucune fusion dans `main`, aucune release GitHub publiée |
+| Recette sur un poste physique SEL | NOT_TESTED — la CI Windows a validé les captures, compilation, installation et mise à niveau isolées; elle ne remplace pas l’acceptation sur le poste de Clarisse/SEL |
+
+Les installateurs sont disponibles dans `artifacts/SEL-V2-central-VAT-facf09e/`. Le backend et les données de production sont à jour sur le commit ci-dessus. La nouvelle règle TVA est une source centrale unique; les anciennes lignes fiscales sont conservées uniquement pour préserver l’historique et les snapshots déjà émis.
