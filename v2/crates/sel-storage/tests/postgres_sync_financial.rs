@@ -476,9 +476,7 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
     let actor_id = Uuid::new_v4();
     let grant_id = Uuid::new_v4();
     let customer_id = Uuid::new_v4();
-    let store = CentralStore::connect(&database_url, organization_id)
-        .await
-        .unwrap();
+    let (store, schema) = isolated_central_store(&database_url, organization_id).await;
     migrate_postgres(&store.pool).await.unwrap();
     store
         .ensure_organization("solar sync fixture")
@@ -644,4 +642,15 @@ async fn solar_sync_creates_one_receivable_and_one_installment_plan() {
     assert_eq!(subtotal, Decimal::new(1000, 0));
     assert_eq!(tax_amount, Decimal::new(160, 0));
     assert_eq!(total, principal);
+    store.pool.close().await;
+    let cleanup_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&cleanup_pool)
+        .await
+        .unwrap();
+    cleanup_pool.close().await;
 }
